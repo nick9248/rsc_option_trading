@@ -35,6 +35,12 @@ wheels/
 logs/
 *.log
 
+# Output files (keep folder structure with .gitkeep)
+output/log/*
+output/data/*
+!output/log/.gitkeep
+!output/data/.gitkeep
+
 # Environment variables
 .env
 .env.local

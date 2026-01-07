@@ -28,13 +28,18 @@ For small task completions: write concise summaries in console output only. Do N
 option_trading/
 ├── coding/
 │   ├── core/              # Definitions, models, base classes
-│   │   └── logging/       # Logging-related code
-│   │   └── endpoints/     # API endpoint definitions
-│   │   └── ...            # Other domain folders as needed
+│   │   ├── api/           # API connection, parsing, validation
+│   │   ├── endpoints/     # API endpoint definitions
+│   │   ├── logging/       # Logging configuration
+│   │   └── schemas/       # Response schemas for validation
 │   └── service/           # High-level orchestration services
+│       └── deribit/       # Deribit API service
 ├── tests/
 │   ├── unit/              # Unit tests
 │   └── integration/       # Integration tests
+├── output/
+│   ├── data/              # CSV exports and data files
+│   └── log/               # Log files with timestamps
 ```
 
 **Structure Rule**: Code files must be inside related folders (e.g., `core/logging/logging_setup.py` not `core/logging_setup.py`).

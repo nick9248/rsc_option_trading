@@ -1,0 +1,367 @@
+"""
+Deribit API service for high-level operations.
+
+Orchestrates connection, fetching, parsing, and validation of Deribit API data.
+"""
+
+import logging
+from typing import Any, Dict, List, Optional
+
+from coding.core.api.connection import ApiConnection
+from coding.core.api.response_parser import ResponseParser
+from coding.core.api.schema_validator import SchemaValidator
+from coding.core.endpoints.deribit_endpoints import DeribitEndpoints, DERIBIT_BASE_URL
+from coding.core.schemas.deribit_schemas import DeribitSchemas
+from coding.pipelines.fetch_and_process import fetch_and_process
+
+
+logger = logging.getLogger(__name__)
+
+
+class DeribitApiService:
+    """
+    High-level service for interacting with the Deribit API.
+
+    Provides methods to:
+    1. Check API connectivity
+    2. Fetch data from endpoints
+    3. Parse responses
+    4. Validate against expected schemas
+    5. Save data to CSV
+    """
+
+    def __init__(
+        self,
+        timeout: int = 30,
+        max_retries: int = 3,
+        validate_responses: bool = True,
+        strict_validation: bool = False
+    ):
+        """
+        Initialize the Deribit API service.
+
+        Args:
+            timeout: Request timeout in seconds.
+            max_retries: Maximum retry attempts for failed requests.
+            validate_responses: Whether to validate responses against schemas.
+            strict_validation: If True, raise exceptions on validation failures.
+        """
+        self.connection = ApiConnection(
+            base_url=DERIBIT_BASE_URL,
+            timeout=timeout,
+            max_retries=max_retries
+        )
+        self.parser = ResponseParser()
+        self.validator = SchemaValidator(strict_mode=strict_validation)
+        self.validate_responses = validate_responses
+
+    def check_connectivity(self) -> Dict[str, Any]:
+        """
+        Test API connectivity and return server information.
+
+        Returns:
+            Dictionary with server version and connection status.
+
+        Raises:
+            ApiUnavailableError: If the API is not available.
+        """
+        logger.info("Checking Deribit API connectivity")
+
+        self.connection.check_connectivity(DeribitEndpoints.TEST)
+        response = self.connection.fetch(DeribitEndpoints.TEST)
+        result = self.parser.extract_result(response)
+
+        if self.validate_responses:
+            self.validator.validate(result, DeribitSchemas.TEST)
+
+        logger.info(f"Connected to Deribit API version: {result.get('version')}")
+        return {
+            "connected": True,
+            "version": result.get("version"),
+            "testnet": response.get("testnet", False)
+        }
+
+    def get_expirations(
+        self,
+        currency: str = "ETH",
+        save_to_csv: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Get available expiration dates for a currency.
+
+        Args:
+            currency: Currency symbol (ETH, BTC).
+            save_to_csv: Whether to save results to CSV.
+
+        Returns:
+            Dictionary with option and future expiration dates.
+        """
+        return fetch_and_process(
+            connection=self.connection,
+            parser=self.parser,
+            validator=self.validator,
+            endpoint=DeribitEndpoints.GET_EXPIRATIONS,
+            parameters={"currency": currency},
+            validate_responses=self.validate_responses,
+            save_to_csv=save_to_csv,
+            csv_filename=f"expirations_{currency.lower()}"
+        )
+
+    def get_instruments(
+        self,
+        currency: str = "ETH",
+        kind: Optional[str] = "option",
+        expired: bool = False,
+        save_to_csv: bool = False
+    ) -> List[Dict[str, Any]]:
+        """
+        Get available trading instruments for a currency.
+
+        Args:
+            currency: Currency symbol (ETH, BTC).
+            kind: Instrument type filter (option, future, spot).
+            expired: Include expired instruments.
+            save_to_csv: Whether to save results to CSV.
+
+        Returns:
+            List of instrument details.
+        """
+        parameters = {"currency": currency}
+        if kind:
+            parameters["kind"] = kind
+        if expired:
+            parameters["expired"] = "true"
+
+        return fetch_and_process(
+            connection=self.connection,
+            parser=self.parser,
+            validator=self.validator,
+            endpoint=DeribitEndpoints.GET_INSTRUMENTS,
+            parameters=parameters,
+            validate_responses=self.validate_responses,
+            save_to_csv=save_to_csv,
+            csv_filename=f"instruments_{currency.lower()}_{kind or 'all'}",
+            csv_subdirectory="instruments"
+        )
+
+    def get_book_summary(
+        self,
+        currency: str = "ETH",
+        kind: Optional[str] = "option",
+        save_to_csv: bool = False
+    ) -> List[Dict[str, Any]]:
+        """
+        Get order book summary for all instruments of a currency.
+
+        Args:
+            currency: Currency symbol (ETH, BTC).
+            kind: Instrument type filter (option, future, spot).
+            save_to_csv: Whether to save results to CSV.
+
+        Returns:
+            List of book summary entries.
+        """
+        parameters = {"currency": currency}
+        if kind:
+            parameters["kind"] = kind
+
+        return fetch_and_process(
+            connection=self.connection,
+            parser=self.parser,
+            validator=self.validator,
+            endpoint=DeribitEndpoints.GET_BOOK_SUMMARY_BY_CURRENCY,
+            parameters=parameters,
+            validate_responses=self.validate_responses,
+            save_to_csv=save_to_csv,
+            csv_filename=f"book_summary_{currency.lower()}_{kind or 'all'}",
+            csv_subdirectory="book_summary"
+        )
+
+    def get_ticker(
+        self,
+        instrument_name: str,
+        save_to_csv: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Get current ticker data for a specific instrument.
+
+        Args:
+            instrument_name: The instrument name (e.g., ETH-PERPETUAL).
+            save_to_csv: Whether to save results to CSV.
+
+        Returns:
+            Ticker data dictionary.
+        """
+        return fetch_and_process(
+            connection=self.connection,
+            parser=self.parser,
+            validator=self.validator,
+            endpoint=DeribitEndpoints.TICKER,
+            parameters={"instrument_name": instrument_name},
+            validate_responses=self.validate_responses,
+            save_to_csv=save_to_csv,
+            csv_filename=f"ticker_{instrument_name.replace('-', '_').lower()}",
+            csv_subdirectory="ticker"
+        )
+
+    def get_order_book(
+        self,
+        instrument_name: str,
+        depth: int = 10,
+        save_to_csv: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Get order book for a specific instrument.
+
+        Args:
+            instrument_name: The instrument name (e.g., ETH-PERPETUAL).
+            depth: Number of price levels (1-10000).
+            save_to_csv: Whether to save results to CSV.
+
+        Returns:
+            Order book data with bids and asks.
+        """
+        return fetch_and_process(
+            connection=self.connection,
+            parser=self.parser,
+            validator=self.validator,
+            endpoint=DeribitEndpoints.GET_ORDER_BOOK,
+            parameters={"instrument_name": instrument_name, "depth": depth},
+            validate_responses=self.validate_responses,
+            save_to_csv=save_to_csv,
+            csv_filename=f"order_book_{instrument_name.replace('-', '_').lower()}",
+            csv_subdirectory="order_book"
+        )
+
+    def get_funding_chart_data(
+        self,
+        instrument_name: str = "ETH-PERPETUAL",
+        length: str = "8h",
+        save_to_csv: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Get funding rate chart data for a perpetual instrument.
+
+        Args:
+            instrument_name: The perpetual instrument name.
+            length: Time period (8h, 24h, 1m).
+            save_to_csv: Whether to save results to CSV.
+
+        Returns:
+            Funding chart data with data points and summary.
+        """
+        return fetch_and_process(
+            connection=self.connection,
+            parser=self.parser,
+            validator=self.validator,
+            endpoint=DeribitEndpoints.GET_FUNDING_CHART_DATA,
+            parameters={"instrument_name": instrument_name, "length": length},
+            validate_responses=self.validate_responses,
+            save_to_csv=save_to_csv,
+            csv_filename=f"funding_{instrument_name.replace('-', '_').lower()}_{length}",
+            csv_subdirectory="funding"
+        )
+
+    def get_historical_volatility(
+        self,
+        currency: str = "ETH",
+        save_to_csv: bool = False
+    ) -> List[List]:
+        """
+        Get historical volatility data for a currency.
+
+        Args:
+            currency: Currency symbol (ETH, BTC).
+            save_to_csv: Whether to save results to CSV.
+
+        Returns:
+            List of [timestamp, volatility] pairs.
+        """
+        result = fetch_and_process(
+            connection=self.connection,
+            parser=self.parser,
+            validator=self.validator,
+            endpoint=DeribitEndpoints.GET_HISTORICAL_VOLATILITY,
+            parameters={"currency": currency},
+            validate_responses=self.validate_responses
+        )
+
+        if save_to_csv and isinstance(result, list):
+            converted = self.parser.array_to_dicts(
+                result,
+                ["timestamp", "volatility"]
+            )
+            self.parser.to_csv(
+                converted,
+                f"historical_volatility_{currency.lower()}",
+                "volatility"
+            )
+
+        return result
+
+    def get_volatility_index_data(
+        self,
+        currency: str = "ETH",
+        resolution: int = 3600,
+        start_timestamp: int = None,
+        end_timestamp: int = None,
+        save_to_csv: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Get DVOL (volatility index) OHLC data.
+
+        Args:
+            currency: Currency symbol (ETH, BTC).
+            resolution: Time resolution in seconds.
+            start_timestamp: Start time in milliseconds.
+            end_timestamp: End time in milliseconds.
+            save_to_csv: Whether to save results to CSV.
+
+        Returns:
+            Dictionary with OHLC data array and continuation token.
+        """
+        import time
+        if end_timestamp is None:
+            end_timestamp = int(time.time() * 1000)
+        if start_timestamp is None:
+            start_timestamp = end_timestamp - (24 * 60 * 60 * 1000)
+
+        result = fetch_and_process(
+            connection=self.connection,
+            parser=self.parser,
+            validator=self.validator,
+            endpoint=DeribitEndpoints.GET_VOLATILITY_INDEX_DATA,
+            parameters={
+                "currency": currency,
+                "resolution": resolution,
+                "start_timestamp": start_timestamp,
+                "end_timestamp": end_timestamp
+            },
+            validate_responses=self.validate_responses
+        )
+
+        if save_to_csv and "data" in result:
+            converted = self.parser.array_to_dicts(
+                result["data"],
+                ["timestamp", "open", "high", "low", "close"]
+            )
+            self.parser.to_csv(
+                converted,
+                f"volatility_index_{currency.lower()}",
+                "volatility"
+            )
+
+        return result
+
+    def close(self) -> None:
+        """Close the API connection."""
+        self.connection.close()
+
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit."""
+        self.close()
+        return False
