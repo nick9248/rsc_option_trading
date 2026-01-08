@@ -182,13 +182,14 @@ class ApiConnectionTab(QWidget):
     def _setup_ui(self) -> None:
         """Set up the user interface."""
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(24, 24, 24, 24)
-        main_layout.setSpacing(20)
+        main_layout.setContentsMargins(16, 16, 16, 16)
+        main_layout.setSpacing(12)
 
         # Header
         header = QLabel("API Connection")
         header.setProperty("class", "heading")
-        header.setStyleSheet(f"font-size: 20px; font-weight: 600; color: {Colors.TEXT_PRIMARY};")
+        header.setStyleSheet(f"font-size: 18px; font-weight: 600; color: {Colors.TEXT_PRIMARY};")
+        header.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         main_layout.addWidget(header)
 
         # Controls section
@@ -199,39 +200,40 @@ class ApiConnectionTab(QWidget):
                 background-color: {Colors.SURFACE};
                 border: 1px solid {Colors.BORDER};
                 border-radius: 12px;
-                padding: 16px;
             }}
         """)
+        controls_frame.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         controls_layout = QVBoxLayout(controls_frame)
-        controls_layout.setContentsMargins(20, 20, 20, 20)
-        controls_layout.setSpacing(16)
+        controls_layout.setContentsMargins(16, 16, 16, 16)
+        controls_layout.setSpacing(12)
 
         # Endpoint selection row
         endpoint_row = QHBoxLayout()
-        endpoint_row.setSpacing(16)
+        endpoint_row.setSpacing(12)
 
         endpoint_label = QLabel("Endpoint:")
-        endpoint_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; min-width: 80px;")
+        endpoint_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY};")
+        endpoint_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         endpoint_row.addWidget(endpoint_label)
 
         self.endpoint_combo = QComboBox()
         self.endpoint_combo.addItems(list(self.ENDPOINTS.keys()))
-        self.endpoint_combo.setMinimumWidth(250)
+        self.endpoint_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         endpoint_row.addWidget(self.endpoint_combo)
 
-        endpoint_row.addStretch()
         controls_layout.addLayout(endpoint_row)
 
         # Parameters container
         self.parameters_frame = QFrame()
+        self.parameters_frame.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.parameters_layout = QVBoxLayout(self.parameters_frame)
         self.parameters_layout.setContentsMargins(0, 0, 0, 0)
-        self.parameters_layout.setSpacing(12)
+        self.parameters_layout.setSpacing(8)
         controls_layout.addWidget(self.parameters_frame)
 
         # Save to CSV option
         csv_row = QHBoxLayout()
-        csv_row.setSpacing(16)
+        csv_row.setSpacing(12)
 
         self.save_csv_checkbox = QCheckBox("Save to CSV")
         self.save_csv_checkbox.setStyleSheet(f"""
@@ -240,8 +242,8 @@ class ApiConnectionTab(QWidget):
                 spacing: 8px;
             }}
             QCheckBox::indicator {{
-                width: 18px;
-                height: 18px;
+                width: 16px;
+                height: 16px;
                 border-radius: 4px;
                 border: 1px solid {Colors.BORDER};
                 background-color: {Colors.INPUT_BACKGROUND};
@@ -260,10 +262,10 @@ class ApiConnectionTab(QWidget):
 
         # Run button row
         button_row = QHBoxLayout()
-        button_row.setSpacing(12)
+        button_row.setSpacing(8)
 
         self.run_button = QPushButton("Run")
-        self.run_button.setMinimumWidth(120)
+        self.run_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.run_button.setCursor(Qt.CursorShape.PointingHandCursor)
         button_row.addWidget(self.run_button)
 
@@ -279,6 +281,7 @@ class ApiConnectionTab(QWidget):
                 background-color: {Colors.BUTTON_SECONDARY_HOVER};
             }}
         """)
+        self.clear_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.clear_button.setCursor(Qt.CursorShape.PointingHandCursor)
         button_row.addWidget(self.clear_button)
 
@@ -286,6 +289,7 @@ class ApiConnectionTab(QWidget):
 
         self.status_label = QLabel("")
         self.status_label.setStyleSheet(f"color: {Colors.TEXT_MUTED};")
+        self.status_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         button_row.addWidget(self.status_label)
 
         controls_layout.addLayout(button_row)
@@ -294,11 +298,13 @@ class ApiConnectionTab(QWidget):
 
         # Log viewer section
         log_label = QLabel("Output")
-        log_label.setStyleSheet(f"font-size: 14px; font-weight: 600; color: {Colors.TEXT_SECONDARY};")
+        log_label.setStyleSheet(f"font-size: 13px; font-weight: 600; color: {Colors.TEXT_SECONDARY};")
+        log_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         main_layout.addWidget(log_label)
 
         self.log_viewer = LogViewer()
-        self.log_viewer.setMinimumHeight(300)
+        self.log_viewer.setMinimumHeight(100)
+        self.log_viewer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         main_layout.addWidget(self.log_viewer, 1)
 
         # Initial parameter setup
@@ -357,10 +363,11 @@ class ApiConnectionTab(QWidget):
         # Create parameter widgets
         for param in parameters:
             row = QHBoxLayout()
-            row.setSpacing(16)
+            row.setSpacing(12)
 
             label = QLabel(f"{param['name'].replace('_', ' ').title()}:")
-            label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; min-width: 120px;")
+            label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY};")
+            label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
             row.addWidget(label)
 
             if param["type"] == "dropdown":
@@ -368,27 +375,27 @@ class ApiConnectionTab(QWidget):
                 widget.addItems(param["options"])
                 if param.get("default"):
                     widget.setCurrentText(param["default"])
-                widget.setMinimumWidth(200)
+                widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
             elif param["type"] == "text":
                 widget = QLineEdit()
                 widget.setText(param.get("default", ""))
-                widget.setMinimumWidth(200)
+                widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
             elif param["type"] == "number":
                 widget = QSpinBox()
                 widget.setMinimum(param.get("min", 0))
                 widget.setMaximum(param.get("max", 999999))
                 widget.setValue(param.get("default", 0))
-                widget.setMinimumWidth(200)
+                widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
             else:
                 widget = QLineEdit()
                 widget.setText(str(param.get("default", "")))
+                widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
             self.parameter_widgets[param["name"]] = widget
             row.addWidget(widget)
-            row.addStretch()
 
             self.parameters_layout.addLayout(row)
 

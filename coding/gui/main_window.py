@@ -46,8 +46,8 @@ class MainWindow(QMainWindow):
     def _setup_window(self) -> None:
         """Configure window properties."""
         self.setWindowTitle("Options Trading Platform")
-        self.setMinimumSize(1200, 800)
-        self.resize(1400, 900)
+        self.setMinimumSize(600, 400)
+        self.resize(1200, 800)
 
         # Apply stylesheet
         self.setStyleSheet(Styles.get_main_stylesheet())
@@ -93,11 +93,10 @@ class MainWindow(QMainWindow):
                 color: {Colors.TEXT_SECONDARY};
                 border: 1px solid {Colors.BORDER};
                 border-bottom: none;
-                border-top-left-radius: 10px;
-                border-top-right-radius: 10px;
-                padding: 12px 28px;
-                margin-right: 4px;
-                min-width: 140px;
+                border-top-left-radius: 8px;
+                border-top-right-radius: 8px;
+                padding: 8px 16px;
+                margin-right: 2px;
                 font-weight: 500;
             }}
 
@@ -113,7 +112,7 @@ class MainWindow(QMainWindow):
             }}
 
             QTabBar::tab:first {{
-                margin-left: 8px;
+                margin-left: 4px;
             }}
         """)
 
