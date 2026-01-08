@@ -132,20 +132,25 @@ class ApiConnectionTab(QWidget):
         "Get Ticker": {
             "description": "Get ticker for an instrument",
             "parameters": [
-                {"name": "instrument_name", "type": "text", "default": "ETH-PERPETUAL"}
+                {"name": "currency", "type": "dropdown", "options": ["ETH", "BTC"], "default": "ETH"},
+                {"name": "kind", "type": "dropdown", "options": ["option", "future", "spot"], "default": "option"},
+                {"name": "instrument_name", "type": "instrument_selector", "default": ""}
             ]
         },
         "Get Order Book": {
             "description": "Get order book for an instrument",
             "parameters": [
-                {"name": "instrument_name", "type": "text", "default": "ETH-PERPETUAL"},
+                {"name": "currency", "type": "dropdown", "options": ["ETH", "BTC"], "default": "ETH"},
+                {"name": "kind", "type": "dropdown", "options": ["option", "future", "spot"], "default": "option"},
+                {"name": "instrument_name", "type": "instrument_selector", "default": ""},
                 {"name": "depth", "type": "number", "default": 10, "min": 1, "max": 10000}
             ]
         },
         "Get Funding Chart": {
-            "description": "Get funding rate data",
+            "description": "Get funding rate data (perpetuals only)",
             "parameters": [
-                {"name": "instrument_name", "type": "text", "default": "ETH-PERPETUAL"},
+                {"name": "currency", "type": "dropdown", "options": ["ETH", "BTC"], "default": "ETH"},
+                {"name": "instrument_name", "type": "perpetual_selector", "default": ""},
                 {"name": "length", "type": "dropdown", "options": ["8h", "24h", "1m"], "default": "8h"}
             ]
         },
@@ -389,6 +394,41 @@ class ApiConnectionTab(QWidget):
                 widget.setValue(param.get("default", 0))
                 widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
+            elif param["type"] == "instrument_selector":
+                widget = QComboBox()
+                widget.setPlaceholderText("Click 'Load Instruments' first")
+                widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+                load_btn = QPushButton("Load")
+                load_btn.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: {Colors.BUTTON_SECONDARY};
+                        color: {Colors.TEXT_PRIMARY};
+                        border: 1px solid {Colors.BORDER};
+                        padding: 8px 12px;
+                        border-radius: 6px;
+                    }}
+                    QPushButton:hover {{
+                        background-color: {Colors.BUTTON_SECONDARY_HOVER};
+                    }}
+                """)
+                load_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+                load_btn.clicked.connect(lambda checked, w=widget: self._load_instruments(w))
+                row.addWidget(load_btn)
+
+            elif param["type"] == "perpetual_selector":
+                widget = QComboBox()
+                currency_widget = self.parameter_widgets.get("currency")
+                currency = currency_widget.currentText() if currency_widget else "ETH"
+                widget.addItems([f"{currency}-PERPETUAL"])
+                widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+                # Update perpetual when currency changes
+                if currency_widget:
+                    currency_widget.currentTextChanged.connect(
+                        lambda curr, w=widget: self._update_perpetual(w, curr)
+                    )
+
             else:
                 widget = QLineEdit()
                 widget.setText(str(param.get("default", "")))
@@ -398,6 +438,53 @@ class ApiConnectionTab(QWidget):
             row.addWidget(widget)
 
             self.parameters_layout.addLayout(row)
+
+    def _load_instruments(self, combo_widget: QComboBox) -> None:
+        """
+        Load instruments based on current currency and kind selection.
+
+        Args:
+            combo_widget: The combo box to populate with instruments.
+        """
+        currency_widget = self.parameter_widgets.get("currency")
+        kind_widget = self.parameter_widgets.get("kind")
+
+        currency = currency_widget.currentText() if currency_widget else "ETH"
+        kind = kind_widget.currentText() if kind_widget else "option"
+
+        self.log_viewer.log_info(f"Loading {kind} instruments for {currency}...")
+        combo_widget.clear()
+        combo_widget.addItem("Loading...")
+
+        try:
+            with DeribitApiService() as service:
+                instruments = service.get_instruments(currency=currency, kind=kind)
+
+                combo_widget.clear()
+                instrument_names = sorted([inst["instrument_name"] for inst in instruments])
+
+                if instrument_names:
+                    combo_widget.addItems(instrument_names)
+                    self.log_viewer.log_info(f"Loaded {len(instrument_names)} instruments")
+                else:
+                    combo_widget.addItem("No instruments found")
+                    self.log_viewer.log_warning("No instruments found")
+
+        except Exception as error:
+            combo_widget.clear()
+            combo_widget.addItem("Error loading")
+            self.log_viewer.log_error(f"Failed to load instruments: {error}")
+
+    def _update_perpetual(self, combo_widget: QComboBox, currency: str) -> None:
+        """
+        Update perpetual selector when currency changes.
+
+        Args:
+            combo_widget: The perpetual combo box.
+            currency: The selected currency.
+        """
+        combo_widget.clear()
+        combo_widget.addItem(f"{currency}-PERPETUAL")
 
     def _get_parameters(self) -> Dict[str, Any]:
         """
@@ -411,8 +498,20 @@ class ApiConnectionTab(QWidget):
         endpoint_config = self.ENDPOINTS.get(endpoint_name, {})
         param_configs = endpoint_config.get("parameters", [])
 
+        # Check if this endpoint uses instrument selector
+        has_instrument_selector = any(
+            p["type"] in ("instrument_selector", "perpetual_selector")
+            for p in param_configs
+        )
+
         for param_config in param_configs:
             name = param_config["name"]
+            param_type = param_config["type"]
+
+            # Skip currency/kind for instrument-based endpoints (used only for loading)
+            if has_instrument_selector and name in ("currency", "kind"):
+                continue
+
             widget = self.parameter_widgets.get(name)
 
             if widget is None:
