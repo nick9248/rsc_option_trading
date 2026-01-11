@@ -19,6 +19,7 @@ from PySide6.QtGui import QIcon
 from coding.gui.theme.styles import Styles
 from coding.gui.theme.colors import Colors
 from coding.gui.tabs.api_connection_tab import ApiConnectionTab
+from coding.gui.tabs.snapshot_tab import SnapshotTab
 
 
 logger = logging.getLogger(__name__)
@@ -126,6 +127,10 @@ class MainWindow(QMainWindow):
         # API Connection tab
         api_tab = ApiConnectionTab()
         self.tab_widget.addTab(api_tab, "API Connection")
+
+        # Snapshot tab
+        snapshot_tab = SnapshotTab()
+        self.tab_widget.addTab(snapshot_tab, "Snapshot")
 
         # Placeholder tabs for future features
         self._add_placeholder_tab("Market Data", "Market data visualization coming soon...")
