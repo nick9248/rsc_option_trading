@@ -29,15 +29,23 @@ option_trading/
 ├── coding/
 │   ├── core/              # Definitions, models, base classes
 │   │   ├── api/           # API connection, parsing, validation
+│   │   ├── analytics/     # Analysis classes (OnChainAnalyzer, GexDexCalculator, ChartGenerator)
+│   │   ├── database/      # Database config, repository
 │   │   ├── endpoints/     # API endpoint definitions
 │   │   ├── logging/       # Logging configuration
 │   │   └── schemas/       # Response schemas for validation
+│   ├── gui/               # GUI components
+│   │   ├── components/    # Reusable UI components
+│   │   ├── tabs/          # Tab widgets (thin layer, calls services)
+│   │   └── theme/         # Styling and colors
 │   └── service/           # High-level orchestration services
-│       └── deribit/       # Deribit API service
+│       ├── deribit/       # Deribit API service
+│       └── database/      # Database capture service (orchestrates capture operations)
 ├── tests/
 │   ├── unit/              # Unit tests
 │   └── integration/       # Integration tests
 ├── output/
+│   ├── charts/            # Generated charts by type and expiration
 │   ├── data/              # CSV exports and data files
 │   └── log/               # Log files with timestamps
 ```
@@ -75,6 +83,49 @@ Example: For API fetching, have core definitions, then base methods (connect, fe
 - Scalable for future expansion (e.g., Asset class with expandable attributes)
 - Completely modular
 - Clear, understandable docstrings
+
+## Code Quality Checklist (MANDATORY)
+
+**Before completing ANY code task, verify:**
+
+1. **Layered Architecture**: Does the code follow Core → Service → GUI/CLI flow?
+   - GUI/CLI should NEVER contain business logic or direct API calls
+   - Services orchestrate operations using core components
+   - Core contains definitions, models, and base methods
+
+2. **Modularity**: Is each class/function doing ONE thing?
+   - No monolithic classes with multiple responsibilities
+   - Use strategy pattern for variations of same operation
+   - Each capture/analysis type should be separate class, not if/elif chains
+
+3. **Right Layer**: Is the code in the correct layer?
+   - API calls → Service layer
+   - Data models → Core layer
+   - UI rendering → GUI layer
+   - Business logic → Service layer (NOT GUI)
+
+4. **No Shortcuts**: Even if it works, is it architecturally correct?
+   - Quick solutions that violate architecture must be refactored
+   - "It works" is not sufficient - it must be clean
+
+**Example - WRONG (business logic in GUI):**
+```python
+# In GUI worker - BAD
+for inst in instruments:
+    ticker = service.get_ticker(instrument_name)  # API call in GUI!
+    # ... process data
+```
+
+**Example - CORRECT (GUI calls service):**
+```python
+# In GUI worker - GOOD
+result = capture_service.capture_gex_dex(currency, expiration)
+
+# In service layer - business logic here
+class DatabaseCaptureService:
+    def capture_gex_dex(self, currency, expiration):
+        # API calls and processing here
+```
 
 ## Problem-Solving Approach
 

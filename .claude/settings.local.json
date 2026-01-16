@@ -1,0 +1,39 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir /b \"C:\\\\Users\\\\Nick\\\\PycharmProjects\\\\option_trading\")",
+      "Bash(powershell:*)",
+      "Bash(git init:*)",
+      "Bash(git remote:*)",
+      "Bash(git branch:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "WebFetch(domain:www.deribit.com)",
+      "Bash(git checkout:*)",
+      "Bash(.venvScriptspip install -r requirements.txt)",
+      "Bash(.venvScriptsactivate)",
+      "Bash(pytest:*)",
+      "Bash(.venvScriptspython.exe -m pytest tests/ -v)",
+      "Bash(\".venv\\\\Scripts\\\\python.exe\" -m pytest tests/ -v)",
+      "Bash(\".venv\\\\Scripts\\\\python.exe\" -m pytest tests/ -v --tb=short)",
+      "Bash(git merge:*)",
+      "Bash(\".venv\\\\Scripts\\\\python.exe\" -c \"from coding.gui.app import main; print\\(''GUI imports successfully''\\)\")",
+      "WebSearch",
+      "WebFetch(domain:docs.deribit.com)",
+      "Bash(find:*)",
+      "WebFetch(domain:perfiliev.com)",
+      "WebFetch(domain:menthorq.com)",
+      "WebFetch(domain:doc.tradingflow.com)",
+      "Bash(python:*)",
+      "WebFetch(domain:insights.glassnode.com)",
+      "WebFetch(domain:halcyonwaters.com)",
+      "WebFetch(domain:unusualwhales.substack.com)",
+      "Bash(C:/Users/Nick/PycharmProjects/option_trading/.venv/Scripts/python.exe -m pytest C:/Users/Nick/PycharmProjects/option_trading -v)",
+      "Bash(pip install:*)",
+      "Bash(dir /b \"C:\\\\Users\\\\Nick\\\\PycharmProjects\\\\option_trading\\\\coding\\\\core\\\\analytics\")",
+      "Bash(dir /b \"C:\\\\Users\\\\Nick\\\\PycharmProjects\\\\option_trading\\\\coding\\\\core\\\\database\")",
+      "Bash(dir:*)"
+    ]
+  }
+}
