@@ -614,7 +614,7 @@ def generate_gex_dex_trend(
         title=f"GEX/DEX Trend - {currency} {expiration}",
         hovermode="x unified",
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.02},
-        height=700,
+        height=550,
         **theme
     )
 
