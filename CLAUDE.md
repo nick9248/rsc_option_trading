@@ -76,6 +76,50 @@ Example: For API fetching, have core definitions, then base methods (connect, fe
 - Completely modular
 - Clear, understandable docstrings
 
+## Problem-Solving Approach
+
+When fixing bugs or issues, follow structural thinking - not quick patches:
+
+1. **Understand the flow first**: Before fixing, trace the data flow and understand WHY the problem exists
+2. **Find the root cause**: Don't patch symptoms. If data is wrong, find where it becomes wrong in the pipeline
+3. **Fix at the right layer**: The fix should be in the component responsible for that logic
+4. **Maintain clean architecture**: Don't add external calls or workarounds that bypass the established flow
+
+**Example - Wrong approach:**
+```python
+# Problem: OnChainAnalyzer has stale underlying_price
+# Bad fix: Add separate API call in worker to fetch fresh price
+perpetual_ticker = service.get_ticker(f"{currency}-PERPETUAL")
+analyzer.underlying_price = perpetual_ticker.get("index_price")
+```
+
+**Example - Correct approach:**
+```python
+# Good fix: Fix the extraction logic inside OnChainAnalyzer
+# The class receives the data, so it should extract the price correctly
+def _extract_underlying_price(self, data):
+    """Use mode (most common value) since stale instruments have old prices."""
+    prices = [item.get("underlying_price") for item in data if item.get("underlying_price")]
+    return Counter(prices).most_common(1)[0][0] if prices else 0.0
+```
+
+**Key principle**: If the same data source works correctly elsewhere (e.g., Snapshot tab), the problem is in how this component processes the data, not in the data itself.
+
+**Data investigation example:**
+When extracting a value from aggregated data (like `underlying_price` from book_summary), investigate the actual data distribution first:
+```python
+# Don't assume - investigate
+from collections import Counter
+prices = [item.get('underlying_price') for item in data]
+print(Counter(prices).most_common(5))  # See what values exist
+
+# Then find the pattern
+# e.g., high-volume instruments have more recent data
+active = [i for i in data if i.get('volume', 0) > 0]
+highest_volume = max(active, key=lambda x: x.get('volume'))
+# Use price from most active instrument
+```
+
 ## Logging System
 
 Use `logging` module. Never use `print()`.
