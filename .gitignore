@@ -38,8 +38,10 @@ logs/
 # Output files (keep folder structure with .gitkeep)
 output/log/*
 output/data/*
+output/charts/*
 !output/log/.gitkeep
 !output/data/.gitkeep
+!output/charts/.gitkeep
 
 # Environment variables
 .env
