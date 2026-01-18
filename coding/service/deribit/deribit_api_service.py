@@ -107,6 +107,84 @@ class DeribitApiService:
             csv_filename=f"expirations_{currency.lower()}"
         )
 
+    def get_expirations_sorted_by_oi(
+        self,
+        currency: str = "ETH",
+        include_oi: bool = False
+    ) -> List[str]:
+        """
+        Get option expirations sorted by total open interest (descending).
+
+        This method fetches all option expirations, calculates total OI for each,
+        and returns them sorted with highest OI first.
+
+        Args:
+            currency: Currency symbol (ETH, BTC).
+            include_oi: If True, returns "expiration (OI: 12345)" format. Default False.
+
+        Returns:
+            List of expiration strings sorted by OI descending.
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # Get expirations from API
+        expirations_data = self.get_expirations(currency=currency)
+
+        # Extract option expirations
+        currency_data = expirations_data.get(currency.lower(), {})
+        option_expirations = currency_data.get("option", [])
+
+        if not option_expirations:
+            logger.warning(f"No option expirations found for {currency}")
+            return []
+
+        logger.info(f"Found {len(option_expirations)} option expirations for {currency}")
+
+        # Get book summary to calculate OI
+        book_summary = self.get_book_summary(currency=currency, kind="option")
+
+        if not book_summary:
+            logger.warning("Could not fetch book summary for OI sorting, using alphabetical order")
+            return sorted(option_expirations)
+
+        # Calculate total OI per expiration
+        oi_by_expiration = {}
+        for item in book_summary:
+            instrument_name = item.get("instrument_name", "")
+            parts = instrument_name.split("-")
+
+            if len(parts) >= 4:
+                expiration = parts[1]
+                oi = item.get("open_interest", 0) or 0
+
+                if expiration not in oi_by_expiration:
+                    oi_by_expiration[expiration] = 0
+                oi_by_expiration[expiration] += oi
+
+        # Sort expirations by OI descending
+        sorted_expirations = sorted(
+            option_expirations,
+            key=lambda exp: oi_by_expiration.get(exp, 0),
+            reverse=True  # Highest OI first
+        )
+
+        # Format with OI if requested
+        if include_oi:
+            formatted_expirations = []
+            for exp in sorted_expirations:
+                oi = oi_by_expiration.get(exp, 0)
+                # Format OI with commas for readability
+                formatted_expirations.append(f"{exp} (OI: {oi:,.0f})")
+            sorted_expirations = formatted_expirations
+
+        logger.info(
+            f"Sorted {len(sorted_expirations)} expirations by OI. "
+            f"Top 3: {sorted_expirations[:3] if len(sorted_expirations) >= 3 else sorted_expirations}"
+        )
+
+        return sorted_expirations
+
     def get_instruments(
         self,
         currency: str = "ETH",

@@ -33,7 +33,11 @@
       "Bash(pip install:*)",
       "Bash(dir /b \"C:\\\\Users\\\\Nick\\\\PycharmProjects\\\\option_trading\\\\coding\\\\core\\\\analytics\")",
       "Bash(dir /b \"C:\\\\Users\\\\Nick\\\\PycharmProjects\\\\option_trading\\\\coding\\\\core\\\\database\")",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(psql:*)",
+      "Bash(findstr:*)",
+      "Bash(more:*)",
+      "Bash(del run_migration.py test_strategy_report.py)"
     ]
   }
 }
