@@ -670,3 +670,182 @@ class DatabaseRepository:
         finally:
             cursor.close()
             self._return_connection(conn)
+
+    def save_strategy_signal(
+        self,
+        signal: Dict[str, Any],
+        captured_at: Optional[datetime] = None
+    ) -> int:
+        """
+        Save strategy signal to the strategy_signals table.
+
+        Args:
+            signal: Strategy signal dictionary with all fields
+            captured_at: Timestamp of signal generation. Uses current time if not provided.
+
+        Returns:
+            ID of inserted row.
+        """
+        import json
+
+        captured_at = captured_at or signal.get("generated_at") or datetime.now()
+        conn = self._get_connection()
+
+        try:
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                INSERT INTO strategy_signals (
+                    generated_at, strategy_name, currency, expiration,
+                    intrinsic_score, on_chain_score, composite_score, rank,
+                    legs, intrinsic_breakdown, on_chain_breakdown,
+                    underlying_price, implied_volatility, max_pain_strike,
+                    max_risk, max_profit, total_cost, breakeven_points,
+                    max_loss_percentage, take_profit_percentage, market_regime,
+                    net_delta, net_gamma, net_theta, net_vega
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                )
+                RETURNING id
+            """, (
+                captured_at,
+                signal.get("strategy_name"),
+                signal.get("currency"),
+                signal.get("expiration"),
+                signal.get("intrinsic_score"),
+                signal.get("on_chain_score"),
+                signal.get("composite_score"),
+                signal.get("rank"),
+                json.dumps(signal.get("legs", [])),
+                json.dumps(signal.get("intrinsic_breakdown", {})),
+                json.dumps(signal.get("on_chain_breakdown", {})),
+                signal.get("underlying_price"),
+                signal.get("implied_volatility"),
+                signal.get("max_pain_strike"),
+                signal.get("max_risk"),
+                signal.get("max_profit"),
+                signal.get("total_cost"),
+                signal.get("breakeven_points", []),
+                signal.get("max_loss_percentage"),
+                signal.get("take_profit_percentage"),
+                signal.get("market_regime"),
+                signal.get("net_delta"),
+                signal.get("net_gamma"),
+                signal.get("net_theta"),
+                signal.get("net_vega")
+            ))
+
+            row_id = cursor.fetchone()[0]
+            conn.commit()
+
+            logger.info(
+                f"Saved strategy signal: {signal.get('strategy_name')} "
+                f"for {signal.get('currency')}-{signal.get('expiration')}, "
+                f"composite_score={signal.get('composite_score'):.2f}"
+            )
+            return row_id
+
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"Failed to save strategy signal: {e}")
+            raise
+        finally:
+            cursor.close()
+            self._return_connection(conn)
+
+    def get_strategy_signals(
+        self,
+        currency: Optional[str] = None,
+        expiration: Optional[str] = None,
+        strategy_name: Optional[str] = None,
+        min_composite_score: float = 0.0,
+        market_regime: Optional[str] = None,
+        limit: int = 100
+    ) -> List[Dict[str, Any]]:
+        """
+        Query strategy signals with filters.
+
+        Args:
+            currency: Filter by currency (optional)
+            expiration: Filter by expiration (optional)
+            strategy_name: Filter by strategy name (optional)
+            min_composite_score: Minimum composite score filter
+            market_regime: Filter by market regime (optional)
+            limit: Maximum number of results
+
+        Returns:
+            List of strategy signal records ordered by composite_score DESC
+        """
+        import json
+
+        conn = self._get_connection()
+
+        try:
+            cursor = conn.cursor()
+
+            # Build WHERE clauses
+            where_clauses = ["composite_score >= %s"]
+            params = [min_composite_score]
+
+            if currency:
+                where_clauses.append("currency = %s")
+                params.append(currency)
+
+            if expiration:
+                where_clauses.append("expiration = %s")
+                params.append(expiration)
+
+            if strategy_name:
+                where_clauses.append("strategy_name = %s")
+                params.append(strategy_name)
+
+            if market_regime:
+                where_clauses.append("market_regime = %s")
+                params.append(market_regime)
+
+            where_sql = " AND ".join(where_clauses)
+            params.append(limit)
+
+            cursor.execute(f"""
+                SELECT
+                    id, generated_at, strategy_name, currency, expiration,
+                    intrinsic_score, on_chain_score, composite_score, rank,
+                    legs, intrinsic_breakdown, on_chain_breakdown,
+                    underlying_price, implied_volatility, max_pain_strike,
+                    max_risk, max_profit, total_cost, breakeven_points,
+                    max_loss_percentage, take_profit_percentage, market_regime,
+                    net_delta, net_gamma, net_theta, net_vega
+                FROM strategy_signals
+                WHERE {where_sql}
+                ORDER BY composite_score DESC, generated_at DESC
+                LIMIT %s
+            """, params)
+
+            columns = [
+                "id", "generated_at", "strategy_name", "currency", "expiration",
+                "intrinsic_score", "on_chain_score", "composite_score", "rank",
+                "legs", "intrinsic_breakdown", "on_chain_breakdown",
+                "underlying_price", "implied_volatility", "max_pain_strike",
+                "max_risk", "max_profit", "total_cost", "breakeven_points",
+                "max_loss_percentage", "take_profit_percentage", "market_regime",
+                "net_delta", "net_gamma", "net_theta", "net_vega"
+            ]
+
+            results = []
+            for row in cursor.fetchall():
+                signal_dict = dict(zip(columns, row))
+
+                # Parse JSON fields
+                signal_dict["legs"] = json.loads(signal_dict["legs"]) if signal_dict["legs"] else []
+                signal_dict["intrinsic_breakdown"] = json.loads(signal_dict["intrinsic_breakdown"]) if signal_dict["intrinsic_breakdown"] else {}
+                signal_dict["on_chain_breakdown"] = json.loads(signal_dict["on_chain_breakdown"]) if signal_dict["on_chain_breakdown"] else {}
+
+                results.append(signal_dict)
+
+            logger.info(f"Retrieved {len(results)} strategy signals")
+            return results
+
+        finally:
+            cursor.close()
+            self._return_connection(conn)
