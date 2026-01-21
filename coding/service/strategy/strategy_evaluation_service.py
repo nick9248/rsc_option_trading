@@ -25,6 +25,7 @@ from coding.core.strategy.models import (
 )
 from coding.core.strategy.scoring import CompositeScorer, IntrinsicScorer, OnChainScorer
 from coding.core.strategy.report_generator import StrategyReportGenerator
+from coding.core.strategy.chart_generator import StrategyChartGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,9 @@ class StrategyEvaluationService:
 
         # Initialize report generator
         self.report_generator = StrategyReportGenerator()
+
+        # Initialize chart generator with repository for trend analysis
+        self.chart_generator = StrategyChartGenerator(repository=repository)
 
         logger.info("StrategyEvaluationService initialized")
 
@@ -166,6 +170,19 @@ class StrategyEvaluationService:
                         logger.debug(f"Generated report: {report_path}")
                     except Exception as e:
                         logger.error(f"Failed to generate report: {e}", exc_info=True)
+
+                    # Generate interactive chart
+                    try:
+                        chart_path = self.chart_generator.generate_strategy_chart(
+                            signal=signal,
+                            market_context=market_context,
+                            currency=currency,
+                            expiration=expiration
+                        )
+                        signal.chart_path = chart_path
+                        logger.debug(f"Generated chart: {chart_path}")
+                    except Exception as e:
+                        logger.error(f"Failed to generate chart: {e}", exc_info=True)
 
                 # Trim to top_n
                 result.signals = result.signals[:config.top_n]
@@ -408,6 +425,7 @@ class StrategyEvaluationService:
                 "gex_total": gex_dex_metrics["total_net_gex"],
                 "dex_total": gex_dex_metrics["total_net_dex"],
                 "gex_dex_data": gex_dex_metrics,  # Full GEX/DEX data for report
+                "support_resistance": on_chain_metrics["support_resistance"],  # Top OI-based levels for chart
                 "implied_volatility": None  # Could add IV calculation later
             }
 

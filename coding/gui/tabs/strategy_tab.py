@@ -521,10 +521,10 @@ Example: If you select "Bullish" regime and evaluate a Long Put, the composite s
 
         # Results table
         self.results_table = QTableWidget()
-        self.results_table.setColumnCount(8)
+        self.results_table.setColumnCount(9)
         self.results_table.setHorizontalHeaderLabels([
             "Rank", "Strategy", "Expiry", "Composite", "Intrinsic", "On-Chain",
-            "Max Loss %", "Breakeven"
+            "Max Loss %", "Breakeven", "Chart"
         ])
         self.results_table.setStyleSheet(self._get_table_style())
         self.results_table.setAlternatingRowColors(True)
@@ -823,6 +823,10 @@ Example: If you select "Bullish" regime and evaluate a Long Put, the composite s
             breakeven_str = ", ".join([f"{bp:.0f}" for bp in signal.breakeven_points])
             self.results_table.setItem(i, 7, QTableWidgetItem(breakeven_str))
 
+            # View Chart button
+            chart_btn = self._create_chart_button(signal)
+            self.results_table.setCellWidget(i, 8, chart_btn)
+
         self.results_table.resizeColumnsToContents()
 
     def _on_evaluation_error(self, error: str) -> None:
@@ -879,6 +883,84 @@ Example: If you select "Bullish" regime and evaluate a Long Put, the composite s
             }}
         """)
         msg_box.exec()
+
+    def _create_chart_button(self, signal) -> QPushButton:
+        """
+        Create a button to view strategy chart.
+
+        Args:
+            signal: Strategy signal with chart_path
+
+        Returns:
+            Button widget
+        """
+        from pathlib import Path
+
+        btn = QPushButton("View")
+        btn.setFixedSize(60, 30)
+
+        # Check if chart path exists
+        has_chart = signal.chart_path and Path(signal.chart_path).exists()
+
+        if has_chart:
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {Colors.ACCENT};
+                    color: {Colors.TEXT_PRIMARY};
+                    border: none;
+                    border-radius: 6px;
+                    font-size: 12px;
+                    font-weight: 600;
+                    padding: 4px;
+                }}
+                QPushButton:hover {{
+                    background-color: {Colors.ACCENT_MUTED};
+                }}
+                QPushButton:pressed {{
+                    background-color: #1565c0;
+                }}
+            """)
+            btn.clicked.connect(lambda: self._open_chart(signal.chart_path))
+        else:
+            btn.setText("N/A")
+            btn.setEnabled(False)
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {Colors.SURFACE};
+                    color: {Colors.TEXT_SECONDARY};
+                    border: 1px solid {Colors.BORDER};
+                    border-radius: 6px;
+                    font-size: 12px;
+                    padding: 4px;
+                }}
+            """)
+
+        return btn
+
+    def _open_chart(self, chart_path: str) -> None:
+        """
+        Open chart HTML file in default browser.
+
+        Args:
+            chart_path: Path to chart HTML file
+        """
+        import webbrowser
+        from pathlib import Path
+
+        path = Path(chart_path)
+
+        if path.exists():
+            # Convert to file:// URL
+            file_url = path.as_uri()
+            webbrowser.open(file_url)
+            logger.info(f"Opened chart: {path.name}")
+        else:
+            QMessageBox.warning(
+                self,
+                "Chart Not Found",
+                f"Chart file not found:\n{chart_path}\n\nTry re-evaluating the strategy."
+            )
+            logger.warning(f"Chart file not found: {chart_path}")
 
     def _get_button_style(self, color: str) -> str:
         """Get button stylesheet."""

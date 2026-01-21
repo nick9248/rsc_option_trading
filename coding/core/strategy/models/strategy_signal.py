@@ -66,6 +66,9 @@ class StrategySignal:
     # Ranking
     rank: Optional[int] = None
 
+    # Chart path
+    chart_path: Optional[str] = None
+
     def __post_init__(self):
         """Validate signal data."""
         # Validate scores are in 0-10 range
@@ -117,7 +120,8 @@ class StrategySignal:
             "net_gamma": self.net_gamma,
             "net_theta": self.net_theta,
             "net_vega": self.net_vega,
-            "rank": self.rank
+            "rank": self.rank,
+            "chart_path": self.chart_path
         }
 
     @classmethod
