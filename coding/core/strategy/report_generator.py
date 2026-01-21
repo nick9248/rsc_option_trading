@@ -298,15 +298,19 @@ class StrategyReportGenerator:
             sr_data = market_context['support_resistance']
 
             if 'resistance_levels' in sr_data and sr_data['resistance_levels']:
-                lines.append("Resistance Levels:")
+                lines.append("Resistance Levels (Top Call OI):")
                 for level in sr_data['resistance_levels'][:5]:  # Top 5
-                    lines.append(f"  ${level:,.2f}")
+                    strike = level.get('strike', 0)
+                    call_oi = level.get('call_oi', 0)
+                    lines.append(f"  ${strike:,.2f} (Call OI: {call_oi:,.0f})")
                 lines.append("")
 
             if 'support_levels' in sr_data and sr_data['support_levels']:
-                lines.append("Support Levels:")
+                lines.append("Support Levels (Top Put OI):")
                 for level in sr_data['support_levels'][:5]:  # Top 5
-                    lines.append(f"  ${level:,.2f}")
+                    strike = level.get('strike', 0)
+                    put_oi = level.get('put_oi', 0)
+                    lines.append(f"  ${strike:,.2f} (Put OI: {put_oi:,.0f})")
                 lines.append("")
 
         # Trend Analysis
