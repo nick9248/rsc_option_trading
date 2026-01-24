@@ -69,3 +69,7 @@ class Colors:
     SCROLLBAR_TRACK = "#141418"
     SCROLLBAR_HANDLE = "#2A2A32"
     SCROLLBAR_HANDLE_HOVER = "#3A3A44"
+
+    # Financial colors
+    PROFIT = "#2ECC71"  # Green for profits
+    LOSS = "#E74C3C"    # Red for losses
