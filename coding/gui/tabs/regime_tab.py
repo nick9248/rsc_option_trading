@@ -95,12 +95,8 @@ class RegimeTab(QWidget):
         self.worker: Optional[RegimeDetectionWorker] = None
         self.latest_result: Optional[dict] = None
 
-        # Setup GUI logging
-        gui_handler = GuiLogHandler()
-        logger.addHandler(gui_handler)
-
         self._init_ui()
-        gui_handler.log_emitted.connect(self.log_viewer.append_log)
+        self._setup_logging()
 
     def _init_ui(self) -> None:
         """Initialize the user interface."""
@@ -131,12 +127,20 @@ class RegimeTab(QWidget):
 
         self.setLayout(layout)
 
+    def _setup_logging(self) -> None:
+        """Set up logging to the GUI log viewer."""
+        gui_handler = GuiLogHandler(self.log_viewer)
+        gui_handler.setFormatter(
+            logging.Formatter("%(message)s")
+        )
+        logger.addHandler(gui_handler)
+
     def _create_control_panel(self) -> QFrame:
         """Create the control panel with currency selector and detect button."""
         frame = QFrame()
         frame.setFrameStyle(QFrame.Shape.StyledPanel)
         frame.setStyleSheet(
-            f"background-color: {Colors.PANEL_BG}; "
+            f"background-color: {Colors.SURFACE}; "
             f"border: 1px solid {Colors.BORDER}; "
             f"border-radius: 4px;"
         )
@@ -152,7 +156,7 @@ class RegimeTab(QWidget):
         self.currency_combo = QComboBox()
         self.currency_combo.addItems(["BTC", "ETH"])
         self.currency_combo.setStyleSheet(
-            f"background-color: {Colors.INPUT_BG}; "
+            f"background-color: {Colors.INPUT_BACKGROUND}; "
             f"color: {Colors.TEXT_PRIMARY}; "
             f"border: 1px solid {Colors.BORDER}; "
             f"padding: 5px; "
@@ -183,7 +187,7 @@ class RegimeTab(QWidget):
         frame = QFrame()
         frame.setFrameStyle(QFrame.Shape.StyledPanel)
         frame.setStyleSheet(
-            f"background-color: {Colors.PANEL_BG}; "
+            f"background-color: {Colors.SURFACE}; "
             f"border: 1px solid {Colors.BORDER}; "
             f"border-radius: 4px;"
         )
@@ -236,13 +240,13 @@ class RegimeTab(QWidget):
         self.scores_table.setHorizontalHeaderLabels(["Component", "Score"])
         self.scores_table.setRowCount(5)
         self.scores_table.setStyleSheet(
-            f"background-color: {Colors.INPUT_BG}; "
+            f"background-color: {Colors.INPUT_BACKGROUND}; "
             f"color: {Colors.TEXT_PRIMARY}; "
             f"border: 1px solid {Colors.BORDER}; "
             f"gridline-color: {Colors.BORDER};"
         )
         self.scores_table.horizontalHeader().setStyleSheet(
-            f"background-color: {Colors.PANEL_BG}; "
+            f"background-color: {Colors.SURFACE}; "
             f"color: {Colors.TEXT_PRIMARY}; "
             f"font-weight: bold;"
         )
@@ -268,7 +272,7 @@ class RegimeTab(QWidget):
         self.reasoning_text.setReadOnly(True)
         self.reasoning_text.setMaximumHeight(100)
         self.reasoning_text.setStyleSheet(
-            f"background-color: {Colors.INPUT_BG}; "
+            f"background-color: {Colors.INPUT_BACKGROUND}; "
             f"color: {Colors.TEXT_SECONDARY}; "
             f"border: 1px solid {Colors.BORDER}; "
             f"padding: 5px;"
