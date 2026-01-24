@@ -206,6 +206,16 @@ class DeribitSchemas:
         ]
     )
 
+    TRADINGVIEW_CHART_DATA = ResponseSchema(
+        name="TradingViewChartData",
+        result_type=dict,
+        description="Response from /public/get_tradingview_chart_data endpoint.",
+        fields=[
+            FieldSchema(name="ticks", field_type=list, required=True),
+            FieldSchema(name="status", field_type=str, required=True),
+        ]
+    )
+
     @classmethod
     def get_schema_for_endpoint(cls, endpoint_path: str) -> ResponseSchema:
         """
@@ -230,6 +240,7 @@ class DeribitSchemas:
             "/public/get_funding_chart_data": cls.FUNDING_CHART_DATA,
             "/public/get_historical_volatility": cls.HISTORICAL_VOLATILITY,
             "/public/get_volatility_index_data": cls.VOLATILITY_INDEX_DATA,
+            "/public/get_tradingview_chart_data": cls.TRADINGVIEW_CHART_DATA,
         }
 
         if endpoint_path not in schema_map:

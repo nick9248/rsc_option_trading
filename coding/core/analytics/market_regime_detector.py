@@ -470,7 +470,8 @@ class MarketRegimeDetector:
         put_call_ratio = onchain.get("put_call_ratio")
         if funding_rate is not None:
             funding_pct = funding_rate * 100
-            reasons.append(f"On-Chain: Funding={funding_pct:.3f}%, P/C Ratio={put_call_ratio:.2f if put_call_ratio else 'N/A'}")
+            pc_ratio_str = f"{put_call_ratio:.2f}" if put_call_ratio is not None else "N/A"
+            reasons.append(f"On-Chain: Funding={funding_pct:.3f}%, P/C Ratio={pc_ratio_str}")
 
         # Sentiment analysis
         fear_greed_data = external.get("fear_greed")

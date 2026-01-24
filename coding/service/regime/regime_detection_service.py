@@ -78,7 +78,27 @@ class RegimeDetectionService:
                 logger.error("Failed to fetch OHLCV data")
                 return {"error": "Failed to fetch OHLCV data"}
 
-            ohlcv_data = ohlcv_result["ticks"]
+            # Transform columnar format to row format
+            # API returns: {ticks: [...], open: [...], high: [...], low: [...], close: [...], volume: [...]}
+            # Need: [[timestamp, open, high, low, close, volume], ...]
+            timestamps = ohlcv_result["ticks"]
+            opens = ohlcv_result.get("open", [])
+            highs = ohlcv_result.get("high", [])
+            lows = ohlcv_result.get("low", [])
+            closes = ohlcv_result.get("close", [])
+            volumes = ohlcv_result.get("volume", [])
+
+            ohlcv_data = []
+            for i in range(len(timestamps)):
+                ohlcv_data.append([
+                    timestamps[i],
+                    opens[i] if i < len(opens) else 0,
+                    highs[i] if i < len(highs) else 0,
+                    lows[i] if i < len(lows) else 0,
+                    closes[i] if i < len(closes) else 0,
+                    volumes[i] if i < len(volumes) else 0,
+                ])
+
             logger.info(f"Fetched {len(ohlcv_data)} OHLCV data points")
 
             # Step 2: Calculate technical indicators
