@@ -232,14 +232,47 @@ class RegimeDetectionService:
             except Exception as e:
                 logger.warning(f"Failed to fetch DVOL: {e}")
 
-            # Get put/call ratio from latest book summary (if available in repository)
+            # Get put/call ratio from current book summary
             try:
-                # Try to get from most recent on-chain capture
-                # This would require a repository method to fetch latest metrics
-                # For now, we'll skip if not available
-                pass
+                book_summary = self.api_service.get_book_summary(
+                    currency=currency,
+                    kind="option"
+                )
+
+                if book_summary:
+                    from coding.core.analytics.on_chain_analyzer import OnChainAnalyzer
+
+                    analyzer = OnChainAnalyzer(book_summary, currency)
+                    analyzer.parse_instruments()
+
+                    # Get all active strikes (combine all expirations for overall market sentiment)
+                    all_strikes = {}
+                    for exp_data in analyzer.parsed_data.values():
+                        for instrument in exp_data:
+                            strike = instrument.get("strike")
+                            option_type = instrument.get("option_type")
+                            oi = instrument.get("open_interest", 0)
+
+                            if strike and option_type and oi > 0:
+                                if strike not in all_strikes:
+                                    all_strikes[strike] = {"call_oi": 0, "put_oi": 0}
+
+                                if option_type == "C":
+                                    all_strikes[strike]["call_oi"] += oi
+                                elif option_type == "P":
+                                    all_strikes[strike]["put_oi"] += oi
+
+                    # Calculate total P/C ratio
+                    total_call_oi = sum(data["call_oi"] for data in all_strikes.values())
+                    total_put_oi = sum(data["put_oi"] for data in all_strikes.values())
+
+                    if total_call_oi > 0:
+                        put_call_ratio = total_put_oi / total_call_oi
+                        metrics["put_call_ratio"] = put_call_ratio
+                        logger.info(f"Put/Call Ratio: {put_call_ratio:.2f}")
+
             except Exception as e:
-                logger.debug(f"Put/call ratio not available: {e}")
+                logger.warning(f"Failed to calculate Put/Call ratio: {e}")
 
         except Exception as e:
             logger.error(f"Failed to fetch on-chain metrics: {e}", exc_info=True)

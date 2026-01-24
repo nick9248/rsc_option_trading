@@ -130,12 +130,10 @@ class TechnicalIndicatorCalculator:
             logger.error(f"Failed to calculate ATR: {e}")
             df["atr"] = None
 
-        # Calculate ATR percentile (rank over last 90 days)
+        # Calculate ATR percentile (global rank across all data)
         if "atr" in df.columns and df["atr"].notna().any():
-            df["atr_percentile"] = df["atr"].rolling(window=90).apply(
-                lambda x: (x.rank(pct=True).iloc[-1] * 100) if len(x) > 0 else None,
-                raw=False
-            )
+            # Use global percentile rank across entire dataset
+            df["atr_percentile"] = df["atr"].rank(pct=True) * 100
         else:
             df["atr_percentile"] = None
 

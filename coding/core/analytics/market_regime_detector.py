@@ -20,12 +20,13 @@ class MarketRegimeDetector:
     """
 
     # Component weights (must sum to 1.0)
+    # Adjusted based on analysis: increased sentiment, decreased volatility
     WEIGHTS = {
         "trend": 0.30,
-        "volatility": 0.15,
+        "volatility": 0.10,
         "momentum": 0.25,
         "onchain": 0.20,
-        "sentiment": 0.10,
+        "sentiment": 0.15,
     }
 
     # Regime thresholds (based on composite score -100 to +100)
