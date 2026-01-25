@@ -170,23 +170,20 @@ class MarketRegimeDetector:
         """
         Score the volatility component (-100 to +100).
 
-        High volatility is slightly negative (uncertain/risky).
-        Low volatility is slightly positive (stable).
+        High volatility indicates fear/uncertainty (bearish).
+        Low/normal volatility is neutral (complacency or stable).
         """
         score = 0.0
         atr_percentile = indicators.get("atr_percentile")
 
         if atr_percentile is not None:
-            # LOW volatility (< 25th percentile) = slightly bullish (stability)
+            # LOW volatility (< 25th percentile) = neutral (complacency, no conviction)
             if atr_percentile < 25:
-                score += 20
-            # NORMAL volatility (25-50th) = neutral
-            elif atr_percentile < 50:
-                score += 5
-            # HIGH volatility (50-75th) = slightly bearish (risk)
+                score += 0
+            # NORMAL volatility (25-75th) = neutral
             elif atr_percentile < 75:
-                score -= 10
-            # EXTREME volatility (> 75th) = bearish (high risk)
+                score += 0
+            # EXTREME volatility (> 75th) = bearish (fear/uncertainty)
             else:
                 score -= 30
 
@@ -262,42 +259,46 @@ class MarketRegimeDetector:
         put_call_ratio = onchain.get("put_call_ratio")
 
         # Funding rate scoring (60% of on-chain score)
+        # Typical range: -0.03% to +0.03% daily
         if funding_rate is not None:
             # Positive funding = longs paying shorts = bullish
             # Negative funding = shorts paying longs = bearish
-            # Scale: typical funding is -0.1% to +0.1% (0.001)
-            if funding_rate > 0.0005:
-                # High positive funding (> 0.05%)
-                score += 50
-            elif funding_rate > 0:
-                # Positive funding
-                score += 30
-            elif funding_rate > -0.0005:
-                # Slightly negative
-                score -= 30
+            if funding_rate > 0.01:
+                # Very bullish (> 1%)
+                score += 40
+            elif funding_rate > 0.005:
+                # Bullish (> 0.5%)
+                score += 20
+            elif funding_rate > -0.005:
+                # Neutral zone (±0.5%) - normal market conditions
+                score += 0
+            elif funding_rate > -0.01:
+                # Bearish (< -0.5%)
+                score -= 20
             else:
-                # High negative funding
-                score -= 50
+                # Very bearish (< -1%)
+                score -= 40
 
         # Put/Call ratio scoring (40% of on-chain score)
+        # Simplified thresholds for clearer interpretation
         if put_call_ratio is not None:
             # High P/C ratio = fear/bearish
             # Low P/C ratio = greed/bullish
-            if put_call_ratio > 1.5:
-                # Heavy put bias = bearish
-                score -= 40
+            if put_call_ratio > 1.2:
+                # Heavy put bias (> 1.2 = fear)
+                score -= 30
             elif put_call_ratio > 1.0:
-                # Moderate put bias = slightly bearish
-                score -= 20
-            elif put_call_ratio > 0.7:
-                # Balanced
+                # Slight put bias
+                score -= 10
+            elif put_call_ratio > 0.8:
+                # Balanced (0.8-1.0 is neutral)
                 score += 0
-            elif put_call_ratio > 0.5:
-                # Call bias = bullish
-                score += 20
+            elif put_call_ratio > 0.6:
+                # Slight call bias (moderately bullish)
+                score += 10
             else:
-                # Heavy call bias = very bullish
-                score += 40
+                # Heavy call bias (< 0.6 = greed)
+                score += 30
 
         return max(-100, min(100, score))
 
