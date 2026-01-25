@@ -22,6 +22,7 @@ from coding.gui.tabs.api_connection_tab import ApiConnectionTab
 from coding.gui.tabs.snapshot_tab import SnapshotTab
 from coding.gui.tabs.on_chain_analysis_tab import OnChainAnalysisTab
 from coding.gui.tabs.database_tab import DatabaseTab
+from coding.gui.tabs.regime_tab import RegimeTab
 
 
 logger = logging.getLogger(__name__)
@@ -141,6 +142,10 @@ class MainWindow(QMainWindow):
         # Database tab
         database_tab = DatabaseTab()
         self.tab_widget.addTab(database_tab, "Database")
+
+        # Market Regime Detection tab
+        regime_tab = RegimeTab()
+        self.tab_widget.addTab(regime_tab, "Market Regime")
 
         # Placeholder tabs for future features
         self._add_placeholder_tab("Market Data", "Market data visualization coming soon...")
