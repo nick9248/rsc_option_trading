@@ -7,7 +7,7 @@ Scores strategies based on on-chain market data:
 - Open interest levels
 - Put/Call ratio
 - Volume profile
-- Trend analysis (max pain trend, volume trend)
+- Market regime detection (technical, on-chain, sentiment analysis)
 """
 
 import logging
@@ -28,7 +28,7 @@ class OnChainScorer(BaseScorer):
     3. OI Levels (15%): Open interest at strikes
     4. Put/Call Ratio (15%): Market sentiment
     5. Volume Profile (15%): Trading volume
-    6. Trend Analysis (15%): Max pain trend + volume trend
+    6. Market Regime (15%): Multi-factor regime detection with alignment scoring
 
     All scores are on 0-10 scale, higher is better.
     """
@@ -40,7 +40,7 @@ class OnChainScorer(BaseScorer):
         "oi_levels": 0.15,
         "put_call_ratio": 0.15,
         "volume_profile": 0.15,
-        "trend_analysis": 0.15
+        "market_regime": 0.15
     }
 
     def __init__(self, repository=None):
@@ -90,7 +90,7 @@ class OnChainScorer(BaseScorer):
             "oi_levels": self._score_oi_levels(strategy, market_context),
             "put_call_ratio": self._score_put_call_ratio(strategy, market_context),
             "volume_profile": self._score_volume_profile(strategy, market_context),
-            "trend_analysis": self._score_trend_analysis(strategy, market_context)
+            "market_regime": self._score_market_regime(strategy, market_context)
         }
 
     def _score_max_pain_alignment(self, strategy, market_context: Dict) -> float:
@@ -418,61 +418,167 @@ class OnChainScorer(BaseScorer):
 
         return score
 
-    def _score_trend_analysis(self, strategy, market_context: Dict) -> float:
+    def _score_market_regime(self, strategy, market_context: Dict) -> float:
         """
-        Score based on trend analysis (max pain trend + volume trend).
+        Score based on market regime detection.
 
-        Requires historical data from repository.
+        Uses sophisticated regime detection combining:
+        - Technical indicators (SMA, RSI, MACD, ADX, ATR)
+        - On-chain metrics (funding rate, P/C ratio, DVOL)
+        - External sentiment (Fear & Greed Index, BTC dominance)
 
         Args:
             strategy: Strategy instance
-            market_context: Market data
+            market_context: Market data (may contain pre-computed regime)
 
         Returns:
             Score (0-10)
         """
-        if self.repository is None:
-            logger.warning("No repository provided for trend analysis, returning neutral score")
-            return 5.0
-
         try:
-            # Get max pain trend
-            max_pain_trend = self._get_max_pain_trend(strategy)
+            # Check if regime was provided in market context (from config)
+            market_regime = market_context.get("market_regime")
+            regime_composite_score = market_context.get("regime_composite_score")
 
-            # Get volume trend
-            volume_trend = self._get_volume_trend(strategy)
+            # If not provided, attempt to detect regime
+            if market_regime is None:
+                market_regime, regime_composite_score = self._detect_market_regime(strategy)
 
-            # Combine trends
+            if market_regime is None:
+                logger.warning("Market regime detection failed, returning neutral score")
+                return 5.0
+
+            # Score based on regime alignment with strategy type
             strategy_type = strategy.strategy_type
-
-            if strategy_type == "directional_bullish":
-                # Bullish wants: decreasing max pain, increasing volume
-                max_pain_score = 10.0 if max_pain_trend == "decreasing" else (5.0 if max_pain_trend == "neutral" else 0.0)
-                volume_score = 10.0 if volume_trend == "increasing" else (5.0 if volume_trend == "neutral" else 3.0)
-
-            elif strategy_type == "directional_bearish":
-                # Bearish wants: increasing max pain, increasing volume
-                max_pain_score = 10.0 if max_pain_trend == "increasing" else (5.0 if max_pain_trend == "neutral" else 0.0)
-                volume_score = 10.0 if volume_trend == "increasing" else (5.0 if volume_trend == "neutral" else 3.0)
-
-            else:
-                # Neutral strategies - trends less important
-                max_pain_score = 5.0
-                volume_score = 5.0
-
-            # Weight: max pain trend 60%, volume trend 40%
-            score = (max_pain_score * 0.6) + (volume_score * 0.4)
+            score = self._score_regime_alignment(
+                strategy_type,
+                market_regime,
+                regime_composite_score
+            )
 
             logger.debug(
-                f"{strategy.name}: Max pain trend={max_pain_trend}, volume trend={volume_trend}, "
-                f"trend_score={score:.2f}"
+                f"{strategy.name}: Market regime={market_regime}, "
+                f"regime_score={regime_composite_score:.1f}, "
+                f"strategy_type={strategy_type}, trend_score={score:.2f}"
             )
 
             return score
 
         except Exception as e:
-            logger.error(f"Error in trend analysis: {e}", exc_info=True)
+            logger.error(f"Error in regime-based trend analysis: {e}", exc_info=True)
             return 5.0  # Neutral score on error
+
+    def _detect_market_regime(self, strategy) -> tuple:
+        """
+        Detect current market regime using RegimeDetectionService.
+
+        Args:
+            strategy: Strategy instance with currency
+
+        Returns:
+            Tuple of (regime_name, composite_score) or (None, None) on error
+        """
+        try:
+            from coding.service.regime.regime_detection_service import RegimeDetectionService
+            from coding.service.deribit.deribit_api_service import DeribitApiService
+
+            # Use existing API service if available, otherwise create new one
+            with DeribitApiService() as api_service:
+                regime_service = RegimeDetectionService(
+                    api_service=api_service,
+                    repository=self.repository
+                )
+
+                result = regime_service.detect_regime(strategy.currency)
+
+                if "error" in result:
+                    logger.error(f"Regime detection error: {result['error']}")
+                    return None, None
+
+                regime = result.get("regime")
+                composite_score = result.get("composite_score")
+
+                logger.info(
+                    f"Detected market regime for {strategy.currency}: "
+                    f"{regime} (score={composite_score:.1f})"
+                )
+
+                return regime, composite_score
+
+        except Exception as e:
+            logger.error(f"Failed to detect market regime: {e}", exc_info=True)
+            return None, None
+
+    def _score_regime_alignment(
+        self,
+        strategy_type: str,
+        regime: str,
+        regime_composite_score: float
+    ) -> float:
+        """
+        Score strategy alignment with market regime.
+
+        Args:
+            strategy_type: Strategy type (directional_bullish, directional_bearish, etc.)
+            regime: Market regime (Strong Bullish, Weak Bullish, Sideways, etc.)
+            regime_composite_score: Regime composite score (-100 to +100)
+
+        Returns:
+            Alignment score (0-10)
+        """
+        # Map regime to numeric scale for alignment
+        regime_score_map = {
+            "Strong Bullish": 10.0,
+            "Weak Bullish": 7.0,
+            "Sideways": 5.0,
+            "Weak Bearish": 3.0,
+            "Strong Bearish": 0.0
+        }
+
+        base_regime_score = regime_score_map.get(regime, 5.0)
+
+        if strategy_type == "directional_bullish":
+            # Bullish strategies align with bullish regimes
+            # Strong Bullish = 10, Weak Bullish = 7, Sideways = 5, Weak Bearish = 3, Strong Bearish = 0
+            score = base_regime_score
+
+        elif strategy_type == "directional_bearish":
+            # Bearish strategies align with bearish regimes (invert the scale)
+            # Strong Bearish = 10, Weak Bearish = 7, Sideways = 5, Weak Bullish = 3, Strong Bullish = 0
+            score = 10.0 - base_regime_score
+
+        elif strategy_type == "volatility_long":
+            # Volatility strategies prefer extreme regimes (strong bull or strong bear)
+            # Score based on how far from sideways
+            distance_from_neutral = abs(regime_composite_score)
+            # 0-30 = sideways (low score), 30-60 = moderate (medium), 60+ = extreme (high)
+            score = self.normalize_score(
+                score=distance_from_neutral,
+                min_score=0,
+                max_score=80
+            )
+
+        elif strategy_type == "volatility_short":
+            # Vol short wants low volatility (sideways regime)
+            # Score based on proximity to sideways
+            distance_from_neutral = abs(regime_composite_score)
+            # Closer to 0 = better
+            score = self.normalize_score(
+                score=80 - distance_from_neutral,
+                min_score=0,
+                max_score=80
+            )
+
+        else:
+            # Neutral strategies (spreads, etc.) prefer sideways markets
+            # Score based on proximity to sideways
+            distance_from_neutral = abs(regime_composite_score)
+            score = self.normalize_score(
+                score=60 - distance_from_neutral,
+                min_score=0,
+                max_score=60
+            )
+
+        return score
 
     def _get_max_pain_trend(self, strategy) -> str:
         """
