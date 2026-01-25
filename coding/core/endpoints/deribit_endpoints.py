@@ -209,6 +209,40 @@ class DeribitEndpoints:
         requires_authentication=False
     )
 
+    GET_TRADINGVIEW_CHART_DATA = EndpointDefinition(
+        path="/public/get_tradingview_chart_data",
+        description="Retrieves historical OHLCV data for an instrument (TradingView format).",
+        method=HttpMethod.GET,
+        parameters=[
+            EndpointParameter(
+                name="instrument_name",
+                required=True,
+                description="The instrument name (e.g., BTC-PERPETUAL, ETH-PERPETUAL).",
+                parameter_type="str"
+            ),
+            EndpointParameter(
+                name="resolution",
+                required=True,
+                description="Time resolution (1, 3, 5, 10, 15, 30, 60, 120, 180, 360, 720, 1D).",
+                parameter_type="str",
+                allowed_values=["1", "3", "5", "10", "15", "30", "60", "120", "180", "360", "720", "1D"]
+            ),
+            EndpointParameter(
+                name="start_timestamp",
+                required=True,
+                description="Start timestamp in milliseconds.",
+                parameter_type="int"
+            ),
+            EndpointParameter(
+                name="end_timestamp",
+                required=True,
+                description="End timestamp in milliseconds.",
+                parameter_type="int"
+            )
+        ],
+        requires_authentication=False
+    )
+
     @classmethod
     def get_all_endpoints(cls) -> list:
         """
@@ -226,5 +260,6 @@ class DeribitEndpoints:
             cls.GET_ORDER_BOOK,
             cls.GET_FUNDING_CHART_DATA,
             cls.GET_HISTORICAL_VOLATILITY,
-            cls.GET_VOLATILITY_INDEX_DATA
+            cls.GET_VOLATILITY_INDEX_DATA,
+            cls.GET_TRADINGVIEW_CHART_DATA
         ]

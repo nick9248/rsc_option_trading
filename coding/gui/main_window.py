@@ -23,6 +23,7 @@ from coding.gui.tabs.snapshot_tab import SnapshotTab
 from coding.gui.tabs.on_chain_analysis_tab import OnChainAnalysisTab
 from coding.gui.tabs.database_tab import DatabaseTab
 from coding.gui.tabs.strategy_tab import StrategyTab
+from coding.gui.tabs.regime_tab import RegimeTab
 from coding.core.database.repository import DatabaseRepository
 from coding.service.deribit.deribit_api_service import DeribitApiService
 
@@ -154,6 +155,10 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.error(f"Failed to initialize Strategies tab: {e}")
             self._add_placeholder_tab("Strategies", "Strategy evaluation tab failed to initialize")
+
+        # Market Regime Detection tab
+        regime_tab = RegimeTab()
+        self.tab_widget.addTab(regime_tab, "Market Regime")
 
         # Placeholder tabs for future features
         self._add_placeholder_tab("Market Data", "Market data visualization coming soon...")
