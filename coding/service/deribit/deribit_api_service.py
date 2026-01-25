@@ -353,6 +353,62 @@ class DeribitApiService:
 
         return result
 
+    def get_tradingview_chart_data(
+        self,
+        instrument_name: str = "BTC-PERPETUAL",
+        resolution: str = "1D",
+        start_timestamp: int = None,
+        end_timestamp: int = None,
+        save_to_csv: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Get historical OHLCV data in TradingView format.
+
+        Args:
+            instrument_name: Instrument name (e.g., BTC-PERPETUAL, ETH-PERPETUAL).
+            resolution: Time resolution (1, 3, 5, 10, 15, 30, 60, 120, 180, 360, 720, 1D).
+            start_timestamp: Start time in milliseconds.
+            end_timestamp: End time in milliseconds.
+            save_to_csv: Whether to save results to CSV.
+
+        Returns:
+            Dictionary with OHLCV data: {ticks: [...], status: 'ok'}
+            Each tick: [timestamp, open, high, low, close, volume]
+        """
+        import time
+        if end_timestamp is None:
+            end_timestamp = int(time.time() * 1000)
+        if start_timestamp is None:
+            # Default to 200 days for moving average calculations
+            start_timestamp = end_timestamp - (200 * 24 * 60 * 60 * 1000)
+
+        result = fetch_and_process(
+            connection=self.connection,
+            parser=self.parser,
+            validator=self.validator,
+            endpoint=DeribitEndpoints.GET_TRADINGVIEW_CHART_DATA,
+            parameters={
+                "instrument_name": instrument_name,
+                "resolution": resolution,
+                "start_timestamp": start_timestamp,
+                "end_timestamp": end_timestamp
+            },
+            validate_responses=self.validate_responses
+        )
+
+        if save_to_csv and "ticks" in result:
+            converted = self.parser.array_to_dicts(
+                result["ticks"],
+                ["timestamp", "open", "high", "low", "close", "volume"]
+            )
+            self.parser.to_csv(
+                converted,
+                f"ohlcv_{instrument_name.replace('-', '_').lower()}",
+                "ohlcv"
+            )
+
+        return result
+
     def close(self) -> None:
         """Close the API connection."""
         self.connection.close()
