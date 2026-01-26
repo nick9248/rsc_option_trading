@@ -11,6 +11,7 @@ import logging
 from typing import Dict, List, Optional
 
 from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -178,10 +179,30 @@ class StrategyTab(QWidget):
 
     def _setup_ui(self) -> None:
         """Set up the user interface."""
-        # Set minimum width to prevent excessive shrinking
-        self.setMinimumWidth(600)
+        # Create main layout for the tab
+        tab_layout = QVBoxLayout(self)
+        tab_layout.setContentsMargins(0, 0, 0, 0)
+        tab_layout.setSpacing(0)
 
-        main_layout = QVBoxLayout(self)
+        # Create scroll area for content
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setStyleSheet(f"""
+            QScrollArea {{
+                border: none;
+                background-color: {Colors.BACKGROUND};
+            }}
+        """)
+
+        # Create content widget
+        content_widget = QWidget()
+        content_widget.setMinimumWidth(580)  # Minimum width for content
+        scroll.setWidget(content_widget)
+
+        # Content layout
+        main_layout = QVBoxLayout(content_widget)
         main_layout.setContentsMargins(20, 20, 20, 20)
         main_layout.setSpacing(16)
 
@@ -224,9 +245,13 @@ class StrategyTab(QWidget):
         results_frame = self._create_results_section()
         main_layout.addWidget(results_frame, 1)  # Stretch to fill
 
-        # Log Viewer
+        # Add scroll area to tab
+        tab_layout.addWidget(scroll, 1)
+
+        # Log Viewer (fixed at bottom, not scrollable)
         self.log_viewer = LogViewer()
-        main_layout.addWidget(self.log_viewer)
+        self.log_viewer.setMaximumHeight(150)
+        tab_layout.addWidget(self.log_viewer)
 
     def _create_general_controls(self) -> QFrame:
         """Create general controls section."""
@@ -267,40 +292,6 @@ class StrategyTab(QWidget):
         currency_grid.setColumnStretch(1, 1)
 
         layout.addLayout(currency_grid)
-
-        # Market regime - use grid for better control
-        regime_grid = QGridLayout()
-        regime_grid.setSpacing(8)
-
-        regime_label = QLabel("Market Regime:")
-        regime_label.setStyleSheet(f"color: {Colors.TEXT_PRIMARY};")
-        regime_label.setMinimumWidth(120)
-
-        self.regime_combo = QComboBox()
-        self.regime_combo.addItems(["Neutral", "Bullish", "Bearish"])
-        self.regime_combo.setStyleSheet(self._get_combo_style())
-        self.regime_combo.setMinimumWidth(100)
-        self.regime_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-
-        regime_info = self._create_info_button(
-            "Market Regime Info",
-            """Market Regime affects scoring:
-
-• Neutral: No bias, all strategies scored equally
-• Bullish: Favors call strategies, applies 50% penalty to put strategies
-• Bearish: Favors put strategies, applies 50% penalty to call strategies
-
-The regime penalty helps filter strategies that go against the expected market direction.
-
-Example: If you select "Bullish" regime and evaluate a Long Put, the composite score will be reduced by 50% since puts profit from price decreases."""
-        )
-
-        regime_grid.addWidget(regime_label, 0, 0)
-        regime_grid.addWidget(self.regime_combo, 0, 1)
-        regime_grid.addWidget(regime_info, 0, 2)
-        regime_grid.setColumnStretch(1, 1)
-
-        layout.addLayout(regime_grid)
 
         # Load expiries button
         load_btn = QPushButton("Load Expiry Dates")
@@ -592,9 +583,9 @@ Example: If you select "Bullish" regime and evaluate a Long Put, the composite s
 
         # Results table
         self.results_table = QTableWidget()
-        self.results_table.setColumnCount(9)
+        self.results_table.setColumnCount(10)
         self.results_table.setHorizontalHeaderLabels([
-            "Rank", "Strategy", "Expiry", "Composite", "Intrinsic", "On-Chain",
+            "Rank", "Strategy", "Expiry", "Market Regime", "Composite", "Intrinsic", "On-Chain",
             "Max Loss %", "Breakeven", "Chart"
         ])
         self.results_table.setStyleSheet(self._get_table_style())
@@ -703,9 +694,8 @@ Example: If you select "Bullish" regime and evaluate a Long Put, the composite s
         # Build config
         currency = self.currency_combo.currentText()
 
-        # Get regime
-        regime = self.regime_combo.currentText()
-        regime_value = regime.lower() if regime != "Neutral" else None
+        # Market regime is now auto-detected in the backend (no user input needed)
+        regime_value = None
 
         # Build strike config
         method = self.strike_method_combo.currentText()
@@ -885,18 +875,29 @@ Example: If you select "Bullish" regime and evaluate a Long Put, the composite s
             self.results_table.setItem(i, 0, QTableWidgetItem(str(i + 1)))
             self.results_table.setItem(i, 1, QTableWidgetItem(signal.strategy_name))
             self.results_table.setItem(i, 2, QTableWidgetItem(signal.expiration))
-            self.results_table.setItem(i, 3, QTableWidgetItem(f"{signal.composite_score:.2f}"))
-            self.results_table.setItem(i, 4, QTableWidgetItem(f"{signal.intrinsic_score:.2f}"))
-            self.results_table.setItem(i, 5, QTableWidgetItem(f"{signal.on_chain_score:.2f}"))
-            self.results_table.setItem(i, 6, QTableWidgetItem(f"{signal.max_loss_percentage:.2f}%"))
+
+            # Market regime (auto-detected by backend)
+            regime_display = signal.market_regime.capitalize() if signal.market_regime else "Neutral"
+            regime_item = QTableWidgetItem(regime_display)
+            # Color code the regime
+            if signal.market_regime == "bullish":
+                regime_item.setForeground(QBrush(QColor("#4ade80")))  # Green
+            elif signal.market_regime == "bearish":
+                regime_item.setForeground(QBrush(QColor("#f87171")))  # Red
+            self.results_table.setItem(i, 3, regime_item)
+
+            self.results_table.setItem(i, 4, QTableWidgetItem(f"{signal.composite_score:.2f}"))
+            self.results_table.setItem(i, 5, QTableWidgetItem(f"{signal.intrinsic_score:.2f}"))
+            self.results_table.setItem(i, 6, QTableWidgetItem(f"{signal.on_chain_score:.2f}"))
+            self.results_table.setItem(i, 7, QTableWidgetItem(f"{signal.max_loss_percentage:.2f}%"))
 
             # Breakeven points
             breakeven_str = ", ".join([f"{bp:.0f}" for bp in signal.breakeven_points])
-            self.results_table.setItem(i, 7, QTableWidgetItem(breakeven_str))
+            self.results_table.setItem(i, 8, QTableWidgetItem(breakeven_str))
 
             # View Chart button
             chart_btn = self._create_chart_button(signal)
-            self.results_table.setCellWidget(i, 8, chart_btn)
+            self.results_table.setCellWidget(i, 9, chart_btn)
 
         self.results_table.resizeColumnsToContents()
 
