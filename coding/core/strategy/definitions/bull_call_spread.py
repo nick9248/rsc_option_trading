@@ -161,10 +161,23 @@ class BullCallSpread(BaseStrategy):
         """
         Calculate maximum risk (loss) for bull call spread.
 
-        Max risk = strike_width - net_debit
+        Max risk = net debit paid (what you lose if price stays below long strike)
 
         Returns:
             Maximum possible loss
+        """
+        # Max risk is the net debit (cost paid upfront)
+        # If price stays below long strike, both options expire worthless
+        return abs(self.get_total_cost())
+
+    def get_max_profit(self) -> Optional[float]:
+        """
+        Calculate maximum profit for bull call spread.
+
+        Max profit = strike_width - net_debit (what you gain if price goes above short strike)
+
+        Returns:
+            Maximum possible profit
         """
         if len(self.legs) != 2:
             logger.warning(f"{self.name}: Expected 2 legs, got {len(self.legs)}")
@@ -177,22 +190,11 @@ class BullCallSpread(BaseStrategy):
         strike_width = short_strike - long_strike
         net_debit = abs(self.get_total_cost())
 
-        # Max risk = strike width - net debit
-        max_risk = strike_width - net_debit
+        # Max profit = strike width - net debit
+        # At expiration above short strike: (short_strike - long_strike) - debit_paid
+        max_profit = strike_width - net_debit
 
-        return max(max_risk, 0.0)  # Cannot be negative
-
-    def get_max_profit(self) -> Optional[float]:
-        """
-        Calculate maximum profit for bull call spread.
-
-        Max profit = net debit paid
-
-        Returns:
-            Maximum possible profit
-        """
-        # Max profit is the net debit (cost paid)
-        return abs(self.get_total_cost())
+        return max(max_profit, 0.0)  # Cannot be negative
 
     def get_breakeven_points(self) -> List[float]:
         """
