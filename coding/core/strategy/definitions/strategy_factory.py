@@ -9,6 +9,7 @@ import logging
 from typing import Dict, List, Optional, Type
 
 from .base_strategy import BaseStrategy
+from .bull_call_spread import BullCallSpread
 from .long_call import LongCall
 from .long_put import LongPut
 
@@ -19,6 +20,7 @@ logger = logging.getLogger(__name__)
 STRATEGY_REGISTRY: Dict[str, Type[BaseStrategy]] = {
     "Long Call": LongCall,
     "Long Put": LongPut,
+    "Bull Call Spread": BullCallSpread,
 }
 
 
