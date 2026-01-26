@@ -218,6 +218,7 @@ class StrategyConfig:
     min_on_chain_score: float = 0.0  # Minimum on-chain score (0-10)
     min_composite_score: float = 0.0  # Minimum composite score (0-10)
     max_loss_filter: Optional[float] = None  # Max loss % (e.g., 2.0 for 2%)
+    max_budget: Optional[float] = None  # Max budget constraint for spreads (USD)
 
     # Exit management
     take_profit_percentage: Optional[float] = None  # Optional take profit target

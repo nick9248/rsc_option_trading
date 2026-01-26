@@ -533,6 +533,59 @@ class StrategyTab(QWidget):
 
         layout.addLayout(max_loss_grid)
 
+        # Budget constraint (optional, for spread strategies) - use grid
+        budget_grid = QGridLayout()
+        budget_grid.setSpacing(8)
+
+        budget_check = QCheckBox("Max Budget ($):")
+        budget_check.setStyleSheet(f"color: {Colors.TEXT_PRIMARY};")
+        budget_check.setMinimumWidth(120)
+        budget_check.stateChanged.connect(self._on_budget_check_changed)
+
+        self.budget_spin = QDoubleSpinBox()
+        self.budget_spin.setRange(0.0, 1000000.0)
+        self.budget_spin.setValue(1000.0)
+        self.budget_spin.setSingleStep(100.0)
+        self.budget_spin.setDecimals(0)
+        self.budget_spin.setEnabled(False)
+        self.budget_spin.setMinimumWidth(100)
+        self.budget_spin.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.budget_spin.setStyleSheet(self._get_spin_style())
+
+        budget_info = self._create_info_button(
+            "Budget Constraint",
+            """Optional budget constraint for spread strategies.
+
+WHAT IT DOES:
+When enabled, the strategy finder will:
+• Only consider spreads that cost less than this budget
+• Maximize spread width within the budget
+• Useful for capital-constrained accounts
+
+EXAMPLE:
+Budget = $500
+- System finds widest spread that costs ≤ $500
+- Could be 100/200 spread at $450 cost
+- Or 150/250 spread at $490 cost
+- Picks the one with best width-to-cost ratio
+
+WHEN TO USE:
+• Limited capital available for the trade
+• Want to control maximum position size
+• Optimize for 'max_width_for_budget' mode
+
+NOTE: Only applies to spread strategies (Bull Call Spread, etc.)
+      Ignored for single-leg strategies (Long Call/Put)"""
+        )
+
+        budget_grid.addWidget(budget_check, 0, 0)
+        budget_grid.addWidget(self.budget_spin, 0, 1)
+        budget_grid.addWidget(budget_info, 0, 2)
+        budget_grid.setColumnStretch(1, 1)
+
+        layout.addLayout(budget_grid)
+        self.budget_check = budget_check
+
         # Take profit % - use grid
         tp_grid = QGridLayout()
         tp_grid.setSpacing(8)
@@ -715,6 +768,10 @@ class StrategyTab(QWidget):
         """Handle take profit checkbox change."""
         self.tp_spin.setEnabled(state == Qt.CheckState.Checked.value)
 
+    def _on_budget_check_changed(self, state: int) -> None:
+        """Handle budget constraint checkbox change."""
+        self.budget_spin.setEnabled(state == Qt.CheckState.Checked.value)
+
     def _on_evaluate_clicked(self) -> None:
         """Handle evaluate button click."""
         # Validate selections - collect all selected strategies
@@ -824,6 +881,7 @@ class StrategyTab(QWidget):
                 expirations=[expiration],
                 strike_configs=strike_configs,
                 max_loss_filter=self.max_loss_spin.value(),
+                max_budget=self.budget_spin.value() if self.budget_check.isChecked() else None,
                 take_profit_percentage=self.tp_spin.value() if self.tp_check.isChecked() else None,
                 market_regime=regime_value,
                 top_n=10
