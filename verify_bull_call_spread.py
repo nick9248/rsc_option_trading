@@ -94,7 +94,7 @@ def manual_spread_calculation(
             greeks = data.get("greeks", {})
             logger.debug(
                 f"  {name}: delta={greeks.get('delta')}, "
-                f"ask={data.get('ask_price')}, mark={data.get('mark_price')}"
+                f"ask={data.get('best_ask_price')}, mark={data.get('mark_price')}"
             )
 
     # Filter long candidates
@@ -129,7 +129,7 @@ def manual_spread_calculation(
         long_iv = long_data.get("greeks", {}).get("iv", 0)
 
         # Cost calculation (same as implementation)
-        long_ask = long_data.get("ask_price", 0)
+        long_ask = long_data.get("best_ask_price", 0)
         long_mark = long_data.get("mark_price", 0)
         long_price = long_ask if long_ask > 0 else long_mark
         long_cost = long_price * underlying_price * quantity
@@ -145,7 +145,7 @@ def manual_spread_calculation(
             short_iv = short_data.get("greeks", {}).get("iv", 0)
 
             # Credit calculation (same as implementation)
-            short_bid = short_data.get("bid_price", 0)
+            short_bid = short_data.get("best_bid_price", 0)
             short_mark = short_data.get("mark_price", 0)
             short_price = short_bid if short_bid > 0 else short_mark
             short_credit = short_price * underlying_price * abs(quantity)
@@ -343,15 +343,15 @@ def audit_findings() -> None:
 
     findings = [
         {
-            "topic": "Ask/Bid Price = 0",
-            "status": "✓ CORRECT BEHAVIOR",
+            "topic": "Ask/Bid Price Field Names",
+            "status": "✓ FIXED",
             "explanation": (
-                "For illiquid options without active market makers, ask_price and "
-                "bid_price are 0. The implementation correctly falls back to mark_price "
-                "in these cases. This is the SAME pattern used in Long Call and Long Put "
-                "strategies, which are verified and working. This is NOT a bug."
+                "ROOT CAUSE: Deribit API does NOT return 'ask_price' and 'bid_price' fields. "
+                "It returns 'best_ask_price' and 'best_bid_price'. The implementation was using "
+                "wrong field names, causing all options to fall back to mark_price. This has been "
+                "fixed across all strategies (Long Call, Long Put, Bull Call Spread)."
             ),
-            "action": "No action needed"
+            "action": "Fixed - now using correct field names"
         },
         {
             "topic": "60-Day Expiration Appropriateness",
