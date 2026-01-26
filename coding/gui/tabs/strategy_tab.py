@@ -37,6 +37,7 @@ from coding.core.database.repository import DatabaseRepository
 from coding.core.strategy.definitions import get_available_strategies
 from coding.core.strategy.models import StrategyConfig, StrikeConfig
 from coding.gui.components.log_viewer import GuiLogHandler, LogViewer
+from coding.gui.components.strategy_config_widgets import create_config_widget, StrategyConfigWidget
 from coding.gui.theme.colors import Colors
 from coding.service.strategy import StrategyEvaluationService
 
@@ -380,135 +381,23 @@ class StrategyTab(QWidget):
         title.setStyleSheet(f"font-size: 16px; font-weight: 600; color: {Colors.TEXT_PRIMARY};")
         layout.addWidget(title)
 
-        # Strike selection method - use grid for better control
-        strike_grid = QGridLayout()
-        strike_grid.setSpacing(8)
+        # Strategy-specific configuration widget container
+        # This will hold the dynamic widget that changes based on selected strategy
+        self.config_widget_container = QWidget()
+        self.config_widget_layout = QVBoxLayout(self.config_widget_container)
+        self.config_widget_layout.setContentsMargins(0, 0, 0, 0)
+        self.config_widget_layout.setSpacing(0)
 
-        strike_label = QLabel("Strike Selection:")
-        strike_label.setStyleSheet(f"color: {Colors.TEXT_PRIMARY};")
-        strike_label.setMinimumWidth(120)
+        # Placeholder until strategy is selected
+        placeholder = QLabel("← Select a strategy to configure")
+        placeholder.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 14px; padding: 20px;")
+        placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.config_widget_layout.addWidget(placeholder)
 
-        self.strike_method_combo = QComboBox()
-        self.strike_method_combo.addItems(["By Delta", "By Moneyness", "By Specific Strike"])
-        self.strike_method_combo.setStyleSheet(self._get_combo_style())
-        self.strike_method_combo.setMinimumWidth(150)
-        self.strike_method_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.strike_method_combo.currentTextChanged.connect(self._on_strike_method_changed)
+        layout.addWidget(self.config_widget_container)
 
-        strike_info = self._create_info_button(
-            "Strike Selection Methods",
-            """Three methods to select option strikes:
-
-1. BY DELTA (Recommended)
-   • Delta measures how much the option price changes per $1 move in underlying
-   • Call delta: 0 to 1 (e.g., 0.30 means option gains $0.30 per $1 rise)
-   • Put delta: 0 to -1 (e.g., -0.30 means option gains $0.30 per $1 drop)
-   • NOTE: Enter positive values (e.g., 0.30) - the sign is automatically adjusted for puts!
-
-   • Common deltas:
-     - 0.30 delta: Out-of-the-money (OTM), lower cost, higher leverage
-     - 0.50 delta: At-the-money (ATM), balanced risk/reward
-     - 0.70 delta: In-the-money (ITM), higher cost, behaves more like stock
-
-   Example: Enter 0.30 for both Long Call and Long Put - the system automatically uses
-           +0.30 for calls (strike above current) and -0.30 for puts (strike below current)
-
-2. BY MONEYNESS
-   • Moneyness = percentage distance from current price
-   • 5% moneyness for calls = strike 5% above current price
-   • 5% moneyness for puts = strike 5% below current price
-
-   Example: If BTC is at $100,000, 5% OTM call = $105,000 strike
-
-3. BY SPECIFIC STRIKE
-   • Manually enter exact strike price
-   • Use when you have a specific price target in mind
-
-   Example: Enter 105000 to buy exactly $105,000 strike"""
-        )
-
-        strike_grid.addWidget(strike_label, 0, 0)
-        strike_grid.addWidget(self.strike_method_combo, 0, 1)
-        strike_grid.addWidget(strike_info, 0, 2)
-        strike_grid.setColumnStretch(1, 1)
-
-        layout.addLayout(strike_grid)
-
-        # Delta value (for "By Delta" method) - use grid
-        delta_grid = QGridLayout()
-        delta_grid.setSpacing(8)
-
-        delta_label = QLabel("Target Delta:")
-        delta_label.setStyleSheet(f"color: {Colors.TEXT_PRIMARY};")
-        delta_label.setMinimumWidth(120)
-
-        self.delta_spin = QDoubleSpinBox()
-        self.delta_spin.setRange(-1.0, 1.0)
-        self.delta_spin.setValue(0.30)
-        self.delta_spin.setSingleStep(0.05)
-        self.delta_spin.setDecimals(2)
-        self.delta_spin.setMinimumWidth(100)
-        self.delta_spin.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.delta_spin.setStyleSheet(self._get_spin_style())
-
-        delta_grid.addWidget(delta_label, 0, 0)
-        delta_grid.addWidget(self.delta_spin, 0, 1)
-        delta_grid.setColumnStretch(1, 1)
-
-        layout.addLayout(delta_grid)
-        self.delta_layout_widgets = (delta_label, self.delta_spin)  # Only widgets, not layout
-
-        # Moneyness % (for "By Moneyness" method) - use grid
-        money_grid = QGridLayout()
-        money_grid.setSpacing(8)
-
-        money_label = QLabel("Moneyness %:")
-        money_label.setStyleSheet(f"color: {Colors.TEXT_PRIMARY};")
-        money_label.setMinimumWidth(120)
-
-        self.moneyness_spin = QDoubleSpinBox()
-        self.moneyness_spin.setRange(0.0, 50.0)
-        self.moneyness_spin.setValue(5.0)
-        self.moneyness_spin.setSingleStep(1.0)
-        self.moneyness_spin.setDecimals(1)
-        self.moneyness_spin.setMinimumWidth(100)
-        self.moneyness_spin.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.moneyness_spin.setStyleSheet(self._get_spin_style())
-
-        money_grid.addWidget(money_label, 0, 0)
-        money_grid.addWidget(self.moneyness_spin, 0, 1)
-        money_grid.setColumnStretch(1, 1)
-
-        layout.addLayout(money_grid)
-        self.moneyness_layout_widgets = (money_label, self.moneyness_spin)  # Only widgets, not layout
-        for widget in self.moneyness_layout_widgets:
-            widget.hide()
-
-        # Specific strike (for "By Specific Strike" method) - use grid
-        specific_grid = QGridLayout()
-        specific_grid.setSpacing(8)
-
-        specific_label = QLabel("Strike Price:")
-        specific_label.setStyleSheet(f"color: {Colors.TEXT_PRIMARY};")
-        specific_label.setMinimumWidth(120)
-
-        self.specific_strike_spin = QDoubleSpinBox()
-        self.specific_strike_spin.setRange(0.0, 1000000.0)
-        self.specific_strike_spin.setValue(100000.0)
-        self.specific_strike_spin.setSingleStep(1000.0)
-        self.specific_strike_spin.setDecimals(0)
-        self.specific_strike_spin.setMinimumWidth(100)
-        self.specific_strike_spin.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.specific_strike_spin.setStyleSheet(self._get_spin_style())
-
-        specific_grid.addWidget(specific_label, 0, 0)
-        specific_grid.addWidget(self.specific_strike_spin, 0, 1)
-        specific_grid.setColumnStretch(1, 1)
-
-        layout.addLayout(specific_grid)
-        self.specific_strike_layout_widgets = (specific_label, self.specific_strike_spin)  # Only widgets, not layout
-        for widget in self.specific_strike_layout_widgets:
-            widget.hide()
+        # Track current config widget
+        self.current_config_widget: Optional[StrategyConfigWidget] = None
 
         # Max loss filter - use grid
         max_loss_grid = QGridLayout()
@@ -694,75 +583,169 @@ NOTE: Only applies to spread strategies (Bull Call Spread, etc.)
         logger.error(f"Failed to load expirations: {error}")
 
     def _on_strategy_selected(self, strategy_name: str) -> None:
-        """Handle strategy button click (multi-selection allowed)."""
+        """Handle strategy button click and swap configuration widget."""
         # Get all selected strategies
         selected = [name for name, btn in self.strategy_buttons.items() if btn.isChecked()]
 
         if selected:
             logger.info(f"Selected strategies: {', '.join(selected)}")
-            # Update defaults based on first selected strategy
-            self._update_defaults_for_strategy(selected[0])
+            # Update config widget based on first selected strategy
+            self._swap_config_widget(selected[0])
         else:
             logger.info("No strategies selected")
+            # Clear config widget if no strategy selected
+            self._clear_config_widget()
 
-    def _update_defaults_for_strategy(self, strategy_name: str) -> None:
+    def _swap_config_widget(self, strategy_name: str) -> None:
         """
-        Update GUI defaults based on strategy-specific configuration.
+        Swap out the current config widget for the selected strategy's widget.
 
         Args:
-            strategy_name: Name of the strategy to get defaults for
+            strategy_name: Name of the strategy to create widget for
         """
         from coding.core.strategy import create_strategy
 
         try:
-            # Create temporary strategy instance to get defaults
-            # Use dummy values for initialization
+            # Remove old widget if exists
+            if self.current_config_widget:
+                self.config_widget_layout.removeWidget(self.current_config_widget)
+                self.current_config_widget.deleteLater()
+                self.current_config_widget = None
+
+            # Create new config widget for this strategy type
+            self.current_config_widget = create_config_widget(strategy_name)
+
+            # Load strategy defaults
             temp_strategy = create_strategy(
                 name=strategy_name,
                 currency="BTC",
                 expiration="31JAN25",
                 underlying_price=100000.0
             )
-
-            # Get strategy-specific defaults
             defaults = temp_strategy.get_default_config()
+            self.current_config_widget.set_defaults(defaults)
 
-            # Update delta spin box
-            if "target_delta" in defaults:
-                self.delta_spin.setValue(defaults["target_delta"])
-                logger.info(f"Updated delta default to {defaults['target_delta']:.2f} for {strategy_name}")
+            logger.info(f"Loaded config widget for {strategy_name} with defaults: {defaults}")
 
-            # Update max loss spin box
+            # Add to layout
+            self.config_widget_layout.addWidget(self.current_config_widget)
+
+            # Update common fields (max loss) if present
             if "max_loss_percentage" in defaults:
                 self.max_loss_spin.setValue(defaults["max_loss_percentage"])
                 logger.info(f"Updated max loss default to {defaults['max_loss_percentage']:.1f}% for {strategy_name}")
 
         except Exception as e:
-            logger.warning(f"Could not update defaults for {strategy_name}: {e}")
-            # Fallback to generic defaults
-            self.delta_spin.setValue(0.30)
-            self.max_loss_spin.setValue(5.0)
+            logger.error(f"Failed to swap config widget for {strategy_name}: {e}")
+            logger.exception("Widget swap error")
+            # Show error to user
+            self._clear_config_widget()
+            error_label = QLabel(f"Error loading configuration for {strategy_name}")
+            error_label.setStyleSheet(f"color: {Colors.ERROR}; padding: 20px;")
+            self.config_widget_layout.addWidget(error_label)
 
-    def _on_strike_method_changed(self, method: str) -> None:
-        """Handle strike method change."""
-        # Hide all method-specific widgets
-        for widget in self.delta_layout_widgets:
-            widget.hide()
-        for widget in self.moneyness_layout_widgets:
-            widget.hide()
-        for widget in self.specific_strike_layout_widgets:
-            widget.hide()
+    def _clear_config_widget(self) -> None:
+        """Clear the config widget and show placeholder."""
+        if self.current_config_widget:
+            self.config_widget_layout.removeWidget(self.current_config_widget)
+            self.current_config_widget.deleteLater()
+            self.current_config_widget = None
 
-        # Show relevant widgets
-        if method == "By Delta":
-            for widget in self.delta_layout_widgets:
-                widget.show()
-        elif method == "By Moneyness":
-            for widget in self.moneyness_layout_widgets:
-                widget.show()
-        elif method == "By Specific Strike":
-            for widget in self.specific_strike_layout_widgets:
-                widget.show()
+        # Show placeholder
+        placeholder = QLabel("← Select a strategy to configure")
+        placeholder.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 14px; padding: 20px;")
+        placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.config_widget_layout.addWidget(placeholder)
+
+    def _convert_widget_config_to_strike_config(
+        self,
+        strategy_name: str,
+        widget_config: Dict
+    ):
+        """
+        Convert widget configuration dict to StrikeConfig or SpreadStrikeConfig.
+
+        Args:
+            strategy_name: Name of the strategy
+            widget_config: Config dict from widget.get_config()
+
+        Returns:
+            StrikeConfig for single-leg strategies
+            SpreadStrikeConfig for spread strategies (or widget_config dict for service to handle)
+        """
+        from coding.core.strategy.models.spread_config import SpreadStrikeConfig
+
+        # Check if this is a spread strategy
+        is_spread = "Spread" in strategy_name
+
+        if is_spread:
+            # Spread configuration
+            mode = widget_config.get("mode", "optimal")
+
+            if mode == "optimal":
+                # Optimal (skew-aware) mode - return dict for service to handle
+                # Service will use skew-aware with budget constraint if specified
+                return widget_config
+            else:
+                # Manual mode - create SpreadStrikeConfig from widget config
+                method = widget_config.get("method")
+
+                if method == "by_delta":
+                    return SpreadStrikeConfig(
+                        method="by_delta",
+                        long_target_delta=widget_config.get("long_target_delta", 0.45),
+                        short_target_delta=widget_config.get("short_target_delta", 0.25),
+                        quantity=1
+                    )
+                elif method == "by_moneyness":
+                    return SpreadStrikeConfig(
+                        method="by_moneyness",
+                        long_moneyness_pct=widget_config.get("long_moneyness_pct", 10.0),
+                        short_moneyness_pct=widget_config.get("short_moneyness_pct", 20.0),
+                        quantity=1
+                    )
+                elif method == "by_strike":
+                    return SpreadStrikeConfig(
+                        method="by_strike",
+                        long_specific_strike=widget_config.get("long_specific_strike", 50000.0),
+                        short_specific_strike=widget_config.get("short_specific_strike", 55000.0),
+                        quantity=1
+                    )
+                else:
+                    logger.warning(f"Unknown spread method: {method}, defaulting to skew-aware")
+                    return widget_config
+        else:
+            # Single-leg configuration - convert to StrikeConfig
+            method = widget_config.get("method")
+
+            # Adjust delta sign for puts
+            if method == "by_delta":
+                target_delta = widget_config.get("target_delta", 0.30)
+                if "Put" in strategy_name:
+                    target_delta = -abs(target_delta)
+                else:
+                    target_delta = abs(target_delta)
+
+                return StrikeConfig(
+                    method="by_delta",
+                    target_delta=target_delta,
+                    quantity=1
+                )
+            elif method == "by_moneyness":
+                return StrikeConfig(
+                    method="by_moneyness",
+                    moneyness_pct=widget_config.get("moneyness_pct", 5.0),
+                    quantity=1
+                )
+            elif method == "by_strike":
+                return StrikeConfig(
+                    method="by_strike",
+                    specific_strike=widget_config.get("specific_strike", 100000.0),
+                    quantity=1
+                )
+            else:
+                logger.warning(f"Unknown method: {method}, defaulting to by_delta")
+                return StrikeConfig(method="by_delta", target_delta=0.30, quantity=1)
 
     def _on_tp_check_changed(self, state: int) -> None:
         """Handle take profit checkbox change."""
@@ -794,53 +777,25 @@ NOTE: Only applies to spread strategies (Bull Call Spread, etc.)
         # Market regime is now auto-detected in the backend (no user input needed)
         regime_value = None
 
-        # Build strike config
-        method = self.strike_method_combo.currentText()
+        # Get configuration from current config widget
+        if not self.current_config_widget:
+            logger.error("No strategy configuration widget loaded. Please select a strategy first.")
+            return
 
-        if method == "By Delta":
-            strike_config = StrikeConfig(
-                method="by_delta",
-                target_delta=self.delta_spin.value(),
-                quantity=1
-            )
-        elif method == "By Moneyness":
-            strike_config = StrikeConfig(
-                method="by_moneyness",
-                moneyness_pct=self.moneyness_spin.value(),
-                quantity=1
-            )
-        else:  # By Specific Strike
-            strike_config = StrikeConfig(
-                method="by_strike",
-                specific_strike=self.specific_strike_spin.value(),
-                quantity=1
-            )
+        try:
+            widget_config = self.current_config_widget.get_config()
+            logger.info(f"Widget configuration: {widget_config}")
+        except Exception as e:
+            logger.error(f"Failed to get configuration from widget: {e}")
+            return
 
-        # Build strike configs for all selected strategies
-        # Important: Adjust delta sign based on strategy type (puts need negative delta)
+        # Convert widget config to proper config objects
         strike_configs = {}
         for strategy in selected_strategies:
-            if method == "By Delta":
-                # For put strategies, negate the delta
-                if "Put" in strategy:
-                    adjusted_delta = -abs(self.delta_spin.value())
-                    strategy_strike_config = StrikeConfig(
-                        method="by_delta",
-                        target_delta=adjusted_delta,
-                        quantity=1
-                    )
-                else:
-                    # For calls and other strategies, use positive delta
-                    adjusted_delta = abs(self.delta_spin.value())
-                    strategy_strike_config = StrikeConfig(
-                        method="by_delta",
-                        target_delta=adjusted_delta,
-                        quantity=1
-                    )
-                strike_configs[strategy] = strategy_strike_config
-            else:
-                # For moneyness and specific strike, use the same config
-                strike_configs[strategy] = strike_config
+            strike_config_obj = self._convert_widget_config_to_strike_config(
+                strategy, widget_config
+            )
+            strike_configs[strategy] = strike_config_obj
 
         # Clear results table to prepare for new evaluation
         self.results_table.setRowCount(0)

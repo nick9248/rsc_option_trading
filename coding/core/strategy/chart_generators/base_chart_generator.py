@@ -26,7 +26,7 @@ from coding.core.strategy.pnl_calculator import StrategyPnLCalculator
 logger = logging.getLogger(__name__)
 
 # Chart output directory
-CHARTS_BASE_DIR = Path(__file__).parent.parent.parent.parent / "output" / "strategies"
+CHARTS_BASE_DIR = Path(__file__).parent.parent.parent.parent.parent / "output" / "strategies"
 
 # Color palette for dark theme
 COLORS = {
