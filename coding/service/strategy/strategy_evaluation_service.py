@@ -251,31 +251,52 @@ class StrategyEvaluationService:
         # Build strategy legs
         strike_config = config.get_strike_config(strategy_name)
 
-        if strike_config:
-            # Use configured strike selection
-            strategy.build_legs(
-                ticker_data=ticker_data,
-                strike_selection_method=strike_config.method,
-                target_delta=strike_config.target_delta,
-                moneyness_pct=strike_config.moneyness_pct,
-                specific_strike=strike_config.specific_strike,
-                quantity=strike_config.quantity
+        # Check if this is a spread strategy (multi-leg)
+        is_spread = "Spread" in strategy_name
+
+        if is_spread:
+            # Spread strategies use SpreadStrikeConfig (not yet supported in GUI)
+            # For now, use default skew-aware configuration
+            from coding.core.strategy.models.spread_config import SpreadStrikeConfig
+
+            spread_config = SpreadStrikeConfig(
+                method="skew_aware",
+                optimize_for="profit_debit_ratio",
+                min_profit_debit_ratio=0.3,
+                quantity=1
             )
-        else:
-            # Use defaults (by_delta with 0.30 delta for directional strategies)
-            if "Call" in strategy_name:
-                target_delta = 0.30
-            elif "Put" in strategy_name:
-                target_delta = -0.30
-            else:
-                target_delta = 0.30
 
             strategy.build_legs(
                 ticker_data=ticker_data,
-                strike_selection_method="by_delta",
-                target_delta=target_delta,
-                quantity=1
+                spread_config=spread_config
             )
+        else:
+            # Single-leg strategies use old signature
+            if strike_config:
+                # Use configured strike selection
+                strategy.build_legs(
+                    ticker_data=ticker_data,
+                    strike_selection_method=strike_config.method,
+                    target_delta=strike_config.target_delta,
+                    moneyness_pct=strike_config.moneyness_pct,
+                    specific_strike=strike_config.specific_strike,
+                    quantity=strike_config.quantity
+                )
+            else:
+                # Use defaults (by_delta with 0.30 delta for directional strategies)
+                if "Call" in strategy_name:
+                    target_delta = 0.30
+                elif "Put" in strategy_name:
+                    target_delta = -0.30
+                else:
+                    target_delta = 0.30
+
+                strategy.build_legs(
+                    ticker_data=ticker_data,
+                    strike_selection_method="by_delta",
+                    target_delta=target_delta,
+                    quantity=1
+                )
 
         # Validate strategy
         if not strategy.validate_legs():
