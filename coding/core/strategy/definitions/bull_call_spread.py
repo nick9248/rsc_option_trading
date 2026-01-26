@@ -82,6 +82,8 @@ class BullCallSpread(BaseStrategy):
         return {
             "long_target_delta": 0.45,
             "short_target_delta": 0.25,
+            "long_moneyness_pct": 15.0,  # 15% OTM for long leg
+            "short_moneyness_pct": 25.0,  # 25% OTM for short leg
             "min_profit_debit_ratio": 0.5,
             "max_loss_percentage": 5.0,
             "optimize_for": "profit_debit_ratio"
