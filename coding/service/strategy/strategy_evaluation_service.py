@@ -255,16 +255,31 @@ class StrategyEvaluationService:
         is_spread = "Spread" in strategy_name
 
         if is_spread:
-            # Spread strategies use SpreadStrikeConfig (not yet supported in GUI)
-            # For now, use default skew-aware configuration
+            # Spread strategies use SpreadStrikeConfig
             from coding.core.strategy.models.spread_config import SpreadStrikeConfig
 
-            spread_config = SpreadStrikeConfig(
-                method="skew_aware",
-                optimize_for="profit_debit_ratio",
-                min_profit_debit_ratio=0.3,
-                quantity=1
-            )
+            # Determine optimization mode based on budget constraint
+            if config.max_budget is not None:
+                # User specified budget - optimize for max width within budget
+                spread_config = SpreadStrikeConfig(
+                    method="skew_aware",
+                    optimize_for="max_width_for_budget",
+                    max_budget=config.max_budget,
+                    min_profit_debit_ratio=0.3,
+                    quantity=1
+                )
+                logger.info(
+                    f"Using budget constraint: ${config.max_budget:.2f} "
+                    f"(optimize for max width within budget)"
+                )
+            else:
+                # No budget constraint - optimize for profit/debit ratio
+                spread_config = SpreadStrikeConfig(
+                    method="skew_aware",
+                    optimize_for="profit_debit_ratio",
+                    min_profit_debit_ratio=0.3,
+                    quantity=1
+                )
 
             strategy.build_legs(
                 ticker_data=ticker_data,
