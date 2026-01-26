@@ -403,6 +403,83 @@ for signal in result.signals:
     print(f"{signal.strategy_name}: {signal.composite_score:.2f}")
 ```
 
+### Available Strategies
+
+**Single-Leg Strategies:**
+
+1. **Long Call**: Bullish directional strategy
+   - Max Risk: Premium paid
+   - Max Profit: Unlimited
+   - Breakeven: Strike + premium
+   - Use Case: Strong bullish outlook
+
+2. **Long Put**: Bearish directional strategy
+   - Max Risk: Premium paid
+   - Max Profit: Strike - premium
+   - Breakeven: Strike - premium
+   - Use Case: Strong bearish outlook
+
+**Multi-Leg Spread Strategies:**
+
+3. **Bull Call Spread**: Bullish vertical spread (NEW)
+   - Max Risk: Strike width - net debit (limited)
+   - Max Profit: Net debit (limited)
+   - Breakeven: Long strike + net debit per contract
+   - Legs: Buy lower strike call + Sell higher strike call
+   - Use Case: Moderately bullish, capital-efficient
+
+   **Configuration (Pydantic SpreadStrikeConfig):**
+   - **Skew-Aware Mode (Recommended)**: Dynamic optimization using volatility skew
+     - `profit_debit_ratio`: Find spread with best risk/reward ratio
+     - `max_width_for_budget`: Find widest spread within budget constraint
+   - **Traditional Modes**: Manual strike selection
+     - `by_delta`: Specify long/short deltas
+     - `by_moneyness`: Specify % OTM for each leg
+     - `by_strike`: Specify exact strikes
+
+   **Example Usage (Skew-Aware):**
+   ```python
+   from coding.core.strategy import create_strategy
+   from coding.core.strategy.models.spread_config import SpreadStrikeConfig
+
+   # Skew-aware optimization (professional approach)
+   config = SpreadStrikeConfig(
+       method="skew_aware",
+       optimize_for="profit_debit_ratio",
+       min_profit_debit_ratio=0.5,  # Require 50% return on capital
+       quantity=1
+   )
+
+   strategy = create_strategy(
+       name="Bull Call Spread",
+       currency="BTC",
+       expiration="31JAN25",
+       underlying_price=100000.0
+   )
+
+   strategy.build_legs(ticker_data=ticker_data, spread_config=config)
+   ```
+
+   **Example Usage (Traditional):**
+   ```python
+   # Manual delta-based selection
+   config = SpreadStrikeConfig(
+       method="by_delta",
+       long_target_delta=0.50,
+       short_target_delta=0.30,
+       quantity=1
+   )
+
+   strategy.build_legs(ticker_data=ticker_data, spread_config=config)
+   ```
+
+   **Important Notes:**
+   - Bull Call Spread is available **programmatically only** (not in GUI yet)
+   - Uses Pydantic for type-safe, validated configuration
+   - Skew-aware mode scans all possible spreads and selects optimal based on criteria
+   - Backward compatible with traditional strike selection methods
+   - Scoring system fully supports multi-leg strategies (no changes needed)
+
 ### Key Design Decisions
 
 1. **Trend Analysis**: Uses last 5 historical captures to detect max pain and volume trends
@@ -411,13 +488,15 @@ for signal in result.signals:
 4. **Extensibility**: Easy to add new strategies by inheriting from BaseStrategy
 5. **Transparency**: Full score breakdowns stored for analysis
 6. **Detailed Output**: Each evaluation generates comprehensive text file in `output/strategies/{expiration}/` with all market data, scores, and analysis
+7. **Pydantic Configuration**: New spread strategies use Pydantic for enhanced validation and type safety
 
 ### Future Enhancements (Not Yet Implemented)
 
 - ML-based weight optimization
 - Advanced market regime detection
 - Backtesting framework
-- Complex multi-leg strategies (spreads, condors, etc.)
+- Additional multi-leg strategies (Bear Put Spread, Bull Put Spread, Bear Call Spread, Iron Condor)
+- GUI support for multi-leg strategies
 - Real-time execution integration
 ## Commands
 

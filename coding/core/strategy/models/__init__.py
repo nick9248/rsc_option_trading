@@ -4,6 +4,7 @@ Strategy data models package.
 Contains dataclasses for signals, configurations, and results.
 """
 
+from .spread_config import SpreadStrikeConfig
 from .strategy_signal import (
     EvaluationResult,
     StrategyConfig,
@@ -16,4 +17,5 @@ __all__ = [
     "StrategyConfig",
     "StrikeConfig",
     "EvaluationResult",
+    "SpreadStrikeConfig",
 ]
