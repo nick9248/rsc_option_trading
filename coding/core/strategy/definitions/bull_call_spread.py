@@ -252,49 +252,87 @@ class BullCallSpread(BaseStrategy):
         Raises:
             ValueError: If no valid spreads found
         """
-        # Filter to reasonable strike range first (0.8x to 1.5x underlying)
-        min_strike = self.underlying_price * 0.8
-        max_strike = self.underlying_price * 1.5
+        # Filter to reasonable strike range for bull call spreads
+        # Long strike: 0.90x to 1.20x (ATM to moderately OTM)
+        # Short strike: 0.95x to 1.30x (slightly OTM to moderately OTM)
+        min_long_strike = self.underlying_price * 0.90
+        max_long_strike = self.underlying_price * 1.20
+        min_short_strike = self.underlying_price * 0.95
+        max_short_strike = self.underlying_price * 1.30
 
-        reasonable_instruments = {
+        # Filter long leg candidates (closer to ATM)
+        long_candidates = {
             name: data
             for name, data in call_instruments.items()
-            if min_strike <= self._extract_strike_from_name(name) <= max_strike
+            if min_long_strike <= self._extract_strike_from_name(name) <= max_long_strike
         }
 
-        if not reasonable_instruments:
+        # Filter short leg candidates (further OTM)
+        short_candidates = {
+            name: data
+            for name, data in call_instruments.items()
+            if min_short_strike <= self._extract_strike_from_name(name) <= max_short_strike
+        }
+
+        if not long_candidates or not short_candidates:
             logger.warning(
-                f"No strikes in reasonable range ({min_strike:.0f}-{max_strike:.0f}), "
-                f"expanding range to 0.5x-2.0x"
+                f"Limited strikes in optimal range. "
+                f"Long: {len(long_candidates)}, Short: {len(short_candidates)}. "
+                f"Expanding range to 0.85x-1.40x"
             )
-            min_strike = self.underlying_price * 0.5
-            max_strike = self.underlying_price * 2.0
-            reasonable_instruments = {
+            # Expand range slightly if needed
+            min_long_strike = self.underlying_price * 0.85
+            max_long_strike = self.underlying_price * 1.25
+            min_short_strike = self.underlying_price * 0.90
+            max_short_strike = self.underlying_price * 1.40
+
+            long_candidates = {
                 name: data
                 for name, data in call_instruments.items()
-                if min_strike <= self._extract_strike_from_name(name) <= max_strike
+                if min_long_strike <= self._extract_strike_from_name(name) <= max_long_strike
             }
 
-        if not reasonable_instruments:
+            short_candidates = {
+                name: data
+                for name, data in call_instruments.items()
+                if min_short_strike <= self._extract_strike_from_name(name) <= max_short_strike
+            }
+
+        if not long_candidates or not short_candidates:
             raise ValueError(
-                f"No call options found in reasonable strike range "
-                f"({min_strike:.0f}-{max_strike:.0f}) for underlying={self.underlying_price:.2f}"
+                f"No suitable call options found for bull call spread. "
+                f"Long candidates: {len(long_candidates)}, Short candidates: {len(short_candidates)}. "
+                f"Underlying: {self.underlying_price:.2f}"
             )
 
         logger.info(
-            f"Filtered to {len(reasonable_instruments)} strikes in range "
-            f"{min_strike:.0f}-{max_strike:.0f} (underlying={self.underlying_price:.2f})"
+            f"Filtered to {len(long_candidates)} long candidates "
+            f"({min_long_strike:.0f}-{max_long_strike:.0f}) and "
+            f"{len(short_candidates)} short candidates "
+            f"({min_short_strike:.0f}-{max_short_strike:.0f}) "
+            f"for underlying={self.underlying_price:.2f}"
         )
 
         spreads = []
 
-        for long_name, long_data in reasonable_instruments.items():
+        for long_name, long_data in long_candidates.items():
             long_strike = self._extract_strike_from_name(long_name)
+            long_delta = abs(long_data.get("greeks", {}).get("delta", 0))
             long_iv = long_data.get("greeks", {}).get("iv", 0)
+
+            # Skip if long leg delta is too low (< 0.20 = too far OTM)
+            if long_delta < 0.20:
+                continue
+
             long_cost = self._calculate_leg_cost(long_data, config.quantity, is_buy=True)
 
-            for short_name, short_data in reasonable_instruments.items():
+            for short_name, short_data in short_candidates.items():
                 short_strike = self._extract_strike_from_name(short_name)
+                short_delta = abs(short_data.get("greeks", {}).get("delta", 0))
+
+                # Skip if short leg delta is too low (< 0.10 = lottery ticket)
+                if short_delta < 0.10:
+                    continue
 
                 # Skip if not valid spread structure (short must be > long)
                 if short_strike <= long_strike:
@@ -304,8 +342,8 @@ class BullCallSpread(BaseStrategy):
                 strike_width = short_strike - long_strike
                 width_pct = (strike_width / self.underlying_price) * 100
 
-                # Skip spreads that are too wide (> 30% of underlying)
-                if width_pct > 30.0:
+                # Skip spreads that are too wide (> 25% of underlying for bull calls)
+                if width_pct > 25.0:
                     continue
 
                 short_iv = short_data.get("greeks", {}).get("iv", 0)
@@ -339,6 +377,8 @@ class BullCallSpread(BaseStrategy):
                     "short_name": short_name,
                     "long_strike": long_strike,
                     "short_strike": short_strike,
+                    "long_delta": long_delta,
+                    "short_delta": short_delta,
                     "net_debit": net_debit,
                     "strike_width": strike_width,
                     "profit_debit_ratio": profit_debit_ratio,
@@ -362,11 +402,11 @@ class BullCallSpread(BaseStrategy):
 
         logger.info(
             f"Skew-aware selection ({config.optimize_for}): "
-            f"{optimal['long_strike']:.0f}/{optimal['short_strike']:.0f}, "
+            f"{optimal['long_strike']:.0f}(Δ{optimal['long_delta']:.2f})/"
+            f"{optimal['short_strike']:.0f}(Δ{optimal['short_delta']:.2f}), "
             f"profit/debit={optimal['profit_debit_ratio']:.2f}, "
             f"width={optimal['strike_width']:.0f}, "
-            f"debit=${optimal['net_debit']:.2f}, "
-            f"IV_skew={optimal['iv_skew_slope']:.6f}"
+            f"debit=${optimal['net_debit']:.2f}"
         )
 
         return optimal["long_name"], optimal["short_name"]
