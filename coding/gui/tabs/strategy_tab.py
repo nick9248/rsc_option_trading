@@ -178,6 +178,9 @@ class StrategyTab(QWidget):
 
     def _setup_ui(self) -> None:
         """Set up the user interface."""
+        # Set minimum width to prevent excessive shrinking
+        self.setMinimumWidth(600)
+
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(20, 20, 20, 20)
         main_layout.setSpacing(16)
@@ -245,25 +248,39 @@ class StrategyTab(QWidget):
         title.setStyleSheet(f"font-size: 16px; font-weight: 600; color: {Colors.TEXT_PRIMARY};")
         layout.addWidget(title)
 
-        # Currency selector
-        currency_layout = QHBoxLayout()
+        # Currency selector - use grid for better control
+        currency_grid = QGridLayout()
+        currency_grid.setSpacing(8)
+
         currency_label = QLabel("Currency:")
         currency_label.setStyleSheet(f"color: {Colors.TEXT_PRIMARY};")
+        currency_label.setMinimumWidth(120)
+
         self.currency_combo = QComboBox()
         self.currency_combo.addItems(["BTC", "ETH"])
         self.currency_combo.setStyleSheet(self._get_combo_style())
-        currency_layout.addWidget(currency_label)
-        currency_layout.addWidget(self.currency_combo)
-        currency_layout.addStretch()
-        layout.addLayout(currency_layout)
+        self.currency_combo.setMinimumWidth(100)
+        self.currency_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
-        # Market regime
-        regime_layout = QHBoxLayout()
+        currency_grid.addWidget(currency_label, 0, 0)
+        currency_grid.addWidget(self.currency_combo, 0, 1)
+        currency_grid.setColumnStretch(1, 1)
+
+        layout.addLayout(currency_grid)
+
+        # Market regime - use grid for better control
+        regime_grid = QGridLayout()
+        regime_grid.setSpacing(8)
+
         regime_label = QLabel("Market Regime:")
         regime_label.setStyleSheet(f"color: {Colors.TEXT_PRIMARY};")
+        regime_label.setMinimumWidth(120)
+
         self.regime_combo = QComboBox()
         self.regime_combo.addItems(["Neutral", "Bullish", "Bearish"])
         self.regime_combo.setStyleSheet(self._get_combo_style())
+        self.regime_combo.setMinimumWidth(100)
+        self.regime_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         regime_info = self._create_info_button(
             "Market Regime Info",
@@ -278,11 +295,12 @@ The regime penalty helps filter strategies that go against the expected market d
 Example: If you select "Bullish" regime and evaluate a Long Put, the composite score will be reduced by 50% since puts profit from price decreases."""
         )
 
-        regime_layout.addWidget(regime_label)
-        regime_layout.addWidget(regime_info)
-        regime_layout.addWidget(self.regime_combo)
-        regime_layout.addStretch()
-        layout.addLayout(regime_layout)
+        regime_grid.addWidget(regime_label, 0, 0)
+        regime_grid.addWidget(self.regime_combo, 0, 1)
+        regime_grid.addWidget(regime_info, 0, 2)
+        regime_grid.setColumnStretch(1, 1)
+
+        layout.addLayout(regime_grid)
 
         # Load expiries button
         load_btn = QPushButton("Load Expiry Dates")
@@ -332,11 +350,17 @@ Example: If you select "Bullish" regime and evaluate a Long Put, the composite s
             btn.setCheckable(True)
             btn.setStyleSheet(self._get_strategy_button_style())
             btn.setMinimumHeight(50)
+            btn.setMinimumWidth(150)  # Prevent text cutoff
+            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             btn.clicked.connect(lambda checked, name=strategy_name: self._on_strategy_selected(name))
 
             row = i // 2
             col = i % 2
             grid.addWidget(btn, row, col)
+
+        # Make columns equal width
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
 
         layout.addLayout(grid)
 
@@ -365,13 +389,19 @@ Example: If you select "Bullish" regime and evaluate a Long Put, the composite s
         title.setStyleSheet(f"font-size: 16px; font-weight: 600; color: {Colors.TEXT_PRIMARY};")
         layout.addWidget(title)
 
-        # Strike selection method
-        strike_layout = QHBoxLayout()
+        # Strike selection method - use grid for better control
+        strike_grid = QGridLayout()
+        strike_grid.setSpacing(8)
+
         strike_label = QLabel("Strike Selection:")
         strike_label.setStyleSheet(f"color: {Colors.TEXT_PRIMARY};")
+        strike_label.setMinimumWidth(120)
+
         self.strike_method_combo = QComboBox()
         self.strike_method_combo.addItems(["By Delta", "By Moneyness", "By Specific Strike"])
         self.strike_method_combo.setStyleSheet(self._get_combo_style())
+        self.strike_method_combo.setMinimumWidth(150)
+        self.strike_method_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.strike_method_combo.currentTextChanged.connect(self._on_strike_method_changed)
 
         strike_info = self._create_info_button(
@@ -406,95 +436,136 @@ Example: If you select "Bullish" regime and evaluate a Long Put, the composite s
    Example: Enter 105000 to buy exactly $105,000 strike"""
         )
 
-        strike_layout.addWidget(strike_label)
-        strike_layout.addWidget(strike_info)
-        strike_layout.addWidget(self.strike_method_combo)
-        strike_layout.addStretch()
-        layout.addLayout(strike_layout)
+        strike_grid.addWidget(strike_label, 0, 0)
+        strike_grid.addWidget(self.strike_method_combo, 0, 1)
+        strike_grid.addWidget(strike_info, 0, 2)
+        strike_grid.setColumnStretch(1, 1)
 
-        # Delta value (for "By Delta" method)
-        delta_layout = QHBoxLayout()
+        layout.addLayout(strike_grid)
+
+        # Delta value (for "By Delta" method) - use grid
+        delta_grid = QGridLayout()
+        delta_grid.setSpacing(8)
+
         delta_label = QLabel("Target Delta:")
         delta_label.setStyleSheet(f"color: {Colors.TEXT_PRIMARY};")
+        delta_label.setMinimumWidth(120)
+
         self.delta_spin = QDoubleSpinBox()
         self.delta_spin.setRange(-1.0, 1.0)
         self.delta_spin.setValue(0.30)
         self.delta_spin.setSingleStep(0.05)
         self.delta_spin.setDecimals(2)
+        self.delta_spin.setMinimumWidth(100)
+        self.delta_spin.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.delta_spin.setStyleSheet(self._get_spin_style())
-        delta_layout.addWidget(delta_label)
-        delta_layout.addWidget(self.delta_spin)
-        delta_layout.addStretch()
-        layout.addLayout(delta_layout)
-        self.delta_layout_widgets = (delta_label, self.delta_spin)
 
-        # Moneyness % (for "By Moneyness" method)
-        money_layout = QHBoxLayout()
+        delta_grid.addWidget(delta_label, 0, 0)
+        delta_grid.addWidget(self.delta_spin, 0, 1)
+        delta_grid.setColumnStretch(1, 1)
+
+        layout.addLayout(delta_grid)
+        self.delta_layout_widgets = (delta_label, self.delta_spin, delta_grid)
+
+        # Moneyness % (for "By Moneyness" method) - use grid
+        money_grid = QGridLayout()
+        money_grid.setSpacing(8)
+
         money_label = QLabel("Moneyness %:")
         money_label.setStyleSheet(f"color: {Colors.TEXT_PRIMARY};")
+        money_label.setMinimumWidth(120)
+
         self.moneyness_spin = QDoubleSpinBox()
         self.moneyness_spin.setRange(0.0, 50.0)
         self.moneyness_spin.setValue(5.0)
         self.moneyness_spin.setSingleStep(1.0)
         self.moneyness_spin.setDecimals(1)
+        self.moneyness_spin.setMinimumWidth(100)
+        self.moneyness_spin.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.moneyness_spin.setStyleSheet(self._get_spin_style())
-        money_layout.addWidget(money_label)
-        money_layout.addWidget(self.moneyness_spin)
-        money_layout.addStretch()
-        layout.addLayout(money_layout)
-        self.moneyness_layout_widgets = (money_label, self.moneyness_spin)
+
+        money_grid.addWidget(money_label, 0, 0)
+        money_grid.addWidget(self.moneyness_spin, 0, 1)
+        money_grid.setColumnStretch(1, 1)
+
+        layout.addLayout(money_grid)
+        self.moneyness_layout_widgets = (money_label, self.moneyness_spin, money_grid)
         for widget in self.moneyness_layout_widgets:
             widget.hide()
 
-        # Specific strike (for "By Specific Strike" method)
-        specific_layout = QHBoxLayout()
+        # Specific strike (for "By Specific Strike" method) - use grid
+        specific_grid = QGridLayout()
+        specific_grid.setSpacing(8)
+
         specific_label = QLabel("Strike Price:")
         specific_label.setStyleSheet(f"color: {Colors.TEXT_PRIMARY};")
+        specific_label.setMinimumWidth(120)
+
         self.specific_strike_spin = QDoubleSpinBox()
         self.specific_strike_spin.setRange(0.0, 1000000.0)
         self.specific_strike_spin.setValue(100000.0)
         self.specific_strike_spin.setSingleStep(1000.0)
         self.specific_strike_spin.setDecimals(0)
+        self.specific_strike_spin.setMinimumWidth(100)
+        self.specific_strike_spin.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.specific_strike_spin.setStyleSheet(self._get_spin_style())
-        specific_layout.addWidget(specific_label)
-        specific_layout.addWidget(self.specific_strike_spin)
-        specific_layout.addStretch()
-        layout.addLayout(specific_layout)
-        self.specific_strike_layout_widgets = (specific_label, self.specific_strike_spin)
+
+        specific_grid.addWidget(specific_label, 0, 0)
+        specific_grid.addWidget(self.specific_strike_spin, 0, 1)
+        specific_grid.setColumnStretch(1, 1)
+
+        layout.addLayout(specific_grid)
+        self.specific_strike_layout_widgets = (specific_label, self.specific_strike_spin, specific_grid)
         for widget in self.specific_strike_layout_widgets:
             widget.hide()
 
-        # Max loss filter
-        max_loss_layout = QHBoxLayout()
+        # Max loss filter - use grid
+        max_loss_grid = QGridLayout()
+        max_loss_grid.setSpacing(8)
+
         max_loss_label = QLabel("Max Loss %:")
         max_loss_label.setStyleSheet(f"color: {Colors.TEXT_PRIMARY};")
+        max_loss_label.setMinimumWidth(120)
+
         self.max_loss_spin = QDoubleSpinBox()
         self.max_loss_spin.setRange(0.0, 100.0)
         self.max_loss_spin.setValue(5.0)
         self.max_loss_spin.setSingleStep(0.5)
         self.max_loss_spin.setDecimals(1)
+        self.max_loss_spin.setMinimumWidth(100)
+        self.max_loss_spin.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.max_loss_spin.setStyleSheet(self._get_spin_style())
-        max_loss_layout.addWidget(max_loss_label)
-        max_loss_layout.addWidget(self.max_loss_spin)
-        max_loss_layout.addStretch()
-        layout.addLayout(max_loss_layout)
 
-        # Take profit %
-        tp_layout = QHBoxLayout()
+        max_loss_grid.addWidget(max_loss_label, 0, 0)
+        max_loss_grid.addWidget(self.max_loss_spin, 0, 1)
+        max_loss_grid.setColumnStretch(1, 1)
+
+        layout.addLayout(max_loss_grid)
+
+        # Take profit % - use grid
+        tp_grid = QGridLayout()
+        tp_grid.setSpacing(8)
+
         tp_check = QCheckBox("Take Profit %:")
         tp_check.setStyleSheet(f"color: {Colors.TEXT_PRIMARY};")
+        tp_check.setMinimumWidth(120)
         tp_check.stateChanged.connect(self._on_tp_check_changed)
+
         self.tp_spin = QDoubleSpinBox()
         self.tp_spin.setRange(0.0, 1000.0)
         self.tp_spin.setValue(50.0)
         self.tp_spin.setSingleStep(10.0)
         self.tp_spin.setDecimals(0)
         self.tp_spin.setEnabled(False)
+        self.tp_spin.setMinimumWidth(100)
+        self.tp_spin.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.tp_spin.setStyleSheet(self._get_spin_style())
-        tp_layout.addWidget(tp_check)
-        tp_layout.addWidget(self.tp_spin)
-        tp_layout.addStretch()
-        layout.addLayout(tp_layout)
+
+        tp_grid.addWidget(tp_check, 0, 0)
+        tp_grid.addWidget(self.tp_spin, 0, 1)
+        tp_grid.setColumnStretch(1, 1)
+
+        layout.addLayout(tp_grid)
         self.tp_check = tp_check
 
         return frame
@@ -590,24 +661,30 @@ Example: If you select "Bullish" regime and evaluate a Long Put, the composite s
 
     def _on_strike_method_changed(self, method: str) -> None:
         """Handle strike method change."""
-        # Hide all method-specific widgets
-        for widget in self.delta_layout_widgets:
-            widget.hide()
-        for widget in self.moneyness_layout_widgets:
-            widget.hide()
-        for widget in self.specific_strike_layout_widgets:
-            widget.hide()
+        # Hide all method-specific widgets (includes the grid layouts)
+        for item in self.delta_layout_widgets:
+            if hasattr(item, 'hide'):
+                item.hide()
+        for item in self.moneyness_layout_widgets:
+            if hasattr(item, 'hide'):
+                item.hide()
+        for item in self.specific_strike_layout_widgets:
+            if hasattr(item, 'hide'):
+                item.hide()
 
         # Show relevant widgets
         if method == "By Delta":
-            for widget in self.delta_layout_widgets:
-                widget.show()
+            for item in self.delta_layout_widgets:
+                if hasattr(item, 'show'):
+                    item.show()
         elif method == "By Moneyness":
-            for widget in self.moneyness_layout_widgets:
-                widget.show()
+            for item in self.moneyness_layout_widgets:
+                if hasattr(item, 'show'):
+                    item.show()
         elif method == "By Specific Strike":
-            for widget in self.specific_strike_layout_widgets:
-                widget.show()
+            for item in self.specific_strike_layout_widgets:
+                if hasattr(item, 'show'):
+                    item.show()
 
     def _on_tp_check_changed(self, state: int) -> None:
         """Handle take profit checkbox change."""
