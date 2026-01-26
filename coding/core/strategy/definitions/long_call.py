@@ -39,6 +39,23 @@ class LongCall(BaseStrategy):
         """Strategy type classification."""
         return "directional_bullish"
 
+    @classmethod
+    def get_default_config(cls) -> Dict[str, any]:
+        """
+        Get default configuration for Long Call.
+
+        Optimized for pure directional speculation:
+        - Delta: 0.30 (OTM for leverage and lower cost)
+        - Max loss: 5% of account
+
+        Returns:
+            Dictionary with Long Call defaults
+        """
+        return {
+            "target_delta": 0.30,
+            "max_loss_percentage": 5.0
+        }
+
     def build_legs(
         self,
         ticker_data: Dict[str, Dict],

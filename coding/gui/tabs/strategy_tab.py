@@ -647,8 +647,48 @@ class StrategyTab(QWidget):
 
         if selected:
             logger.info(f"Selected strategies: {', '.join(selected)}")
+            # Update defaults based on first selected strategy
+            self._update_defaults_for_strategy(selected[0])
         else:
             logger.info("No strategies selected")
+
+    def _update_defaults_for_strategy(self, strategy_name: str) -> None:
+        """
+        Update GUI defaults based on strategy-specific configuration.
+
+        Args:
+            strategy_name: Name of the strategy to get defaults for
+        """
+        from coding.core.strategy import create_strategy
+
+        try:
+            # Create temporary strategy instance to get defaults
+            # Use dummy values for initialization
+            temp_strategy = create_strategy(
+                name=strategy_name,
+                currency="BTC",
+                expiration="31JAN25",
+                underlying_price=100000.0
+            )
+
+            # Get strategy-specific defaults
+            defaults = temp_strategy.get_default_config()
+
+            # Update delta spin box
+            if "target_delta" in defaults:
+                self.delta_spin.setValue(defaults["target_delta"])
+                logger.info(f"Updated delta default to {defaults['target_delta']:.2f} for {strategy_name}")
+
+            # Update max loss spin box
+            if "max_loss_percentage" in defaults:
+                self.max_loss_spin.setValue(defaults["max_loss_percentage"])
+                logger.info(f"Updated max loss default to {defaults['max_loss_percentage']:.1f}% for {strategy_name}")
+
+        except Exception as e:
+            logger.warning(f"Could not update defaults for {strategy_name}: {e}")
+            # Fallback to generic defaults
+            self.delta_spin.setValue(0.30)
+            self.max_loss_spin.setValue(5.0)
 
     def _on_strike_method_changed(self, method: str) -> None:
         """Handle strike method change."""
