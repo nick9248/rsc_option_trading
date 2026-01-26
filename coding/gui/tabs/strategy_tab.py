@@ -465,7 +465,7 @@ Example: If you select "Bullish" regime and evaluate a Long Put, the composite s
         delta_grid.setColumnStretch(1, 1)
 
         layout.addLayout(delta_grid)
-        self.delta_layout_widgets = (delta_label, self.delta_spin, delta_grid)
+        self.delta_layout_widgets = (delta_label, self.delta_spin)  # Only widgets, not layout
 
         # Moneyness % (for "By Moneyness" method) - use grid
         money_grid = QGridLayout()
@@ -489,7 +489,7 @@ Example: If you select "Bullish" regime and evaluate a Long Put, the composite s
         money_grid.setColumnStretch(1, 1)
 
         layout.addLayout(money_grid)
-        self.moneyness_layout_widgets = (money_label, self.moneyness_spin, money_grid)
+        self.moneyness_layout_widgets = (money_label, self.moneyness_spin)  # Only widgets, not layout
         for widget in self.moneyness_layout_widgets:
             widget.hide()
 
@@ -515,7 +515,7 @@ Example: If you select "Bullish" regime and evaluate a Long Put, the composite s
         specific_grid.setColumnStretch(1, 1)
 
         layout.addLayout(specific_grid)
-        self.specific_strike_layout_widgets = (specific_label, self.specific_strike_spin, specific_grid)
+        self.specific_strike_layout_widgets = (specific_label, self.specific_strike_spin)  # Only widgets, not layout
         for widget in self.specific_strike_layout_widgets:
             widget.hide()
 
@@ -661,30 +661,24 @@ Example: If you select "Bullish" regime and evaluate a Long Put, the composite s
 
     def _on_strike_method_changed(self, method: str) -> None:
         """Handle strike method change."""
-        # Hide all method-specific widgets (includes the grid layouts)
-        for item in self.delta_layout_widgets:
-            if hasattr(item, 'hide'):
-                item.hide()
-        for item in self.moneyness_layout_widgets:
-            if hasattr(item, 'hide'):
-                item.hide()
-        for item in self.specific_strike_layout_widgets:
-            if hasattr(item, 'hide'):
-                item.hide()
+        # Hide all method-specific widgets
+        for widget in self.delta_layout_widgets:
+            widget.hide()
+        for widget in self.moneyness_layout_widgets:
+            widget.hide()
+        for widget in self.specific_strike_layout_widgets:
+            widget.hide()
 
         # Show relevant widgets
         if method == "By Delta":
-            for item in self.delta_layout_widgets:
-                if hasattr(item, 'show'):
-                    item.show()
+            for widget in self.delta_layout_widgets:
+                widget.show()
         elif method == "By Moneyness":
-            for item in self.moneyness_layout_widgets:
-                if hasattr(item, 'show'):
-                    item.show()
+            for widget in self.moneyness_layout_widgets:
+                widget.show()
         elif method == "By Specific Strike":
-            for item in self.specific_strike_layout_widgets:
-                if hasattr(item, 'show'):
-                    item.show()
+            for widget in self.specific_strike_layout_widgets:
+                widget.show()
 
     def _on_tp_check_changed(self, state: int) -> None:
         """Handle take profit checkbox change."""
