@@ -21,6 +21,15 @@ Full permissions for read, write, execute, and file management. Only removal ope
 - Don't use over-the-top validation or excessive praise
 - Focus on technical accuracy over emotional validation
 - If uncertain about something, investigate to find the truth first rather than confirming user's beliefs
+- **BE PRECISE** - Never make assumptions or generalizations without verifying facts
+- **NO HYPOCRISY** - If there's a problem, admit it directly and investigate thoroughly
+- **NO QUICK FIXES** - Search deeply, think carefully, find the root cause, implement future-proof solutions
+- When investigating issues:
+  1. Don't assume - verify with actual data
+  2. Don't quick patch - find the structural root cause
+  3. Don't sugar coat - state the problem clearly
+  4. Think through all possibilities before concluding
+  5. Implement solutions that prevent the issue class, not just the symptom
 
 ## Documentation Rules
 

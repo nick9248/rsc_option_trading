@@ -598,14 +598,14 @@ class BullCallSpread(BaseStrategy):
         Returns:
             StrategyLeg for long position
         """
-        # Use ask price for buying
-        ask_price = ticker.get("ask_price", 0)
-        if ask_price == 0:
-            logger.warning(f"Ask price is 0 for {instrument_name}, using mark_price")
-            ask_price = ticker.get("mark_price", 0)
+        # Use best ask price for buying
+        best_ask_price = ticker.get("best_ask_price", 0)
+        if best_ask_price == 0:
+            logger.warning(f"Best ask price is 0 for {instrument_name}, using mark_price")
+            best_ask_price = ticker.get("mark_price", 0)
 
         # Cost per contract in USD
-        cost_per_contract = ask_price * self.underlying_price
+        cost_per_contract = best_ask_price * self.underlying_price
         total_cost = cost_per_contract * quantity
 
         # Extract greeks
@@ -646,14 +646,14 @@ class BullCallSpread(BaseStrategy):
         Returns:
             StrategyLeg for short position
         """
-        # Use bid price for selling
-        bid_price = ticker.get("bid_price", 0)
-        if bid_price == 0:
-            logger.warning(f"Bid price is 0 for {instrument_name}, using mark_price")
-            bid_price = ticker.get("mark_price", 0)
+        # Use best bid price for selling
+        best_bid_price = ticker.get("best_bid_price", 0)
+        if best_bid_price == 0:
+            logger.warning(f"Best bid price is 0 for {instrument_name}, using mark_price")
+            best_bid_price = ticker.get("mark_price", 0)
 
         # Credit per contract in USD
-        credit_per_contract = bid_price * self.underlying_price
+        credit_per_contract = best_bid_price * self.underlying_price
         total_credit = credit_per_contract * quantity
 
         # Extract greeks
@@ -738,11 +738,11 @@ class BullCallSpread(BaseStrategy):
             Total cost in USD
         """
         if is_buy:
-            price = ticker.get("ask_price", 0)
+            price = ticker.get("best_ask_price", 0)
             if price == 0:
                 price = ticker.get("mark_price", 0)
         else:
-            price = ticker.get("bid_price", 0)
+            price = ticker.get("best_bid_price", 0)
             if price == 0:
                 price = ticker.get("mark_price", 0)
 

@@ -103,15 +103,15 @@ class LongCall(BaseStrategy):
         # Get ticker data for selected instrument
         ticker = ticker_data[selected_instrument]
 
-        # Calculate cost (ask price * quantity, converted to currency units)
+        # Calculate cost (best ask price * quantity, converted to currency units)
         # Deribit prices are in currency units (BTC/ETH)
-        ask_price = ticker.get("ask_price", 0)
-        if ask_price == 0:
-            logger.warning(f"Ask price is 0 for {selected_instrument}, using mark_price")
-            ask_price = ticker.get("mark_price", 0)
+        best_ask_price = ticker.get("best_ask_price", 0)
+        if best_ask_price == 0:
+            logger.warning(f"Best ask price is 0 for {selected_instrument}, using mark_price")
+            best_ask_price = ticker.get("mark_price", 0)
 
         # Cost per contract in currency units (e.g., BTC)
-        cost_per_contract = ask_price * self.underlying_price  # Convert to USD equivalent
+        cost_per_contract = best_ask_price * self.underlying_price  # Convert to USD equivalent
 
         total_cost = cost_per_contract * quantity
 
