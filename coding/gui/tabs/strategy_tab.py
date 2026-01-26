@@ -192,7 +192,7 @@ class StrategyTab(QWidget):
         scroll.setStyleSheet(f"""
             QScrollArea {{
                 border: none;
-                background-color: {Colors.BACKGROUND};
+                background-color: {Colors.BACKGROUND_PRIMARY};
             }}
         """)
 
