@@ -259,22 +259,46 @@ class StrategyEvaluationService:
             # Spread strategies use SpreadStrikeConfig
             from coding.core.strategy.models.spread_config import SpreadStrikeConfig
 
-            # Determine optimization mode based on budget constraint
-            if config.max_budget is not None:
-                # User specified budget - optimize for max width within budget
-                spread_config = SpreadStrikeConfig(
-                    method="skew_aware",
-                    optimize_for="max_width_for_budget",
-                    max_budget=config.max_budget,
-                    min_profit_debit_ratio=0.3,
-                    quantity=1
-                )
-                logger.info(
-                    f"Using budget constraint: ${config.max_budget:.2f} "
-                    f"(optimize for max width within budget)"
-                )
+            # Check if strike_config is a dict (optimal mode from GUI)
+            if isinstance(strike_config, dict):
+                mode = strike_config.get("mode", "optimal")
+
+                if mode == "optimal":
+                    # Use skew-aware optimization
+                    # Determine optimization mode based on budget constraint
+                    if config.max_budget is not None:
+                        # User specified budget - optimize for max width within budget
+                        spread_config = SpreadStrikeConfig(
+                            method="skew_aware",
+                            optimize_for="max_width_for_budget",
+                            max_budget=config.max_budget,
+                            min_profit_debit_ratio=0.3,
+                            quantity=1
+                        )
+                        logger.info(
+                            f"Using budget constraint: ${config.max_budget:.2f} "
+                            f"(optimize for max width within budget)"
+                        )
+                    else:
+                        # No budget constraint - optimize for profit/debit ratio
+                        spread_config = SpreadStrikeConfig(
+                            method="skew_aware",
+                            optimize_for="profit_debit_ratio",
+                            min_profit_debit_ratio=0.3,
+                            quantity=1
+                        )
+                        logger.info("Using optimal (skew-aware) strike selection")
+                else:
+                    # Manual mode - should have been converted to SpreadStrikeConfig by GUI
+                    logger.error(f"Manual mode dict not converted to SpreadStrikeConfig: {strike_config}")
+                    raise ValueError("Manual spread config should be SpreadStrikeConfig object")
+            elif isinstance(strike_config, SpreadStrikeConfig):
+                # Already a SpreadStrikeConfig (manual mode from GUI)
+                spread_config = strike_config
+                logger.info(f"Using manual spread config: {spread_config.method}")
             else:
-                # No budget constraint - optimize for profit/debit ratio
+                # Fallback to optimal mode
+                logger.warning(f"Unknown strike config type for spread: {type(strike_config)}, using optimal")
                 spread_config = SpreadStrikeConfig(
                     method="skew_aware",
                     optimize_for="profit_debit_ratio",
