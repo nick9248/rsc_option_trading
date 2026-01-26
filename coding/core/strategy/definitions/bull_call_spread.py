@@ -230,16 +230,17 @@ class BullCallSpread(BaseStrategy):
         calculate metrics, and select the optimal one based on criteria.
 
         Algorithm:
-        1. Extract IV from greeks for all strikes
-        2. Generate all valid spread combinations
-        3. For each spread, calculate:
+        1. Filter strikes to reasonable range (0.8x to 1.5x underlying)
+        2. Extract IV from greeks for all strikes
+        3. Generate all valid spread combinations
+        4. For each spread, calculate:
            - Net debit (long cost - short credit)
            - Strike width
            - Profit/debit ratio: (width - debit) / debit
            - IV skew slope: (short_IV - long_IV) / (short_strike - long_strike)
-        4. Apply filters (min ratio, target width, max budget)
-        5. Rank by optimization criteria
-        6. Return optimal long/short instrument names
+        5. Apply filters (min ratio, target width, max budget, max spread width)
+        6. Rank by optimization criteria
+        7. Return optimal long/short instrument names
 
         Args:
             call_instruments: Filtered call options
@@ -251,18 +252,60 @@ class BullCallSpread(BaseStrategy):
         Raises:
             ValueError: If no valid spreads found
         """
+        # Filter to reasonable strike range first (0.8x to 1.5x underlying)
+        min_strike = self.underlying_price * 0.8
+        max_strike = self.underlying_price * 1.5
+
+        reasonable_instruments = {
+            name: data
+            for name, data in call_instruments.items()
+            if min_strike <= self._extract_strike_from_name(name) <= max_strike
+        }
+
+        if not reasonable_instruments:
+            logger.warning(
+                f"No strikes in reasonable range ({min_strike:.0f}-{max_strike:.0f}), "
+                f"expanding range to 0.5x-2.0x"
+            )
+            min_strike = self.underlying_price * 0.5
+            max_strike = self.underlying_price * 2.0
+            reasonable_instruments = {
+                name: data
+                for name, data in call_instruments.items()
+                if min_strike <= self._extract_strike_from_name(name) <= max_strike
+            }
+
+        if not reasonable_instruments:
+            raise ValueError(
+                f"No call options found in reasonable strike range "
+                f"({min_strike:.0f}-{max_strike:.0f}) for underlying={self.underlying_price:.2f}"
+            )
+
+        logger.info(
+            f"Filtered to {len(reasonable_instruments)} strikes in range "
+            f"{min_strike:.0f}-{max_strike:.0f} (underlying={self.underlying_price:.2f})"
+        )
+
         spreads = []
 
-        for long_name, long_data in call_instruments.items():
+        for long_name, long_data in reasonable_instruments.items():
             long_strike = self._extract_strike_from_name(long_name)
             long_iv = long_data.get("greeks", {}).get("iv", 0)
             long_cost = self._calculate_leg_cost(long_data, config.quantity, is_buy=True)
 
-            for short_name, short_data in call_instruments.items():
+            for short_name, short_data in reasonable_instruments.items():
                 short_strike = self._extract_strike_from_name(short_name)
 
                 # Skip if not valid spread structure (short must be > long)
                 if short_strike <= long_strike:
+                    continue
+
+                # Calculate strike width first
+                strike_width = short_strike - long_strike
+                width_pct = (strike_width / self.underlying_price) * 100
+
+                # Skip spreads that are too wide (> 30% of underlying)
+                if width_pct > 30.0:
                     continue
 
                 short_iv = short_data.get("greeks", {}).get("iv", 0)
@@ -270,7 +313,6 @@ class BullCallSpread(BaseStrategy):
 
                 # Calculate metrics
                 net_debit = long_cost - short_credit
-                strike_width = short_strike - long_strike
                 max_profit = strike_width - net_debit
                 profit_debit_ratio = max_profit / net_debit if net_debit > 0 else 0
                 iv_skew_slope = (short_iv - long_iv) / strike_width if strike_width > 0 else 0
