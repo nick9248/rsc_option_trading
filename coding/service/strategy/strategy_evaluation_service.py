@@ -25,7 +25,7 @@ from coding.core.strategy.models import (
 )
 from coding.core.strategy.scoring import CompositeScorer, IntrinsicScorer, OnChainScorer
 from coding.core.strategy.report_generator import StrategyReportGenerator
-from coding.core.strategy.chart_generator import StrategyChartGenerator
+from coding.core.strategy.chart_generators import get_chart_generator
 
 logger = logging.getLogger(__name__)
 
@@ -62,9 +62,6 @@ class StrategyEvaluationService:
 
         # Initialize report generator
         self.report_generator = StrategyReportGenerator()
-
-        # Initialize chart generator with repository for trend analysis
-        self.chart_generator = StrategyChartGenerator(repository=repository)
 
         logger.info("StrategyEvaluationService initialized")
 
@@ -171,9 +168,13 @@ class StrategyEvaluationService:
                     except Exception as e:
                         logger.error(f"Failed to generate report: {e}", exc_info=True)
 
-                    # Generate interactive chart
+                    # Generate interactive chart (using strategy-specific generator)
                     try:
-                        chart_path = self.chart_generator.generate_strategy_chart(
+                        chart_generator = get_chart_generator(
+                            strategy_name=signal.strategy_name,
+                            repository=self.repository
+                        )
+                        chart_path = chart_generator.generate_strategy_chart(
                             signal=signal,
                             market_context=market_context,
                             currency=currency,
