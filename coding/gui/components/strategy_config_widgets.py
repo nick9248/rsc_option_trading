@@ -19,7 +19,7 @@ from typing import Dict, Optional
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
-    QComboBox, QDoubleSpinBox, QPushButton, QCheckBox, QSizePolicy
+    QComboBox, QDoubleSpinBox, QPushButton, QCheckBox, QSizePolicy, QMessageBox
 )
 from PySide6.QtCore import Signal, Qt
 
@@ -116,26 +116,47 @@ class StrategyConfigWidget(QWidget):
         """
 
     def _create_info_button(self, title: str, description: str) -> QPushButton:
-        """Create info button with tooltip."""
-        btn = QPushButton("ⓘ")
-        btn.setToolTip(f"<b>{title}</b><br><br>{description}")
+        """Create info button matching existing GUI style."""
+        btn = QPushButton("Info")
+        btn.setFixedSize(60, 30)
+        btn.setToolTip(title)
         btn.setStyleSheet(f"""
             QPushButton {{
-                background-color: transparent;
-                color: {Colors.TEXT_SECONDARY};
-                border: none;
-                font-size: 16px;
-                padding: 0px;
-                max-width: 20px;
-                max-height: 20px;
+                background-color: {Colors.SURFACE};
+                color: {Colors.ACCENT};
+                border: 2px solid {Colors.ACCENT};
+                border-radius: 6px;
+                font-size: 12px;
+                font-weight: 600;
+                padding: 4px;
             }}
             QPushButton:hover {{
-                color: {Colors.ACCENT};
+                background-color: {Colors.ACCENT};
+                color: {Colors.TEXT_PRIMARY};
+            }}
+            QPushButton:pressed {{
+                background-color: {Colors.ACCENT_MUTED};
             }}
         """)
-        btn.setFixedSize(20, 20)
+        btn.clicked.connect(lambda: self._show_info_dialog(title, description))
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         return btn
+
+    def _show_info_dialog(self, title: str, message: str) -> None:
+        """Show info dialog with detailed explanation."""
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle(title)
+        msg_box.setText(message)
+        msg_box.setIcon(QMessageBox.Icon.Information)
+        msg_box.setStyleSheet(f"""
+            QMessageBox {{
+                background-color: {Colors.SURFACE};
+            }}
+            QLabel {{
+                color: {Colors.TEXT_PRIMARY};
+            }}
+        """)
+        msg_box.exec()
 
 
 class SingleLegConfigWidget(StrategyConfigWidget):
