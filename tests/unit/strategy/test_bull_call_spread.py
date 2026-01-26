@@ -260,7 +260,25 @@ class TestStrategyValidation:
     """Test strategy validation and calculations."""
 
     def test_max_risk_calculation(self, bull_call_spread, mock_ticker_data):
-        """Test that max risk = strike_width - net_debit."""
+        """Test that max risk = net debit paid."""
+        config = SpreadStrikeConfig(
+            method="by_strike",
+            long_specific_strike=100000.0,
+            short_specific_strike=105000.0,
+            quantity=1
+        )
+
+        bull_call_spread.build_legs(mock_ticker_data, config)
+
+        net_debit = abs(bull_call_spread.get_total_cost())
+        expected_max_risk = net_debit  # Max loss is the premium paid
+
+        actual_max_risk = bull_call_spread.get_max_risk()
+
+        assert abs(actual_max_risk - expected_max_risk) < 1.0  # Within $1
+
+    def test_max_profit_calculation(self, bull_call_spread, mock_ticker_data):
+        """Test that max profit = strike_width - net debit."""
         config = SpreadStrikeConfig(
             method="by_strike",
             long_specific_strike=100000.0,
@@ -272,27 +290,11 @@ class TestStrategyValidation:
 
         net_debit = abs(bull_call_spread.get_total_cost())
         strike_width = 5000.0  # 105000 - 100000
-        expected_max_risk = strike_width - net_debit
+        expected_max_profit = strike_width - net_debit  # Profit if price above short strike
 
-        actual_max_risk = bull_call_spread.get_max_risk()
-
-        assert abs(actual_max_risk - expected_max_risk) < 1.0  # Within $1
-
-    def test_max_profit_calculation(self, bull_call_spread, mock_ticker_data):
-        """Test that max profit = net debit."""
-        config = SpreadStrikeConfig(
-            method="by_strike",
-            long_specific_strike=100000.0,
-            short_specific_strike=105000.0,
-            quantity=1
-        )
-
-        bull_call_spread.build_legs(mock_ticker_data, config)
-
-        net_debit = abs(bull_call_spread.get_total_cost())
         max_profit = bull_call_spread.get_max_profit()
 
-        assert abs(max_profit - net_debit) < 1.0  # Within $1
+        assert abs(max_profit - expected_max_profit) < 1.0  # Within $1
 
     def test_breakeven_calculation(self, bull_call_spread, mock_ticker_data):
         """Test single breakeven point calculation."""
