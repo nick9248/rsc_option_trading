@@ -103,6 +103,37 @@ class BaseStrategy(ABC):
         """
         pass
 
+    @classmethod
+    def get_default_config(cls) -> Dict[str, any]:
+        """
+        Get default configuration for this strategy.
+
+        Subclasses should override this to provide strategy-specific defaults.
+
+        Returns:
+            Dictionary with default configuration parameters.
+            Keys vary by strategy type (single-leg vs spread).
+
+        Example for single-leg strategies:
+            {
+                "target_delta": 0.30,
+                "max_loss_percentage": 5.0
+            }
+
+        Example for spread strategies:
+            {
+                "long_target_delta": 0.45,
+                "short_target_delta": 0.25,
+                "min_profit_debit_ratio": 0.5,
+                "max_loss_percentage": 5.0
+            }
+        """
+        # Base implementation returns generic defaults
+        return {
+            "target_delta": 0.30,
+            "max_loss_percentage": 5.0
+        }
+
     @abstractmethod
     def build_legs(self, ticker_data: Dict[str, Dict], **kwargs) -> None:
         """

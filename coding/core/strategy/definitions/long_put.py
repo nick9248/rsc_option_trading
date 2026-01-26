@@ -39,6 +39,23 @@ class LongPut(BaseStrategy):
         """Strategy type classification."""
         return "directional_bearish"
 
+    @classmethod
+    def get_default_config(cls) -> Dict[str, any]:
+        """
+        Get default configuration for Long Put.
+
+        Optimized for pure directional speculation:
+        - Delta: -0.30 (OTM for leverage and lower cost)
+        - Max loss: 5% of account
+
+        Returns:
+            Dictionary with Long Put defaults
+        """
+        return {
+            "target_delta": 0.30,  # Absolute value, sign handled by strategy
+            "max_loss_percentage": 5.0
+        }
+
     def build_legs(
         self,
         ticker_data: Dict[str, Dict],

@@ -65,6 +65,28 @@ class BullCallSpread(BaseStrategy):
         """Strategy type classification."""
         return "directional_bullish"
 
+    @classmethod
+    def get_default_config(cls) -> Dict[str, any]:
+        """
+        Get default configuration for Bull Call Spread.
+
+        Optimized for capital-efficient directional plays:
+        - Long leg: 0.45 delta (ATM for directional exposure)
+        - Short leg: 0.25 delta (OTM to maximize spread width)
+        - Min profit/debit ratio: 0.5 (50% return on capital minimum)
+        - Max loss: 5% of account
+
+        Returns:
+            Dictionary with Bull Call Spread defaults
+        """
+        return {
+            "long_target_delta": 0.45,
+            "short_target_delta": 0.25,
+            "min_profit_debit_ratio": 0.5,
+            "max_loss_percentage": 5.0,
+            "optimize_for": "profit_debit_ratio"
+        }
+
     def build_legs(
         self,
         ticker_data: Dict[str, Dict],
