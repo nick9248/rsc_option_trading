@@ -188,7 +188,7 @@ class SingleLegConfigWidget(StrategyConfigWidget):
         self.method_combo.setMinimumWidth(100)
         self.method_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.method_combo.currentTextChanged.connect(self._on_method_changed)
-        self.method_combo.currentTextChanged.connect(self.config_changed.emit)
+        self.method_combo.currentTextChanged.connect(lambda: self.config_changed.emit())
 
         method_grid.addWidget(method_label, 0, 0)
         method_grid.addWidget(self.method_combo, 0, 1)
@@ -212,7 +212,7 @@ class SingleLegConfigWidget(StrategyConfigWidget):
         self.delta_spin.setMinimumWidth(100)
         self.delta_spin.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.delta_spin.setStyleSheet(self._get_spin_style())
-        self.delta_spin.valueChanged.connect(self.config_changed.emit)
+        self.delta_spin.valueChanged.connect(lambda: self.config_changed.emit())
 
         delta_info = self._create_info_button(
             "Target Delta",
@@ -245,7 +245,7 @@ class SingleLegConfigWidget(StrategyConfigWidget):
         self.moneyness_spin.setMinimumWidth(100)
         self.moneyness_spin.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.moneyness_spin.setStyleSheet(self._get_spin_style())
-        self.moneyness_spin.valueChanged.connect(self.config_changed.emit)
+        self.moneyness_spin.valueChanged.connect(lambda: self.config_changed.emit())
 
         moneyness_info = self._create_info_button(
             "Moneyness",
@@ -280,7 +280,7 @@ class SingleLegConfigWidget(StrategyConfigWidget):
         self.strike_spin.setMinimumWidth(100)
         self.strike_spin.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.strike_spin.setStyleSheet(self._get_spin_style())
-        self.strike_spin.valueChanged.connect(self.config_changed.emit)
+        self.strike_spin.valueChanged.connect(lambda: self.config_changed.emit())
 
         strike_info = self._create_info_button(
             "Specific Strike",
@@ -380,7 +380,7 @@ class SpreadConfigWidget(StrategyConfigWidget):
         self.mode_combo.setMinimumWidth(100)
         self.mode_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.mode_combo.currentTextChanged.connect(self._on_mode_changed)
-        self.mode_combo.currentTextChanged.connect(self.config_changed.emit)
+        self.mode_combo.currentTextChanged.connect(lambda: self.config_changed.emit())
 
         mode_info = self._create_info_button(
             "Strike Selection Mode",
@@ -416,7 +416,7 @@ class SpreadConfigWidget(StrategyConfigWidget):
         self.manual_method_combo.setMinimumWidth(100)
         self.manual_method_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.manual_method_combo.currentTextChanged.connect(self._on_manual_method_changed)
-        self.manual_method_combo.currentTextChanged.connect(self.config_changed.emit)
+        self.manual_method_combo.currentTextChanged.connect(lambda: self.config_changed.emit())
 
         manual_method_grid.addWidget(manual_method_label, 0, 0)
         manual_method_grid.addWidget(self.manual_method_combo, 0, 1)
@@ -446,7 +446,7 @@ class SpreadConfigWidget(StrategyConfigWidget):
         self.long_delta_spin.setMinimumWidth(100)
         self.long_delta_spin.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.long_delta_spin.setStyleSheet(self._get_spin_style())
-        self.long_delta_spin.valueChanged.connect(self.config_changed.emit)
+        self.long_delta_spin.valueChanged.connect(lambda: self.config_changed.emit())
 
         long_delta_info = self._create_info_button(
             "Long Leg Delta",
@@ -478,7 +478,7 @@ class SpreadConfigWidget(StrategyConfigWidget):
         self.short_delta_spin.setMinimumWidth(100)
         self.short_delta_spin.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.short_delta_spin.setStyleSheet(self._get_spin_style())
-        self.short_delta_spin.valueChanged.connect(self.config_changed.emit)
+        self.short_delta_spin.valueChanged.connect(lambda: self.config_changed.emit())
 
         short_delta_info = self._create_info_button(
             "Short Leg Delta",
@@ -518,7 +518,7 @@ class SpreadConfigWidget(StrategyConfigWidget):
         self.long_moneyness_spin.setMinimumWidth(100)
         self.long_moneyness_spin.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.long_moneyness_spin.setStyleSheet(self._get_spin_style())
-        self.long_moneyness_spin.valueChanged.connect(self.config_changed.emit)
+        self.long_moneyness_spin.valueChanged.connect(lambda: self.config_changed.emit())
 
         long_mon_info = self._create_info_button(
             "Long Leg Moneyness",
@@ -549,7 +549,7 @@ class SpreadConfigWidget(StrategyConfigWidget):
         self.short_moneyness_spin.setMinimumWidth(100)
         self.short_moneyness_spin.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.short_moneyness_spin.setStyleSheet(self._get_spin_style())
-        self.short_moneyness_spin.valueChanged.connect(self.config_changed.emit)
+        self.short_moneyness_spin.valueChanged.connect(lambda: self.config_changed.emit())
 
         short_mon_info = self._create_info_button(
             "Short Leg Moneyness",
@@ -589,7 +589,7 @@ class SpreadConfigWidget(StrategyConfigWidget):
         self.long_strike_spin.setMinimumWidth(100)
         self.long_strike_spin.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.long_strike_spin.setStyleSheet(self._get_spin_style())
-        self.long_strike_spin.valueChanged.connect(self.config_changed.emit)
+        self.long_strike_spin.valueChanged.connect(lambda: self.config_changed.emit())
 
         long_strike_info = self._create_info_button(
             "Long Leg Strike",
@@ -620,7 +620,7 @@ class SpreadConfigWidget(StrategyConfigWidget):
         self.short_strike_spin.setMinimumWidth(100)
         self.short_strike_spin.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.short_strike_spin.setStyleSheet(self._get_spin_style())
-        self.short_strike_spin.valueChanged.connect(self.config_changed.emit)
+        self.short_strike_spin.valueChanged.connect(lambda: self.config_changed.emit())
 
         short_strike_info = self._create_info_button(
             "Short Leg Strike",
