@@ -269,6 +269,9 @@ class StrategyEvaluationService:
 
                 if mode == "optimal":
                     # Use skew-aware optimization
+                    # Get return_top_n from GUI config (default to 5 if not specified)
+                    return_top_n = strike_config.get("return_top_n", 5)
+
                     # Determine optimization mode based on budget constraint
                     if config.max_budget is not None:
                         # User specified budget - optimize for max width within budget
@@ -277,11 +280,12 @@ class StrategyEvaluationService:
                             optimize_for="max_width_for_budget",
                             max_budget=config.max_budget,
                             min_profit_debit_ratio=0.3,
-                            quantity=1
+                            quantity=1,
+                            return_top_n=return_top_n
                         )
                         logger.info(
                             f"Using budget constraint: ${config.max_budget:.2f} "
-                            f"(optimize for max width within budget)"
+                            f"(optimize for max width within budget), return_top_n={return_top_n}"
                         )
                     else:
                         # No budget constraint - optimize for profit/debit ratio
@@ -289,9 +293,10 @@ class StrategyEvaluationService:
                             method="skew_aware",
                             optimize_for="profit_debit_ratio",
                             min_profit_debit_ratio=0.3,
-                            quantity=1
+                            quantity=1,
+                            return_top_n=return_top_n
                         )
-                        logger.info("Using optimal (skew-aware) strike selection")
+                        logger.info(f"Using optimal (skew-aware) strike selection, return_top_n={return_top_n}")
                 else:
                     # Manual mode - should have been converted to SpreadStrikeConfig by GUI
                     logger.error(f"Manual mode dict not converted to SpreadStrikeConfig: {strike_config}")

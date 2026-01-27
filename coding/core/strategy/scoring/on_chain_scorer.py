@@ -497,10 +497,17 @@ class OnChainScorer(BaseScorer):
                 regime = result.get("regime")
                 composite_score = result.get("composite_score")
 
-                logger.info(
-                    f"Detected market regime for {strategy.currency}: "
-                    f"{regime} (score={composite_score:.1f})"
-                )
+                # Handle None composite_score (can happen if regime detection partially fails)
+                if composite_score is not None:
+                    logger.info(
+                        f"Detected market regime for {strategy.currency}: "
+                        f"{regime} (score={composite_score:.1f})"
+                    )
+                else:
+                    logger.warning(
+                        f"Detected market regime for {strategy.currency}: "
+                        f"{regime} (score=None, using default)"
+                    )
 
                 return regime, composite_score
 

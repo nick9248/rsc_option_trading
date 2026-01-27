@@ -396,6 +396,41 @@ class SpreadConfigWidget(StrategyConfigWidget):
 
         layout.addLayout(mode_grid)
 
+        # Top N field (for Optimal mode - controls number of spread variations)
+        self.top_n_section = QWidget()
+        top_n_layout = QGridLayout(self.top_n_section)
+        top_n_layout.setContentsMargins(0, 0, 0, 0)
+        top_n_layout.setSpacing(8)
+
+        top_n_label = QLabel("Variations to Show:")
+        top_n_label.setStyleSheet(f"color: {Colors.TEXT_PRIMARY};")
+        top_n_label.setMinimumWidth(120)
+
+        self.top_n_spin = QSpinBox()
+        self.top_n_spin.setRange(1, 10)
+        self.top_n_spin.setValue(5)
+        self.top_n_spin.setSingleStep(1)
+        self.top_n_spin.setMinimumWidth(100)
+        self.top_n_spin.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.top_n_spin.setStyleSheet(self._get_spin_style())
+        self.top_n_spin.valueChanged.connect(lambda: self.config_changed.emit())
+
+        top_n_info = self._create_info_button(
+            "Number of Variations",
+            "How many different spread combinations to show.<br><br>"
+            "<b>1:</b> Show only the best spread<br>"
+            "<b>5 (default):</b> Show top 5 spreads with different risk/reward profiles<br>"
+            "<b>10:</b> Show all top variations for maximum choice<br><br>"
+            "Each variation gets independently scored and ranked."
+        )
+
+        top_n_layout.addWidget(top_n_label, 0, 0)
+        top_n_layout.addWidget(self.top_n_spin, 0, 1)
+        top_n_layout.addWidget(top_n_info, 0, 2)
+        top_n_layout.setColumnStretch(1, 1)
+
+        layout.addWidget(self.top_n_section)
+
         # Manual configuration section (hidden by default)
         self.manual_section = QWidget()
         manual_layout = QVBoxLayout(self.manual_section)
@@ -645,8 +680,10 @@ class SpreadConfigWidget(StrategyConfigWidget):
         """Handle strike selection mode change."""
         if mode == "Optimal (Skew-Aware)":
             self.manual_section.hide()
+            self.top_n_section.show()  # Show top_n for optimal mode
         else:  # Manual
             self.manual_section.show()
+            self.top_n_section.hide()  # Hide top_n for manual mode
             # Trigger update to show correct method fields
             self._on_manual_method_changed(self.manual_method_combo.currentText())
 
@@ -672,7 +709,8 @@ class SpreadConfigWidget(StrategyConfigWidget):
         if mode == "Optimal (Skew-Aware)":
             return {
                 "mode": "optimal",
-                "method": "skew_aware"
+                "method": "skew_aware",
+                "return_top_n": self.top_n_spin.value()
             }
         else:  # Manual
             manual_method = self.manual_method_combo.currentText()
