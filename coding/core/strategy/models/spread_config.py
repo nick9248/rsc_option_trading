@@ -56,6 +56,9 @@ class SpreadStrikeConfig(BaseModel):
     # Position sizing
     quantity: int = 1  # Number of contracts per leg
 
+    # Multi-signal generation
+    return_top_n: int = 5  # Number of top spread variations to return (for skew_aware mode)
+
     model_config = ConfigDict(
         frozen=True,  # Make config immutable
         validate_assignment=True  # Validate on attribute assignment
@@ -112,6 +115,16 @@ class SpreadStrikeConfig(BaseModel):
         """Validate quantity is positive."""
         if v <= 0:
             raise ValueError(f"quantity must be positive, got {v}")
+        return v
+
+    @field_validator('return_top_n')
+    @classmethod
+    def validate_return_top_n(cls, v: int) -> int:
+        """Validate return_top_n is positive and reasonable."""
+        if v <= 0:
+            raise ValueError(f"return_top_n must be positive, got {v}")
+        if v > 20:
+            raise ValueError(f"return_top_n must be <= 20 to avoid excessive signals, got {v}")
         return v
 
     @model_validator(mode='after')

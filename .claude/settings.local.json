@@ -37,7 +37,14 @@
       "Bash(psql:*)",
       "Bash(findstr:*)",
       "Bash(more:*)",
-      "Bash(del run_migration.py test_strategy_report.py)"
+      "Bash(del run_migration.py test_strategy_report.py)",
+      "Bash(other ones should remain intact\" with emphasis \"becareful about other)",
+      "Bash(strategie that is already implemented, like I said it has to be robust\"\n\nIMPLEMENTATION:\n- Created chart_generators/ package with base class pattern\n- BaseStrategyChartGenerator: Contains all current chart logic \\(unchanged\\)\n- SingleLegChartGenerator: For Long Call/Long Put \\(no overrides - inherits all\\)\n- SpreadChartGenerator: For spreads \\(no overrides - placeholder for future\\)\n- Factory pattern: get_chart_generator\\(\\) selects appropriate generator\n\nSAFETY GUARANTEES:\n- Long Call and Long Put use SingleLegChartGenerator with zero overrides\n- All existing chart generation logic preserved in base class\n- One strategy''s future customizations won''t affect others\n- Tests confirm no regression \\(71 passed\\)\n\nARCHITECTURE:\n- Service layer creates generator per-signal using factory\n- Centralized strategy-to-generator mapping\n- Easy to add new strategy types without touching existing code\n\nCo-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git log:*)",
+      "Bash(ls:*)",
+      "Bash(.venvScriptspython.exe test_widget_import.py)",
+      "Bash(git reset:*)",
+      "Bash(git show:*)"
     ]
   }
 }

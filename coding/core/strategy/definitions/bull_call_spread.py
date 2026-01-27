@@ -55,6 +55,25 @@ class BullCallSpread(BaseStrategy):
         strategy.build_legs(ticker_data=data, spread_config=config)
     """
 
+    def __init__(
+        self,
+        currency: str,
+        expiration: str,
+        underlying_price: float,
+        take_profit_percentage: Optional[float] = None
+    ):
+        """
+        Initialize Bull Call Spread strategy.
+
+        Args:
+            currency: Currency symbol
+            expiration: Expiration date string
+            underlying_price: Current underlying price
+            take_profit_percentage: Optional take profit percentage
+        """
+        super().__init__(currency, expiration, underlying_price, take_profit_percentage)
+        self._top_spread_variations: List[Dict] = []  # Stores top N spreads for multi-signal generation
+
     @property
     def name(self) -> str:
         """Strategy name."""
@@ -469,21 +488,63 @@ class BullCallSpread(BaseStrategy):
         elif config.optimize_for == "max_width_for_budget":
             spreads.sort(key=lambda s: s["strike_width"], reverse=True)
 
-        optimal = spreads[0]
+        # Get top N spreads (for multi-signal generation)
+        num_variations = min(config.return_top_n, len(spreads))
+        top_spreads = spreads[:num_variations]
 
+        # Log all top variations
         logger.info(
-            f"Skew-aware selection ({config.optimize_for}): "
-            f"{optimal['long_strike']:.0f}(Δ{optimal['long_delta']:.2f}, "
-            f"{optimal['long_otm_pct']:+.1f}% OTM)/"
-            f"{optimal['short_strike']:.0f}(Δ{optimal['short_delta']:.2f}), "
-            f"profit/debit={optimal['profit_debit_ratio']:.2f}, "
-            f"risk-adj={optimal['risk_adjusted_score']:.2f}, "
-            f"breakeven={optimal['breakeven']:.0f} ({optimal['breakeven_distance_pct']:+.1f}%), "
-            f"width={optimal['strike_width']:.0f}, "
-            f"debit=${optimal['net_debit']:.2f}"
+            f"Found {len(spreads)} valid spreads, returning top {num_variations} variations "
+            f"(sorted by {'risk-adjusted score' if config.optimize_for == 'profit_debit_ratio' else 'width'})"
         )
 
+        for i, spread in enumerate(top_spreads, 1):
+            logger.info(
+                f"  #{i}: {spread['long_strike']:.0f}(Δ{spread['long_delta']:.2f}, "
+                f"{spread['long_otm_pct']:+.1f}% OTM)/"
+                f"{spread['short_strike']:.0f}(Δ{spread['short_delta']:.2f}), "
+                f"profit/debit={spread['profit_debit_ratio']:.2f}, "
+                f"risk-adj={spread['risk_adjusted_score']:.2f}, "
+                f"breakeven={spread['breakeven']:.0f} ({spread['breakeven_distance_pct']:+.1f}%), "
+                f"width={spread['strike_width']:.0f}, "
+                f"debit=${spread['net_debit']:.2f}"
+            )
+
+        # Store all top spreads for multi-signal generation
+        self._top_spread_variations = top_spreads
+
+        # Return optimal spread (backward compatible)
+        optimal = top_spreads[0]
         return optimal["long_name"], optimal["short_name"]
+
+    def get_all_spread_variations(self) -> List[Tuple[str, str]]:
+        """
+        Get all top spread variations as instrument name pairs.
+
+        This method should be called AFTER build_legs() has been called with skew_aware method.
+        Returns the top N spreads that were identified during skew-aware optimization.
+
+        Returns:
+            List of (long_instrument_name, short_instrument_name) tuples
+
+        Raises:
+            ValueError: If build_legs() hasn't been called yet or no variations available
+
+        Example:
+            strategy.build_legs(ticker_data=data, spread_config=config)
+            variations = strategy.get_all_spread_variations()
+            # [(ETH-27MAR26-3100-C, ETH-27MAR26-3500-C), (ETH-27MAR26-3150-C, ETH-27MAR26-3550-C), ...]
+        """
+        if not self._top_spread_variations:
+            raise ValueError(
+                "No spread variations available. "
+                "Call build_legs() with skew_aware method first."
+            )
+
+        return [
+            (spread["long_name"], spread["short_name"])
+            for spread in self._top_spread_variations
+        ]
 
     def _select_by_dual_delta(
         self,

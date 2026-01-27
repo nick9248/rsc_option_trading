@@ -112,7 +112,7 @@ class StrategyEvaluationService:
 
             for i, strategy_name in enumerate(config.strategy_names):
                 try:
-                    signal = self._evaluate_single_strategy(
+                    signals = self._evaluate_single_strategy(
                         strategy_name=strategy_name,
                         currency=currency,
                         expiration=expiration,
@@ -121,14 +121,15 @@ class StrategyEvaluationService:
                         config=config
                     )
 
-                    # Apply filters
-                    if self._passes_filters(signal, config):
-                        result.signals.append(signal)
-                    else:
-                        logger.debug(
-                            f"{strategy_name}: Filtered out "
-                            f"(composite={signal.composite_score:.2f})"
-                        )
+                    # Apply filters to each signal (may be multiple for spreads)
+                    for signal in signals:
+                        if self._passes_filters(signal, config):
+                            result.signals.append(signal)
+                        else:
+                            logger.debug(
+                                f"{strategy_name}: Filtered out "
+                                f"(composite={signal.composite_score:.2f})"
+                            )
 
                 except Exception as e:
                     logger.error(
@@ -214,9 +215,12 @@ class StrategyEvaluationService:
         ticker_data: Dict,
         market_context: Dict,
         config: StrategyConfig
-    ) -> StrategySignal:
+    ) -> List[StrategySignal]:
         """
         Evaluate a single strategy.
+
+        For spread strategies with skew_aware method, this may return multiple signals
+        (top N spread variations). For other strategies, returns a single-element list.
 
         Args:
             strategy_name: Strategy name
@@ -227,7 +231,7 @@ class StrategyEvaluationService:
             config: Strategy configuration
 
         Returns:
-            StrategySignal instance
+            List of StrategySignal instances (usually 1, but may be N for spreads)
 
         Raises:
             Exception: If evaluation fails
@@ -390,7 +394,105 @@ class StrategyEvaluationService:
             f"on_chain={signal.on_chain_score:.2f}"
         )
 
-        return signal
+        signals = [signal]
+
+        # Check if this is a spread strategy with multiple variations
+        # (only for skew_aware optimization with return_top_n > 1)
+        if is_spread and isinstance(spread_config, SpreadStrikeConfig):
+            if spread_config.method == "skew_aware" and spread_config.return_top_n > 1:
+                try:
+                    # Get all spread variations from the strategy
+                    variations = strategy.get_all_spread_variations()
+
+                    # We already have signal for variation #1, so start from #2
+                    if len(variations) > 1:
+                        logger.info(
+                            f"Generating {len(variations) - 1} additional signals "
+                            f"for spread variations #2-#{len(variations)}"
+                        )
+
+                        for i, (long_name, short_name) in enumerate(variations[1:], start=2):
+                            # Create a fresh strategy instance for this variation
+                            variation_strategy = create_strategy(
+                                name=strategy_name,
+                                currency=currency,
+                                expiration=expiration,
+                                underlying_price=underlying_price,
+                                take_profit_percentage=config.take_profit_percentage
+                            )
+
+                            # Build legs with the specific strikes
+                            from coding.core.strategy.models.spread_config import SpreadStrikeConfig
+                            long_strike = variation_strategy._extract_strike_from_name(long_name)
+                            short_strike = variation_strategy._extract_strike_from_name(short_name)
+
+                            variation_config = SpreadStrikeConfig(
+                                method="by_strike",
+                                long_specific_strike=long_strike,
+                                short_specific_strike=short_strike,
+                                quantity=spread_config.quantity,
+                                return_top_n=1
+                            )
+
+                            variation_strategy.build_legs(
+                                ticker_data=ticker_data,
+                                spread_config=variation_config
+                            )
+
+                            # Validate
+                            if not variation_strategy.validate_legs():
+                                logger.warning(f"Variation #{i} has invalid legs, skipping")
+                                continue
+
+                            # Score the variation
+                            variation_scores = composite_scorer.evaluate_strategy(
+                                strategy=variation_strategy,
+                                market_context=market_context,
+                                market_regime=config.market_regime
+                            )
+
+                            # Create signal
+                            variation_signal = StrategySignal(
+                                strategy_name=strategy_name,
+                                currency=currency,
+                                expiration=expiration,
+                                generated_at=datetime.now(),
+                                legs=[leg.__dict__ for leg in variation_strategy.legs],
+                                intrinsic_score=variation_scores["intrinsic_score"],
+                                on_chain_score=variation_scores["on_chain_score"],
+                                composite_score=variation_scores["composite_score"],
+                                intrinsic_breakdown=variation_scores["intrinsic_breakdown"],
+                                on_chain_breakdown=variation_scores["on_chain_breakdown"],
+                                underlying_price=underlying_price,
+                                implied_volatility=market_context.get("implied_volatility"),
+                                max_pain_strike=market_context.get("max_pain_strike"),
+                                max_risk=variation_strategy.get_max_risk(),
+                                max_profit=variation_strategy.get_max_profit(),
+                                total_cost=variation_strategy.get_total_cost(),
+                                breakeven_points=variation_strategy.get_breakeven_points(),
+                                max_loss_percentage=variation_strategy.get_max_loss_percentage(),
+                                take_profit_percentage=variation_strategy.take_profit_percentage,
+                                market_regime=config.market_regime,
+                                net_delta=variation_strategy.get_net_greeks()["delta"],
+                                net_gamma=variation_strategy.get_net_greeks()["gamma"],
+                                net_theta=variation_strategy.get_net_greeks()["theta"],
+                                net_vega=variation_strategy.get_net_greeks()["vega"]
+                            )
+
+                            logger.info(
+                                f"{strategy_name} variation #{i} scored: "
+                                f"composite={variation_signal.composite_score:.2f}"
+                            )
+
+                            signals.append(variation_signal)
+
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to generate additional spread variations: {e}. "
+                        f"Returning primary signal only."
+                    )
+
+        return signals
 
     def _fetch_market_context(self, currency: str, expiration: str, ticker_data: Dict[str, Dict] = None) -> Dict:
         """
