@@ -1,310 +1,74 @@
 StrategyEvaluationService initialized
-Starting strategy evaluation: ETH-27MAR26, strategies=['Long Call', 'Long Put', 'Bull Call Spread']
+Starting strategy evaluation: ETH-27MAR26, strategies=['Bull Call Spread']
 Fetching ticker data for 110 instruments
 Fetched ticker data for 110 instruments
 Using 110 instruments with greeks for GEX/DEX calculation
-Market context fetched: underlying=2943.95, max_pain=3200.00, GEX=19456.89, DEX=-4817.12
-Selected strike by delta: target=0.300, actual=0.300, instrument=ETH-27MAR26-3400-C
-Built Long Call: strike=3400.0, cost=$113.34, delta=0.300, instrument=ETH-27MAR26-3400-C
-Detected market regime for ETH: Weak Bearish (score=-34.5)
-Detected market regime for ETH: Weak Bearish (score=-34.5)
-Long Call evaluation: intrinsic=5.35, on_chain=3.76, composite=4.56
-Long Call scored: composite=4.56, intrinsic=5.35, on_chain=3.76
-Selected strike by delta: target=-0.300, actual=-0.307, instrument=ETH-27MAR26-2700-P
-Built Long Put: strike=2700.0, cost=$154.56, delta=-0.307, instrument=ETH-27MAR26-2700-P
-Detected market regime for ETH: Weak Bearish (score=-34.5)
-Detected market regime for ETH: Weak Bearish (score=-34.5)
-Long Put evaluation: intrinsic=6.55, on_chain=6.35, composite=6.45
-Long Put scored: composite=6.45, intrinsic=6.55, on_chain=6.35
-Using optimal (skew-aware) strike selection
-Filtered to 6 long candidates (2650-3297) and 8 short candidates (2797-3533) for underlying=2943.95
+Market context fetched: underlying=2939.94, max_pain=3200.00, GEX=18903.23, DEX=-5582.81
+Using optimal (skew-aware) strike selection, return_top_n=5
+Filtered to 6 long candidates (2646-3293) and 8 short candidates (2793-3528) for underlying=2939.94
 Found 23 valid spreads, returning top 5 variations (sorted by risk-adjusted score)
-  #1: 3000(Δ0.52, +1.9% OTM)/3400(Δ0.30), profit/debit=1.95, risk-adj=1.76, breakeven=3135 (+6.5%), width=400, debit=$135.42
-  #2: 3100(Δ0.46, +5.3% OTM)/3500(Δ0.26), profit/debit=2.48, risk-adj=1.74, breakeven=3215 (+9.2%), width=400, debit=$114.81
-  #3: 3000(Δ0.52, +1.9% OTM)/3300(Δ0.35), profit/debit=1.72, risk-adj=1.55, breakeven=3110 (+5.7%), width=300, debit=$110.40
-  #4: 2900(Δ0.58, -1.5% OTM)/3300(Δ0.35), profit/debit=1.54, risk-adj=1.54, breakeven=3058 (+3.9%), width=400, debit=$157.50
-  #5: 3100(Δ0.46, +5.3% OTM)/3400(Δ0.30), profit/debit=2.18, risk-adj=1.53, breakeven=3194 (+8.5%), width=300, debit=$94.21
-Built Bull Call Spread: 3000.0/3400.0 (width=400), debit=$135.42, max_profit=$264.58, profit/debit=1.95
+  #1: 3000(Δ0.51, +2.0% OTM)/3400(Δ0.30), profit/debit=2.06, risk-adj=1.85, breakeven=3131 (+6.5%), width=400, debit=$130.83
+  #2: 3100(Δ0.45, +5.4% OTM)/3500(Δ0.25), profit/debit=2.58, risk-adj=1.81, breakeven=3212 (+9.2%), width=400, debit=$111.72
+  #3: 3000(Δ0.51, +2.0% OTM)/3300(Δ0.35), profit/debit=1.80, risk-adj=1.62, breakeven=3107 (+5.7%), width=300, debit=$107.31
+  #4: 3100(Δ0.45, +5.4% OTM)/3400(Δ0.30), profit/debit=2.29, risk-adj=1.60, breakeven=3191 (+8.5%), width=300, debit=$91.14
+  #5: 2900(Δ0.57, -1.4% OTM)/3300(Δ0.35), profit/debit=1.59, risk-adj=1.59, breakeven=3054 (+3.9%), width=400, debit=$154.35
+Built Bull Call Spread: 3000.0/3400.0 (width=400), debit=$130.83, max_profit=$269.17, profit/debit=2.06
 Detected market regime for ETH: Weak Bearish (score=-34.5)
-Regime detection error: unsupported format string passed to NoneType.__format__
-Market regime detection failed, returning neutral score
-Bull Call Spread evaluation: intrinsic=5.11, on_chain=3.76, composite=4.44
-Bull Call Spread scored: composite=4.44, intrinsic=5.11, on_chain=3.76
+Detected market regime for ETH: Weak Bearish (score=-34.5)
+Bull Call Spread evaluation: intrinsic=5.26, on_chain=3.75, composite=4.50
+Bull Call Spread scored: composite=4.50, intrinsic=5.26, on_chain=3.75
 Generating 4 additional signals for spread variations #2-#5
 Selected by strike: long=3100, short=3500
-Built Bull Call Spread: 3100.0/3500.0 (width=400), debit=$114.81, max_profit=$285.19, profit/debit=2.48
-Regime detection error: unsupported format string passed to NoneType.__format__
-Market regime detection failed, returning neutral score
-Regime detection error: unsupported format string passed to NoneType.__format__
-Market regime detection failed, returning neutral score
-Bull Call Spread evaluation: intrinsic=5.40, on_chain=4.06, composite=4.73
-Bull Call Spread variation #2 scored: composite=4.73
+Built Bull Call Spread: 3100.0/3500.0 (width=400), debit=$111.72, max_profit=$288.28, profit/debit=2.58
+Detected market regime for ETH: Weak Bearish (score=-34.5)
+Detected market regime for ETH: Weak Bearish (score=-34.5)
+Bull Call Spread evaluation: intrinsic=5.52, on_chain=3.75, composite=4.63
+Bull Call Spread variation #2 scored: composite=4.63
 Selected by strike: long=3000, short=3300
-Built Bull Call Spread: 3000.0/3300.0 (width=300), debit=$110.40, max_profit=$189.60, profit/debit=1.72
+Built Bull Call Spread: 3000.0/3300.0 (width=300), debit=$107.31, max_profit=$192.69, profit/debit=1.80
+Detected market regime for ETH: Weak Bearish (score=-34.5)
 Regime detection error: unsupported format string passed to NoneType.__format__
 Market regime detection failed, returning neutral score
-Regime detection error: unsupported format string passed to NoneType.__format__
-Market regime detection failed, returning neutral score
-Bull Call Spread evaluation: intrinsic=5.10, on_chain=4.06, composite=4.58
-Bull Call Spread variation #3 scored: composite=4.58
-Selected by strike: long=2900, short=3300
-Built Bull Call Spread: 2900.0/3300.0 (width=400), debit=$157.50, max_profit=$242.50, profit/debit=1.54
-Regime detection error: unsupported format string passed to NoneType.__format__
-Market regime detection failed, returning neutral score
-Regime detection error: unsupported format string passed to NoneType.__format__
-Market regime detection failed, returning neutral score
-Bull Call Spread evaluation: intrinsic=4.83, on_chain=4.06, composite=4.45
-Bull Call Spread variation #4 scored: composite=4.45
+Bull Call Spread evaluation: intrinsic=5.20, on_chain=3.75, composite=4.47
+Bull Call Spread variation #3 scored: composite=4.47
 Selected by strike: long=3100, short=3400
-Built Bull Call Spread: 3100.0/3400.0 (width=300), debit=$94.21, max_profit=$205.79, profit/debit=2.18
+Built Bull Call Spread: 3100.0/3400.0 (width=300), debit=$91.14, max_profit=$208.86, profit/debit=2.29
 Regime detection error: unsupported format string passed to NoneType.__format__
 Market regime detection failed, returning neutral score
 Regime detection error: unsupported format string passed to NoneType.__format__
 Market regime detection failed, returning neutral score
-Bull Call Spread evaluation: intrinsic=5.28, on_chain=4.06, composite=4.67
-Bull Call Spread variation #5 scored: composite=4.67
-Generated strategy report: C:\Users\Nick\PycharmProjects\option_trading\output\strategies\27MAR26\ETH_Bull_Call_Spread_20260127_161152.txt
+Bull Call Spread evaluation: intrinsic=5.41, on_chain=4.05, composite=4.73
+Bull Call Spread variation #4 scored: composite=4.73
+Selected by strike: long=2900, short=3300
+Built Bull Call Spread: 2900.0/3300.0 (width=400), debit=$154.35, max_profit=$245.65, profit/debit=1.59
+Regime detection error: unsupported format string passed to NoneType.__format__
+Market regime detection failed, returning neutral score
+Regime detection error: unsupported format string passed to NoneType.__format__
+Market regime detection failed, returning neutral score
+Bull Call Spread evaluation: intrinsic=4.91, on_chain=4.05, composite=4.48
+Bull Call Spread variation #5 scored: composite=4.48
+Generated strategy report: C:\Users\Nick\PycharmProjects\option_trading\output\strategies\27MAR26\ETH_Bull_Call_Spread_20260127_165549.txt
 Generating chart for Bull Call Spread - ETH 27MAR26
 Adding resistance level at $3,500
 Adding support level at $3,100
 Adding support level at $2,500
-Chart saved: C:\Users\Nick\PycharmProjects\option_trading\output\strategies\27MAR26\charts\ETH_Bull_Call_Spread_20260127_161152.html
-Generated strategy report: C:\Users\Nick\PycharmProjects\option_trading\output\strategies\27MAR26\ETH_Bull_Call_Spread_20260127_161152.txt
+Chart saved: C:\Users\Nick\PycharmProjects\option_trading\output\strategies\27MAR26\charts\ETH_Bull_Call_Spread_20260127_165549.html
+Generated strategy report: C:\Users\Nick\PycharmProjects\option_trading\output\strategies\27MAR26\ETH_Bull_Call_Spread_20260127_165549.txt
 Generating chart for Bull Call Spread - ETH 27MAR26
 Adding resistance level at $3,500
 Adding support level at $3,100
 Adding support level at $2,500
-Chart saved: C:\Users\Nick\PycharmProjects\option_trading\output\strategies\27MAR26\charts\ETH_Bull_Call_Spread_20260127_161152.html
-Generated strategy report: C:\Users\Nick\PycharmProjects\option_trading\output\strategies\27MAR26\ETH_Bull_Call_Spread_20260127_161152.txt
+Chart saved: C:\Users\Nick\PycharmProjects\option_trading\output\strategies\27MAR26\charts\ETH_Bull_Call_Spread_20260127_165549.html
+Generated strategy report: C:\Users\Nick\PycharmProjects\option_trading\output\strategies\27MAR26\ETH_Bull_Call_Spread_20260127_165549.txt
 Generating chart for Bull Call Spread - ETH 27MAR26
 Adding resistance level at $3,500
 Adding support level at $3,100
 Adding support level at $2,500
-Chart saved: C:\Users\Nick\PycharmProjects\option_trading\output\strategies\27MAR26\charts\ETH_Bull_Call_Spread_20260127_161152.html
-Generated strategy report: C:\Users\Nick\PycharmProjects\option_trading\output\strategies\27MAR26\ETH_Long_Call_20260127_161152.txt
-Generating chart for Long Call - ETH 27MAR26
-Adding resistance level at $3,500
-Adding support level at $3,100
-Adding support level at $2,500
-Chart saved: C:\Users\Nick\PycharmProjects\option_trading\output\strategies\27MAR26\charts\ETH_Long_Call_20260127_161152.html
-Generated strategy report: C:\Users\Nick\PycharmProjects\option_trading\output\strategies\27MAR26\ETH_Bull_Call_Spread_20260127_161152.txt
+Chart saved: C:\Users\Nick\PycharmProjects\option_trading\output\strategies\27MAR26\charts\ETH_Bull_Call_Spread_20260127_165549.html
+Generated strategy report: C:\Users\Nick\PycharmProjects\option_trading\output\strategies\27MAR26\ETH_Bull_Call_Spread_20260127_165549.txt
 Generating chart for Bull Call Spread - ETH 27MAR26
 Adding resistance level at $3,500
 Adding support level at $3,100
 Adding support level at $2,500
-Chart saved: C:\Users\Nick\PycharmProjects\option_trading\output\strategies\27MAR26\charts\ETH_Bull_Call_Spread_20260127_161153.html
-Evaluation complete: 5 signals generated, 0 errors, time=25.03s
-StrategyEvaluationService initialized
-Starting strategy evaluation: ETH-30JAN26, strategies=['Long Call', 'Long Put', 'Bull Call Spread']
-Fetching ticker data for 98 instruments
-Fetched ticker data for 98 instruments
-Using 98 instruments with greeks for GEX/DEX calculation
-Market context fetched: underlying=2942.13, max_pain=3100.00, GEX=-302553.23, DEX=-49176.16
-Selected strike by delta: target=0.300, actual=0.316, instrument=ETH-30JAN26-3000-C
-Built Long Call: strike=3000.0, cost=$26.48, delta=0.316, instrument=ETH-30JAN26-3000-C
-Regime detection error: unsupported format string passed to NoneType.__format__
-Market regime detection failed, returning neutral score
-Regime detection error: unsupported format string passed to NoneType.__format__
-Market regime detection failed, returning neutral score
-Long Call evaluation: intrinsic=7.80, on_chain=3.96, composite=5.88
-Long Call scored: composite=5.88, intrinsic=7.80, on_chain=3.96
-Selected strike by delta: target=-0.300, actual=-0.329, instrument=ETH-30JAN26-2875-P
-Built Long Put: strike=2875.0, cost=$32.36, delta=-0.329, instrument=ETH-30JAN26-2875-P
-Regime detection error: unsupported format string passed to NoneType.__format__
-Market regime detection failed, returning neutral score
-Regime detection error: unsupported format string passed to NoneType.__format__
-Market regime detection failed, returning neutral score
-Long Put evaluation: intrinsic=7.88, on_chain=6.65, composite=7.27
-Long Put scored: composite=7.27, intrinsic=7.88, on_chain=6.65
-Using optimal (skew-aware) strike selection
-Filtered to 17 long candidates (2648-3295) and 20 short candidates (2795-3531) for underlying=2942.13
-Found 44 valid spreads, returning top 5 variations (sorted by risk-adjusted score)
-  #1: 3000(Δ0.32, +2.0% OTM)/3100(Δ0.12), profit/debit=4.00, risk-adj=3.60, breakeven=3020 (+2.6%), width=100, debit=$20.01
-  #2: 2975(Δ0.38, +1.1% OTM)/3100(Δ0.12), profit/debit=3.34, risk-adj=3.00, breakeven=3004 (+2.1%), width=125, debit=$28.83
-  #3: 2950(Δ0.46, +0.3% OTM)/3100(Δ0.12), profit/debit=2.83, risk-adj=2.55, breakeven=2989 (+1.6%), width=150, debit=$39.13
-  #4: 2925(Δ0.53, -0.6% OTM)/3100(Δ0.12), profit/debit=2.34, risk-adj=2.34, breakeven=2977 (+1.2%), width=175, debit=$52.37
-  #5: 2900(Δ0.60, -1.4% OTM)/3100(Δ0.12), profit/debit=1.92, risk-adj=1.92, breakeven=2969 (+0.9%), width=200, debit=$68.55
-Built Bull Call Spread: 3000.0/3100.0 (width=100), debit=$20.01, max_profit=$79.99, profit/debit=4.00
-Regime detection error: unsupported format string passed to NoneType.__format__
-Market regime detection failed, returning neutral score
-Regime detection error: unsupported format string passed to NoneType.__format__
-Market regime detection failed, returning neutral score
-Bull Call Spread evaluation: intrinsic=7.79, on_chain=3.96, composite=5.88
-Bull Call Spread scored: composite=5.88, intrinsic=7.79, on_chain=3.96
-Generating 4 additional signals for spread variations #2-#5
-Selected by strike: long=2975, short=3100
-Built Bull Call Spread: 2975.0/3100.0 (width=125), debit=$28.83, max_profit=$96.17, profit/debit=3.34
-Regime detection error: unsupported format string passed to NoneType.__format__
-Market regime detection failed, returning neutral score
-Regime detection error: unsupported format string passed to NoneType.__format__
-Market regime detection failed, returning neutral score
-Bull Call Spread evaluation: intrinsic=7.94, on_chain=3.96, composite=5.95
-Bull Call Spread variation #2 scored: composite=5.95
-Selected by strike: long=2950, short=3100
-Built Bull Call Spread: 2950.0/3100.0 (width=150), debit=$39.13, max_profit=$110.87, profit/debit=2.83
-Regime detection error: unsupported format string passed to NoneType.__format__
-Market regime detection failed, returning neutral score
-Regime detection error: unsupported format string passed to NoneType.__format__
-Market regime detection failed, returning neutral score
-Bull Call Spread evaluation: intrinsic=7.89, on_chain=3.96, composite=5.92
-Bull Call Spread variation #3 scored: composite=5.92
-Selected by strike: long=2925, short=3100
-Built Bull Call Spread: 2925.0/3100.0 (width=175), debit=$52.37, max_profit=$122.63, profit/debit=2.34
-Regime detection error: unsupported format string passed to NoneType.__format__
-Market regime detection failed, returning neutral score
-Regime detection error: unsupported format string passed to NoneType.__format__
-Market regime detection failed, returning neutral score
-Bull Call Spread evaluation: intrinsic=7.38, on_chain=3.96, composite=5.67
-Bull Call Spread variation #4 scored: composite=5.67
-Selected by strike: long=2900, short=3100
-Built Bull Call Spread: 2900.0/3100.0 (width=200), debit=$68.55, max_profit=$131.45, profit/debit=1.92
-Regime detection error: unsupported format string passed to NoneType.__format__
-Market regime detection failed, returning neutral score
-Regime detection error: unsupported format string passed to NoneType.__format__
-Market regime detection failed, returning neutral score
-Bull Call Spread evaluation: intrinsic=6.89, on_chain=3.96, composite=5.43
-Bull Call Spread variation #5 scored: composite=5.43
-Generated strategy report: C:\Users\Nick\PycharmProjects\option_trading\output\strategies\30JAN26\ETH_Long_Put_20260127_161216.txt
-Generating chart for Long Put - ETH 30JAN26
-Adding resistance level at $3,500
-Adding resistance level at $3,400
-Adding support level at $3,000
-Adding support level at $2,700
-Adding support level at $2,500
-Chart saved: C:\Users\Nick\PycharmProjects\option_trading\output\strategies\30JAN26\charts\ETH_Long_Put_20260127_161216.html
-Generated strategy report: C:\Users\Nick\PycharmProjects\option_trading\output\strategies\30JAN26\ETH_Bull_Call_Spread_20260127_161216.txt
-Generating chart for Bull Call Spread - ETH 30JAN26
-Adding resistance level at $3,500
-Adding resistance level at $3,400
-Adding support level at $3,000
-Adding support level at $2,700
-Adding support level at $2,500
-Chart saved: C:\Users\Nick\PycharmProjects\option_trading\output\strategies\30JAN26\charts\ETH_Bull_Call_Spread_20260127_161216.html
-Generated strategy report: C:\Users\Nick\PycharmProjects\option_trading\output\strategies\30JAN26\ETH_Bull_Call_Spread_20260127_161216.txt
-Generating chart for Bull Call Spread - ETH 30JAN26
-Adding resistance level at $3,500
-Adding resistance level at $3,400
-Adding support level at $3,000
-Adding support level at $2,700
-Adding support level at $2,500
-Chart saved: C:\Users\Nick\PycharmProjects\option_trading\output\strategies\30JAN26\charts\ETH_Bull_Call_Spread_20260127_161216.html
-Generated strategy report: C:\Users\Nick\PycharmProjects\option_trading\output\strategies\30JAN26\ETH_Long_Call_20260127_161216.txt
-Generating chart for Long Call - ETH 30JAN26
-Adding resistance level at $3,500
-Adding resistance level at $3,400
-Adding support level at $3,000
-Adding support level at $2,700
-Adding support level at $2,500
-Chart saved: C:\Users\Nick\PycharmProjects\option_trading\output\strategies\30JAN26\charts\ETH_Long_Call_20260127_161216.html
-Generated strategy report: C:\Users\Nick\PycharmProjects\option_trading\output\strategies\30JAN26\ETH_Bull_Call_Spread_20260127_161216.txt
-Generating chart for Bull Call Spread - ETH 30JAN26
-Adding resistance level at $3,500
-Adding resistance level at $3,400
-Adding support level at $3,000
-Adding support level at $2,700
-Adding support level at $2,500
-Chart saved: C:\Users\Nick\PycharmProjects\option_trading\output\strategies\30JAN26\charts\ETH_Bull_Call_Spread_20260127_161216.html
-Generated strategy report: C:\Users\Nick\PycharmProjects\option_trading\output\strategies\30JAN26\ETH_Bull_Call_Spread_20260127_161216.txt
-Generating chart for Bull Call Spread - ETH 30JAN26
-Adding resistance level at $3,500
-Adding resistance level at $3,400
-Adding support level at $3,000
-Adding support level at $2,700
-Adding support level at $2,500
-Chart saved: C:\Users\Nick\PycharmProjects\option_trading\output\strategies\30JAN26\charts\ETH_Bull_Call_Spread_20260127_161216.html
-Generated strategy report: C:\Users\Nick\PycharmProjects\option_trading\output\strategies\30JAN26\ETH_Bull_Call_Spread_20260127_161216.txt
-Generating chart for Bull Call Spread - ETH 30JAN26
-Adding resistance level at $3,500
-Adding resistance level at $3,400
-Adding support level at $3,000
-Adding support level at $2,700
-Adding support level at $2,500
-Chart saved: C:\Users\Nick\PycharmProjects\option_trading\output\strategies\30JAN26\charts\ETH_Bull_Call_Spread_20260127_161216.html
-Evaluation complete: 7 signals generated, 0 errors, time=23.61s
-StrategyEvaluationService initialized
-Starting strategy evaluation: ETH-26JUN26, strategies=['Long Call', 'Long Put', 'Bull Call Spread']
-Fetching ticker data for 94 instruments
-Fetched ticker data for 94 instruments
-Using 94 instruments with greeks for GEX/DEX calculation
-Market context fetched: underlying=2938.80, max_pain=3600.00, GEX=-8599.75, DEX=-16825.30
-Selected strike by delta: target=0.300, actual=0.280, instrument=ETH-26JUN26-4000-C
-Built Long Call: strike=4000.0, cost=$163.10, delta=0.280, instrument=ETH-26JUN26-4000-C
-Regime detection error: unsupported format string passed to NoneType.__format__
-Market regime detection failed, returning neutral score
-Regime detection error: unsupported format string passed to NoneType.__format__
-Market regime detection failed, returning neutral score
-Long Call evaluation: intrinsic=3.92, on_chain=3.90, composite=3.91
-Long Call scored: composite=3.91, intrinsic=3.92, on_chain=3.90
-Selected strike by delta: target=-0.300, actual=-0.296, instrument=ETH-26JUN26-2600-P
-Built Long Put: strike=2600.0, cost=$271.84, delta=-0.296, instrument=ETH-26JUN26-2600-P
-Regime detection error: unsupported format string passed to NoneType.__format__
-Market regime detection failed, returning neutral score
-Regime detection error: unsupported format string passed to NoneType.__format__
-Market regime detection failed, returning neutral score
-Long Put evaluation: intrinsic=4.79, on_chain=6.61, composite=5.70
-Long Put scored: composite=5.70, intrinsic=4.79, on_chain=6.61
-Using optimal (skew-aware) strike selection
-Filtered to 3 long candidates (2645-3291) and 5 short candidates (2792-3527) for underlying=2938.80
-Found 5 valid spreads, returning top 5 variations (sorted by risk-adjusted score)
-  #1: 3000(Δ0.57, +2.1% OTM)/3400(Δ0.44), profit/debit=1.72, risk-adj=1.55, breakeven=3147 (+7.1%), width=400, debit=$146.94
-  #2: 2800(Δ0.64, -4.7% OTM)/3200(Δ0.50), profit/debit=1.29, risk-adj=1.29, breakeven=2975 (+1.2%), width=400, debit=$174.86
-  #3: 3000(Δ0.57, +2.1% OTM)/3200(Δ0.50), profit/debit=1.43, risk-adj=1.29, breakeven=3082 (+4.9%), width=200, debit=$82.29
-  #4: 2800(Δ0.64, -4.7% OTM)/3000(Δ0.57), profit/debit=1.06, risk-adj=1.06, breakeven=2897 (-1.4%), width=200, debit=$96.98
-  #5: 3200(Δ0.50, +8.9% OTM)/3400(Δ0.44), profit/debit=1.90, risk-adj=0.95, breakeven=3269 (+11.2%), width=200, debit=$69.06
-Built Bull Call Spread: 3000.0/3400.0 (width=400), debit=$146.94, max_profit=$253.06, profit/debit=1.72
-Regime detection error: unsupported format string passed to NoneType.__format__
-Market regime detection failed, returning neutral score
-Regime detection error: unsupported format string passed to NoneType.__format__
-Market regime detection failed, returning neutral score
-Bull Call Spread evaluation: intrinsic=4.53, on_chain=3.90, composite=4.22
-Bull Call Spread scored: composite=4.22, intrinsic=4.53, on_chain=3.90
-Generating 4 additional signals for spread variations #2-#5
-Selected by strike: long=2800, short=3200
-Built Bull Call Spread: 2800.0/3200.0 (width=400), debit=$174.86, max_profit=$225.14, profit/debit=1.29
-Regime detection error: unsupported format string passed to NoneType.__format__
-Market regime detection failed, returning neutral score
-Regime detection error: unsupported format string passed to NoneType.__format__
-Market regime detection failed, returning neutral score
-Bull Call Spread evaluation: intrinsic=4.43, on_chain=3.90, composite=4.16
-Bull Call Spread variation #2 scored: composite=4.16
-Selected by strike: long=3000, short=3200
-Built Bull Call Spread: 3000.0/3200.0 (width=200), debit=$82.29, max_profit=$117.71, profit/debit=1.43
-Regime detection error: unsupported format string passed to NoneType.__format__
-Market regime detection failed, returning neutral score
-Regime detection error: unsupported format string passed to NoneType.__format__
-Market regime detection failed, returning neutral score
-Bull Call Spread evaluation: intrinsic=4.91, on_chain=3.90, composite=4.41
-Bull Call Spread variation #3 scored: composite=4.41
-Selected by strike: long=2800, short=3000
-Built Bull Call Spread: 2800.0/3000.0 (width=200), debit=$96.98, max_profit=$103.02, profit/debit=1.06
-Regime detection error: unsupported format string passed to NoneType.__format__
-Market regime detection failed, returning neutral score
-Regime detection error: unsupported format string passed to NoneType.__format__
-Market regime detection failed, returning neutral score
-Bull Call Spread evaluation: intrinsic=4.79, on_chain=3.90, composite=4.35
-Bull Call Spread variation #4 scored: composite=4.35
-Selected by strike: long=3200, short=3400
-Built Bull Call Spread: 3200.0/3400.0 (width=200), debit=$69.06, max_profit=$130.94, profit/debit=1.90
-Regime detection error: unsupported format string passed to NoneType.__format__
-Market regime detection failed, returning neutral score
-Regime detection error: unsupported format string passed to NoneType.__format__
-Market regime detection failed, returning neutral score
-Bull Call Spread evaluation: intrinsic=4.57, on_chain=3.90, composite=4.23
-Bull Call Spread variation #5 scored: composite=4.23
-Generated strategy report: C:\Users\Nick\PycharmProjects\option_trading\output\strategies\26JUN26\ETH_Bull_Call_Spread_20260127_161239.txt
-Generating chart for Bull Call Spread - ETH 26JUN26
-Adding support level at $2,600
-Chart saved: C:\Users\Nick\PycharmProjects\option_trading\output\strategies\26JUN26\charts\ETH_Bull_Call_Spread_20260127_161239.html
-Generated strategy report: C:\Users\Nick\PycharmProjects\option_trading\output\strategies\26JUN26\ETH_Bull_Call_Spread_20260127_161239.txt
-Generating chart for Bull Call Spread - ETH 26JUN26
-Adding support level at $2,600
-Chart saved: C:\Users\Nick\PycharmProjects\option_trading\output\strategies\26JUN26\charts\ETH_Bull_Call_Spread_20260127_161239.html
-Generated strategy report: C:\Users\Nick\PycharmProjects\option_trading\output\strategies\26JUN26\ETH_Bull_Call_Spread_20260127_161239.txt
-Generating chart for Bull Call Spread - ETH 26JUN26
-Adding support level at $2,600
-Chart saved: C:\Users\Nick\PycharmProjects\option_trading\output\strategies\26JUN26\charts\ETH_Bull_Call_Spread_20260127_161239.html
-Generated strategy report: C:\Users\Nick\PycharmProjects\option_trading\output\strategies\26JUN26\ETH_Bull_Call_Spread_20260127_161239.txt
-Generating chart for Bull Call Spread - ETH 26JUN26
-Adding support level at $2,600
-Chart saved: C:\Users\Nick\PycharmProjects\option_trading\output\strategies\26JUN26\charts\ETH_Bull_Call_Spread_20260127_161239.html
-Evaluation complete: 4 signals generated, 0 errors, time=23.07s
+Chart saved: C:\Users\Nick\PycharmProjects\option_trading\output\strategies\27MAR26\charts\ETH_Bull_Call_Spread_20260127_165550.html
+Evaluation complete: 4 signals generated, 0 errors, time=19.54s

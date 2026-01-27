@@ -713,7 +713,15 @@ class BaseStrategyChartGenerator(ABC):
 
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         strategy_name = signal.strategy_name.replace(" ", "_")
-        filename = f"{currency}_{strategy_name}_{timestamp}.html"
+
+        # For multi-leg strategies, add strikes to filename for uniqueness
+        if len(signal.legs) > 1:
+            strikes = [f"{int(leg.strike)}" for leg in signal.legs]
+            strike_str = "_" + "_".join(strikes)
+            filename = f"{currency}_{strategy_name}{strike_str}_{timestamp}.html"
+        else:
+            filename = f"{currency}_{strategy_name}_{timestamp}.html"
+
         chart_path = charts_dir / filename
 
         # Save with full screen HTML wrapper

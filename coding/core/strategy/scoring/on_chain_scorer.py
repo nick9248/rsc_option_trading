@@ -455,9 +455,11 @@ class OnChainScorer(BaseScorer):
                 regime_composite_score
             )
 
+            # Format regime_composite_score safely (can be None)
+            regime_score_str = f"{regime_composite_score:.1f}" if regime_composite_score is not None else "N/A"
             logger.debug(
                 f"{strategy.name}: Market regime={market_regime}, "
-                f"regime_score={regime_composite_score:.1f}, "
+                f"regime_score={regime_score_str}, "
                 f"strategy_type={strategy_type}, trend_score={score:.2f}"
             )
 
@@ -542,6 +544,11 @@ class OnChainScorer(BaseScorer):
         }
 
         base_regime_score = regime_score_map.get(regime, 5.0)
+
+        # If regime_composite_score is None, use base regime score only
+        if regime_composite_score is None:
+            logger.debug(f"Regime composite score is None, using base regime score: {base_regime_score}")
+            return base_regime_score
 
         if strategy_type == "directional_bullish":
             # Bullish strategies align with bullish regimes
