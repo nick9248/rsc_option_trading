@@ -279,12 +279,13 @@ class BullCallSpread(BaseStrategy):
             ValueError: If no valid spreads found
         """
         # Filter to reasonable strike range for bull call spreads
-        # Long strike: 0.90x to 1.20x (ATM to moderately OTM)
-        # Short strike: 0.95x to 1.30x (slightly OTM to moderately OTM)
+        # Long strike: 0.90x to 1.12x (ATM to moderately OTM - max 12% OTM)
+        # Short strike: 0.95x to 1.20x (slightly OTM to moderately OTM - max 20% OTM)
+        # These tighter ranges prevent lottery ticket trades
         min_long_strike = self.underlying_price * 0.90
-        max_long_strike = self.underlying_price * 1.20
+        max_long_strike = self.underlying_price * 1.12  # Changed from 1.20 (max 12% OTM)
         min_short_strike = self.underlying_price * 0.95
-        max_short_strike = self.underlying_price * 1.30
+        max_short_strike = self.underlying_price * 1.20  # Changed from 1.30 (max 20% OTM)
 
         # Filter long leg candidates (closer to ATM)
         long_candidates = {
@@ -304,13 +305,13 @@ class BullCallSpread(BaseStrategy):
             logger.warning(
                 f"Limited strikes in optimal range. "
                 f"Long: {len(long_candidates)}, Short: {len(short_candidates)}. "
-                f"Expanding range to 0.85x-1.40x"
+                f"Expanding range to 0.85x-1.15x for long, 0.90x-1.25x for short"
             )
-            # Expand range slightly if needed
+            # Expand range slightly if needed, but still keep it reasonable
             min_long_strike = self.underlying_price * 0.85
-            max_long_strike = self.underlying_price * 1.25
+            max_long_strike = self.underlying_price * 1.15  # Still cap at 15% OTM
             min_short_strike = self.underlying_price * 0.90
-            max_short_strike = self.underlying_price * 1.40
+            max_short_strike = self.underlying_price * 1.25  # Still cap at 25% OTM
 
             long_candidates = {
                 name: data
@@ -368,8 +369,14 @@ class BullCallSpread(BaseStrategy):
                 strike_width = short_strike - long_strike
                 width_pct = (strike_width / self.underlying_price) * 100
 
-                # Skip spreads that are too wide (> 25% of underlying for bull calls)
-                if width_pct > 25.0:
+                # Skip spreads that are too wide (> 15% of underlying for bull calls)
+                # Reduced from 25% to prevent excessive spreads
+                if width_pct > 15.0:
+                    continue
+
+                # Skip spreads that are too narrow (< 3% of underlying)
+                # Prevents tiny profit potential like $50 spreads on $3000 underlying
+                if width_pct < 3.0:
                     continue
 
                 short_iv = short_data.get("greeks", {}).get("iv", 0)
@@ -384,6 +391,37 @@ class BullCallSpread(BaseStrategy):
                 # Skip if debit is negative (we're getting paid - not a debit spread)
                 if net_debit <= 0:
                     continue
+
+                # Calculate breakeven and distance from current price
+                debit_per_contract = net_debit / config.quantity if config.quantity > 0 else net_debit
+                breakeven = long_strike + debit_per_contract
+                breakeven_distance_pct = ((breakeven - self.underlying_price) / self.underlying_price) * 100
+
+                # Skip if breakeven requires excessive move (> 12% for bull call spread)
+                # This prevents lottery ticket trades that need 20%+ moves
+                max_breakeven_distance_pct = 12.0
+                if breakeven_distance_pct > max_breakeven_distance_pct:
+                    continue
+
+                # Calculate probability-adjusted score
+                # Penalize spreads that are far OTM even if they have good profit/debit ratios
+                long_otm_pct = ((long_strike - self.underlying_price) / self.underlying_price) * 100
+
+                # Probability weight: decreases as strikes move further OTM
+                # 1.0 for ATM, 0.5 for 10% OTM, 0.2 for 15% OTM, etc.
+                if long_otm_pct <= 0:
+                    probability_weight = 1.0  # ITM or ATM
+                elif long_otm_pct <= 5:
+                    probability_weight = 0.9
+                elif long_otm_pct <= 8:
+                    probability_weight = 0.7
+                elif long_otm_pct <= 12:
+                    probability_weight = 0.5
+                else:
+                    probability_weight = 0.3  # Very OTM
+
+                # Risk-adjusted score: combines profit/debit with probability
+                risk_adjusted_score = profit_debit_ratio * probability_weight
 
                 # Apply filters
                 if config.min_profit_debit_ratio and profit_debit_ratio < config.min_profit_debit_ratio:
@@ -409,7 +447,12 @@ class BullCallSpread(BaseStrategy):
                     "strike_width": strike_width,
                     "profit_debit_ratio": profit_debit_ratio,
                     "iv_skew_slope": iv_skew_slope,
-                    "max_profit": max_profit
+                    "max_profit": max_profit,
+                    "breakeven": breakeven,
+                    "breakeven_distance_pct": breakeven_distance_pct,
+                    "long_otm_pct": long_otm_pct,
+                    "probability_weight": probability_weight,
+                    "risk_adjusted_score": risk_adjusted_score
                 })
 
         if not spreads:
@@ -420,7 +463,9 @@ class BullCallSpread(BaseStrategy):
 
         # Sort by optimization criteria
         if config.optimize_for == "profit_debit_ratio":
-            spreads.sort(key=lambda s: s["profit_debit_ratio"], reverse=True)
+            # Use risk-adjusted score instead of raw profit/debit ratio
+            # This prevents selecting lottery ticket trades with high ratios but low probability
+            spreads.sort(key=lambda s: s["risk_adjusted_score"], reverse=True)
         elif config.optimize_for == "max_width_for_budget":
             spreads.sort(key=lambda s: s["strike_width"], reverse=True)
 
@@ -428,9 +473,12 @@ class BullCallSpread(BaseStrategy):
 
         logger.info(
             f"Skew-aware selection ({config.optimize_for}): "
-            f"{optimal['long_strike']:.0f}(Δ{optimal['long_delta']:.2f})/"
+            f"{optimal['long_strike']:.0f}(Δ{optimal['long_delta']:.2f}, "
+            f"{optimal['long_otm_pct']:+.1f}% OTM)/"
             f"{optimal['short_strike']:.0f}(Δ{optimal['short_delta']:.2f}), "
             f"profit/debit={optimal['profit_debit_ratio']:.2f}, "
+            f"risk-adj={optimal['risk_adjusted_score']:.2f}, "
+            f"breakeven={optimal['breakeven']:.0f} ({optimal['breakeven_distance_pct']:+.1f}%), "
             f"width={optimal['strike_width']:.0f}, "
             f"debit=${optimal['net_debit']:.2f}"
         )
