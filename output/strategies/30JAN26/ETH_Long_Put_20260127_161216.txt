@@ -2,10 +2,10 @@
                                      STRATEGY EVALUATION REPORT                                     
 ====================================================================================================
 
-Generated: 2026-01-26 19:50:23
-Strategy: Bull Call Spread
+Generated: 2026-01-27 16:12:03
+Strategy: Long Put
 Currency: ETH
-Expiration: 27MAR26
+Expiration: 30JAN26
 
 ====================================================================================================
 
@@ -13,103 +13,97 @@ STRATEGY DEFINITION
 ----------------------------------------------------------------------------------------------------
 
 Leg 1:
-  BUY 1 CALL @ Strike $3,500.00
-  Premium: 0.0310 ETH ($90.53 USD)
-  Greeks: Delta=0.2524, Gamma=0.000480, Theta=-1.7760, Vega=3.7867
+  BUY 1 PUT @ Strike $2,875.00
+  Premium: 0.0110 ETH ($32.36 USD)
+  Greeks: Delta=-0.3293, Gamma=0.002590, Theta=-9.3702, Vega=0.9127
 
-Leg 2:
-  SELL -1 CALL @ Strike $3,700.00
-  Premium: -0.0200 ETH ($-58.41 USD)
-  Greeks: Delta=0.1826, Gamma=0.000400, Theta=-1.4821, Vega=3.1388
-
-Total Cost: $32.12 USD (0.0110 ETH)
-Max Risk: $32.12 USD
-Max Profit: $167.88 USD
+Total Cost: $32.36 USD (0.0110 ETH)
+Max Risk: $32.36 USD
+Max Profit: $2842.64 USD
 Max Loss %: 1.10% of underlying
-Breakeven Points: $3,532.12
+Breakeven Points: $2,842.64
 
 
 MARKET CONTEXT
 ----------------------------------------------------------------------------------------------------
 
-Underlying Price: $2,920.39
-Max Pain Strike: $3,200.00
-Max Pain Distance: +9.57% from current price
-Put/Call Ratio: 0.530
-  → Bullish sentiment (more calls than puts)
+Underlying Price: $2,942.13
+Max Pain Strike: $3,100.00
+Max Pain Distance: +5.37% from current price
+Put/Call Ratio: 0.764
+  → Neutral sentiment
 
 
 ON-CHAIN METRICS
 ----------------------------------------------------------------------------------------------------
 
 GEX/DEX Analysis:
-  Total Net GEX: 16,584
-    → Positive GEX: Dealers provide stability (sell rallies, buy dips)
-  Total Net DEX: -6,522
-  Call Wall (Resistance): $3,200.00 (GEX: 28,685)
-  Put Wall (Support): $3,100.00 (GEX: -25,774)
-  Gamma Flip Point: $2,400.00
+  Total Net GEX: -302,553
+    → Negative GEX: Dealers amplify moves (buy rallies, sell dips)
+  Total Net DEX: -49,176
+  Call Wall (Resistance): $3,100.00 (GEX: 27,504)
+  Put Wall (Support): $3,000.00 (GEX: -90,390)
 
 Resistance Levels (Top Call OI):
-  $6,500.00 (Call OI: 53,372)
-  $5,500.00 (Call OI: 49,122)
-  $3,500.00 (Call OI: 22,265)
+  $3,500.00 (Call OI: 16,590)
+  $3,400.00 (Call OI: 15,972)
+  $4,000.00 (Call OI: 14,375)
 
 Support Levels (Top Put OI):
-  $3,100.00 (Put OI: 17,283)
-  $500.00 (Put OI: 16,485)
-  $2,500.00 (Put OI: 15,143)
+  $3,000.00 (Put OI: 23,535)
+  $2,700.00 (Put OI: 22,195)
+  $2,500.00 (Put OI: 15,480)
 
 
 SCORING BREAKDOWN
 ----------------------------------------------------------------------------------------------------
 
-Composite Score: 4.60/10
-  Intrinsic Score: 4.93/10 (50% weight)
-  On-Chain Score: 4.27/10 (50% weight)
+Composite Score: 7.27/10
+  Intrinsic Score: 7.88/10 (50% weight)
+  On-Chain Score: 6.65/10 (50% weight)
 
 Intrinsic Components:
   Risk Reward Ratio: 10.00/10
   Cost Efficiency: 8.90/10
-  Greek Profile: 0.70/10
-  Breakeven Distance: 0.00/10
-  Strike Moneyness: 0.04/10
+  Greek Profile: 3.29/10
+  Breakeven Distance: 8.31/10
+  Strike Moneyness: 8.00/10
 
 On-Chain Components:
-  Max Pain Alignment: 0.00/10
-  Gex Dex Support: 1.50/10
+  Max Pain Alignment: 10.00/10
+  Gex Dex Support: 9.40/10
   Oi Levels: 10.00/10
-  Put Call Ratio: 9.70/10
-  Volume Profile: 1.75/10
+  Put Call Ratio: 2.64/10
+  Volume Profile: 0.83/10
   Market Regime: 5.00/10
 
 Score Interpretation:
-  → NEUTRAL: Marginal opportunity, proceed with caution
+  → GOOD: Solid opportunity worth considering
 
 
 RISK METRICS
 ----------------------------------------------------------------------------------------------------
 
-Maximum Risk: $32.12
+Maximum Risk: $32.36
 Maximum Loss %: 1.10% of underlying price
-Maximum Profit: $167.88
-Risk/Reward Ratio: 5.23:1
-Total Cost: $32.12
+Maximum Profit: $2842.64
+Risk/Reward Ratio: 87.83:1
+Total Cost: $32.36
 Cost as % of Underlying: 1.10%
-Breakeven Point 1: $3,532.12 (+20.95% from current)
+Breakeven Point 1: $2,842.64 (-3.38% from current)
 
 
 GREEK PROFILE
 ----------------------------------------------------------------------------------------------------
 
-Net Delta: 0.0698
-  → Directional exposure: $203.90 per $1 move
-Net Gamma: 0.000080
-  → Delta acceleration: 0.000080 per $1 move
-Net Theta: -0.2939
-  → Time decay: -$0.29 per day
-Net Vega: 0.6478
-  → IV sensitivity: $0.65 per 1% IV change
+Net Delta: -0.3293
+  → Directional exposure: $968.76 per $1 move
+Net Gamma: 0.002590
+  → Delta acceleration: 0.002590 per $1 move
+Net Theta: -9.3702
+  → Time decay: -$9.37 per day
+Net Vega: 0.9127
+  → IV sensitivity: $0.91 per 1% IV change
 
 
 ====================================================================================================
