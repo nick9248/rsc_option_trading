@@ -63,9 +63,18 @@ class StrategyReportGenerator:
         expiry_dir = self.output_base_dir / expiration
         expiry_dir.mkdir(parents=True, exist_ok=True)
 
-        # Generate filename with timestamp
+        # Generate filename with timestamp and strike info (for uniqueness)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{currency}_{signal.strategy_name.replace(' ', '_')}_{timestamp}.txt"
+        strategy_name_clean = signal.strategy_name.replace(' ', '_')
+
+        # For multi-leg strategies, add strikes to filename for uniqueness
+        if len(signal.legs) > 1:
+            strikes = [f"{int(leg['strike'])}" for leg in signal.legs]
+            strike_str = "_" + "_".join(strikes)
+            filename = f"{currency}_{strategy_name_clean}{strike_str}_{timestamp}.txt"
+        else:
+            filename = f"{currency}_{strategy_name_clean}_{timestamp}.txt"
+
         filepath = expiry_dir / filename
 
         # Build report content
