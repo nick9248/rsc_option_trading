@@ -436,12 +436,14 @@ class MarketRegimeDetector:
         adx = indicators.get("adx")
 
         if sma_50 and sma_200:
+            adx_str = f"{adx:.1f}" if adx is not None else "N/A"
             if sma_50 > sma_200:
-                reasons.append(f"Trend: Golden Cross structure (50 SMA > 200 SMA), ADX={adx:.1f}")
+                reasons.append(f"Trend: Golden Cross structure (50 SMA > 200 SMA), ADX={adx_str}")
             else:
-                reasons.append(f"Trend: Death Cross structure (50 SMA < 200 SMA), ADX={adx:.1f}")
+                reasons.append(f"Trend: Death Cross structure (50 SMA < 200 SMA), ADX={adx_str}")
         else:
-            reasons.append(f"Trend: Insufficient MA data, ADX={adx:.1f if adx else 'N/A'}")
+            adx_str = f"{adx:.1f}" if adx is not None else "N/A"
+            reasons.append(f"Trend: Insufficient MA data, ADX={adx_str}")
 
         # Momentum analysis
         rsi = indicators.get("rsi")
