@@ -676,6 +676,9 @@ class SpreadConfigWidget(StrategyConfigWidget):
         layout.addWidget(self.manual_section)
         self.manual_section.hide()  # Hidden by default (Optimal mode)
 
+        # Trigger initial visibility state (Optimal mode is default)
+        self._on_mode_changed(self.mode_combo.currentText())
+
     def _on_mode_changed(self, mode: str) -> None:
         """Handle strike selection mode change."""
         if mode == "Optimal (Skew-Aware)":

@@ -14,6 +14,7 @@ from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QComboBox,
+    QDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -238,13 +239,20 @@ class StrategyTab(QWidget):
         evaluate_btn.clicked.connect(self._on_evaluate_clicked)
         action_layout.addWidget(evaluate_btn)
 
+        # View Results Button (disabled by default)
+        self.view_results_btn = QPushButton("View Results")
+        self.view_results_btn.setStyleSheet(self._get_button_style(Colors.SUCCESS))
+        self.view_results_btn.setMinimumHeight(40)
+        self.view_results_btn.setEnabled(False)  # Disabled until evaluation completes
+        self.view_results_btn.clicked.connect(self._show_results_dialog)
+        action_layout.addWidget(self.view_results_btn)
+
         action_layout.addStretch()
 
         main_layout.addLayout(action_layout)
 
-        # Results Section
-        results_frame = self._create_results_section()
-        main_layout.addWidget(results_frame, 1)  # Stretch to fill
+        # Store results data (populated after evaluation)
+        self.evaluation_results = []
 
         # Add scroll area to tab
         tab_layout.addWidget(scroll, 1)
@@ -504,7 +512,11 @@ NOTE: Only applies to spread strategies (Bull Call Spread, etc.)
         return frame
 
     def _create_results_section(self) -> QFrame:
-        """Create results display section."""
+        """
+        Create results display section (now just a placeholder).
+
+        Actual results are shown in a popup dialog via View Results button.
+        """
         frame = QFrame()
         frame.setStyleSheet(f"""
             QFrame {{
@@ -518,21 +530,12 @@ NOTE: Only applies to spread strategies (Bull Call Spread, etc.)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
 
-        # Section title
-        title = QLabel("Results")
-        title.setStyleSheet(f"font-size: 16px; font-weight: 600; color: {Colors.TEXT_PRIMARY};")
-        layout.addWidget(title)
-
-        # Results table
-        self.results_table = QTableWidget()
-        self.results_table.setColumnCount(10)
-        self.results_table.setHorizontalHeaderLabels([
-            "Rank", "Strategy", "Expiry", "Market Regime", "Composite", "Intrinsic", "On-Chain",
-            "Max Loss %", "Breakeven", "Chart"
-        ])
-        self.results_table.setStyleSheet(self._get_table_style())
-        self.results_table.setAlternatingRowColors(True)
-        layout.addWidget(self.results_table)
+        # Placeholder message
+        message = QLabel("Click 'Evaluate Strategy' to run analysis.\nResults will be available via 'View Results' button.")
+        message.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 14px; padding: 20px;")
+        message.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        message.setWordWrap(True)
+        layout.addWidget(message)
 
         return frame
 
@@ -797,9 +800,10 @@ NOTE: Only applies to spread strategies (Bull Call Spread, etc.)
             )
             strike_configs[strategy] = strike_config_obj
 
-        # Clear results table to prepare for new evaluation
-        self.results_table.setRowCount(0)
+        # Clear results and disable View Results button for new evaluation
+        self.evaluation_results = []
         self.accumulated_signals = []
+        self.view_results_btn.setEnabled(False)
 
         logger.info(
             f"Starting evaluation for {len(selected_strategies)} strategies "
@@ -919,44 +923,85 @@ NOTE: Only applies to spread strategies (Bull Call Spread, etc.)
         self.current_evaluation_index += 1
         self._process_next_evaluation()
 
-        # Update results table with all accumulated signals (sorted by composite score)
-        all_signals = sorted(self.accumulated_signals, key=lambda s: s.composite_score, reverse=True)
-
-        self.results_table.setRowCount(len(all_signals))
-
-        for i, signal in enumerate(all_signals):
-            self.results_table.setItem(i, 0, QTableWidgetItem(str(i + 1)))
-            self.results_table.setItem(i, 1, QTableWidgetItem(signal.strategy_name))
-            self.results_table.setItem(i, 2, QTableWidgetItem(signal.expiration))
-
-            # Market regime (auto-detected by backend)
-            regime_display = signal.market_regime.capitalize() if signal.market_regime else "Neutral"
-            regime_item = QTableWidgetItem(regime_display)
-            # Color code the regime
-            if signal.market_regime == "bullish":
-                regime_item.setForeground(QBrush(QColor("#4ade80")))  # Green
-            elif signal.market_regime == "bearish":
-                regime_item.setForeground(QBrush(QColor("#f87171")))  # Red
-            self.results_table.setItem(i, 3, regime_item)
-
-            self.results_table.setItem(i, 4, QTableWidgetItem(f"{signal.composite_score:.2f}"))
-            self.results_table.setItem(i, 5, QTableWidgetItem(f"{signal.intrinsic_score:.2f}"))
-            self.results_table.setItem(i, 6, QTableWidgetItem(f"{signal.on_chain_score:.2f}"))
-            self.results_table.setItem(i, 7, QTableWidgetItem(f"{signal.max_loss_percentage:.2f}%"))
-
-            # Breakeven points
-            breakeven_str = ", ".join([f"{bp:.0f}" for bp in signal.breakeven_points])
-            self.results_table.setItem(i, 8, QTableWidgetItem(breakeven_str))
-
-            # View Chart button
-            chart_btn = self._create_chart_button(signal)
-            self.results_table.setCellWidget(i, 9, chart_btn)
-
-        self.results_table.resizeColumnsToContents()
+        # Store results and enable View Results button
+        self.evaluation_results = sorted(self.accumulated_signals, key=lambda s: s.composite_score, reverse=True)
+        self.view_results_btn.setEnabled(True)
+        logger.info(f"Evaluation complete. {len(self.evaluation_results)} results available. Click 'View Results' to see details.")
 
     def _on_evaluation_error(self, error: str) -> None:
         """Handle evaluation error."""
         logger.error(f"Evaluation failed: {error}")
+
+    def _show_results_dialog(self) -> None:
+        """Show evaluation results in a popup dialog."""
+        if not self.evaluation_results:
+            QMessageBox.information(self, "No Results", "No evaluation results available.")
+            return
+
+        # Create dialog
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Strategy Evaluation Results")
+        dialog.setMinimumSize(1200, 600)
+        dialog.setStyleSheet(f"background-color: {Colors.BACKGROUND};")
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(16)
+
+        # Title
+        title = QLabel(f"Found {len(self.evaluation_results)} Strategy Signal(s)")
+        title.setStyleSheet(f"font-size: 18px; font-weight: 600; color: {Colors.TEXT_PRIMARY};")
+        layout.addWidget(title)
+
+        # Results table
+        results_table = QTableWidget()
+        results_table.setColumnCount(10)
+        results_table.setHorizontalHeaderLabels([
+            "Rank", "Strategy", "Expiry", "Market Regime", "Composite", "Intrinsic", "On-Chain",
+            "Max Loss %", "Breakeven", "Chart"
+        ])
+        results_table.setStyleSheet(self._get_table_style())
+        results_table.setAlternatingRowColors(True)
+        results_table.setRowCount(len(self.evaluation_results))
+
+        for i, signal in enumerate(self.evaluation_results):
+            results_table.setItem(i, 0, QTableWidgetItem(str(i + 1)))
+            results_table.setItem(i, 1, QTableWidgetItem(signal.strategy_name))
+            results_table.setItem(i, 2, QTableWidgetItem(signal.expiration))
+
+            # Market regime
+            regime_display = signal.market_regime.capitalize() if signal.market_regime else "Neutral"
+            regime_item = QTableWidgetItem(regime_display)
+            if signal.market_regime == "bullish":
+                regime_item.setForeground(QBrush(QColor("#4ade80")))  # Green
+            elif signal.market_regime == "bearish":
+                regime_item.setForeground(QBrush(QColor("#f87171")))  # Red
+            results_table.setItem(i, 3, regime_item)
+
+            results_table.setItem(i, 4, QTableWidgetItem(f"{signal.composite_score:.2f}"))
+            results_table.setItem(i, 5, QTableWidgetItem(f"{signal.intrinsic_score:.2f}"))
+            results_table.setItem(i, 6, QTableWidgetItem(f"{signal.on_chain_score:.2f}"))
+            results_table.setItem(i, 7, QTableWidgetItem(f"{signal.max_loss_percentage:.2f}%"))
+
+            # Breakeven points
+            breakeven_str = ", ".join([f"{bp:.0f}" for bp in signal.breakeven_points])
+            results_table.setItem(i, 8, QTableWidgetItem(breakeven_str))
+
+            # View Chart button
+            chart_btn = self._create_chart_button(signal)
+            results_table.setCellWidget(i, 9, chart_btn)
+
+        results_table.resizeColumnsToContents()
+        layout.addWidget(results_table)
+
+        # Close button
+        close_btn = QPushButton("Close")
+        close_btn.setStyleSheet(self._get_button_style(Colors.SURFACE))
+        close_btn.setMinimumHeight(40)
+        close_btn.clicked.connect(dialog.close)
+        layout.addWidget(close_btn)
+
+        dialog.exec()
 
     def _create_info_button(self, tooltip: str, detailed_text: str) -> QPushButton:
         """
