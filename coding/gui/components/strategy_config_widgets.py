@@ -19,7 +19,7 @@ from typing import Dict, Optional
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
-    QComboBox, QDoubleSpinBox, QPushButton, QCheckBox, QSizePolicy, QMessageBox
+    QComboBox, QDoubleSpinBox, QSpinBox, QPushButton, QCheckBox, QSizePolicy, QMessageBox
 )
 from PySide6.QtCore import Signal, Qt
 
