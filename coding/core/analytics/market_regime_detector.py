@@ -68,6 +68,22 @@ class MarketRegimeDetector:
         onchain_score = self._score_onchain_component(onchain_metrics)
         sentiment_score = self._score_sentiment_component(external_metrics)
 
+        # Defensive check: Ensure all scores are valid numbers (not None)
+        # This should never happen since scoring functions return 0.0 by default,
+        # but guard against edge cases
+        if any(score is None for score in [trend_score, volatility_score, momentum_score, onchain_score, sentiment_score]):
+            logger.error(
+                f"One or more component scores is None: trend={trend_score}, "
+                f"vol={volatility_score}, mom={momentum_score}, "
+                f"onchain={onchain_score}, sentiment={sentiment_score}"
+            )
+            # Use 0.0 for any None values
+            trend_score = trend_score if trend_score is not None else 0.0
+            volatility_score = volatility_score if volatility_score is not None else 0.0
+            momentum_score = momentum_score if momentum_score is not None else 0.0
+            onchain_score = onchain_score if onchain_score is not None else 0.0
+            sentiment_score = sentiment_score if sentiment_score is not None else 0.0
+
         # Calculate weighted composite score
         composite_score = (
             trend_score * self.WEIGHTS["trend"] +
@@ -104,9 +120,12 @@ class MarketRegimeDetector:
             "reasoning": reasoning,
         }
 
+        # Safe formatting for logging
+        composite_str = f"{composite_score:.1f}" if composite_score is not None else "N/A"
+        confidence_str = f"{confidence:.1f}" if confidence is not None else "N/A"
         logger.info(
-            f"Detected regime: {regime} (composite={composite_score:.1f}, "
-            f"confidence={confidence:.1f}%)"
+            f"Detected regime: {regime} (composite={composite_str}, "
+            f"confidence={confidence_str}%)"
         )
 
         return result
@@ -428,7 +447,9 @@ class MarketRegimeDetector:
         Returns:
             Reasoning text.
         """
-        reasons = [f"Market Regime: {regime} (Score: {composite_score:.1f})"]
+        # Safe formatting for composite_score (defensive check)
+        composite_str = f"{composite_score:.1f}" if composite_score is not None else "N/A"
+        reasons = [f"Market Regime: {regime} (Score: {composite_str})"]
 
         # Trend analysis
         sma_50 = indicators.get("sma_50")
@@ -448,17 +469,19 @@ class MarketRegimeDetector:
         # Momentum analysis
         rsi = indicators.get("rsi")
         macd_histogram = indicators.get("macd_histogram")
-        if rsi:
+        if rsi is not None:  # Explicit None check instead of truthy check
+            rsi_str = f"{rsi:.1f}"  # Safe to format now
             if rsi > 70:
-                reasons.append(f"Momentum: Overbought (RSI={rsi:.1f})")
+                reasons.append(f"Momentum: Overbought (RSI={rsi_str})")
             elif rsi < 30:
-                reasons.append(f"Momentum: Oversold (RSI={rsi:.1f})")
+                reasons.append(f"Momentum: Oversold (RSI={rsi_str})")
             else:
-                reasons.append(f"Momentum: RSI={rsi:.1f}, MACD={'Bullish' if macd_histogram and macd_histogram > 0 else 'Bearish'}")
+                reasons.append(f"Momentum: RSI={rsi_str}, MACD={'Bullish' if macd_histogram and macd_histogram > 0 else 'Bearish'}")
 
         # Volatility analysis
         atr_percentile = indicators.get("atr_percentile")
-        if atr_percentile:
+        if atr_percentile is not None:  # Explicit None check
+            atr_str = f"{atr_percentile:.1f}"  # Safe to format now
             if atr_percentile < 25:
                 vol_regime = "LOW"
             elif atr_percentile < 50:
@@ -467,15 +490,16 @@ class MarketRegimeDetector:
                 vol_regime = "HIGH"
             else:
                 vol_regime = "EXTREME"
-            reasons.append(f"Volatility: {vol_regime} regime (ATR Percentile={atr_percentile:.1f})")
+            reasons.append(f"Volatility: {vol_regime} regime (ATR Percentile={atr_str})")
 
         # On-chain analysis
         funding_rate = onchain.get("funding_rate")
         put_call_ratio = onchain.get("put_call_ratio")
         if funding_rate is not None:
             funding_pct = funding_rate * 100
+            funding_str = f"{funding_pct:.3f}"  # Safe to format
             pc_ratio_str = f"{put_call_ratio:.2f}" if put_call_ratio is not None else "N/A"
-            reasons.append(f"On-Chain: Funding={funding_pct:.3f}%, P/C Ratio={pc_ratio_str}")
+            reasons.append(f"On-Chain: Funding={funding_str}%, P/C Ratio={pc_ratio_str}")
 
         # Sentiment analysis
         fear_greed_data = external.get("fear_greed")

@@ -716,7 +716,7 @@ class BaseStrategyChartGenerator(ABC):
 
         # For multi-leg strategies, add strikes to filename for uniqueness
         if len(signal.legs) > 1:
-            strikes = [f"{int(leg.strike)}" for leg in signal.legs]
+            strikes = [f"{int(leg['strike'])}" for leg in signal.legs]
             strike_str = "_" + "_".join(strikes)
             filename = f"{currency}_{strategy_name}{strike_str}_{timestamp}.html"
         else:

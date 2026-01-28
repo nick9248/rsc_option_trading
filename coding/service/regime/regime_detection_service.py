@@ -163,9 +163,12 @@ class RegimeDetectionService:
             except Exception as e:
                 logger.warning(f"Failed to save regime detection to database: {e}")
 
+            # Safe formatting for logging (defensive check)
+            confidence_str = f"{result['confidence']:.1f}" if result.get('confidence') is not None else "N/A"
+            time_str = f"{result['detection_time_seconds']:.2f}" if result.get('detection_time_seconds') is not None else "N/A"
             logger.info(
                 f"Regime detection complete: {result['regime']} "
-                f"(confidence={result['confidence']:.1f}%, time={result['detection_time_seconds']:.2f}s)"
+                f"(confidence={confidence_str}%, time={time_str}s)"
             )
 
             return result
