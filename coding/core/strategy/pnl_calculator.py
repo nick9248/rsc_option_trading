@@ -76,8 +76,9 @@ class StrategyPnLCalculator:
                 # Long position: profit when intrinsic > cost
                 leg_pnl = (intrinsic_value - leg.cost) * abs(leg.quantity)
             else:  # sell
-                # Short position: profit when cost > intrinsic
-                leg_pnl = (leg.cost - intrinsic_value) * abs(leg.quantity)
+                # Short position: profit when premium received > intrinsic owed
+                # leg.cost is negative (credit), so negate it to get credit received
+                leg_pnl = (-leg.cost - intrinsic_value) * abs(leg.quantity)
 
             total_pnl += leg_pnl
 
@@ -112,7 +113,8 @@ class StrategyPnLCalculator:
             if leg.action == "buy":
                 leg_pnl = (greek_value - leg.cost) * abs(leg.quantity)
             else:  # sell
-                leg_pnl = (leg.cost - greek_value) * abs(leg.quantity)
+                # leg.cost is negative (credit), so negate it
+                leg_pnl = (-leg.cost - greek_value) * abs(leg.quantity)
 
             total_pnl += leg_pnl
 

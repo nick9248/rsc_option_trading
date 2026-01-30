@@ -1067,7 +1067,7 @@ NOTE: Only applies to spread strategies (Bull Call Spread, etc.)
         from pathlib import Path
 
         btn = QPushButton("View")
-        btn.setFixedSize(60, 30)
+        btn.setFixedSize(50, 26)  # Smaller to fit within table cell
 
         # Check if chart path exists
         has_chart = signal.chart_path and Path(signal.chart_path).exists()
