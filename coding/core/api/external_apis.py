@@ -185,9 +185,12 @@ class CoinGeckoAPI:
                     "updated_at": market_data.get("updated_at"),
                 }
 
+                # Safe formatting with None checks
+                btc_dom_str = f"{result['btc_dominance']:.2f}%" if result['btc_dominance'] is not None else "N/A"
+                eth_dom_str = f"{result['eth_dominance']:.2f}%" if result['eth_dominance'] is not None else "N/A"
                 logger.info(
-                    f"BTC Dominance: {result['btc_dominance']:.2f}%, "
-                    f"ETH Dominance: {result['eth_dominance']:.2f}%"
+                    f"BTC Dominance: {btc_dom_str}, "
+                    f"ETH Dominance: {eth_dom_str}"
                 )
                 return result
 
@@ -286,10 +289,13 @@ class ExternalMetricsFetcher:
             metrics["eth_dominance"] = global_data.get("eth_dominance")
             metrics["market_cap_change_24h"] = global_data.get("market_cap_change_24h")
 
+        # Safe formatting with None checks
+        fg_str = metrics['fear_greed']['value'] if metrics['fear_greed'] else 'N/A'
+        btc_dom_str = f"{metrics['btc_dominance']:.2f}%" if metrics['btc_dominance'] is not None else 'N/A'
         logger.info(
             f"Fetched external metrics: "
-            f"F&G={metrics['fear_greed']['value'] if metrics['fear_greed'] else 'N/A'}, "
-            f"BTC Dom={metrics['btc_dominance']:.2f}% if metrics['btc_dominance'] else 'N/A'"
+            f"F&G={fg_str}, "
+            f"BTC Dom={btc_dom_str}"
         )
 
         return metrics
