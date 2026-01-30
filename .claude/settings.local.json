@@ -44,7 +44,8 @@
       "Bash(ls:*)",
       "Bash(.venvScriptspython.exe test_widget_import.py)",
       "Bash(git reset:*)",
-      "Bash(git show:*)"
+      "Bash(git show:*)",
+      "Bash(NoneType.__format__\" errors that persisted through previous attempts.\n\nCo-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>\nEOF\n\\)\")"
     ]
   }
 }
