@@ -538,8 +538,21 @@ class StrategyEvaluationService:
             analyzer.parse_instruments()
             on_chain_metrics = analyzer.analyze_expiration(expiration)
 
-            # Run GEX/DEX calculation using ticker data (which has reliable greeks)
-            underlying_price = analyzer.underlying_price
+            # Get underlying_price from FRESH ticker_data (not cached book_summary)
+            # ticker_data is fetched via get_ticker() which gives current prices
+            if ticker_data:
+                # All tickers have same underlying_price, get from first available
+                first_ticker = next(iter(ticker_data.values()))
+                underlying_price = first_ticker.get("underlying_price", 0)
+                if underlying_price == 0:
+                    logger.warning("No underlying_price in ticker_data, falling back to book_summary")
+                    underlying_price = analyzer.underlying_price
+                else:
+                    logger.debug(f"Using underlying_price from fresh ticker_data: {underlying_price:.2f}")
+            else:
+                # Fallback to book_summary if no ticker_data provided
+                underlying_price = analyzer.underlying_price
+                logger.warning("Using underlying_price from book_summary (may be cached)")
 
             # If ticker_data provided, use it for GEX/DEX (more reliable greeks)
             if ticker_data:
