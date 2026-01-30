@@ -125,10 +125,14 @@ class StrategyEvaluationService:
                     for signal in signals:
                         if self._passes_filters(signal, config):
                             result.signals.append(signal)
+                            logger.info(f"{strategy_name}: PASSED filters (composite={signal.composite_score:.2f})")
                         else:
-                            logger.debug(
-                                f"{strategy_name}: Filtered out "
-                                f"(composite={signal.composite_score:.2f})"
+                            logger.warning(
+                                f"{strategy_name}: FILTERED OUT - "
+                                f"composite={signal.composite_score:.2f} (min={config.min_composite_score}), "
+                                f"intrinsic={signal.intrinsic_score:.2f} (min={config.min_intrinsic_score}), "
+                                f"on_chain={signal.on_chain_score:.2f} (min={config.min_on_chain_score}), "
+                                f"max_loss={signal.max_loss_percentage:.2f}% (max={config.max_loss_filter})"
                             )
 
                 except Exception as e:
