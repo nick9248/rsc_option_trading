@@ -942,7 +942,7 @@ NOTE: Only applies to spread strategies (Bull Call Spread, etc.)
         dialog = QDialog(self)
         dialog.setWindowTitle("Strategy Evaluation Results")
         dialog.setMinimumSize(1200, 600)
-        dialog.setStyleSheet(f"background-color: {Colors.BACKGROUND};")
+        dialog.setStyleSheet(f"background-color: {Colors.BACKGROUND_PRIMARY};")
 
         layout = QVBoxLayout(dialog)
         layout.setContentsMargins(20, 20, 20, 20)
