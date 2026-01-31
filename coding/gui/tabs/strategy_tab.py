@@ -309,13 +309,26 @@ class StrategyTab(QWidget):
         layout.addWidget(load_btn)
 
         # Expiry selector (multi-selection)
+        expiry_header_layout = QHBoxLayout()
         expiry_label = QLabel("Select Expiries (multi-select):")
         expiry_label.setStyleSheet(f"color: {Colors.TEXT_PRIMARY};")
+        expiry_header_layout.addWidget(expiry_label)
+
+        # Button to open expiry selection dialog
+        self.select_expiries_btn = QPushButton("Select in Grid View")
+        self.select_expiries_btn.setStyleSheet(self._get_button_style(Colors.PRIMARY))
+        self.select_expiries_btn.setMaximumWidth(150)
+        self.select_expiries_btn.setEnabled(False)  # Disabled until expiries loaded
+        self.select_expiries_btn.clicked.connect(self._show_expiry_selection_dialog)
+        expiry_header_layout.addWidget(self.select_expiries_btn)
+        expiry_header_layout.addStretch()
+
+        layout.addLayout(expiry_header_layout)
+
         self.expiry_list = QListWidget()
         self.expiry_list.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
         self.expiry_list.setStyleSheet(self._get_list_style())
         self.expiry_list.setMaximumHeight(120)
-        layout.addWidget(expiry_label)
         layout.addWidget(self.expiry_list)
 
         return frame
@@ -578,6 +591,9 @@ NOTE: Only applies to spread strategies (Bull Call Spread, etc.)
         self.available_expirations = expirations
         self.expiry_list.clear()
         self.expiry_list.addItems(expirations)
+
+        # Enable grid selection button
+        self.select_expiries_btn.setEnabled(True)
 
         logger.info(f"Loaded {len(expirations)} expirations (sorted by OI descending)")
 
@@ -931,6 +947,121 @@ NOTE: Only applies to spread strategies (Bull Call Spread, etc.)
     def _on_evaluation_error(self, error: str) -> None:
         """Handle evaluation error."""
         logger.error(f"Evaluation failed: {error}")
+
+    def _show_expiry_selection_dialog(self) -> None:
+        """Show expiry selection in a grid view dialog."""
+        if not hasattr(self, 'available_expirations') or not self.available_expirations:
+            QMessageBox.information(self, "No Expiries", "No expiry dates available. Load expiries first.")
+            return
+
+        # Create dialog
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Select Expiry Dates")
+        dialog.setMinimumSize(600, 400)
+        dialog.setStyleSheet(f"background-color: {Colors.BACKGROUND_PRIMARY};")
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(16)
+
+        # Title
+        title = QLabel(f"Select Expiry Dates ({len(self.available_expirations)} available)")
+        title.setStyleSheet(f"font-size: 18px; font-weight: 600; color: {Colors.TEXT_PRIMARY};")
+        layout.addWidget(title)
+
+        # Info label
+        info = QLabel("Click checkboxes to select/deselect. Selected expiries will be highlighted in the main list.")
+        info.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 12px;")
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        # Get currently selected expiries from main list
+        currently_selected = {item.text() for item in self.expiry_list.selectedItems()}
+
+        # Create table
+        table = QTableWidget()
+        table.setColumnCount(3)
+        table.setHorizontalHeaderLabels(["Select", "Expiry Date", "Open Interest"])
+        table.setStyleSheet(self._get_table_style())
+        table.setAlternatingRowColors(True)
+        table.setRowCount(len(self.available_expirations))
+        table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+
+        # Populate table
+        checkboxes = []
+        for i, expiry in enumerate(self.available_expirations):
+            # Checkbox for selection
+            checkbox = QCheckBox()
+            if expiry in currently_selected:
+                checkbox.setChecked(True)
+            checkbox_widget = QWidget()
+            checkbox_layout = QHBoxLayout(checkbox_widget)
+            checkbox_layout.addWidget(checkbox)
+            checkbox_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            checkbox_layout.setContentsMargins(0, 0, 0, 0)
+            table.setCellWidget(i, 0, checkbox_widget)
+            checkboxes.append(checkbox)
+
+            # Expiry date (parse from format like "28MAR26 (OI: 12345)")
+            expiry_parts = expiry.split(" (OI:")
+            expiry_date = expiry_parts[0]
+            table.setItem(i, 1, QTableWidgetItem(expiry_date))
+
+            # Open Interest
+            if len(expiry_parts) > 1:
+                oi_str = expiry_parts[1].rstrip(")")
+                table.setItem(i, 2, QTableWidgetItem(oi_str))
+            else:
+                table.setItem(i, 2, QTableWidgetItem("N/A"))
+
+        table.resizeColumnsToContents()
+        table.setColumnWidth(0, 80)  # Select column
+        layout.addWidget(table)
+
+        # Action buttons
+        button_layout = QHBoxLayout()
+
+        select_all_btn = QPushButton("Select All")
+        select_all_btn.setStyleSheet(self._get_button_style(Colors.SUCCESS))
+        select_all_btn.setMinimumHeight(40)
+        select_all_btn.clicked.connect(lambda: [cb.setChecked(True) for cb in checkboxes])
+        button_layout.addWidget(select_all_btn)
+
+        clear_all_btn = QPushButton("Clear All")
+        clear_all_btn.setStyleSheet(self._get_button_style(Colors.WARNING))
+        clear_all_btn.setMinimumHeight(40)
+        clear_all_btn.clicked.connect(lambda: [cb.setChecked(False) for cb in checkboxes])
+        button_layout.addWidget(clear_all_btn)
+
+        button_layout.addStretch()
+
+        apply_btn = QPushButton("Apply Selection")
+        apply_btn.setStyleSheet(self._get_button_style(Colors.PRIMARY))
+        apply_btn.setMinimumHeight(40)
+
+        def apply_selection():
+            # Clear current selection
+            self.expiry_list.clearSelection()
+
+            # Select items based on checkboxes
+            for i, checkbox in enumerate(checkboxes):
+                if checkbox.isChecked():
+                    self.expiry_list.item(i).setSelected(True)
+
+            dialog.accept()
+
+        apply_btn.clicked.connect(apply_selection)
+        button_layout.addWidget(apply_btn)
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setStyleSheet(self._get_button_style(Colors.SURFACE))
+        cancel_btn.setMinimumHeight(40)
+        cancel_btn.clicked.connect(dialog.reject)
+        button_layout.addWidget(cancel_btn)
+
+        layout.addLayout(button_layout)
+
+        dialog.exec()
 
     def _show_results_dialog(self) -> None:
         """Show evaluation results in a popup dialog."""
