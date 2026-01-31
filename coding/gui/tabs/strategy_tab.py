@@ -316,7 +316,7 @@ class StrategyTab(QWidget):
 
         # Button to open expiry selection dialog
         self.select_expiries_btn = QPushButton("Select in Grid View")
-        self.select_expiries_btn.setStyleSheet(self._get_button_style(Colors.PRIMARY))
+        self.select_expiries_btn.setStyleSheet(self._get_button_style(Colors.ACCENT))
         self.select_expiries_btn.setMaximumWidth(150)
         self.select_expiries_btn.setEnabled(False)  # Disabled until expiries loaded
         self.select_expiries_btn.clicked.connect(self._show_expiry_selection_dialog)
@@ -1036,7 +1036,7 @@ NOTE: Only applies to spread strategies (Bull Call Spread, etc.)
         button_layout.addStretch()
 
         apply_btn = QPushButton("Apply Selection")
-        apply_btn.setStyleSheet(self._get_button_style(Colors.PRIMARY))
+        apply_btn.setStyleSheet(self._get_button_style(Colors.ACCENT))
         apply_btn.setMinimumHeight(40)
 
         def apply_selection():
