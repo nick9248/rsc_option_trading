@@ -435,12 +435,16 @@ class StrategyEvaluationService:
                             long_strike = variation_strategy._extract_strike_from_name(long_name)
                             short_strike = variation_strategy._extract_strike_from_name(short_name)
 
+                            # Determine spread type based on strategy type
+                            spread_type = "put" if "Put" in strategy_name else "call"
+
                             variation_config = SpreadStrikeConfig(
                                 method="by_strike",
                                 long_specific_strike=long_strike,
                                 short_specific_strike=short_strike,
                                 quantity=spread_config.quantity,
-                                return_top_n=1
+                                return_top_n=1,
+                                spread_type=spread_type
                             )
 
                             variation_strategy.build_legs(

@@ -17,8 +17,9 @@ class SpreadStrikeConfig(BaseModel):
     """
     Pydantic configuration model for spread strike selection.
 
-    Provides type-safe, validated configuration for Bull Call Spread and other multi-leg spreads.
-    Supports both skew-aware optimization and traditional manual strike selection methods.
+    Provides type-safe, validated configuration for Bull Call Spread, Bear Put Spread,
+    and other multi-leg spreads. Supports both skew-aware optimization and traditional
+    manual strike selection methods.
 
     Benefits of Pydantic approach:
     - Type Safety: Compile-time checking, IDE autocomplete
@@ -38,6 +39,9 @@ class SpreadStrikeConfig(BaseModel):
 
     # Strike selection method
     method: Literal["skew_aware", "by_delta", "by_moneyness", "by_strike"]
+
+    # Spread type (for validation logic)
+    spread_type: Literal["call", "put"] = "call"  # Default to call for backward compatibility
 
     # Skew-aware optimization parameters
     optimize_for: Optional[Literal["profit_debit_ratio", "max_width_for_budget"]] = "profit_debit_ratio"
@@ -149,12 +153,22 @@ class SpreadStrikeConfig(BaseModel):
                 raise ValueError(
                     "long_target_delta and short_target_delta required for by_delta method"
                 )
-            # Validate delta ordering for call spreads (long should have higher delta)
-            if self.long_target_delta <= self.short_target_delta:
-                raise ValueError(
-                    f"For call spreads, long_target_delta ({self.long_target_delta}) must be > "
-                    f"short_target_delta ({self.short_target_delta})"
-                )
+            # Validate delta ordering based on spread type
+            if self.spread_type == "call":
+                # For call spreads: long should have higher delta (closer to ATM)
+                if self.long_target_delta <= self.short_target_delta:
+                    raise ValueError(
+                        f"For call spreads, long_target_delta ({self.long_target_delta}) must be > "
+                        f"short_target_delta ({self.short_target_delta})"
+                    )
+            else:  # put spreads
+                # For put spreads: long should have higher delta (absolute value, closer to ATM)
+                # Note: deltas are specified as absolute values in config
+                if self.long_target_delta <= self.short_target_delta:
+                    raise ValueError(
+                        f"For put spreads, long_target_delta ({self.long_target_delta}) must be > "
+                        f"short_target_delta ({self.short_target_delta})"
+                    )
 
         # By-moneyness method validation
         elif method == "by_moneyness":
@@ -162,12 +176,21 @@ class SpreadStrikeConfig(BaseModel):
                 raise ValueError(
                     "long_moneyness_pct and short_moneyness_pct required for by_moneyness method"
                 )
-            # Validate moneyness ordering for call spreads (long closer to ATM)
-            if self.long_moneyness_pct >= self.short_moneyness_pct:
-                raise ValueError(
-                    f"For call spreads, long_moneyness_pct ({self.long_moneyness_pct}) must be < "
-                    f"short_moneyness_pct ({self.short_moneyness_pct})"
-                )
+            # Validate moneyness ordering based on spread type
+            if self.spread_type == "call":
+                # For call spreads: long closer to ATM (smaller % OTM)
+                if self.long_moneyness_pct >= self.short_moneyness_pct:
+                    raise ValueError(
+                        f"For call spreads, long_moneyness_pct ({self.long_moneyness_pct}) must be < "
+                        f"short_moneyness_pct ({self.short_moneyness_pct})"
+                    )
+            else:  # put spreads
+                # For put spreads: long closer to ATM (smaller % below)
+                if self.long_moneyness_pct >= self.short_moneyness_pct:
+                    raise ValueError(
+                        f"For put spreads, long_moneyness_pct ({self.long_moneyness_pct}) must be < "
+                        f"short_moneyness_pct ({self.short_moneyness_pct})"
+                    )
 
         # By-strike method validation
         elif method == "by_strike":
@@ -175,12 +198,21 @@ class SpreadStrikeConfig(BaseModel):
                 raise ValueError(
                     "long_specific_strike and short_specific_strike required for by_strike method"
                 )
-            # Validate strike ordering for call spreads
-            if self.long_specific_strike >= self.short_specific_strike:
-                raise ValueError(
-                    f"For call spreads, long_specific_strike ({self.long_specific_strike}) must be < "
-                    f"short_specific_strike ({self.short_specific_strike})"
-                )
+            # Validate strike ordering based on spread type
+            if self.spread_type == "call":
+                # For call spreads: long strike < short strike (buy lower, sell higher)
+                if self.long_specific_strike >= self.short_specific_strike:
+                    raise ValueError(
+                        f"For call spreads, long_specific_strike ({self.long_specific_strike}) must be < "
+                        f"short_specific_strike ({self.short_specific_strike})"
+                    )
+            else:  # put spreads
+                # For put spreads: long strike > short strike (buy higher, sell lower)
+                if self.long_specific_strike <= self.short_specific_strike:
+                    raise ValueError(
+                        f"For put spreads, long_specific_strike ({self.long_specific_strike}) must be > "
+                        f"short_specific_strike ({self.short_specific_strike})"
+                    )
 
         return self
 
