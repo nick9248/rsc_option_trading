@@ -6,8 +6,9 @@ expecting the underlying price to rise above the strike price.
 """
 
 import logging
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
+from ..models.long_call_config import LongCallConfig
 from .base_strategy import BaseStrategy, StrategyLeg
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,30 @@ class LongCall(BaseStrategy):
     1. by_delta: Select strike closest to target delta (e.g., 0.30 delta)
     2. by_moneyness: Select strike at X% OTM from current price (e.g., 5% OTM)
     3. by_strike: Use specific strike value
+
+    Example Usage (by_delta):
+        config = LongCallConfig(
+            method="by_delta",
+            target_delta=0.30,
+            quantity=1
+        )
+        strategy.build_legs(ticker_data=data, config=config)
+
+    Example Usage (by_moneyness):
+        config = LongCallConfig(
+            method="by_moneyness",
+            moneyness_pct=10.0,  # 10% OTM
+            quantity=1
+        )
+        strategy.build_legs(ticker_data=data, config=config)
+
+    Example Usage (by_strike):
+        config = LongCallConfig(
+            method="by_strike",
+            specific_strike=105000.0,
+            quantity=1
+        )
+        strategy.build_legs(ticker_data=data, config=config)
     """
 
     @property
@@ -59,11 +84,7 @@ class LongCall(BaseStrategy):
     def build_legs(
         self,
         ticker_data: Dict[str, Dict],
-        strike_selection_method: str = "by_delta",
-        target_delta: Optional[float] = None,
-        moneyness_pct: Optional[float] = None,
-        specific_strike: Optional[float] = None,
-        quantity: int = 1
+        config: LongCallConfig
     ) -> None:
         """
         Build long call leg based on strike selection method.
@@ -71,11 +92,7 @@ class LongCall(BaseStrategy):
         Args:
             ticker_data: Dictionary mapping instrument names to ticker data
                         Expected format: {"BTC-31JAN25-100000-C": {...}, ...}
-            strike_selection_method: Method for selecting strike ("by_delta", "by_moneyness", "by_strike")
-            target_delta: Target delta value for "by_delta" method (e.g., 0.30)
-            moneyness_pct: Percentage OTM for "by_moneyness" method (e.g., 5.0 for 5% OTM)
-            specific_strike: Specific strike value for "by_strike" method
-            quantity: Number of contracts (default 1)
+            config: LongCallConfig Pydantic model with method and parameters
 
         Raises:
             ValueError: If unable to find suitable strike or invalid parameters
@@ -93,24 +110,18 @@ class LongCall(BaseStrategy):
             )
 
         # Select strike based on method
-        if strike_selection_method == "by_delta":
-            if target_delta is None:
-                raise ValueError("target_delta required for by_delta selection method")
-            selected_instrument = self._select_by_delta(call_instruments, target_delta)
+        if config.method == "by_delta":
+            selected_instrument = self._select_by_delta(call_instruments, config.target_delta)
 
-        elif strike_selection_method == "by_moneyness":
-            if moneyness_pct is None:
-                raise ValueError("moneyness_pct required for by_moneyness selection method")
-            selected_instrument = self._select_by_moneyness(call_instruments, moneyness_pct)
+        elif config.method == "by_moneyness":
+            selected_instrument = self._select_by_moneyness(call_instruments, config.moneyness_pct)
 
-        elif strike_selection_method == "by_strike":
-            if specific_strike is None:
-                raise ValueError("specific_strike required for by_strike selection method")
-            selected_instrument = self._select_by_strike(call_instruments, specific_strike)
+        elif config.method == "by_strike":
+            selected_instrument = self._select_by_strike(call_instruments, config.specific_strike)
 
         else:
             raise ValueError(
-                f"Invalid strike_selection_method: {strike_selection_method}. "
+                f"Invalid method: {config.method}. "
                 f"Must be 'by_delta', 'by_moneyness', or 'by_strike'"
             )
 
@@ -127,17 +138,18 @@ class LongCall(BaseStrategy):
             logger.warning(f"Best ask price is 0 for {selected_instrument}, using mark_price")
             best_ask_price = ticker.get("mark_price", 0)
 
-        # Cost per contract in currency units (e.g., BTC)
-        cost_per_contract = best_ask_price * self.underlying_price  # Convert to USD equivalent
+        # Cost per contract in USD
+        cost_per_contract = best_ask_price * self.underlying_price
 
-        total_cost = cost_per_contract * quantity
+        total_cost = cost_per_contract * config.quantity
 
-        # Extract greeks
+        # Extract greeks (including IV like Bull Call Spread)
         greeks = {
             "delta": ticker.get("greeks", {}).get("delta", 0),
             "gamma": ticker.get("greeks", {}).get("gamma", 0),
             "theta": ticker.get("greeks", {}).get("theta", 0),
             "vega": ticker.get("greeks", {}).get("vega", 0),
+            "iv": ticker.get("greeks", {}).get("iv", 0),  # Added IV
         }
 
         # Create the leg
@@ -145,7 +157,7 @@ class LongCall(BaseStrategy):
             action="buy",
             option_type="call",
             strike=strike,
-            quantity=quantity,
+            quantity=config.quantity,
             cost=total_cost,
             greeks=greeks,
             instrument_name=selected_instrument
@@ -155,7 +167,7 @@ class LongCall(BaseStrategy):
 
         logger.info(
             f"Built {self.name}: strike={strike}, cost=${total_cost:.2f}, "
-            f"delta={greeks['delta']:.3f}, instrument={selected_instrument}"
+            f"delta={greeks['delta']:.3f}, iv={greeks['iv']:.2%}, instrument={selected_instrument}"
         )
 
     def get_max_risk(self) -> float:
@@ -175,6 +187,29 @@ class LongCall(BaseStrategy):
             None (unlimited profit potential)
         """
         return None  # Unlimited profit potential
+
+    def get_breakeven_points(self) -> List[float]:
+        """
+        Calculate breakeven price at expiration.
+
+        Breakeven = strike + premium_per_contract
+
+        Returns:
+            List with single breakeven point
+        """
+        if not self.legs:
+            return []
+
+        leg = self.legs[0]
+        strike = leg.strike
+        total_cost = abs(leg.cost)
+        quantity = abs(leg.quantity)
+
+        premium_per_contract = total_cost / quantity if quantity > 0 else 0
+
+        breakeven = strike + premium_per_contract
+
+        return [breakeven]
 
     def _is_matching_call(self, instrument_name: str, ticker_data: Dict) -> bool:
         """
