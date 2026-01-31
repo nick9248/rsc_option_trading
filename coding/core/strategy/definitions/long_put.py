@@ -267,11 +267,12 @@ class LongPut(BaseStrategy):
         """
         Select strike closest to target delta.
 
-        Note: Put deltas are negative, so target_delta should be negative (e.g., -0.30)
+        Note: Put deltas are negative, but config uses absolute value.
+        We compare absolute values to find the closest match.
 
         Args:
             put_instruments: Filtered put options
-            target_delta: Target delta value (e.g., -0.30)
+            target_delta: Target delta value (absolute value, e.g., 0.30)
 
         Returns:
             Selected instrument name
@@ -289,10 +290,11 @@ class LongPut(BaseStrategy):
         if not instruments_with_delta:
             raise ValueError("No put options with delta data found")
 
-        # Find instrument with delta closest to target
+        # Find instrument with delta closest to target (compare absolute values)
+        # Put deltas are negative, so we compare abs(actual_delta) to abs(target_delta)
         best_instrument = min(
             instruments_with_delta.items(),
-            key=lambda item: abs(item[1].get("greeks", {}).get("delta", 0) - target_delta)
+            key=lambda item: abs(abs(item[1].get("greeks", {}).get("delta", 0)) - abs(target_delta))
         )
 
         selected_name = best_instrument[0]
