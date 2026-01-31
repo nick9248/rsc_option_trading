@@ -324,31 +324,87 @@ class StrategyEvaluationService:
                 spread_config=spread_config
             )
         else:
-            # Single-leg strategies use old signature
+            # Single-leg strategies use Pydantic config objects
             if strike_config:
-                # Use configured strike selection
+                # Create appropriate Pydantic config based on strategy type
+                if "Call" in strategy_name:
+                    from coding.core.strategy.models.long_call_config import LongCallConfig
+
+                    # Map method and create config
+                    if strike_config.method == "by_delta":
+                        single_config = LongCallConfig(
+                            method="by_delta",
+                            target_delta=strike_config.target_delta,
+                            quantity=strike_config.quantity
+                        )
+                    elif strike_config.method == "by_moneyness":
+                        single_config = LongCallConfig(
+                            method="by_moneyness",
+                            moneyness_pct=strike_config.moneyness_pct,
+                            quantity=strike_config.quantity
+                        )
+                    elif strike_config.method == "by_strike":
+                        single_config = LongCallConfig(
+                            method="by_strike",
+                            specific_strike=strike_config.specific_strike,
+                            quantity=strike_config.quantity
+                        )
+                    else:
+                        raise ValueError(f"Unsupported method for Long Call: {strike_config.method}")
+
+                elif "Put" in strategy_name:
+                    from coding.core.strategy.models.long_put_config import LongPutConfig
+
+                    # Map method and create config
+                    if strike_config.method == "by_delta":
+                        single_config = LongPutConfig(
+                            method="by_delta",
+                            target_delta=abs(strike_config.target_delta) if strike_config.target_delta else 0.30,
+                            quantity=strike_config.quantity
+                        )
+                    elif strike_config.method == "by_moneyness":
+                        single_config = LongPutConfig(
+                            method="by_moneyness",
+                            moneyness_pct=strike_config.moneyness_pct,
+                            quantity=strike_config.quantity
+                        )
+                    elif strike_config.method == "by_strike":
+                        single_config = LongPutConfig(
+                            method="by_strike",
+                            specific_strike=strike_config.specific_strike,
+                            quantity=strike_config.quantity
+                        )
+                    else:
+                        raise ValueError(f"Unsupported method for Long Put: {strike_config.method}")
+                else:
+                    raise ValueError(f"Unknown single-leg strategy: {strategy_name}")
+
                 strategy.build_legs(
                     ticker_data=ticker_data,
-                    strike_selection_method=strike_config.method,
-                    target_delta=strike_config.target_delta,
-                    moneyness_pct=strike_config.moneyness_pct,
-                    specific_strike=strike_config.specific_strike,
-                    quantity=strike_config.quantity
+                    config=single_config
                 )
             else:
                 # Use defaults (by_delta with 0.30 delta for directional strategies)
                 if "Call" in strategy_name:
-                    target_delta = 0.30
+                    from coding.core.strategy.models.long_call_config import LongCallConfig
+                    single_config = LongCallConfig(
+                        method="by_delta",
+                        target_delta=0.30,
+                        quantity=1
+                    )
                 elif "Put" in strategy_name:
-                    target_delta = -0.30
+                    from coding.core.strategy.models.long_put_config import LongPutConfig
+                    single_config = LongPutConfig(
+                        method="by_delta",
+                        target_delta=0.30,  # Absolute value
+                        quantity=1
+                    )
                 else:
-                    target_delta = 0.30
+                    raise ValueError(f"Unknown strategy: {strategy_name}")
 
                 strategy.build_legs(
                     ticker_data=ticker_data,
-                    strike_selection_method="by_delta",
-                    target_delta=target_delta,
-                    quantity=1
+                    config=single_config
                 )
 
         # Validate strategy
