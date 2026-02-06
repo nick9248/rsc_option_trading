@@ -30,13 +30,18 @@ class MarketRegimeDetector:
     }
 
     # Regime thresholds (based on composite score -100 to +100)
+    # Narrowed "Sideways" range to prevent misclassification during strong trends
     REGIME_THRESHOLDS = {
         "Strong Bullish": 60,
         "Weak Bullish": 30,
-        "Sideways": -30,
+        "Sideways": -15,  # Narrowed from -30 to -15
         "Weak Bearish": -60,
         "Strong Bearish": -100,
     }
+
+    # ADX threshold for trend detection
+    # If ADX > this value, market is trending (never classify as sideways)
+    ADX_TREND_THRESHOLD = 25
 
     def __init__(self):
         """Initialize the regime detector."""
@@ -66,7 +71,14 @@ class MarketRegimeDetector:
         volatility_score = self._score_volatility_component(technical_indicators, onchain_metrics)
         momentum_score = self._score_momentum_component(technical_indicators)
         onchain_score = self._score_onchain_component(onchain_metrics)
-        sentiment_score = self._score_sentiment_component(external_metrics)
+
+        # Context-aware sentiment scoring
+        # Pass trend strength (ADX) to avoid contrarian logic during strong trends
+        sentiment_score = self._score_sentiment_component(
+            external_metrics,
+            adx=technical_indicators.get("adx"),
+            composite_trend=trend_score
+        )
 
         # Defensive check: Ensure all scores are valid numbers (not None)
         # This should never happen since scoring functions return 0.0 by default,
@@ -93,8 +105,11 @@ class MarketRegimeDetector:
             sentiment_score * self.WEIGHTS["sentiment"]
         )
 
-        # Classify regime
-        regime = self._classify_regime(composite_score)
+        # Classify regime with ADX override
+        regime = self._classify_regime(
+            composite_score,
+            adx=technical_indicators.get("adx")
+        )
 
         # Calculate confidence (based on alignment of components)
         confidence = self._calculate_confidence([
@@ -282,6 +297,7 @@ class MarketRegimeDetector:
         if funding_rate is not None:
             # Positive funding = longs paying shorts = bullish
             # Negative funding = shorts paying longs = bearish
+            # Widened neutral zone to reduce false signals
             if funding_rate > 0.01:
                 # Very bullish (> 1%)
                 score += 40
@@ -290,6 +306,7 @@ class MarketRegimeDetector:
                 score += 20
             elif funding_rate > -0.005:
                 # Neutral zone (±0.5%) - normal market conditions
+                # Treat as truly neutral, not slightly bullish
                 score += 0
             elif funding_rate > -0.01:
                 # Bearish (< -0.5%)
@@ -299,7 +316,7 @@ class MarketRegimeDetector:
                 score -= 40
 
         # Put/Call ratio scoring (40% of on-chain score)
-        # Simplified thresholds for clearer interpretation
+        # More conservative interpretation
         if put_call_ratio is not None:
             # High P/C ratio = fear/bearish
             # Low P/C ratio = greed/bullish
@@ -309,46 +326,71 @@ class MarketRegimeDetector:
             elif put_call_ratio > 1.0:
                 # Slight put bias
                 score -= 10
-            elif put_call_ratio > 0.8:
-                # Balanced (0.8-1.0 is neutral)
+            elif put_call_ratio > 0.7:
+                # Balanced (0.7-1.0 is neutral)
+                # Widened neutral zone
                 score += 0
-            elif put_call_ratio > 0.6:
+            elif put_call_ratio > 0.5:
                 # Slight call bias (moderately bullish)
                 score += 10
             else:
-                # Heavy call bias (< 0.6 = greed)
+                # Heavy call bias (< 0.5 = extreme greed)
                 score += 30
 
         return max(-100, min(100, score))
 
-    def _score_sentiment_component(self, external: Dict) -> float:
+    def _score_sentiment_component(
+        self,
+        external: Dict,
+        adx: Optional[float] = None,
+        composite_trend: Optional[float] = None
+    ) -> float:
         """
         Score the sentiment component (-100 to +100).
 
         Considers Fear & Greed Index and BTC dominance.
+
+        Args:
+            external: External sentiment metrics.
+            adx: ADX value to detect strong trends.
+            composite_trend: Trend component score to detect trend direction.
+
+        Returns:
+            Sentiment score (-100 to +100).
         """
         score = 0.0
+
+        # Detect if we're in a strong trend
+        in_strong_trend = adx is not None and adx > 25
+        trend_is_bearish = composite_trend is not None and composite_trend < -30
 
         # Fear & Greed Index (70% of sentiment score)
         fear_greed_data = external.get("fear_greed")
         if fear_greed_data and isinstance(fear_greed_data, dict):
             value = fear_greed_data.get("value")
             if value is not None:
-                # 0-25: Extreme Fear (contrarian bullish)
-                # 25-45: Fear (slightly bearish)
-                # 45-55: Neutral
-                # 55-75: Greed (bullish)
-                # 75-100: Extreme Greed (contrarian bearish)
+                # Context-aware scoring
                 if value < 25:
-                    score += 30  # Extreme fear = buy signal
+                    # Extreme Fear
+                    if in_strong_trend and trend_is_bearish:
+                        # During strong bearish trend, extreme fear confirms bearishness
+                        # Not a contrarian signal
+                        score -= 20
+                    else:
+                        # In ranging/weak trend, extreme fear = contrarian buy signal
+                        score += 30
                 elif value < 45:
-                    score -= 20  # Fear
+                    # Fear
+                    score -= 20
                 elif value < 55:
-                    score += 0  # Neutral
+                    # Neutral
+                    score += 0
                 elif value < 75:
-                    score += 40  # Greed
+                    # Greed
+                    score += 40
                 else:
-                    score += 20  # Extreme greed = potential top
+                    # Extreme Greed
+                    score += 20  # Potential top
 
         # BTC Dominance (30% of sentiment score)
         btc_dom = external.get("btc_dominance")
@@ -364,16 +406,40 @@ class MarketRegimeDetector:
 
         return max(-100, min(100, score))
 
-    def _classify_regime(self, composite_score: float) -> str:
+    def _classify_regime(
+        self,
+        composite_score: float,
+        adx: Optional[float] = None
+    ) -> str:
         """
-        Classify regime based on composite score.
+        Classify regime based on composite score with ADX override.
 
         Args:
             composite_score: Weighted average score (-100 to +100).
+            adx: Average Directional Index (ADX) value.
 
         Returns:
             Regime classification string.
         """
+        # ADX override: If ADX indicates strong trend, never classify as sideways
+        # ADX > 25 = trending market
+        if adx is not None and adx > self.ADX_TREND_THRESHOLD:
+            # Force trend classification based on score direction
+            if composite_score >= self.REGIME_THRESHOLDS["Strong Bullish"]:
+                return "Strong Bullish"
+            elif composite_score >= self.REGIME_THRESHOLDS["Weak Bullish"]:
+                return "Weak Bullish"
+            elif composite_score >= 0:
+                # Positive score but not bullish threshold = weak bullish
+                return "Weak Bullish"
+            elif composite_score >= self.REGIME_THRESHOLDS["Weak Bearish"]:
+                # Negative score = weak bearish
+                return "Weak Bearish"
+            else:
+                # Very negative score = strong bearish
+                return "Strong Bearish"
+
+        # Normal classification without ADX override
         if composite_score >= self.REGIME_THRESHOLDS["Strong Bullish"]:
             return "Strong Bullish"
         elif composite_score >= self.REGIME_THRESHOLDS["Weak Bullish"]:
