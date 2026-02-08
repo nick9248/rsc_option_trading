@@ -84,7 +84,8 @@
       "Bash(then echo \".env exists\")",
       "Bash(else echo \"DB_PASSWORD=DB_PASSWORD_REDACTED\")",
       "Bash(fi)",
-      "Bash(test:*)"
+      "Bash(test:*)",
+      "Bash(wc:*)"
     ]
   }
 }
