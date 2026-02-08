@@ -7,6 +7,7 @@ Integrates free APIs:
 """
 
 import logging
+import time
 from typing import Dict, List, Optional
 
 import requests
@@ -267,8 +268,6 @@ class ExternalMetricsFetcher:
                 "timestamp": 1640000000
             }
         """
-        import time
-
         metrics = {
             "timestamp": int(time.time()),
             "fear_greed": None,

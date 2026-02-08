@@ -126,7 +126,7 @@ class LongCall(BaseStrategy):
             )
 
         # Extract strike from instrument name (e.g., "BTC-31JAN25-100000-C" -> 100000)
-        strike = self._extract_strike_from_name(selected_instrument)
+        strike = self.extract_strike_from_name(selected_instrument)
 
         # Get ticker data for selected instrument
         ticker = ticker_data[selected_instrument]
@@ -235,21 +235,6 @@ class LongCall(BaseStrategy):
             option_type == "C"  # Call option
         )
 
-    def _extract_strike_from_name(self, instrument_name: str) -> float:
-        """
-        Extract strike price from instrument name.
-
-        Args:
-            instrument_name: Instrument name (e.g., "BTC-31JAN25-100000-C")
-
-        Returns:
-            Strike price as float
-        """
-        parts = instrument_name.split("-")
-        if len(parts) != 4:
-            raise ValueError(f"Invalid instrument name format: {instrument_name}")
-
-        return float(parts[2])
 
     def _select_by_delta(
         self,
@@ -324,10 +309,10 @@ class LongCall(BaseStrategy):
         # Find strike closest to target
         best_instrument = min(
             call_instruments.keys(),
-            key=lambda name: abs(self._extract_strike_from_name(name) - target_strike)
+            key=lambda name: abs(self.extract_strike_from_name(name) - target_strike)
         )
 
-        actual_strike = self._extract_strike_from_name(best_instrument)
+        actual_strike = self.extract_strike_from_name(best_instrument)
 
         logger.info(
             f"Selected strike by moneyness: target={target_strike:.2f}, "
@@ -357,7 +342,7 @@ class LongCall(BaseStrategy):
         # Find exact match or closest strike
         matching_instruments = [
             name for name in call_instruments.keys()
-            if self._extract_strike_from_name(name) == specific_strike
+            if self.extract_strike_from_name(name) == specific_strike
         ]
 
         if matching_instruments:
@@ -372,10 +357,10 @@ class LongCall(BaseStrategy):
 
         best_instrument = min(
             call_instruments.keys(),
-            key=lambda name: abs(self._extract_strike_from_name(name) - specific_strike)
+            key=lambda name: abs(self.extract_strike_from_name(name) - specific_strike)
         )
 
-        actual_strike = self._extract_strike_from_name(best_instrument)
+        actual_strike = self.extract_strike_from_name(best_instrument)
 
         logger.info(
             f"Selected closest strike: target={specific_strike:.2f}, "

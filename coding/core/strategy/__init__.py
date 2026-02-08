@@ -6,6 +6,8 @@ This package contains strategy definitions, models, and scoring logic.
 
 from .definitions import (
     BaseStrategy,
+    BearPutSpread,
+    BullCallSpread,
     LongCall,
     LongPut,
     StrategyLeg,
@@ -18,6 +20,8 @@ __all__ = [
     "StrategyLeg",
     "LongCall",
     "LongPut",
+    "BullCallSpread",
+    "BearPutSpread",
     "create_strategy",
     "get_available_strategies",
 ]

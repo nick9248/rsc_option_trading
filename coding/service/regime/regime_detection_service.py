@@ -6,7 +6,7 @@ Orchestrates data fetching, indicator calculation, and regime detection.
 
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Optional
 
 from coding.core.analytics.market_regime_detector import MarketRegimeDetector
@@ -118,6 +118,17 @@ class RegimeDetectionService:
 
             logger.info(f"Current price: ${current_price:,.2f}")
 
+            # Save technical indicators to database
+            try:
+                indicator_date = datetime.fromtimestamp(timestamps[-1] / 1000)
+                self.repository.save_technical_indicators(
+                    currency=currency,
+                    date=indicator_date,
+                    indicators=latest_indicators
+                )
+            except Exception as e:
+                logger.warning(f"Failed to save technical indicators: {e}")
+
             # Step 3: Get on-chain metrics
             logger.info("Fetching on-chain metrics")
             onchain_metrics = self._get_onchain_metrics(currency)
@@ -125,6 +136,23 @@ class RegimeDetectionService:
             # Step 4: Get external sentiment metrics
             logger.info("Fetching external sentiment metrics")
             external_metrics = self.external_fetcher.fetch_all_metrics()
+
+            # Save external metrics to database
+            try:
+                # Extract values from nested structure
+                fear_greed_data = external_metrics.get("fear_greed") or {}
+                fear_greed_value = fear_greed_data.get("value") if isinstance(fear_greed_data, dict) else None
+                fear_greed_classification = fear_greed_data.get("classification") if isinstance(fear_greed_data, dict) else None
+
+                self.repository.save_external_metrics(
+                    date=datetime.now(),
+                    fear_greed_value=fear_greed_value,
+                    fear_greed_classification=fear_greed_classification,
+                    btc_dominance=external_metrics.get("btc_dominance"),
+                    eth_dominance=external_metrics.get("eth_dominance")
+                )
+            except Exception as e:
+                logger.warning(f"Failed to save external metrics: {e}")
 
             # Step 5: Detect regime
             logger.info("Running regime detection algorithm")
@@ -202,6 +230,19 @@ class RegimeDetectionService:
                     metrics["funding_rate"] = funding_8h / 100
                     logger.info(f"Funding rate: {funding_8h:.4f}%")
 
+                    # Save funding rate to database
+                    try:
+                        ticker_timestamp = ticker.get("timestamp", int(time.time() * 1000))
+                        self.repository.save_funding_rate(
+                            currency=currency,
+                            instrument_name=instrument_name,
+                            timestamp=ticker_timestamp,
+                            date=datetime.fromtimestamp(ticker_timestamp / 1000),
+                            funding_rate=funding_8h / 100
+                        )
+                    except Exception as save_error:
+                        logger.warning(f"Failed to save funding rate: {save_error}")
+
                 # Current funding rate
                 current_funding = ticker.get("current_funding")
                 if current_funding is not None:
@@ -229,9 +270,22 @@ class RegimeDetectionService:
                     # Get latest DVOL value (last close)
                     latest_dvol = dvol_result["data"][-1]
                     if len(latest_dvol) >= 5:
+                        dvol_timestamp = latest_dvol[0]  # Timestamp
                         dvol_value = latest_dvol[4]  # Close price
                         metrics["dvol"] = dvol_value
                         logger.info(f"DVOL: {dvol_value:.2f}")
+
+                        # Save DVOL to database
+                        try:
+                            self.repository.save_dvol(
+                                currency=currency,
+                                index_name=f"{currency}DVOL",
+                                timestamp=dvol_timestamp,
+                                date=datetime.fromtimestamp(dvol_timestamp / 1000),
+                                dvol=dvol_value
+                            )
+                        except Exception as save_error:
+                            logger.warning(f"Failed to save DVOL: {save_error}")
             except Exception as e:
                 logger.warning(f"Failed to fetch DVOL: {e}")
 
@@ -289,9 +343,15 @@ class RegimeDetectionService:
         Args:
             result: Regime detection result dictionary.
         """
-        # This would require adding a method to DatabaseRepository
-        # For now, just log
-        logger.debug(f"Regime detection result: {result['regime']}")
+        try:
+            row_id = self.repository.save_regime_detection(
+                currency=result.get("currency"),
+                detected_at=result.get("detected_at"),
+                regime_data=result
+            )
+            logger.info(f"Saved regime detection to database (ID: {row_id})")
+        except Exception as e:
+            logger.error(f"Failed to save regime detection: {e}", exc_info=True)
 
     def get_regime_history(
         self,
@@ -308,7 +368,19 @@ class RegimeDetectionService:
         Returns:
             List of regime detection results.
         """
-        # This would require adding a repository method
-        # For now, return empty list
-        logger.info(f"Fetching regime history for {currency} (last {days} days)")
-        return []
+        try:
+            end_time = datetime.now()
+            start_time = end_time - timedelta(days=days)
+
+            results = self.repository.get_regime_detections(
+                currency=currency,
+                start_time=start_time,
+                end_time=end_time
+            )
+
+            logger.info(f"Fetched {len(results)} regime detections for {currency}")
+            return results
+
+        except Exception as e:
+            logger.error(f"Failed to fetch regime history: {e}", exc_info=True)
+            return []

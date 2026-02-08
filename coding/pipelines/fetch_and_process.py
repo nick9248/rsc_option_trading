@@ -186,7 +186,7 @@ def main():
         connectivity = service.check_connectivity()
         logger.info(f"API connectivity: {connectivity}")
 
-        result = service.et_instruments(currency="ETH", kind="option", save_to_csv=True)
+        result = service.get_instruments(currency="ETH", kind="option", save_to_csv=True)
         logger.info(f"Fetched {len(result)} instruments")
 
 

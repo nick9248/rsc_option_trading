@@ -216,6 +216,32 @@ class DeribitSchemas:
         ]
     )
 
+    LAST_TRADES_BY_CURRENCY = ResponseSchema(
+        name="LastTradesByCurrency",
+        result_type=dict,
+        description="Response from /public/get_last_trades_by_currency endpoint.",
+        fields=[
+            FieldSchema(
+                name="trades",
+                field_type=list,
+                required=True,
+                item_schema=[
+                    FieldSchema(name="trade_id", field_type=str, required=True),
+                    FieldSchema(name="trade_seq", field_type=int, required=False),
+                    FieldSchema(name="timestamp", field_type=int, required=True),
+                    FieldSchema(name="instrument_name", field_type=str, required=True),
+                    FieldSchema(name="price", field_type=[int, float], required=True),
+                    FieldSchema(name="amount", field_type=[int, float], required=True),
+                    FieldSchema(name="direction", field_type=str, required=True),
+                    FieldSchema(name="iv", field_type=[int, float], required=False, nullable=True),
+                    FieldSchema(name="mark_price", field_type=[int, float], required=False, nullable=True),
+                    FieldSchema(name="index_price", field_type=[int, float], required=False, nullable=True),
+                ]
+            ),
+            FieldSchema(name="has_more", field_type=bool, required=False),
+        ]
+    )
+
     @classmethod
     def get_schema_for_endpoint(cls, endpoint_path: str) -> ResponseSchema:
         """
@@ -241,6 +267,7 @@ class DeribitSchemas:
             "/public/get_historical_volatility": cls.HISTORICAL_VOLATILITY,
             "/public/get_volatility_index_data": cls.VOLATILITY_INDEX_DATA,
             "/public/get_tradingview_chart_data": cls.TRADINGVIEW_CHART_DATA,
+            "/public/get_last_trades_by_currency": cls.LAST_TRADES_BY_CURRENCY,
         }
 
         if endpoint_path not in schema_map:

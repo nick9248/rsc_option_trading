@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
 )
 
+from coding.core.config import SUPPORTED_CURRENCIES
 from coding.core.database.repository import DatabaseRepository
 from coding.core.strategy.definitions import get_available_strategies
 from coding.core.strategy.models import StrategyConfig, StrikeConfig
@@ -291,7 +292,7 @@ class StrategyTab(QWidget):
         currency_label.setMinimumWidth(120)
 
         self.currency_combo = QComboBox()
-        self.currency_combo.addItems(["BTC", "ETH"])
+        self.currency_combo.addItems(SUPPORTED_CURRENCIES)
         self.currency_combo.setStyleSheet(self._get_combo_style())
         self.currency_combo.setMinimumWidth(100)
         self.currency_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -684,6 +685,8 @@ NOTE: Only applies to spread strategies (Bull Call Spread, etc.)
         """
         Convert widget configuration dict to StrikeConfig or SpreadStrikeConfig.
 
+        Delegates to service layer for actual conversion logic.
+
         Args:
             strategy_name: Name of the strategy
             widget_config: Config dict from widget.get_config()
@@ -692,79 +695,10 @@ NOTE: Only applies to spread strategies (Bull Call Spread, etc.)
             StrikeConfig for single-leg strategies
             SpreadStrikeConfig for spread strategies (or widget_config dict for service to handle)
         """
-        from coding.core.strategy.models.spread_config import SpreadStrikeConfig
-
-        # Check if this is a spread strategy
-        is_spread = "Spread" in strategy_name
-
-        if is_spread:
-            # Spread configuration
-            mode = widget_config.get("mode", "optimal")
-
-            if mode == "optimal":
-                # Optimal (skew-aware) mode - return dict for service to handle
-                # Service will use skew-aware with budget constraint if specified
-                return widget_config
-            else:
-                # Manual mode - create SpreadStrikeConfig from widget config
-                method = widget_config.get("method")
-
-                if method == "by_delta":
-                    return SpreadStrikeConfig(
-                        method="by_delta",
-                        long_target_delta=widget_config.get("long_target_delta", 0.45),
-                        short_target_delta=widget_config.get("short_target_delta", 0.25),
-                        quantity=1
-                    )
-                elif method == "by_moneyness":
-                    return SpreadStrikeConfig(
-                        method="by_moneyness",
-                        long_moneyness_pct=widget_config.get("long_moneyness_pct", 10.0),
-                        short_moneyness_pct=widget_config.get("short_moneyness_pct", 20.0),
-                        quantity=1
-                    )
-                elif method == "by_strike":
-                    return SpreadStrikeConfig(
-                        method="by_strike",
-                        long_specific_strike=widget_config.get("long_specific_strike", 50000.0),
-                        short_specific_strike=widget_config.get("short_specific_strike", 55000.0),
-                        quantity=1
-                    )
-                else:
-                    logger.warning(f"Unknown spread method: {method}, defaulting to skew-aware")
-                    return widget_config
-        else:
-            # Single-leg configuration - convert to StrikeConfig
-            method = widget_config.get("method")
-
-            # Adjust delta sign for puts
-            if method == "by_delta":
-                target_delta = widget_config.get("target_delta", 0.30)
-                if "Put" in strategy_name:
-                    target_delta = -abs(target_delta)
-                else:
-                    target_delta = abs(target_delta)
-
-                return StrikeConfig(
-                    method="by_delta",
-                    target_delta=target_delta,
-                    quantity=1
-                )
-            elif method == "by_moneyness":
-                return StrikeConfig(
-                    method="by_moneyness",
-                    moneyness_pct=widget_config.get("moneyness_pct", 5.0),
-                    quantity=1
-                )
-            elif method == "by_strike":
-                return StrikeConfig(
-                    method="by_strike",
-                    specific_strike=widget_config.get("specific_strike", 100000.0),
-                    quantity=1
-                )
-            else:
-                logger.warning(f"Unknown method: {method}, defaulting to by_delta")
-                return StrikeConfig(method="by_delta", target_delta=0.30, quantity=1)
+        from coding.service.strategy.strategy_evaluation_service import StrategyEvaluationService
+        return StrategyEvaluationService.convert_widget_config_to_strike_config(
+            strategy_name, widget_config
+        )
 
     def _on_tp_check_changed(self, state: int) -> None:
         """Handle take profit checkbox change."""

@@ -17,7 +17,7 @@ from typing import Callable, Dict, List, Optional
 from coding.core.analytics.gex_dex_calculator import GexDexCalculator
 from coding.core.analytics.on_chain_analyzer import OnChainAnalyzer
 from coding.core.database.repository import DatabaseRepository
-from coding.core.strategy.definitions import create_strategy
+from coding.core.strategy.definitions import create_strategy, is_spread_strategy
 from coding.core.strategy.models import (
     EvaluationResult,
     StrategyConfig,
@@ -64,6 +64,36 @@ class StrategyEvaluationService:
         self.report_generator = StrategyReportGenerator()
 
         logger.info("StrategyEvaluationService initialized")
+
+    @staticmethod
+    def normalize_market_regime(regime: Optional[str]) -> Optional[str]:
+        """
+        Normalize market regime to match database constraint.
+
+        Database allows: 'bullish', 'bearish', 'neutral', NULL
+        Regime detection returns: 'Strong Bullish', 'Weak Bearish', 'Sideways', etc.
+
+        Args:
+            regime: Raw regime string from detection
+
+        Returns:
+            Normalized regime for database ('bullish', 'bearish', 'neutral', or None)
+        """
+        if regime is None:
+            return None
+
+        regime_lower = regime.lower()
+
+        if "bullish" in regime_lower:
+            return "bullish"
+        elif "bearish" in regime_lower:
+            return "bearish"
+        elif "sideways" in regime_lower or "neutral" in regime_lower:
+            return "neutral"
+        else:
+            # Default to neutral for unknown regimes
+            logger.warning(f"Unknown regime '{regime}', defaulting to 'neutral'")
+            return "neutral"
 
     def evaluate_strategies(
         self,
@@ -260,9 +290,8 @@ class StrategyEvaluationService:
         # Build strategy legs
         strike_config = config.get_strike_config(strategy_name)
 
-        # Check if this is a spread strategy (multi-leg)
-        is_spread = "Spread" in strategy_name
-
+        # Check if this is a spread strategy (multi-leg) using factory helper
+        is_spread = is_spread_strategy(strategy_name)
         if is_spread:
             # Spread strategies use SpreadStrikeConfig
             from coding.core.strategy.models.spread_config import SpreadStrikeConfig
@@ -446,7 +475,7 @@ class StrategyEvaluationService:
             breakeven_points=strategy.get_breakeven_points(),
             max_loss_percentage=strategy.get_max_loss_percentage(),
             take_profit_percentage=strategy.take_profit_percentage,
-            market_regime=config.market_regime,
+            market_regime=self.normalize_market_regime(market_context.get("market_regime")),
             net_delta=strategy.get_net_greeks()["delta"],
             net_gamma=strategy.get_net_greeks()["gamma"],
             net_theta=strategy.get_net_greeks()["theta"],
@@ -488,8 +517,8 @@ class StrategyEvaluationService:
 
                             # Build legs with the specific strikes
                             from coding.core.strategy.models.spread_config import SpreadStrikeConfig
-                            long_strike = variation_strategy._extract_strike_from_name(long_name)
-                            short_strike = variation_strategy._extract_strike_from_name(short_name)
+                            long_strike = variation_strategy.extract_strike_from_name(long_name)
+                            short_strike = variation_strategy.extract_strike_from_name(short_name)
 
                             # Determine spread type based on strategy type
                             spread_type = "put" if "Put" in strategy_name else "call"
@@ -541,7 +570,7 @@ class StrategyEvaluationService:
                                 breakeven_points=variation_strategy.get_breakeven_points(),
                                 max_loss_percentage=variation_strategy.get_max_loss_percentage(),
                                 take_profit_percentage=variation_strategy.take_profit_percentage,
-                                market_regime=config.market_regime,
+                                market_regime=self.normalize_market_regime(market_context.get("market_regime")),
                                 net_delta=variation_strategy.get_net_greeks()["delta"],
                                 net_gamma=variation_strategy.get_net_greeks()["gamma"],
                                 net_theta=variation_strategy.get_net_greeks()["theta"],
@@ -658,6 +687,9 @@ class StrategyEvaluationService:
             gex_calculator = GexDexCalculator(instruments_with_greeks, underlying_price)
             gex_dex_metrics = gex_calculator.calculate()
 
+            # Detect market regime once for all strategies (prevents circular dependencies)
+            market_regime, regime_composite_score = self._detect_market_regime(currency)
+
             # Combine metrics
             market_context = {
                 "underlying_price": underlying_price,
@@ -671,7 +703,9 @@ class StrategyEvaluationService:
                 "dex_total": gex_dex_metrics["total_net_dex"],
                 "gex_dex_data": gex_dex_metrics,  # Full GEX/DEX data for report
                 "support_resistance": on_chain_metrics["support_resistance"],  # Top OI-based levels for chart
-                "implied_volatility": None  # Could add IV calculation later
+                "implied_volatility": None,  # Could add IV calculation later
+                "market_regime": market_regime,  # Detected regime for on-chain scoring
+                "regime_composite_score": regime_composite_score  # Regime strength score
             }
 
             logger.info(
@@ -685,6 +719,118 @@ class StrategyEvaluationService:
         except Exception as e:
             logger.error(f"Failed to fetch market context: {e}", exc_info=True)
             return {}
+
+    def _detect_market_regime(self, currency: str) -> tuple:
+        """
+        Detect current market regime using ML prediction (preferred) with heuristic fallback.
+
+        Tries ML-based prediction first. If ML model is not available or prediction fails,
+        falls back to the existing RegimeDetectionService heuristic.
+
+        Args:
+            currency: Currency symbol (e.g., "BTC", "ETH")
+
+        Returns:
+            Tuple of (regime_name, composite_score) or (None, None) on error
+        """
+        # Try ML prediction first
+        try:
+            from coding.service.ml.ml_training_service import MLTrainingService
+
+            logger.debug(f"Attempting ML-based regime prediction for {currency}...")
+
+            ml_service = MLTrainingService(repository=self.repository)
+            prediction = ml_service.predict(currency)
+
+            # Check if prediction succeeded
+            regime_pred = prediction.get("regime", {})
+
+            if not regime_pred.get("error") and regime_pred.get("confidence", 0) > 0.5:
+                ml_regime = regime_pred.get("regime")
+                confidence = regime_pred.get("confidence", 0.5)
+
+                # Map ML regime to strategy regime names
+                # ML outputs: bullish, bearish, sideways, high_vol, low_vol
+                # Strategy expects: Strong Bullish, Weak Bullish, Sideways, Weak Bearish, Strong Bearish
+                regime_map = {
+                    "bullish": "Weak Bullish",
+                    "bearish": "Weak Bearish",
+                    "sideways": "Sideways",
+                    "high_vol": "Sideways",
+                    "low_vol": "Sideways"
+                }
+
+                # High confidence → Strong, Low confidence → Weak
+                if confidence > 0.75:
+                    if ml_regime == "bullish":
+                        mapped_regime = "Strong Bullish"
+                    elif ml_regime == "bearish":
+                        mapped_regime = "Strong Bearish"
+                    else:
+                        mapped_regime = regime_map.get(ml_regime, "Sideways")
+                else:
+                    mapped_regime = regime_map.get(ml_regime, "Sideways")
+
+                # Convert confidence (0-1) to composite score (-100 to +100)
+                # Bullish: positive score, Bearish: negative score
+                if "Bullish" in mapped_regime:
+                    composite_score = confidence * 100
+                elif "Bearish" in mapped_regime:
+                    composite_score = -confidence * 100
+                else:
+                    composite_score = 0.0
+
+                logger.info(
+                    f"ML regime prediction for {currency}: "
+                    f"{mapped_regime} (confidence={confidence:.2f}, score={composite_score:.1f})"
+                )
+
+                return mapped_regime, composite_score
+
+            else:
+                error_msg = regime_pred.get("error", "Low confidence")
+                logger.debug(f"ML prediction not usable: {error_msg}, falling back to heuristic")
+
+        except Exception as e:
+            logger.debug(f"ML prediction unavailable, falling back to heuristic: {e}")
+
+        # Fallback to existing RegimeDetectionService
+        try:
+            from coding.service.regime.regime_detection_service import RegimeDetectionService
+
+            logger.debug(f"Using heuristic regime detection for {currency}...")
+
+            regime_service = RegimeDetectionService(
+                api_service=self.api_service,
+                repository=self.repository
+            )
+
+            result = regime_service.detect_regime(currency)
+
+            if "error" in result:
+                logger.error(f"Regime detection error: {result['error']}")
+                return None, None
+
+            regime = result.get("regime")
+            composite_score = result.get("composite_score")
+
+            # Handle None composite_score (can happen if regime detection partially fails)
+            if composite_score is not None:
+                logger.info(
+                    f"Heuristic regime detection for {currency}: "
+                    f"{regime} (score={composite_score:.1f})"
+                )
+            else:
+                logger.warning(
+                    f"Heuristic regime detection for {currency}: "
+                    f"{regime} (score=None, using default)"
+                )
+
+            return regime, composite_score
+
+        except Exception as e:
+            logger.error(f"Failed to detect market regime (both ML and heuristic): {e}", exc_info=True)
+            return None, None
 
     def _fetch_ticker_data(self, currency: str, expiration: str) -> Dict[str, Dict]:
         """
@@ -790,3 +936,93 @@ class StrategyEvaluationService:
                 self.progress_callback(message, current, total)
             except Exception as e:
                 logger.warning(f"Progress callback failed: {e}")
+
+    @staticmethod
+    def convert_widget_config_to_strike_config(
+        strategy_name: str,
+        widget_config: Dict
+    ):
+        """
+        Convert widget configuration dict to StrikeConfig or SpreadStrikeConfig.
+
+        Args:
+            strategy_name: Name of the strategy
+            widget_config: Config dict from widget.get_config()
+
+        Returns:
+            StrikeConfig for single-leg strategies
+            SpreadStrikeConfig for spread strategies (or widget_config dict for service to handle)
+        """
+        from coding.core.strategy.models.spread_config import SpreadStrikeConfig
+
+        # Check if this is a spread strategy
+        is_spread = "Spread" in strategy_name
+
+        if is_spread:
+            # Spread configuration
+            mode = widget_config.get("mode", "optimal")
+
+            if mode == "optimal":
+                # Optimal (skew-aware) mode - return dict for service to handle
+                # Service will use skew-aware with budget constraint if specified
+                return widget_config
+            else:
+                # Manual mode - create SpreadStrikeConfig from widget config
+                method = widget_config.get("method")
+
+                if method == "by_delta":
+                    return SpreadStrikeConfig(
+                        method="by_delta",
+                        long_target_delta=widget_config.get("long_target_delta", 0.45),
+                        short_target_delta=widget_config.get("short_target_delta", 0.25),
+                        quantity=1
+                    )
+                elif method == "by_moneyness":
+                    return SpreadStrikeConfig(
+                        method="by_moneyness",
+                        long_moneyness_pct=widget_config.get("long_moneyness_pct", 10.0),
+                        short_moneyness_pct=widget_config.get("short_moneyness_pct", 20.0),
+                        quantity=1
+                    )
+                elif method == "by_strike":
+                    return SpreadStrikeConfig(
+                        method="by_strike",
+                        long_specific_strike=widget_config.get("long_specific_strike", 50000.0),
+                        short_specific_strike=widget_config.get("short_specific_strike", 55000.0),
+                        quantity=1
+                    )
+                else:
+                    logger.warning(f"Unknown spread method: {method}, defaulting to skew-aware")
+                    return widget_config
+        else:
+            # Single-leg configuration - convert to StrikeConfig
+            method = widget_config.get("method")
+
+            # Adjust delta sign for puts
+            if method == "by_delta":
+                target_delta = widget_config.get("target_delta", 0.30)
+                if "Put" in strategy_name:
+                    target_delta = -abs(target_delta)
+                else:
+                    target_delta = abs(target_delta)
+
+                return StrikeConfig(
+                    method="by_delta",
+                    target_delta=target_delta,
+                    quantity=1
+                )
+            elif method == "by_moneyness":
+                return StrikeConfig(
+                    method="by_moneyness",
+                    moneyness_pct=widget_config.get("moneyness_pct", 5.0),
+                    quantity=1
+                )
+            elif method == "by_strike":
+                return StrikeConfig(
+                    method="by_strike",
+                    specific_strike=widget_config.get("specific_strike", 100000.0),
+                    quantity=1
+                )
+            else:
+                logger.warning(f"Unknown method: {method}, defaulting to by_delta")
+                return StrikeConfig(method="by_delta", target_delta=0.30, quantity=1)

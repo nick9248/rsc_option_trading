@@ -4,7 +4,9 @@ Database repository for on-chain analysis data storage.
 Provides methods to save and retrieve data from PostgreSQL tables.
 """
 
+import json
 import logging
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -40,6 +42,34 @@ class DatabaseRepository:
         """Return a connection to the pool."""
         self.pool.return_connection(conn)
 
+    @contextmanager
+    def _db_cursor(self):
+        """
+        Context manager for database operations with automatic connection management.
+
+        Handles connection acquisition, cursor creation, commit/rollback,
+        and resource cleanup automatically.
+
+        Yields:
+            Database cursor for executing queries.
+
+        Example:
+            with self._db_cursor() as cursor:
+                cursor.execute("SELECT * FROM table")
+                results = cursor.fetchall()
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        try:
+            yield cursor
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            cursor.close()
+            self._return_connection(conn)
+
     def save_snapshot(
         self,
         currency: str,
@@ -61,63 +91,56 @@ class DatabaseRepository:
             return 0
 
         captured_at = captured_at or datetime.now()
-        conn = self._get_connection()
 
         try:
-            cursor = conn.cursor()
+            with self._db_cursor() as cursor:
+                insert_sql = """
+                    INSERT INTO snapshots (
+                        captured_at, currency, instrument_name, expiration,
+                        strike, option_type, open_interest, volume, volume_usd,
+                        underlying_price, mark_price, bid_price, ask_price
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """
 
-            insert_sql = """
-                INSERT INTO snapshots (
-                    captured_at, currency, instrument_name, expiration,
-                    strike, option_type, open_interest, volume, volume_usd,
-                    underlying_price, mark_price, bid_price, ask_price
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """
+                rows = []
+                for item in data:
+                    instrument_name = item.get("instrument_name", "")
+                    parts = instrument_name.split("-")
 
-            rows = []
-            for item in data:
-                instrument_name = item.get("instrument_name", "")
-                parts = instrument_name.split("-")
+                    if len(parts) < 4:
+                        continue
 
-                if len(parts) < 4:
-                    continue
+                    expiration = parts[1]
+                    try:
+                        strike = float(parts[2])
+                    except ValueError:
+                        continue
+                    option_type = parts[3][0].upper()
 
-                expiration = parts[1]
-                try:
-                    strike = float(parts[2])
-                except ValueError:
-                    continue
-                option_type = parts[3][0].upper()
+                    rows.append((
+                        captured_at,
+                        currency,
+                        instrument_name,
+                        expiration,
+                        strike,
+                        option_type,
+                        item.get("open_interest"),
+                        item.get("volume"),
+                        item.get("volume_usd"),
+                        item.get("underlying_price"),
+                        item.get("mark_price"),
+                        item.get("bid_price"),
+                        item.get("ask_price"),
+                    ))
 
-                rows.append((
-                    captured_at,
-                    currency,
-                    instrument_name,
-                    expiration,
-                    strike,
-                    option_type,
-                    item.get("open_interest"),
-                    item.get("volume"),
-                    item.get("volume_usd"),
-                    item.get("underlying_price"),
-                    item.get("mark_price"),
-                    item.get("bid_price"),
-                    item.get("ask_price"),
-                ))
+                cursor.executemany(insert_sql, rows)
 
-            cursor.executemany(insert_sql, rows)
-            conn.commit()
-
-            logger.info(f"Saved {len(rows)} snapshot records for {currency}")
-            return len(rows)
+                logger.info(f"Saved {len(rows)} snapshot records for {currency}")
+                return len(rows)
 
         except Exception as e:
-            conn.rollback()
             logger.error(f"Failed to save snapshot: {e}")
             raise
-        finally:
-            cursor.close()
-            self._return_connection(conn)
 
     def save_max_pain(
         self,
@@ -144,35 +167,27 @@ class DatabaseRepository:
         distance = underlying_price - max_pain_strike
         distance_pct = (distance / max_pain_strike * 100) if max_pain_strike else 0
 
-        conn = self._get_connection()
-
         try:
-            cursor = conn.cursor()
-
-            cursor.execute("""
-                INSERT INTO max_pain (
+            with self._db_cursor() as cursor:
+                cursor.execute("""
+                    INSERT INTO max_pain (
+                        captured_at, currency, expiration, max_pain_strike,
+                        underlying_price, distance_from_price, distance_percent
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                """, (
                     captured_at, currency, expiration, max_pain_strike,
-                    underlying_price, distance_from_price, distance_percent
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-                RETURNING id
-            """, (
-                captured_at, currency, expiration, max_pain_strike,
-                underlying_price, distance, distance_pct
-            ))
+                    underlying_price, distance, distance_pct
+                ))
 
-            row_id = cursor.fetchone()[0]
-            conn.commit()
+                row_id = cursor.fetchone()[0]
 
-            logger.info(f"Saved max pain for {currency} {expiration}: {max_pain_strike}")
-            return row_id
+                logger.info(f"Saved max pain for {currency} {expiration}: {max_pain_strike}")
+                return row_id
 
         except Exception as e:
-            conn.rollback()
             logger.error(f"Failed to save max pain: {e}")
             raise
-        finally:
-            cursor.close()
-            self._return_connection(conn)
 
     def save_open_interest(
         self,
@@ -201,35 +216,27 @@ class DatabaseRepository:
         total_oi = total_call_oi + total_put_oi
         pc_ratio = (total_put_oi / total_call_oi) if total_call_oi > 0 else None
 
-        conn = self._get_connection()
-
         try:
-            cursor = conn.cursor()
-
-            cursor.execute("""
-                INSERT INTO open_interest (
+            with self._db_cursor() as cursor:
+                cursor.execute("""
+                    INSERT INTO open_interest (
+                        captured_at, currency, expiration, total_call_oi,
+                        total_put_oi, total_oi, put_call_ratio, underlying_price
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                """, (
                     captured_at, currency, expiration, total_call_oi,
-                    total_put_oi, total_oi, put_call_ratio, underlying_price
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING id
-            """, (
-                captured_at, currency, expiration, total_call_oi,
-                total_put_oi, total_oi, pc_ratio, underlying_price
-            ))
+                    total_put_oi, total_oi, pc_ratio, underlying_price
+                ))
 
-            row_id = cursor.fetchone()[0]
-            conn.commit()
+                row_id = cursor.fetchone()[0]
 
-            logger.info(f"Saved OI for {currency} {expiration}: {total_oi}")
-            return row_id
+                logger.info(f"Saved OI for {currency} {expiration}: {total_oi}")
+                return row_id
 
         except Exception as e:
-            conn.rollback()
             logger.error(f"Failed to save open interest: {e}")
             raise
-        finally:
-            cursor.close()
-            self._return_connection(conn)
 
     def save_volume(
         self,
@@ -258,35 +265,27 @@ class DatabaseRepository:
         total_volume = total_call_volume + total_put_volume
         pc_ratio = (total_put_volume / total_call_volume) if total_call_volume > 0 else None
 
-        conn = self._get_connection()
-
         try:
-            cursor = conn.cursor()
-
-            cursor.execute("""
-                INSERT INTO volume (
+            with self._db_cursor() as cursor:
+                cursor.execute("""
+                    INSERT INTO volume (
+                        captured_at, currency, expiration, total_call_volume,
+                        total_put_volume, total_volume, volume_put_call_ratio, underlying_price
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                """, (
                     captured_at, currency, expiration, total_call_volume,
-                    total_put_volume, total_volume, volume_put_call_ratio, underlying_price
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING id
-            """, (
-                captured_at, currency, expiration, total_call_volume,
-                total_put_volume, total_volume, pc_ratio, underlying_price
-            ))
+                    total_put_volume, total_volume, pc_ratio, underlying_price
+                ))
 
-            row_id = cursor.fetchone()[0]
-            conn.commit()
+                row_id = cursor.fetchone()[0]
 
-            logger.info(f"Saved volume for {currency} {expiration}: {total_volume}")
-            return row_id
+                logger.info(f"Saved volume for {currency} {expiration}: {total_volume}")
+                return row_id
 
         except Exception as e:
-            conn.rollback()
             logger.error(f"Failed to save volume: {e}")
             raise
-        finally:
-            cursor.close()
-            self._return_connection(conn)
 
     def save_levels(
         self,
@@ -313,44 +312,37 @@ class DatabaseRepository:
             return 0
 
         captured_at = captured_at or datetime.now()
-        conn = self._get_connection()
 
         try:
-            cursor = conn.cursor()
+            with self._db_cursor() as cursor:
+                insert_sql = """
+                    INSERT INTO levels (
+                        captured_at, currency, expiration, level_type,
+                        strike, oi_or_gex_value, underlying_price
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """
 
-            insert_sql = """
-                INSERT INTO levels (
-                    captured_at, currency, expiration, level_type,
-                    strike, oi_or_gex_value, underlying_price
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-            """
+                rows = [
+                    (
+                        captured_at,
+                        currency,
+                        expiration,
+                        level["level_type"],
+                        level["strike"],
+                        level.get("value"),
+                        underlying_price,
+                    )
+                    for level in levels
+                ]
 
-            rows = [
-                (
-                    captured_at,
-                    currency,
-                    expiration,
-                    level["level_type"],
-                    level["strike"],
-                    level.get("value"),
-                    underlying_price,
-                )
-                for level in levels
-            ]
+                cursor.executemany(insert_sql, rows)
 
-            cursor.executemany(insert_sql, rows)
-            conn.commit()
-
-            logger.info(f"Saved {len(rows)} levels for {currency} {expiration}")
-            return len(rows)
+                logger.info(f"Saved {len(rows)} levels for {currency} {expiration}")
+                return len(rows)
 
         except Exception as e:
-            conn.rollback()
             logger.error(f"Failed to save levels: {e}")
             raise
-        finally:
-            cursor.close()
-            self._return_connection(conn)
 
     def get_max_pain_history(
         self,
@@ -369,11 +361,7 @@ class DatabaseRepository:
         Returns:
             List of max pain records ordered by captured_at.
         """
-        conn = self._get_connection()
-
-        try:
-            cursor = conn.cursor()
-
+        with self._db_cursor() as cursor:
             cursor.execute("""
                 SELECT captured_at, max_pain_strike, underlying_price,
                        distance_from_price, distance_percent
@@ -388,10 +376,6 @@ class DatabaseRepository:
             results = [dict(zip(columns, row)) for row in cursor.fetchall()]
 
             return list(reversed(results))  # Return in chronological order
-
-        finally:
-            cursor.close()
-            self._return_connection(conn)
 
     def get_open_interest_history(
         self,
@@ -410,11 +394,7 @@ class DatabaseRepository:
         Returns:
             List of OI records ordered by captured_at.
         """
-        conn = self._get_connection()
-
-        try:
-            cursor = conn.cursor()
-
+        with self._db_cursor() as cursor:
             cursor.execute("""
                 SELECT captured_at, total_call_oi, total_put_oi,
                        total_oi, put_call_ratio, underlying_price
@@ -429,10 +409,6 @@ class DatabaseRepository:
             results = [dict(zip(columns, row)) for row in cursor.fetchall()]
 
             return list(reversed(results))
-
-        finally:
-            cursor.close()
-            self._return_connection(conn)
 
     def get_volume_history(
         self,
@@ -451,11 +427,7 @@ class DatabaseRepository:
         Returns:
             List of volume records ordered by captured_at.
         """
-        conn = self._get_connection()
-
-        try:
-            cursor = conn.cursor()
-
+        with self._db_cursor() as cursor:
             cursor.execute("""
                 SELECT captured_at, total_call_volume, total_put_volume,
                        total_volume, volume_put_call_ratio, underlying_price
@@ -470,10 +442,6 @@ class DatabaseRepository:
             results = [dict(zip(columns, row)) for row in cursor.fetchall()]
 
             return list(reversed(results))
-
-        finally:
-            cursor.close()
-            self._return_connection(conn)
 
     def get_levels_history(
         self,
@@ -494,11 +462,7 @@ class DatabaseRepository:
         Returns:
             List of level records ordered by captured_at.
         """
-        conn = self._get_connection()
-
-        try:
-            cursor = conn.cursor()
-
+        with self._db_cursor() as cursor:
             if level_type:
                 cursor.execute("""
                     SELECT captured_at, level_type, strike, oi_or_gex_value, underlying_price
@@ -521,10 +485,6 @@ class DatabaseRepository:
 
             return list(reversed(results))
 
-        finally:
-            cursor.close()
-            self._return_connection(conn)
-
     def get_available_expirations(self, currency: str, table: str = "max_pain") -> List[str]:
         """
         Get list of expirations with data in a table.
@@ -540,11 +500,7 @@ class DatabaseRepository:
         if table not in valid_tables:
             raise ValueError(f"Invalid table: {table}")
 
-        conn = self._get_connection()
-
-        try:
-            cursor = conn.cursor()
-
+        with self._db_cursor() as cursor:
             cursor.execute(f"""
                 SELECT DISTINCT expiration
                 FROM {table}
@@ -553,10 +509,6 @@ class DatabaseRepository:
             """, (currency,))
 
             return [row[0] for row in cursor.fetchall()]
-
-        finally:
-            cursor.close()
-            self._return_connection(conn)
 
     def save_gex_dex(
         self,
@@ -592,37 +544,30 @@ class DatabaseRepository:
             ID of inserted row.
         """
         captured_at = captured_at or datetime.now()
-        conn = self._get_connection()
 
         try:
-            cursor = conn.cursor()
-
-            cursor.execute("""
-                INSERT INTO gex_dex (
+            with self._db_cursor() as cursor:
+                cursor.execute("""
+                    INSERT INTO gex_dex (
+                        captured_at, currency, expiration, total_net_gex,
+                        total_net_dex, call_resistance_strike, call_resistance_gex,
+                        put_support_strike, put_support_gex, hvl_strike, underlying_price
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                """, (
                     captured_at, currency, expiration, total_net_gex,
                     total_net_dex, call_resistance_strike, call_resistance_gex,
                     put_support_strike, put_support_gex, hvl_strike, underlying_price
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING id
-            """, (
-                captured_at, currency, expiration, total_net_gex,
-                total_net_dex, call_resistance_strike, call_resistance_gex,
-                put_support_strike, put_support_gex, hvl_strike, underlying_price
-            ))
+                ))
 
-            row_id = cursor.fetchone()[0]
-            conn.commit()
+                row_id = cursor.fetchone()[0]
 
-            logger.info(f"Saved GEX/DEX for {currency} {expiration}")
-            return row_id
+                logger.info(f"Saved GEX/DEX for {currency} {expiration}")
+                return row_id
 
         except Exception as e:
-            conn.rollback()
             logger.error(f"Failed to save GEX/DEX: {e}")
             raise
-        finally:
-            cursor.close()
-            self._return_connection(conn)
 
     def get_gex_dex_history(
         self,
@@ -641,11 +586,7 @@ class DatabaseRepository:
         Returns:
             List of GEX/DEX records ordered by captured_at.
         """
-        conn = self._get_connection()
-
-        try:
-            cursor = conn.cursor()
-
+        with self._db_cursor() as cursor:
             cursor.execute("""
                 SELECT captured_at, total_net_gex, total_net_dex,
                        call_resistance_strike, call_resistance_gex,
@@ -667,10 +608,6 @@ class DatabaseRepository:
 
             return list(reversed(results))
 
-        finally:
-            cursor.close()
-            self._return_connection(conn)
-
     def save_strategy_signal(
         self,
         signal: Dict[str, Any],
@@ -686,73 +623,64 @@ class DatabaseRepository:
         Returns:
             ID of inserted row.
         """
-        import json
-
         captured_at = captured_at or signal.get("generated_at") or datetime.now()
-        conn = self._get_connection()
 
         try:
-            cursor = conn.cursor()
+            with self._db_cursor() as cursor:
+                cursor.execute("""
+                    INSERT INTO strategy_signals (
+                        generated_at, strategy_name, currency, expiration,
+                        intrinsic_score, on_chain_score, composite_score, rank,
+                        legs, intrinsic_breakdown, on_chain_breakdown,
+                        underlying_price, implied_volatility, max_pain_strike,
+                        max_risk, max_profit, total_cost, breakeven_points,
+                        max_loss_percentage, take_profit_percentage, market_regime,
+                        net_delta, net_gamma, net_theta, net_vega
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    )
+                    RETURNING id
+                """, (
+                    captured_at,
+                    signal.get("strategy_name"),
+                    signal.get("currency"),
+                    signal.get("expiration"),
+                    signal.get("intrinsic_score"),
+                    signal.get("on_chain_score"),
+                    signal.get("composite_score"),
+                    signal.get("rank"),
+                    json.dumps(signal.get("legs", [])),
+                    json.dumps(signal.get("intrinsic_breakdown", {})),
+                    json.dumps(signal.get("on_chain_breakdown", {})),
+                    signal.get("underlying_price"),
+                    signal.get("implied_volatility"),
+                    signal.get("max_pain_strike"),
+                    signal.get("max_risk"),
+                    signal.get("max_profit"),
+                    signal.get("total_cost"),
+                    signal.get("breakeven_points", []),
+                    signal.get("max_loss_percentage"),
+                    signal.get("take_profit_percentage"),
+                    signal.get("market_regime"),
+                    signal.get("net_delta"),
+                    signal.get("net_gamma"),
+                    signal.get("net_theta"),
+                    signal.get("net_vega")
+                ))
 
-            cursor.execute("""
-                INSERT INTO strategy_signals (
-                    generated_at, strategy_name, currency, expiration,
-                    intrinsic_score, on_chain_score, composite_score, rank,
-                    legs, intrinsic_breakdown, on_chain_breakdown,
-                    underlying_price, implied_volatility, max_pain_strike,
-                    max_risk, max_profit, total_cost, breakeven_points,
-                    max_loss_percentage, take_profit_percentage, market_regime,
-                    net_delta, net_gamma, net_theta, net_vega
-                ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                row_id = cursor.fetchone()[0]
+
+                logger.info(
+                    f"Saved strategy signal: {signal.get('strategy_name')} "
+                    f"for {signal.get('currency')}-{signal.get('expiration')}, "
+                    f"composite_score={signal.get('composite_score'):.2f}"
                 )
-                RETURNING id
-            """, (
-                captured_at,
-                signal.get("strategy_name"),
-                signal.get("currency"),
-                signal.get("expiration"),
-                signal.get("intrinsic_score"),
-                signal.get("on_chain_score"),
-                signal.get("composite_score"),
-                signal.get("rank"),
-                json.dumps(signal.get("legs", [])),
-                json.dumps(signal.get("intrinsic_breakdown", {})),
-                json.dumps(signal.get("on_chain_breakdown", {})),
-                signal.get("underlying_price"),
-                signal.get("implied_volatility"),
-                signal.get("max_pain_strike"),
-                signal.get("max_risk"),
-                signal.get("max_profit"),
-                signal.get("total_cost"),
-                signal.get("breakeven_points", []),
-                signal.get("max_loss_percentage"),
-                signal.get("take_profit_percentage"),
-                signal.get("market_regime"),
-                signal.get("net_delta"),
-                signal.get("net_gamma"),
-                signal.get("net_theta"),
-                signal.get("net_vega")
-            ))
-
-            row_id = cursor.fetchone()[0]
-            conn.commit()
-
-            logger.info(
-                f"Saved strategy signal: {signal.get('strategy_name')} "
-                f"for {signal.get('currency')}-{signal.get('expiration')}, "
-                f"composite_score={signal.get('composite_score'):.2f}"
-            )
-            return row_id
+                return row_id
 
         except Exception as e:
-            conn.rollback()
             logger.error(f"Failed to save strategy signal: {e}")
             raise
-        finally:
-            cursor.close()
-            self._return_connection(conn)
 
     def get_strategy_signals(
         self,
@@ -777,13 +705,7 @@ class DatabaseRepository:
         Returns:
             List of strategy signal records ordered by composite_score DESC
         """
-        import json
-
-        conn = self._get_connection()
-
-        try:
-            cursor = conn.cursor()
-
+        with self._db_cursor() as cursor:
             # Build WHERE clauses
             where_clauses = ["composite_score >= %s"]
             params = [min_composite_score]
@@ -846,6 +768,83 @@ class DatabaseRepository:
             logger.info(f"Retrieved {len(results)} strategy signals")
             return results
 
-        finally:
-            cursor.close()
-            self._return_connection(conn)
+    def save_regime_detection(
+        self,
+        currency: str,
+        detected_at,
+        regime_data: dict
+    ) -> int:
+        """
+        Save regime detection result to database.
+
+        Args:
+            currency: Currency symbol (e.g., "BTC", "ETH")
+            detected_at: Detection timestamp
+            regime_data: Complete regime detection result dictionary
+
+        Returns:
+            Row ID of inserted record
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO regime_detections (
+                    currency, detected_at, regime, confidence_score,
+                    trend_score, volatility_score, momentum_score,
+                    onchain_score, sentiment_score,
+                    current_price, sma_50, sma_200,
+                    adx, atr_percentile, rsi,
+                    funding_rate, put_call_ratio, fear_greed,
+                    reasoning
+                ) VALUES (
+                    %s, %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s,
+                    %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s, %s,
+                    %s
+                )
+                ON CONFLICT (currency, detected_at) DO UPDATE SET
+                    regime = EXCLUDED.regime,
+                    confidence_score = EXCLUDED.confidence_score,
+                    trend_score = EXCLUDED.trend_score,
+                    volatility_score = EXCLUDED.volatility_score,
+                    momentum_score = EXCLUDED.momentum_score,
+                    onchain_score = EXCLUDED.onchain_score,
+                    sentiment_score = EXCLUDED.sentiment_score,
+                    current_price = EXCLUDED.current_price,
+                    sma_50 = EXCLUDED.sma_50,
+                    sma_200 = EXCLUDED.sma_200,
+                    adx = EXCLUDED.adx,
+                    atr_percentile = EXCLUDED.atr_percentile,
+                    rsi = EXCLUDED.rsi,
+                    funding_rate = EXCLUDED.funding_rate,
+                    put_call_ratio = EXCLUDED.put_call_ratio,
+                    fear_greed = EXCLUDED.fear_greed,
+                    reasoning = EXCLUDED.reasoning
+                RETURNING id
+            """, (
+                currency,
+                detected_at,
+                regime_data.get("regime"),
+                regime_data.get("confidence"),
+                regime_data.get("signals", {}).get("trend"),
+                regime_data.get("signals", {}).get("volatility"),
+                regime_data.get("signals", {}).get("momentum"),
+                regime_data.get("signals", {}).get("onchain"),
+                regime_data.get("signals", {}).get("sentiment"),
+                regime_data.get("current_price"),
+                regime_data.get("indicators", {}).get("sma_50"),
+                regime_data.get("indicators", {}).get("sma_200"),
+                regime_data.get("indicators", {}).get("adx"),
+                regime_data.get("indicators", {}).get("atr_percentile"),
+                regime_data.get("indicators", {}).get("rsi"),
+                regime_data.get("indicators", {}).get("funding_rate"),
+                regime_data.get("indicators", {}).get("put_call_ratio"),
+                regime_data.get("indicators", {}).get("fear_greed"),
+                regime_data.get("reasoning")
+            ))
+
+            row_id = cursor.fetchone()[0]
+            logger.info(f"Saved regime detection: {currency} - {regime_data.get('regime')} (ID: {row_id})")
+            return row_id

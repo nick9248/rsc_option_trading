@@ -280,19 +280,19 @@ class TestLongPutHelperMethods:
 
         assert strategy._is_matching_put("BTC-31JAN25-95000-C", {}) is False
 
-    def test_extract_strike_from_name(self):
-        """Test _extract_strike_from_name returns correct strike."""
+    def testextract_strike_from_name(self):
+        """Test extract_strike_from_name returns correct strike."""
         strategy = LongPut("BTC", "31JAN25", 100000.0)
 
-        strike = strategy._extract_strike_from_name("BTC-31JAN25-95000-P")
+        strike = strategy.extract_strike_from_name("BTC-31JAN25-95000-P")
         assert strike == 95000.0
 
-    def test_extract_strike_from_name_invalid_format(self):
-        """Test _extract_strike_from_name raises error for invalid format."""
+    def testextract_strike_from_name_invalid_format(self):
+        """Test extract_strike_from_name raises error for invalid format."""
         strategy = LongPut("BTC", "31JAN25", 100000.0)
 
         with pytest.raises(ValueError, match="Invalid instrument name format"):
-            strategy._extract_strike_from_name("INVALID")
+            strategy.extract_strike_from_name("INVALID")
 
 
 class TestLongPutGreeks:

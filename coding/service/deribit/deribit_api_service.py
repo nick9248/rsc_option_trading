@@ -5,6 +5,7 @@ Orchestrates connection, fetching, parsing, and validation of Deribit API data.
 """
 
 import logging
+import time
 from typing import Any, Dict, List, Optional
 
 from coding.core.api.connection import ApiConnection
@@ -125,9 +126,6 @@ class DeribitApiService:
         Returns:
             List of expiration strings sorted by OI descending.
         """
-        import logging
-        logger = logging.getLogger(__name__)
-
         # Get expirations from API
         expirations_data = self.get_expirations(currency=currency)
 
@@ -253,6 +251,41 @@ class DeribitApiService:
             save_to_csv=save_to_csv,
             csv_filename=f"book_summary_{currency.lower()}_{kind or 'all'}",
             csv_subdirectory="book_summary"
+        )
+
+    def get_last_trades_by_currency(
+        self,
+        currency: str = "ETH",
+        kind: Optional[str] = "option",
+        count: int = 1000,
+        save_to_csv: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Get recent trades for all instruments of a currency.
+
+        Args:
+            currency: Currency symbol (ETH, BTC).
+            kind: Instrument type filter (option, future, spot).
+            count: Number of trades to retrieve (max 1000).
+            save_to_csv: Whether to save results to CSV.
+
+        Returns:
+            Dictionary with trades data.
+        """
+        parameters = {"currency": currency, "count": count}
+        if kind:
+            parameters["kind"] = kind
+
+        return fetch_and_process(
+            connection=self.connection,
+            parser=self.parser,
+            validator=self.validator,
+            endpoint=DeribitEndpoints.GET_LAST_TRADES_BY_CURRENCY,
+            parameters=parameters,
+            validate_responses=self.validate_responses,
+            save_to_csv=save_to_csv,
+            csv_filename=f"last_trades_{currency.lower()}_{kind or 'all'}",
+            csv_subdirectory="trades"
         )
 
     def get_ticker(
@@ -398,7 +431,6 @@ class DeribitApiService:
         Returns:
             Dictionary with OHLC data array and continuation token.
         """
-        import time
         if end_timestamp is None:
             end_timestamp = int(time.time() * 1000)
         if start_timestamp is None:
@@ -453,7 +485,6 @@ class DeribitApiService:
             Dictionary with OHLCV data: {ticks: [...], status: 'ok'}
             Each tick: [timestamp, open, high, low, close, volume]
         """
-        import time
         if end_timestamp is None:
             end_timestamp = int(time.time() * 1000)
         if start_timestamp is None:

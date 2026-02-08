@@ -420,31 +420,32 @@ class OnChainScorer(BaseScorer):
 
     def _score_market_regime(self, strategy, market_context: Dict) -> float:
         """
-        Score based on market regime detection.
+        Score based on market regime alignment.
 
-        Uses sophisticated regime detection combining:
-        - Technical indicators (SMA, RSI, MACD, ADX, ATR)
-        - On-chain metrics (funding rate, P/C ratio, DVOL)
-        - External sentiment (Fear & Greed Index, BTC dominance)
+        The regime should be detected at the service layer and passed in market_context.
+        This method only scores the alignment between strategy type and provided regime.
 
         Args:
             strategy: Strategy instance
-            market_context: Market data (may contain pre-computed regime)
+            market_context: Market data with pre-computed regime
+                Expected keys:
+                - market_regime: Regime name (e.g., "Strong Bullish", "Weak Bearish", "Sideways")
+                - regime_composite_score: Regime strength score (-100 to +100)
 
         Returns:
             Score (0-10)
         """
         try:
-            # Check if regime was provided in market context (from config)
+            # Get regime from market context (should be pre-computed by service layer)
             market_regime = market_context.get("market_regime")
             regime_composite_score = market_context.get("regime_composite_score")
 
-            # If not provided, attempt to detect regime
             if market_regime is None:
-                market_regime, regime_composite_score = self._detect_market_regime(strategy)
-
-            if market_regime is None:
-                logger.warning("Market regime detection failed, returning neutral score")
+                logger.warning(
+                    "Market regime not provided in market_context. "
+                    "Service layer should detect regime and pass it in market_context. "
+                    "Returning neutral score."
+                )
                 return 5.0
 
             # Score based on regime alignment with strategy type
@@ -468,54 +469,6 @@ class OnChainScorer(BaseScorer):
         except Exception as e:
             logger.error(f"Error in regime-based trend analysis: {e}", exc_info=True)
             return 5.0  # Neutral score on error
-
-    def _detect_market_regime(self, strategy) -> tuple:
-        """
-        Detect current market regime using RegimeDetectionService.
-
-        Args:
-            strategy: Strategy instance with currency
-
-        Returns:
-            Tuple of (regime_name, composite_score) or (None, None) on error
-        """
-        try:
-            from coding.service.regime.regime_detection_service import RegimeDetectionService
-            from coding.service.deribit.deribit_api_service import DeribitApiService
-
-            # Use existing API service if available, otherwise create new one
-            with DeribitApiService() as api_service:
-                regime_service = RegimeDetectionService(
-                    api_service=api_service,
-                    repository=self.repository
-                )
-
-                result = regime_service.detect_regime(strategy.currency)
-
-                if "error" in result:
-                    logger.error(f"Regime detection error: {result['error']}")
-                    return None, None
-
-                regime = result.get("regime")
-                composite_score = result.get("composite_score")
-
-                # Handle None composite_score (can happen if regime detection partially fails)
-                if composite_score is not None:
-                    logger.info(
-                        f"Detected market regime for {strategy.currency}: "
-                        f"{regime} (score={composite_score:.1f})"
-                    )
-                else:
-                    logger.warning(
-                        f"Detected market regime for {strategy.currency}: "
-                        f"{regime} (score=None, using default)"
-                    )
-
-                return regime, composite_score
-
-        except Exception as e:
-            logger.error(f"Failed to detect market regime: {e}", exc_info=True)
-            return None, None
 
     def _score_regime_alignment(
         self,

@@ -164,8 +164,8 @@ class BearPutSpread(BaseStrategy):
             )
 
         # Extract strikes
-        long_strike = self._extract_strike_from_name(long_instrument)
-        short_strike = self._extract_strike_from_name(short_instrument)
+        long_strike = self.extract_strike_from_name(long_instrument)
+        short_strike = self.extract_strike_from_name(short_instrument)
 
         # Validate spread structure
         self._validate_spread(long_strike, short_strike)
@@ -310,14 +310,14 @@ class BearPutSpread(BaseStrategy):
         long_candidates = {
             name: data
             for name, data in put_instruments.items()
-            if min_long_strike <= self._extract_strike_from_name(name) <= max_long_strike
+            if min_long_strike <= self.extract_strike_from_name(name) <= max_long_strike
         }
 
         # Filter short leg candidates (lower strikes, further OTM)
         short_candidates = {
             name: data
             for name, data in put_instruments.items()
-            if min_short_strike <= self._extract_strike_from_name(name) <= max_short_strike
+            if min_short_strike <= self.extract_strike_from_name(name) <= max_short_strike
         }
 
         if not long_candidates or not short_candidates:
@@ -335,13 +335,13 @@ class BearPutSpread(BaseStrategy):
             long_candidates = {
                 name: data
                 for name, data in put_instruments.items()
-                if min_long_strike <= self._extract_strike_from_name(name) <= max_long_strike
+                if min_long_strike <= self.extract_strike_from_name(name) <= max_long_strike
             }
 
             short_candidates = {
                 name: data
                 for name, data in put_instruments.items()
-                if min_short_strike <= self._extract_strike_from_name(name) <= max_short_strike
+                if min_short_strike <= self.extract_strike_from_name(name) <= max_short_strike
             }
 
         if not long_candidates or not short_candidates:
@@ -362,7 +362,7 @@ class BearPutSpread(BaseStrategy):
         spreads = []
 
         for long_name, long_data in long_candidates.items():
-            long_strike = self._extract_strike_from_name(long_name)
+            long_strike = self.extract_strike_from_name(long_name)
             long_delta = abs(long_data.get("greeks", {}).get("delta", 0))  # Absolute value for puts
             long_iv = long_data.get("greeks", {}).get("iv", 0)
 
@@ -373,7 +373,7 @@ class BearPutSpread(BaseStrategy):
             long_cost = self._calculate_leg_cost(long_data, config.quantity, is_buy=True)
 
             for short_name, short_data in short_candidates.items():
-                short_strike = self._extract_strike_from_name(short_name)
+                short_strike = self.extract_strike_from_name(short_name)
                 short_delta = abs(short_data.get("greeks", {}).get("delta", 0))  # Absolute value for puts
 
                 # Skip if short leg delta is too low (< 0.10 = lottery ticket)
@@ -622,16 +622,16 @@ class BearPutSpread(BaseStrategy):
         # Find closest strikes
         long_instrument = min(
             put_instruments.keys(),
-            key=lambda name: abs(self._extract_strike_from_name(name) - long_target_strike)
+            key=lambda name: abs(self.extract_strike_from_name(name) - long_target_strike)
         )
 
         short_instrument = min(
             put_instruments.keys(),
-            key=lambda name: abs(self._extract_strike_from_name(name) - short_target_strike)
+            key=lambda name: abs(self.extract_strike_from_name(name) - short_target_strike)
         )
 
-        long_actual = self._extract_strike_from_name(long_instrument)
-        short_actual = self._extract_strike_from_name(short_instrument)
+        long_actual = self.extract_strike_from_name(long_instrument)
+        short_actual = self.extract_strike_from_name(short_instrument)
 
         logger.info(
             f"Selected by moneyness: long={config.long_moneyness_pct}% below (strike={long_actual:.0f}), "
@@ -663,7 +663,7 @@ class BearPutSpread(BaseStrategy):
         # Find long strike (exact or closest)
         long_matches = [
             name for name in put_instruments.keys()
-            if self._extract_strike_from_name(name) == config.long_specific_strike
+            if self.extract_strike_from_name(name) == config.long_specific_strike
         ]
 
         if long_matches:
@@ -675,14 +675,14 @@ class BearPutSpread(BaseStrategy):
             long_instrument = min(
                 put_instruments.keys(),
                 key=lambda name: abs(
-                    self._extract_strike_from_name(name) - config.long_specific_strike
+                    self.extract_strike_from_name(name) - config.long_specific_strike
                 )
             )
 
         # Find short strike (exact or closest)
         short_matches = [
             name for name in put_instruments.keys()
-            if self._extract_strike_from_name(name) == config.short_specific_strike
+            if self.extract_strike_from_name(name) == config.short_specific_strike
         ]
 
         if short_matches:
@@ -694,12 +694,12 @@ class BearPutSpread(BaseStrategy):
             short_instrument = min(
                 put_instruments.keys(),
                 key=lambda name: abs(
-                    self._extract_strike_from_name(name) - config.short_specific_strike
+                    self.extract_strike_from_name(name) - config.short_specific_strike
                 )
             )
 
-        long_actual = self._extract_strike_from_name(long_instrument)
-        short_actual = self._extract_strike_from_name(short_instrument)
+        long_actual = self.extract_strike_from_name(long_instrument)
+        short_actual = self.extract_strike_from_name(short_instrument)
 
         logger.info(
             f"Selected by strike: long={long_actual:.0f}, short={short_actual:.0f}"
@@ -831,24 +831,6 @@ class BearPutSpread(BaseStrategy):
             option_type == "P"  # Put option
         )
 
-    def _extract_strike_from_name(self, instrument_name: str) -> float:
-        """
-        Extract strike price from instrument name.
-
-        Args:
-            instrument_name: Instrument name (e.g., "BTC-31JAN25-95000-P")
-
-        Returns:
-            Strike price as float
-
-        Raises:
-            ValueError: If instrument name format is invalid
-        """
-        parts = instrument_name.split("-")
-        if len(parts) != 4:
-            raise ValueError(f"Invalid instrument name format: {instrument_name}")
-
-        return float(parts[2])
 
     def _calculate_leg_cost(
         self,

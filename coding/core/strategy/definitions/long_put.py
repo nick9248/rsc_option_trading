@@ -126,7 +126,7 @@ class LongPut(BaseStrategy):
             )
 
         # Extract strike from instrument name (e.g., "BTC-31JAN25-90000-P" -> 90000)
-        strike = self._extract_strike_from_name(selected_instrument)
+        strike = self.extract_strike_from_name(selected_instrument)
 
         # Get ticker data for selected instrument
         ticker = ticker_data[selected_instrument]
@@ -243,21 +243,6 @@ class LongPut(BaseStrategy):
             option_type == "P"  # Put option
         )
 
-    def _extract_strike_from_name(self, instrument_name: str) -> float:
-        """
-        Extract strike price from instrument name.
-
-        Args:
-            instrument_name: Instrument name (e.g., "BTC-31JAN25-90000-P")
-
-        Returns:
-            Strike price as float
-        """
-        parts = instrument_name.split("-")
-        if len(parts) != 4:
-            raise ValueError(f"Invalid instrument name format: {instrument_name}")
-
-        return float(parts[2])
 
     def _select_by_delta(
         self,
@@ -336,10 +321,10 @@ class LongPut(BaseStrategy):
         # Find strike closest to target
         best_instrument = min(
             put_instruments.keys(),
-            key=lambda name: abs(self._extract_strike_from_name(name) - target_strike)
+            key=lambda name: abs(self.extract_strike_from_name(name) - target_strike)
         )
 
-        actual_strike = self._extract_strike_from_name(best_instrument)
+        actual_strike = self.extract_strike_from_name(best_instrument)
 
         logger.info(
             f"Selected strike by moneyness: target={target_strike:.2f}, "
@@ -369,7 +354,7 @@ class LongPut(BaseStrategy):
         # Find exact match or closest strike
         matching_instruments = [
             name for name in put_instruments.keys()
-            if self._extract_strike_from_name(name) == specific_strike
+            if self.extract_strike_from_name(name) == specific_strike
         ]
 
         if matching_instruments:
@@ -384,10 +369,10 @@ class LongPut(BaseStrategy):
 
         best_instrument = min(
             put_instruments.keys(),
-            key=lambda name: abs(self._extract_strike_from_name(name) - specific_strike)
+            key=lambda name: abs(self.extract_strike_from_name(name) - specific_strike)
         )
 
-        actual_strike = self._extract_strike_from_name(best_instrument)
+        actual_strike = self.extract_strike_from_name(best_instrument)
 
         logger.info(
             f"Selected closest strike: target={specific_strike:.2f}, "

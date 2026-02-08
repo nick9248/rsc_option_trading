@@ -261,6 +261,25 @@ class BaseStrategy(ABC):
 
         return (max_risk / self.underlying_price) * 100.0
 
+    def extract_strike_from_name(self, instrument_name: str) -> float:
+        """
+        Extract strike price from instrument name.
+
+        Args:
+            instrument_name: Instrument name (e.g., "BTC-31JAN25-100000-C")
+
+        Returns:
+            Strike price as float
+
+        Raises:
+            ValueError: If instrument name format is invalid
+        """
+        parts = instrument_name.split("-")
+        if len(parts) != 4:
+            raise ValueError(f"Invalid instrument name format: {instrument_name}")
+
+        return float(parts[2])
+
     def validate_legs(self) -> bool:
         """
         Validate that strategy legs are properly constructed.
