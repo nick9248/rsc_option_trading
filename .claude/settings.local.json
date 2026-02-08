@@ -84,7 +84,8 @@
       "Bash(then echo \".env exists\")",
       "Bash(else echo \"DB_PASSWORD=Asdf/1234\")",
       "Bash(fi)",
-      "Bash(test:*)"
+      "Bash(test:*)",
+      "Bash(wc:*)"
     ]
   }
 }

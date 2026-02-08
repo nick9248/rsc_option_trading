@@ -8,6 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Hardware**: Intel 14900K CPU + NVIDIA 5090 Suprim SOC Liquid GPU
 - **Python Version**: 3.13
 - **Testing Framework**: pytest
+- **OS**: Windows
+- **IDE**: PyCharm 2025.2.3
 
 ## Setup
 
@@ -29,7 +31,14 @@ The application will automatically load credentials from `.env` on startup.
 
 ## Permissions
 
-Full permissions for read, write, execute, and file management. Only removal operations require user approval.
+**Granted**:
+- Read (all files)
+- Write (create, edit)
+- Execute (bash, scripts)
+- File management (move, rename)
+
+**Requires Approval**:
+- Delete operations (files, directories)
 
 ## Communication Style
 
@@ -108,47 +117,16 @@ For small task completions: write concise summaries in console output only. Do N
 
 ## Project Structure
 
-```
-option_trading/
-├── coding/
-│   ├── core/              # Definitions, models, base classes
-│   │   ├── api/           # API connection, parsing, validation
-│   │   ├── analytics/     # Analysis classes (OnChainAnalyzer, GexDexCalculator, ChartGenerator)
-│   │   ├── database/      # Database config, repository
-│   │   ├── endpoints/     # API endpoint definitions
-│   │   ├── logging/       # Logging configuration
-│   │   ├── schemas/       # Response schemas for validation
-│   │   └── strategy/      # Strategy system (NEW)
-│   │       ├── definitions/   # Strategy classes (BaseStrategy, LongCall, LongPut)
-│   │       ├── models/        # Data models (StrategySignal, StrategyConfig)
-│   │       └── scoring/       # Scoring logic (IntrinsicScorer, OnChainScorer, CompositeScorer)
-│   ├── gui/               # GUI components
-│   │   ├── components/    # Reusable UI components
-│   │   ├── tabs/          # Tab widgets (thin layer, calls services)
-│   │   │   ├── api_connection_tab.py
-│   │   │   ├── snapshot_tab.py
-│   │   │   ├── database_tab.py
-│   │   │   ├── on_chain_analysis_tab.py
-│   │   │   └── strategy_tab.py  # Strategy evaluation (NEW)
-│   │   └── theme/         # Styling and colors
-│   └── service/           # High-level orchestration services
-│       ├── deribit/       # Deribit API service
-│       ├── database/      # Database capture service (orchestrates capture operations)
-│       └── strategy/      # Strategy evaluation services (NEW)
-│           ├── strategy_evaluation_service.py
-│           └── strategy_finder_service.py
-├── tests/
-│   ├── unit/              # Unit tests
-│   │   └── strategy/      # Strategy system tests (NEW)
-│   └── integration/       # Integration tests
-│       └── strategy/      # Strategy integration tests (NEW)
-├── output/
-│   ├── charts/            # Generated charts by type and expiration
-│   ├── data/              # CSV exports and data files
-│   └── log/               # Log files with timestamps
-├── migrations/            # Database migrations
-│   └── add_strategy_signals.sql  # Strategy signals table (NEW)
-```
+Layered architecture: **Core** (definitions/models) → **Service** (orchestration) → **GUI/CLI** (presentation)
+
+Key directories:
+- `coding/core/` - Base classes, models, analytics
+- `coding/service/` - High-level orchestration services
+- `coding/gui/` - PySide6 GUI components
+- `tests/` - Unit and integration tests
+- `claude_resources/` - Claude reference documentation
+
+**Full structure**: See `claude_resources/project_structure.md`
 
 **Structure Rule**: Code files must be inside related folders (e.g., `core/logging/logging_setup.py` not `core/logging_setup.py`).
 
@@ -304,128 +282,16 @@ logger.debug("Detailed debug info")
 
 **MANDATORY for all new strategy implementations and significant code changes.**
 
-We built a modular, scalable system where every component can be independently tested. When implementing new strategies or features, you MUST verify correctness by fetching real data and manually calculating expected values.
+Core process:
+1. Fetch real API data using existing services
+2. Manually calculate expected values step-by-step
+3. Compare implementation output to manual calculations
+4. Test multiple scenarios (currencies, expirations, edge cases)
+5. Document findings and fix issues before committing
 
-### Step-by-Step Verification Process
+Skip verification only for: trivial changes, pure refactoring with tests, GUI-only changes.
 
-1. **Fetch Real API Data**: Use existing services to get live market data
-   ```python
-   from coding.service.deribit.deribit_api_service import DeribitAPIService
-
-   api = DeribitAPIService()
-
-   # Get ticker data
-   ticker = api.get_ticker('ETH-27MAR26-3400-C')
-
-   # Get book summary
-   book_summary = api.get_book_summary_by_currency('ETH')
-
-   # Get on-chain analysis
-   from coding.core.analytics.on_chain_analyzer import OnChainAnalyzer
-   analyzer = OnChainAnalyzer(book_summary)
-   analysis = analyzer.calculate_all_metrics()
-   ```
-
-2. **Manual Calculation**: Calculate expected values step-by-step
-   - Extract relevant data points (strikes, IVs, prices, greeks)
-   - Apply the algorithm manually (e.g., profit/debit ratio calculation)
-   - Document your manual calculations with comments
-   - Compare manual results to implementation output
-
-3. **Audit as an External Reviewer**: Check the code as if you didn't write it
-   - Does the strike selection make financial sense?
-   - Are the calculations mathematically correct?
-   - Are edge cases handled (illiquid options, extreme strikes)?
-   - Does it use existing verified services correctly?
-
-4. **Test with Multiple Scenarios**:
-   - Different currencies (BTC, ETH)
-   - Different expirations (short-term, long-term)
-   - Different market conditions (liquid vs illiquid)
-   - Edge cases (very OTM strikes, near expiration)
-
-5. **Document Findings**: List potential problems and bugs
-   - What could go wrong?
-   - What assumptions are made?
-   - What needs improvement?
-   - Fix issues before committing
-
-### Example: Verifying Bull Call Spread Strike Selection
-
-```python
-# 1. Fetch real data
-api = DeribitAPIService()
-book_summary = api.get_book_summary_by_currency('ETH')
-underlying_price = 2906.50  # From perpetual ticker
-
-# 2. Filter call options for expiration
-calls = {k: v for k, v in book_summary.items()
-         if 'C' in k and '27MAR26' in k}
-
-# 3. Manual calculation for one spread
-long_strike = 3400
-short_strike = 3700
-long_call = calls['ETH-27MAR26-3400-C']
-short_call = calls['ETH-27MAR26-3700-C']
-
-long_cost = long_call['ask_price'] or long_call['mark_price']
-short_credit = short_call['bid_price'] or short_call['mark_price']
-net_debit = long_cost - short_credit
-strike_width = short_strike - long_strike
-max_profit = strike_width - net_debit
-profit_debit_ratio = max_profit / net_debit
-
-print(f"Manual calculation:")
-print(f"  Long {long_strike}: ${long_cost:.2f}")
-print(f"  Short {short_strike}: ${short_credit:.2f}")
-print(f"  Net debit: ${net_debit:.2f}")
-print(f"  Max profit: ${max_profit:.2f}")
-print(f"  Profit/debit ratio: {profit_debit_ratio:.2f}")
-
-# 4. Compare to implementation
-from coding.core.strategy import create_strategy
-strategy = create_strategy("Bull Call Spread", "ETH", "27MAR26", underlying_price)
-strategy.build_legs(ticker_data=book_summary, spread_config=config)
-
-implementation_debit = abs(strategy.get_total_cost())
-implementation_profit = strategy.get_max_profit()
-implementation_ratio = implementation_profit / implementation_debit
-
-# 5. Verify match
-assert abs(implementation_debit - net_debit) < 0.01, "Debit mismatch!"
-assert abs(implementation_ratio - profit_debit_ratio) < 0.01, "Ratio mismatch!"
-```
-
-### Common Issues to Check
-
-1. **Ask/Bid Price = 0**: This is CORRECT for illiquid options
-   - Fallback to mark_price is expected behavior
-   - Same pattern used in Long Call/Long Put strategies
-   - Not a bug - it's proper handling of market reality
-
-2. **Strike Selection**: Verify strikes are realistic
-   - Not too far OTM (delta too low)
-   - Not "lottery tickets" (extremely low probability)
-   - Within reasonable range of underlying price
-
-3. **Greek Aggregation**: For multi-leg strategies
-   - Net greeks = sum(leg.greeks × leg.quantity)
-   - Negative quantity for sold legs
-   - Verify sign conventions
-
-4. **Cost Calculation**:
-   - Long legs: use ask_price (what you pay to buy)
-   - Short legs: use bid_price (what you receive to sell)
-   - Net cost = sum of all leg costs (credits are negative)
-
-### When to Skip This Process
-
-Only skip verification for:
-- Trivial changes (typo fixes, comments, logging)
-- Pure refactoring with 100% test coverage
-- Changes to GUI only (no business logic)
-
-For ALL strategy implementations and financial calculations, this verification is MANDATORY.
+**Full methodology**: See `claude_resources/testing_guide.md`
 
 ## Quality Control Workflow
 
@@ -437,397 +303,19 @@ After the first major task is completed, it becomes the **reference example**. A
 
 ## Strategy System
 
-The strategy evaluation system scores and ranks option strategies based on intrinsic and on-chain metrics.
+Scores and ranks option strategies based on intrinsic metrics (risk/reward, cost efficiency, greeks) and on-chain metrics (max pain, GEX/DEX, OI, volume).
 
-### Architecture
+**Available Strategies**:
+- Long Call/Put (single-leg)
+- Bull Call Spread (multi-leg, Pydantic config, skew-aware optimization) - **GOLD STANDARD REFERENCE**
 
-```
-Core Layer (coding/core/strategy/)
-├── definitions/           # Strategy classes (BaseStrategy, LongCall, LongPut)
-├── models/               # Data models (StrategySignal, StrategyConfig)
-└── scoring/              # Scoring logic (IntrinsicScorer, OnChainScorer, CompositeScorer)
+**Architecture**: Core (definitions, models, scoring) → Service (evaluation, finder) → GUI (strategy tab)
 
-Service Layer (coding/service/strategy/)
-├── strategy_evaluation_service.py    # Evaluates strategies for single expiration
-└── strategy_finder_service.py        # Scans multiple currencies/expirations
+**Adding Strategies**: Inherit from BaseStrategy, register in factory, use Pydantic for config
 
-GUI Layer (coding/gui/tabs/)
-└── strategy_tab.py                   # Strategy evaluation interface
+**Quality Standards**: Bull Call Spread sets the bar (99/100 overall: 55 unit tests, 42 edge case tests, 100% critical path coverage, manual verification with real data)
 
-Database
-└── strategy_signals table            # Persisted scored signals
-```
-
-### How to Add New Strategies
-
-1. Create new strategy class in `coding/core/strategy/definitions/`:
-   ```python
-   from .base_strategy import BaseStrategy, StrategyLeg
-
-   class MyStrategy(BaseStrategy):
-       @property
-       def name(self) -> str:
-           return "My Strategy"
-
-       @property
-       def strategy_type(self) -> str:
-           return "directional_bullish"  # or directional_bearish, neutral, etc.
-
-       def build_legs(self, ticker_data: Dict, **kwargs) -> None:
-           # Implement leg construction logic
-           pass
-   ```
-
-2. Register in `strategy_factory.py`:
-   ```python
-   STRATEGY_REGISTRY["My Strategy"] = MyStrategy
-   ```
-
-3. Strategy is now available in GUI and evaluation services.
-
-### How to Add New Scorers
-
-1. Create new scorer in `coding/core/strategy/scoring/`:
-   ```python
-   from .base_scorer import BaseScorer
-
-   class MyScorer(BaseScorer):
-       def calculate_score(self, strategy, market_context: Dict) -> float:
-           # Return 0-10 score
-           pass
-
-       def get_breakdown(self, strategy, market_context: Dict) -> Dict[str, float]:
-           # Return component scores
-           pass
-   ```
-
-2. Integrate into `CompositeScorer` or use standalone.
-
-### Scoring Components and Weights
-
-**Intrinsic Scorer (default 50% weight)**:
-- Risk/Reward Ratio (30%)
-- Cost Efficiency (25%)
-- Greek Profile (25%)
-- Breakeven Distance (20%)
-
-**On-Chain Scorer (default 50% weight)**:
-- Max Pain Alignment (20%)
-- GEX/DEX Support (20%)
-- OI Levels (15%)
-- Put/Call Ratio (15%)
-- Volume Profile (15%)
-- Trend Analysis (15%)
-
-**Composite Score** = (Intrinsic × weight) + (On-Chain × weight)
-
-Market regime penalties:
-- Bullish strategy in bearish regime: 50% penalty
-- Bearish strategy in bullish regime: 50% penalty
-
-**Detailed scoring formulas and interpretation guide**: See `documentation/strategy_system_guide.md`
-
-### Database Schema
-
-```sql
-CREATE TABLE strategy_signals (
-    id SERIAL PRIMARY KEY,
-    generated_at TIMESTAMP NOT NULL,
-    strategy_name VARCHAR(50) NOT NULL,
-    currency VARCHAR(10) NOT NULL,
-    expiration VARCHAR(20) NOT NULL,
-
-    -- Scores (0-10 scale)
-    intrinsic_score DECIMAL(4,2) NOT NULL,
-    on_chain_score DECIMAL(4,2) NOT NULL,
-    composite_score DECIMAL(4,2) NOT NULL,
-    rank INTEGER,
-
-    -- Structure and breakdowns (JSON)
-    legs JSONB NOT NULL,
-    intrinsic_breakdown JSONB,
-    on_chain_breakdown JSONB,
-
-    -- Risk metrics
-    max_risk DECIMAL(12,2) NOT NULL,
-    max_profit DECIMAL(12,2),
-    total_cost DECIMAL(12,2) NOT NULL,
-    max_loss_percentage DECIMAL(6,2) NOT NULL,
-    take_profit_percentage DECIMAL(6,2),
-
-    -- Greeks
-    net_delta DECIMAL(8,6),
-    net_gamma DECIMAL(10,8),
-    net_theta DECIMAL(8,6),
-    net_vega DECIMAL(8,6)
-);
-```
-
-### GUI Usage (Strategies Tab)
-
-1. Select currency and load expiry dates
-2. Choose market regime (optional)
-3. Select strategy (Long Call/Put)
-4. Configure strike selection (delta/moneyness/specific)
-5. Set filters (max loss %, take profit %)
-6. Evaluate and view ranked results
-
-**Detailed usage guide and score interpretation**: See `documentation/strategy_system_guide.md`
-
-### Service Layer Usage (Programmatic)
-
-```python
-from coding.service.strategy import StrategyEvaluationService
-from coding.core.strategy.models import StrategyConfig, StrikeConfig
-
-# Create config
-config = StrategyConfig(
-    strategy_names=["Long Call", "Long Put"],
-    expirations=["31JAN25"],
-    strike_configs={
-        "Long Call": StrikeConfig(method="by_delta", target_delta=0.30, quantity=1)
-    },
-    max_loss_filter=5.0,  # Max 5% loss
-    market_regime="bullish",
-    top_n=10
-)
-
-# Evaluate
-service = StrategyEvaluationService(api_service, repository)
-result = service.evaluate_strategies(
-    currency="BTC",
-    expiration="31JAN25",
-    config=config
-)
-
-# Access signals
-for signal in result.signals:
-    print(f"{signal.strategy_name}: {signal.composite_score:.2f}")
-```
-
-### Available Strategies
-
-**Single-Leg Strategies:**
-
-1. **Long Call**: Bullish directional strategy
-   - Max Risk: Premium paid
-   - Max Profit: Unlimited
-   - Breakeven: Strike + premium
-   - Use Case: Strong bullish outlook
-
-2. **Long Put**: Bearish directional strategy
-   - Max Risk: Premium paid
-   - Max Profit: Strike - premium
-   - Breakeven: Strike - premium
-   - Use Case: Strong bearish outlook
-
-**Multi-Leg Spread Strategies:**
-
-3. **Bull Call Spread**: Bullish vertical spread (NEW)
-   - Max Risk: Strike width - net debit (limited)
-   - Max Profit: Net debit (limited)
-   - Breakeven: Long strike + net debit per contract
-   - Legs: Buy lower strike call + Sell higher strike call
-   - Use Case: Moderately bullish, capital-efficient
-
-   **Configuration (Pydantic SpreadStrikeConfig):**
-   - **Skew-Aware Mode (Recommended)**: Dynamic optimization using volatility skew
-     - `profit_debit_ratio`: Find spread with best risk/reward ratio
-     - `max_width_for_budget`: Find widest spread within budget constraint
-   - **Traditional Modes**: Manual strike selection
-     - `by_delta`: Specify long/short deltas
-     - `by_moneyness`: Specify % OTM for each leg
-     - `by_strike`: Specify exact strikes
-
-   **Example Usage (Skew-Aware):**
-   ```python
-   from coding.core.strategy import create_strategy
-   from coding.core.strategy.models.spread_config import SpreadStrikeConfig
-
-   # Skew-aware optimization (professional approach)
-   config = SpreadStrikeConfig(
-       method="skew_aware",
-       optimize_for="profit_debit_ratio",
-       min_profit_debit_ratio=0.5,  # Require 50% return on capital
-       quantity=1
-   )
-
-   strategy = create_strategy(
-       name="Bull Call Spread",
-       currency="BTC",
-       expiration="31JAN25",
-       underlying_price=100000.0
-   )
-
-   strategy.build_legs(ticker_data=ticker_data, spread_config=config)
-   ```
-
-   **Example Usage (Traditional):**
-   ```python
-   # Manual delta-based selection
-   config = SpreadStrikeConfig(
-       method="by_delta",
-       long_target_delta=0.50,
-       short_target_delta=0.30,
-       quantity=1
-   )
-
-   strategy.build_legs(ticker_data=ticker_data, spread_config=config)
-   ```
-
-   **Important Notes:**
-   - Bull Call Spread is available **programmatically only** (not in GUI yet)
-   - Uses Pydantic for type-safe, validated configuration
-   - Skew-aware mode scans all possible spreads and selects optimal based on criteria
-   - Backward compatible with traditional strike selection methods
-   - Scoring system fully supports multi-leg strategies (no changes needed)
-
-### 🌟 REFERENCE IMPLEMENTATION: Bull Call Spread
-
-**Bull Call Spread is the GOLD STANDARD reference implementation for all future strategies.**
-
-This implementation has been comprehensively audited and verified to demonstrate:
-
-**Code Quality (99/100):**
-- ✅ Zero unused imports
-- ✅ No methods inside methods
-- ✅ Clear, descriptive naming (no abbreviations)
-- ✅ Complete type hints
-- ✅ No code duplication
-- ✅ Well-documented (comprehensive docstrings)
-
-**Architecture (100/100):**
-- ✅ Perfect layering: Core → Service → GUI
-- ✅ No business logic in GUI
-- ✅ No API calls in core
-- ✅ Single responsibility principle
-- ✅ No circular dependencies
-- ✅ Strategy pattern for variations
-
-**Testing (95/100):**
-- ✅ 55 unit tests (vs 0 for Long Call/Put)
-- ✅ 42 edge case tests (97.6% pass rate)
-- ✅ 100% of critical paths covered
-- ✅ Integration tests with real data
-- ✅ All financial formulas manually verified
-
-**Edge Case Handling (97.6/100):**
-- ✅ Pydantic prevents entire classes of errors
-- ✅ All invalid inputs rejected with clear messages
-- ✅ Graceful degradation for missing data
-- ✅ No silent failures
-- ✅ Robust error handling verified with 42 tests
-
-**Mathematical Correctness (100/100):**
-- ✅ All formulas verified with real data
-- ✅ Premium conversion correct
-- ✅ Max risk/profit calculations accurate
-- ✅ Breakeven calculation precise
-- ✅ Greek aggregation correct
-- ✅ P&L profiles mathematically sound
-
-**Documentation (100/100):**
-- ✅ Complete CLAUDE.md documentation
-- ✅ Comprehensive docstrings for all methods
-- ✅ Clear examples for all modes
-- ✅ Usage patterns documented
-- ✅ Limitations clearly stated
-
-**Key Features That Set the Standard:**
-
-1. **Pydantic Configuration Model:**
-   - Type-safe, immutable configuration
-   - Validation at creation time (not runtime)
-   - Prevents entire classes of errors
-   - Self-documenting with clear field types
-   - IDE autocomplete support
-
-2. **Skew-Aware Strike Selection:**
-   - Professional approach using volatility surface
-   - Dynamic optimization (profit/debit ratio or max width for budget)
-   - Probability-weighted scoring
-   - Prevents lottery ticket trades
-   - Multi-signal generation (top N variations)
-
-3. **Comprehensive Testing:**
-   - 97 total tests (55 unit + 42 edge cases)
-   - 100% coverage of critical paths
-   - Manual verification with real market data
-   - Edge cases systematically identified and tested
-
-4. **Robust Error Handling:**
-   - All edge cases handled gracefully
-   - Clear, actionable error messages
-   - Pydantic catches config errors early
-   - No silent failures
-   - Proper logging at all levels
-
-**When Implementing New Strategies:**
-
-All future strategies MUST follow this pattern:
-
-1. **Use Pydantic for configuration** (not kwargs dictionaries)
-2. **Inherit from BaseStrategy** and override required methods
-3. **Write comprehensive tests** (minimum 20 unit tests + edge cases)
-4. **Verify formulas manually** with real data
-5. **Document all public methods** with docstrings
-6. **Follow layering rules** (no API calls in core, no business logic in GUI)
-7. **Handle edge cases explicitly** (test with 40+ edge case scenarios)
-8. **Use clear naming** (no abbreviations, descriptive names)
-9. **Validate inputs early** (Pydantic validators)
-10. **Log appropriately** (use logging module, proper levels)
-
-**Quality Benchmark:**
-
-New strategies should aim for:
-- **Minimum 20 unit tests** (Bull Call Spread has 55)
-- **Minimum 30 edge case tests** (Bull Call Spread has 42)
-- **100% of critical paths tested**
-- **All formulas manually verified**
-- **Complete docstrings**
-- **Pydantic configuration model**
-
-**Reference Files:**
-
-Study these files as examples:
-- `coding/core/strategy/definitions/bull_call_spread.py` - Strategy implementation
-- `coding/core/strategy/models/spread_config.py` - Pydantic configuration
-- `tests/unit/strategy/test_bull_call_spread.py` - Unit tests
-- `tests/unit/strategy/test_spread_config.py` - Config tests
-
-**Audit Results:**
-
-Bull Call Spread passed comprehensive multi-perspective audit:
-- ✅ Code Quality: 99/100
-- ✅ Architecture: 100/100
-- ✅ Testing: 95/100
-- ✅ Edge Cases: 97.6/100
-- ✅ Mathematics: 100/100
-- ✅ Documentation: 100/100
-- ✅ CLAUDE.md Compliance: 100/100
-
-**Overall: 99/100 - PRODUCTION READY**
-
-This is the standard all future code should meet.
-
-### Key Design Decisions
-
-1. **Trend Analysis**: Uses last 5 historical captures to detect max pain and volume trends
-2. **Graceful Error Handling**: One strategy failure doesn't stop entire evaluation
-3. **Regime Awareness**: Optional market regime parameter with basic penalty logic
-4. **Extensibility**: Easy to add new strategies by inheriting from BaseStrategy
-5. **Transparency**: Full score breakdowns stored for analysis
-6. **Detailed Output**: Each evaluation generates comprehensive text file in `output/strategies/{expiration}/` with all market data, scores, and analysis
-7. **Pydantic Configuration**: New spread strategies use Pydantic for enhanced validation and type safety
-
-### Future Enhancements (Not Yet Implemented)
-
-- ML-based weight optimization
-- Advanced market regime detection
-- Backtesting framework
-- Additional multi-leg strategies (Bear Put Spread, Bull Put Spread, Bear Call Spread, Iron Condor)
-- GUI support for multi-leg strategies
-- Real-time execution integration
+**Full details**: See `claude_resources/strategy_system.md`
 ## Commands
 
 ```bash
