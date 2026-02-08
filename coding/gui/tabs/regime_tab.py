@@ -34,6 +34,7 @@ from coding.gui.components.log_viewer import LogViewer, GuiLogHandler
 from coding.gui.theme.colors import Colors
 from coding.service.deribit.deribit_api_service import DeribitApiService
 from coding.service.regime.regime_detection_service import RegimeDetectionService
+from coding.core.config import SUPPORTED_CURRENCIES
 from coding.core.database.repository import DatabaseRepository
 
 
@@ -154,7 +155,7 @@ class RegimeTab(QWidget):
         layout.addWidget(currency_label)
 
         self.currency_combo = QComboBox()
-        self.currency_combo.addItems(["BTC", "ETH"])
+        self.currency_combo.addItems(SUPPORTED_CURRENCIES)
         self.currency_combo.setStyleSheet(
             f"background-color: {Colors.INPUT_BACKGROUND}; "
             f"color: {Colors.TEXT_PRIMARY}; "

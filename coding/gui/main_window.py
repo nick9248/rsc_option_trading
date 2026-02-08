@@ -24,6 +24,7 @@ from coding.gui.tabs.on_chain_analysis_tab import OnChainAnalysisTab
 from coding.gui.tabs.database_tab import DatabaseTab
 from coding.gui.tabs.strategy_tab import StrategyTab
 from coding.gui.tabs.regime_tab import RegimeTab
+from coding.gui.tabs.system_validation_tab import SystemValidationTab
 from coding.core.database.repository import DatabaseRepository
 from coding.service.deribit.deribit_api_service import DeribitApiService
 
@@ -159,6 +160,10 @@ class MainWindow(QMainWindow):
         # Market Regime Detection tab
         regime_tab = RegimeTab()
         self.tab_widget.addTab(regime_tab, "Market Regime")
+
+        # System Validation tab
+        validation_tab = SystemValidationTab()
+        self.tab_widget.addTab(validation_tab, "System Health")
 
         # Placeholder tabs for future features
         self._add_placeholder_tab("Market Data", "Market data visualization coming soon...")

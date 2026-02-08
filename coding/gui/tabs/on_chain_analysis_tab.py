@@ -33,8 +33,7 @@ from PySide6.QtGui import QFont
 from coding.gui.components.log_viewer import LogViewer, GuiLogHandler
 from coding.gui.theme.colors import Colors
 from coding.service.deribit.deribit_api_service import DeribitApiService
-from coding.core.analytics.on_chain_analyzer import OnChainAnalyzer
-from coding.core.analytics.gex_dex_calculator import GexDexCalculator
+from coding.service.on_chain.on_chain_analysis_service import OnChainAnalysisService
 
 
 logger = logging.getLogger(__name__)
@@ -73,166 +72,18 @@ class OnChainAnalysisWorker(QThread):
     def run(self) -> None:
         """Execute data fetch and analysis."""
         try:
-            with DeribitApiService() as service:
-                self.progress.emit(f"Fetching book summary for {self.currency} options...")
-
-                all_data = service.get_book_summary(
+            with DeribitApiService() as api_service:
+                service = OnChainAnalysisService(api_service)
+                report = service.fetch_and_analyze(
                     currency=self.currency,
-                    kind="option"
+                    fetch_gex_dex=self.fetch_gex_dex,
+                    progress_callback=lambda msg: self.progress.emit(msg)
                 )
-
-                self.progress.emit(f"Received {len(all_data)} instruments")
-
-                # Create analyzer and parse data
-                self.progress.emit("Parsing instruments and grouping by expiration...")
-                analyzer = OnChainAnalyzer(all_data, self.currency)
-                analyzer.parse_instruments()
-
-                expirations = analyzer.get_expirations()
-                self.progress.emit(f"Found {len(expirations)} expirations")
-
-                # Fetch market metrics (DVOL, funding rate)
-                self._fetch_market_metrics(service, analyzer)
-
-                # Optionally fetch Greeks for GEX/DEX
-                if self.fetch_gex_dex:
-                    self._fetch_greeks_and_store_gex_dex(service, analyzer)
-
-                # Generate report (includes GEX/DEX if data was fetched)
-                self.progress.emit("Generating analysis report...")
-                report = analyzer.generate_report()
-
-                self.progress.emit("Analysis complete")
                 self.finished.emit(report)
 
         except Exception as error:
             logger.exception("Error during on-chain analysis")
             self.error.emit(str(error))
-
-    def _fetch_greeks_and_store_gex_dex(
-        self,
-        service: DeribitApiService,
-        analyzer: OnChainAnalyzer
-    ) -> None:
-        """
-        Fetch Greeks for all instruments and store GEX/DEX data in analyzer.
-
-        Args:
-            service: Deribit API service instance.
-            analyzer: OnChainAnalyzer with parsed data.
-        """
-        for expiration in analyzer.get_expirations():
-            instruments = analyzer.parsed_data.get(expiration, [])
-            if not instruments:
-                continue
-
-            self.progress.emit(f"Fetching Greeks for {expiration} ({len(instruments)} instruments)...")
-
-            # Fetch Greeks for each instrument
-            instruments_with_greeks = []
-            for i, item in enumerate(instruments):
-                try:
-                    ticker = service.get_ticker(item["instrument_name"])
-                    greeks = ticker.get("greeks", {})
-
-                    item_with_greeks = item.copy()
-                    item_with_greeks["delta"] = greeks.get("delta")
-                    item_with_greeks["gamma"] = greeks.get("gamma")
-                    instruments_with_greeks.append(item_with_greeks)
-
-                    if (i + 1) % 20 == 0:
-                        self.progress.emit(
-                            f"  Fetched {i + 1}/{len(instruments)} for {expiration}"
-                        )
-                except Exception as e:
-                    logger.warning(f"Failed to fetch Greeks for {item['instrument_name']}: {e}")
-
-            # Calculate GEX/DEX and store in analyzer
-            if instruments_with_greeks:
-                self.progress.emit(f"Calculating GEX/DEX for {expiration}...")
-                calculator = GexDexCalculator(
-                    instruments_with_greeks,
-                    analyzer.underlying_price
-                )
-                gex_dex_report = calculator.generate_report_section()
-                analyzer.set_gex_dex_data(expiration, gex_dex_report)
-
-    def _fetch_market_metrics(
-        self,
-        service: DeribitApiService,
-        analyzer: OnChainAnalyzer
-    ) -> None:
-        """
-        Fetch market-wide metrics (DVOL, funding rate) and store in analyzer.
-
-        Args:
-            service: Deribit API service instance.
-            analyzer: OnChainAnalyzer to store metrics in.
-        """
-        import time
-
-        dvol = None
-        iv_percentile = None
-        current_funding = None
-        funding_8h = None
-
-        # Fetch DVOL data for past 365 days
-        try:
-            self.progress.emit("Fetching DVOL data for IV percentile calculation...")
-
-            end_timestamp = int(time.time() * 1000)
-            start_timestamp = end_timestamp - (365 * 24 * 60 * 60 * 1000)  # 365 days ago
-
-            dvol_data = service.get_volatility_index_data(
-                currency=self.currency,
-                resolution=86400,  # Daily resolution for 365 days
-                start_timestamp=start_timestamp,
-                end_timestamp=end_timestamp
-            )
-
-            if dvol_data and "data" in dvol_data and dvol_data["data"]:
-                # Data format: [timestamp, open, high, low, close]
-                close_values = [point[4] for point in dvol_data["data"] if len(point) > 4]
-
-                if close_values:
-                    dvol = close_values[-1]  # Current DVOL (most recent close)
-
-                    # Calculate IV percentile
-                    values_below = sum(1 for v in close_values if v < dvol)
-                    iv_percentile = (values_below / len(close_values)) * 100
-
-                    self.progress.emit(
-                        f"DVOL: {dvol:.2f}, IV Percentile: {iv_percentile:.1f}% "
-                        f"(based on {len(close_values)} days)"
-                    )
-
-        except Exception as e:
-            logger.warning(f"Failed to fetch DVOL data: {e}")
-
-        # Fetch funding rate from perpetual ticker
-        try:
-            self.progress.emit("Fetching funding rate...")
-
-            perpetual_ticker = service.get_ticker(f"{self.currency}-PERPETUAL")
-            current_funding = perpetual_ticker.get("current_funding")
-            funding_8h = perpetual_ticker.get("funding_8h")
-
-            if current_funding is not None:
-                self.progress.emit(
-                    f"Current Funding: {current_funding * 100:.4f}%, "
-                    f"8h Funding: {funding_8h * 100:.4f}%"
-                )
-
-        except Exception as e:
-            logger.warning(f"Failed to fetch funding rate: {e}")
-
-        # Store in analyzer
-        analyzer.set_market_metrics(
-            dvol=dvol,
-            iv_percentile=iv_percentile,
-            current_funding=current_funding,
-            funding_8h=funding_8h
-        )
 
 
 class OnChainAnalysisTab(QWidget):

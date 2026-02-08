@@ -9,6 +9,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Python Version**: 3.13
 - **Testing Framework**: pytest
 
+## Setup
+
+### Environment Variables
+
+Database credentials are stored in `.env` file (not committed to git):
+
+1. Copy `.env.example` to `.env`:
+   ```bash
+   cp .env.example .env
+   ```
+
+2. Edit `.env` and set your database password:
+   ```
+   DB_PASSWORD=your_actual_password_here
+   ```
+
+The application will automatically load credentials from `.env` on startup.
+
 ## Permissions
 
 Full permissions for read, write, execute, and file management. Only removal operations require user approval.
@@ -30,6 +48,54 @@ Full permissions for read, write, execute, and file management. Only removal ope
   3. Don't sugar coat - state the problem clearly
   4. Think through all possibilities before concluding
   5. Implement solutions that prevent the issue class, not just the symptom
+
+## MANDATORY VERIFICATION CHECKLIST
+
+**CRITICAL: Never say a task is "done" or "working" without completing ALL verification steps.**
+
+For EVERY implementation task, you MUST:
+
+1. ✅ **Code Implemented** - Write the code
+2. ✅ **Code Runs Without Errors** - Execute and verify no crashes
+3. ✅ **VERIFY ACTUAL RESULTS** - Check database/files/output contain expected data
+4. ✅ **Compare Expected vs Actual** - Does the data match specifications?
+5. ✅ **Test Edge Cases** - Handle failures, missing data, invalid inputs
+6. ✅ **Show Verification Results** - Provide proof (query results, file contents, logs)
+7. ✅ **Run System Validator** - Use `scripts/validate_system.py` to check all modules
+
+**"Code runs without errors" ≠ "Code works correctly"**
+
+### Examples of Proper Verification:
+
+**BAD (No Verification):**
+- "I implemented the data collector. It's running and logging successfully. ✓ Done!"
+
+**GOOD (With Verification):**
+- "I implemented the data collector. Let me verify:
+  - Daemon started: ✓
+  - Logs show collections: ✓
+  - Database check: Last entry 2 minutes ago ✓
+  - Expected tables populated: ✓
+  - Sample query shows correct data: ✓
+  Here are the verification results: [shows actual database query results]"
+
+### When to Run Verification:
+
+- **During Development**: Check incrementally as you build
+- **After Implementation**: Before saying "done"
+- **Before Committing**: Ensure everything actually works
+- **After User Reports Issues**: Don't assume, verify with data
+
+### Verification Tools:
+
+- `python -m scripts.validate_system` - Comprehensive system health check (checks API, database, daemon, data freshness, quality)
+- `python scripts/check_collection_status.py` - Check collection daemon and data recency
+- `python scripts/check_database.py` - Database state verification
+- Direct database queries - Check actual data
+- Log file inspection - Verify operations completed
+- API test calls - Ensure endpoints work
+
+**REMEMBER: The user trusts you. Don't claim something works until you've PROVEN it works.**
 
 ## Documentation Rules
 
@@ -232,7 +298,7 @@ logger.debug("Detailed debug info")
 
 - Descriptive names related to the method's purpose
 - No abbreviations
-- No leading underscores
+- Leading underscores allowed for internal/private methods (Python convention)
 
 ## Testing and Verification Methodology
 

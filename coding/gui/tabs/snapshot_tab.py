@@ -35,6 +35,7 @@ from PySide6.QtCore import Qt, QThread, Signal
 from coding.gui.components.log_viewer import LogViewer, GuiLogHandler
 from coding.gui.theme.colors import Colors
 from coding.service.deribit.deribit_api_service import DeribitApiService
+from coding.service.snapshot.snapshot_service import SnapshotService
 
 
 logger = logging.getLogger(__name__)
@@ -78,62 +79,52 @@ class SnapshotWorker(QThread):
     def run(self) -> None:
         """Execute the snapshot data fetch."""
         try:
-            with DeribitApiService() as service:
-                self.progress.emit(f"Fetching book summary for {self.currency} options...")
-
-                # Get all options book summary
-                all_data = service.get_book_summary(
+            with DeribitApiService() as api_service:
+                service = SnapshotService(api_service)
+                filtered_data = service.get_filtered_instruments(
                     currency=self.currency,
-                    kind="option"
+                    expirations=self.expirations,
+                    min_volume=self.min_volume,
+                    fetch_greeks=self.fetch_greeks,
+                    progress_callback=lambda msg: self.progress.emit(msg)
                 )
-
-                self.progress.emit(f"Received {len(all_data)} instruments")
-
-                # Filter by expiration dates
-                filtered_data = []
-                for item in all_data:
-                    instrument_name = item.get("instrument_name", "")
-                    # Extract expiration from instrument name (e.g., ETH-10JAN25-3400-C)
-                    parts = instrument_name.split("-")
-                    if len(parts) >= 2:
-                        expiry = parts[1]
-                        if expiry in self.expirations:
-                            filtered_data.append(item)
-
-                self.progress.emit(f"Filtered to {len(filtered_data)} instruments for selected expirations")
-
-                # Filter by volume
-                if self.min_volume > 0:
-                    filtered_data = [
-                        item for item in filtered_data
-                        if item.get("volume", 0) >= self.min_volume
-                    ]
-                    self.progress.emit(f"After volume filter: {len(filtered_data)} instruments")
-
-                # Optionally fetch Greeks from ticker
-                if self.fetch_greeks and filtered_data:
-                    self.progress.emit("Fetching Greeks from ticker...")
-                    for i, item in enumerate(filtered_data):
-                        try:
-                            ticker = service.get_ticker(item["instrument_name"])
-                            greeks = ticker.get("greeks", {})
-                            item["delta"] = greeks.get("delta")
-                            item["gamma"] = greeks.get("gamma")
-                            item["vega"] = greeks.get("vega")
-                            item["theta"] = greeks.get("theta")
-                            item["rho"] = greeks.get("rho")
-
-                            if (i + 1) % 10 == 0:
-                                self.progress.emit(f"Fetched Greeks for {i + 1}/{len(filtered_data)} instruments")
-                        except Exception as e:
-                            logger.warning(f"Failed to fetch Greeks for {item['instrument_name']}: {e}")
-
-                # Sort by instrument name
-                filtered_data.sort(key=lambda x: x.get("instrument_name", ""))
-
                 self.finished.emit(filtered_data)
 
         except Exception as error:
+            self.error.emit(str(error))
+
+
+class ExpirationLoaderWorker(QThread):
+    """Worker thread for loading expiration dates."""
+
+    finished = Signal(list)  # Returns list of expiration strings
+    error = Signal(str)
+
+    def __init__(self, currency: str, parent: Optional[QWidget] = None):
+        """
+        Initialize the worker.
+
+        Args:
+            currency: Currency symbol (ETH, BTC).
+            parent: Parent widget.
+        """
+        super().__init__(parent)
+        self.currency = currency
+
+    def run(self) -> None:
+        """Load expiration dates from API."""
+        try:
+            with DeribitApiService() as service:
+                result = service.get_expirations(currency=self.currency)
+
+                # Get option expirations for the selected currency
+                currency_data = result.get(self.currency.lower(), {})
+                option_expirations = currency_data.get("option", [])
+
+                self.finished.emit(sorted(option_expirations))
+
+        except Exception as error:
+            logger.exception("Error loading expirations")
             self.error.emit(str(error))
 
 
@@ -427,29 +418,40 @@ class SnapshotTab(QWidget):
         self.expiry_list.clear()
         self.load_expiry_btn.setEnabled(False)
 
-        try:
-            with DeribitApiService() as service:
-                result = service.get_expirations(currency=currency)
+        # Start worker thread
+        self.expiry_worker = ExpirationLoaderWorker(currency, self)
+        self.expiry_worker.finished.connect(self._on_expirations_loaded)
+        self.expiry_worker.error.connect(self._on_expirations_error)
+        self.expiry_worker.start()
 
-                # Get option expirations for the selected currency
-                currency_data = result.get(currency.lower(), {})
-                option_expirations = currency_data.get("option", [])
+    def _on_expirations_loaded(self, expirations: List[str]) -> None:
+        """
+        Handle successful expiration loading.
 
-                if option_expirations:
-                    for expiry in sorted(option_expirations):
-                        item = QListWidgetItem(expiry)
-                        self.expiry_list.addItem(item)
-                    self.log_viewer.log_info(f"Loaded {len(option_expirations)} expirations")
-                else:
-                    self.expiry_list.addItem("No expirations found")
-                    self.log_viewer.log_warning("No option expirations found")
+        Args:
+            expirations: List of expiration strings.
+        """
+        if expirations:
+            for expiry in expirations:
+                item = QListWidgetItem(expiry)
+                self.expiry_list.addItem(item)
+            self.log_viewer.log_info(f"Loaded {len(expirations)} expirations")
+        else:
+            self.expiry_list.addItem("No expirations found")
+            self.log_viewer.log_warning("No option expirations found")
 
-        except Exception as error:
-            self.expiry_list.addItem("Error loading expirations")
-            self.log_viewer.log_error(f"Failed to load expirations: {error}")
+        self.load_expiry_btn.setEnabled(True)
 
-        finally:
-            self.load_expiry_btn.setEnabled(True)
+    def _on_expirations_error(self, error_message: str) -> None:
+        """
+        Handle expiration loading error.
+
+        Args:
+            error_message: Error description.
+        """
+        self.expiry_list.addItem("Error loading expirations")
+        self.log_viewer.log_error(f"Failed to load expirations: {error_message}")
+        self.load_expiry_btn.setEnabled(True)
 
     def _toggle_select_all(self, state: int) -> None:
         """Toggle selection of all expiration dates."""

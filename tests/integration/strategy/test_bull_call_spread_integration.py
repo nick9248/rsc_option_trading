@@ -331,6 +331,7 @@ class TestBullCallSpreadIntegration:
     def test_comparison_with_long_call(self, realistic_ticker_data, market_context):
         """Test that Bull Call Spread has limited risk compared to Long Call."""
         from coding.core.strategy.definitions.long_call import LongCall
+        from coding.core.strategy.models.long_call_config import LongCallConfig
 
         # Create Bull Call Spread
         bull_spread = BullCallSpread(
@@ -355,12 +356,13 @@ class TestBullCallSpreadIntegration:
             underlying_price=100142.52
         )
 
-        long_call.build_legs(
-            realistic_ticker_data,
-            strike_selection_method="by_strike",
+        long_call_config = LongCallConfig(
+            method="by_strike",
             specific_strike=102000.0,
             quantity=1
         )
+
+        long_call.build_legs(realistic_ticker_data, long_call_config)
 
         # Bull Call Spread should have lower cost and limited profit
         spread_cost = abs(bull_spread.get_total_cost())

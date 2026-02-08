@@ -279,19 +279,19 @@ class TestLongCallHelperMethods:
 
         assert strategy._is_matching_call("BTC-31JAN25-100000-P", {}) is False
 
-    def test_extract_strike_from_name(self):
-        """Test _extract_strike_from_name returns correct strike."""
+    def testextract_strike_from_name(self):
+        """Test extract_strike_from_name returns correct strike."""
         strategy = LongCall("BTC", "31JAN25", 100000.0)
 
-        strike = strategy._extract_strike_from_name("BTC-31JAN25-105000-C")
+        strike = strategy.extract_strike_from_name("BTC-31JAN25-105000-C")
         assert strike == 105000.0
 
-    def test_extract_strike_from_name_invalid_format(self):
-        """Test _extract_strike_from_name raises error for invalid format."""
+    def testextract_strike_from_name_invalid_format(self):
+        """Test extract_strike_from_name raises error for invalid format."""
         strategy = LongCall("BTC", "31JAN25", 100000.0)
 
         with pytest.raises(ValueError, match="Invalid instrument name format"):
-            strategy._extract_strike_from_name("INVALID")
+            strategy.extract_strike_from_name("INVALID")
 
 
 class TestLongCallGreeks:

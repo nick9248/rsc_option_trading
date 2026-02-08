@@ -93,6 +93,37 @@ class ApiWorker(QThread):
             self.error.emit(str(error))
 
 
+class InstrumentLoaderWorker(QThread):
+    """Worker thread for loading instruments."""
+
+    finished = Signal(list)  # Returns list of instrument dicts
+    error = Signal(str)
+
+    def __init__(self, currency: str, kind: str, parent: Optional[QWidget] = None):
+        """
+        Initialize the worker.
+
+        Args:
+            currency: Currency symbol (ETH, BTC).
+            kind: Instrument kind (option, future, etc.).
+            parent: Parent widget.
+        """
+        super().__init__(parent)
+        self.currency = currency
+        self.kind = kind
+
+    def run(self) -> None:
+        """Load instruments from API."""
+        try:
+            with DeribitApiService() as service:
+                instruments = service.get_instruments(currency=self.currency, kind=self.kind)
+                self.finished.emit(instruments)
+
+        except Exception as error:
+            logger.exception("Error loading instruments")
+            self.error.emit(str(error))
+
+
 class ApiConnectionTab(QWidget):
     """
     Tab widget for API connection testing and execution.
@@ -456,24 +487,45 @@ class ApiConnectionTab(QWidget):
         combo_widget.clear()
         combo_widget.addItem("Loading...")
 
-        try:
-            with DeribitApiService() as service:
-                instruments = service.get_instruments(currency=currency, kind=kind)
+        # Start worker thread
+        self.instrument_worker = InstrumentLoaderWorker(currency, kind, self)
+        self.instrument_worker.finished.connect(
+            lambda instruments: self._on_instruments_loaded(combo_widget, instruments)
+        )
+        self.instrument_worker.error.connect(
+            lambda error: self._on_instruments_error(combo_widget, error)
+        )
+        self.instrument_worker.start()
 
-                combo_widget.clear()
-                instrument_names = sorted([inst["instrument_name"] for inst in instruments])
+    def _on_instruments_loaded(self, combo_widget: QComboBox, instruments: List[Dict]) -> None:
+        """
+        Handle successful instrument loading.
 
-                if instrument_names:
-                    combo_widget.addItems(instrument_names)
-                    self.log_viewer.log_info(f"Loaded {len(instrument_names)} instruments")
-                else:
-                    combo_widget.addItem("No instruments found")
-                    self.log_viewer.log_warning("No instruments found")
+        Args:
+            combo_widget: The combo box to populate.
+            instruments: List of instrument dictionaries.
+        """
+        combo_widget.clear()
+        instrument_names = sorted([inst["instrument_name"] for inst in instruments])
 
-        except Exception as error:
-            combo_widget.clear()
-            combo_widget.addItem("Error loading")
-            self.log_viewer.log_error(f"Failed to load instruments: {error}")
+        if instrument_names:
+            combo_widget.addItems(instrument_names)
+            self.log_viewer.log_info(f"Loaded {len(instrument_names)} instruments")
+        else:
+            combo_widget.addItem("No instruments found")
+            self.log_viewer.log_warning("No instruments found")
+
+    def _on_instruments_error(self, combo_widget: QComboBox, error_message: str) -> None:
+        """
+        Handle instrument loading error.
+
+        Args:
+            combo_widget: The combo box to update.
+            error_message: Error description.
+        """
+        combo_widget.clear()
+        combo_widget.addItem("Error loading")
+        self.log_viewer.log_error(f"Failed to load instruments: {error_message}")
 
     def _update_perpetual(self, combo_widget: QComboBox, currency: str) -> None:
         """

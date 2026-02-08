@@ -107,6 +107,24 @@ def get_strategy_metadata() -> List[Dict[str, str]]:
     return metadata
 
 
+def is_spread_strategy(name: str) -> bool:
+    """
+    Check if a strategy is a multi-leg spread strategy.
+
+    Args:
+        name: Strategy name
+
+    Returns:
+        True if strategy is a spread (multi-leg), False if single-leg
+    """
+    if name not in STRATEGY_REGISTRY:
+        return False
+
+    # Simple check: if "Spread" is in the strategy name, it's a spread
+    # This covers Bull Call Spread, Bear Put Spread, Bull Put Spread, Bear Call Spread, etc.
+    return "Spread" in name
+
+
 def register_strategy(name: str, strategy_class: Type[BaseStrategy]) -> None:
     """
     Register a new strategy in the registry.

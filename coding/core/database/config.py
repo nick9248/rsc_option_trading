@@ -3,11 +3,18 @@ Database configuration for PostgreSQL connection.
 """
 
 import logging
+import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 import psycopg2
+from dotenv import load_dotenv
 from psycopg2 import pool
+
+# Load .env file from project root
+env_path = Path(__file__).parents[3] / ".env"
+load_dotenv(dotenv_path=env_path)
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +36,7 @@ class DatabaseConfig:
     port: int = 5433
     database: str = "option_trading"
     user: str = "postgres"
-    password: str = "Asdf/1234"
+    password: str = os.getenv("DB_PASSWORD", "")
 
     def get_connection_dict(self) -> dict:
         """

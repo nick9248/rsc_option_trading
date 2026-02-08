@@ -243,6 +243,37 @@ class DeribitEndpoints:
         requires_authentication=False
     )
 
+    GET_LAST_TRADES_BY_CURRENCY = EndpointDefinition(
+        path="/public/get_last_trades_by_currency",
+        description="Retrieves recent trades for all instruments of a currency.",
+        method=HttpMethod.GET,
+        parameters=[
+            EndpointParameter(
+                name="currency",
+                required=True,
+                description="The currency symbol (e.g., ETH, BTC).",
+                parameter_type="str",
+                allowed_values=["ETH", "BTC", "USDC", "USDT", "EURR"]
+            ),
+            EndpointParameter(
+                name="kind",
+                required=False,
+                description="Instrument kind filter.",
+                parameter_type="str",
+                default_value=None,
+                allowed_values=["future", "option", "spot", "future_combo", "option_combo"]
+            ),
+            EndpointParameter(
+                name="count",
+                required=False,
+                description="Number of trades to retrieve (max 1000).",
+                parameter_type="int",
+                default_value=10
+            )
+        ],
+        requires_authentication=False
+    )
+
     @classmethod
     def get_all_endpoints(cls) -> list:
         """
@@ -261,5 +292,6 @@ class DeribitEndpoints:
             cls.GET_FUNDING_CHART_DATA,
             cls.GET_HISTORICAL_VOLATILITY,
             cls.GET_VOLATILITY_INDEX_DATA,
-            cls.GET_TRADINGVIEW_CHART_DATA
+            cls.GET_TRADINGVIEW_CHART_DATA,
+            cls.GET_LAST_TRADES_BY_CURRENCY
         ]
