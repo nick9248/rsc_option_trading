@@ -873,3 +873,158 @@ class DatabaseRepository:
             row_id = cursor.fetchone()[0]
             logger.info(f"Saved regime detection: {currency} - {regime_data.get('regime')} (ID: {row_id})")
             return row_id
+
+    def get_unaggregated_hours(self, currency: str) -> List[datetime]:
+        """
+        Find hours that have trades but no hourly snapshots.
+
+        This is used by HourlyAggregationService to discover gaps.
+
+        Args:
+            currency: Currency symbol (BTC, ETH).
+
+        Returns:
+            List of datetime objects representing hour buckets that need aggregation.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                SELECT DISTINCT
+                    date_trunc('hour', to_timestamp(trade_timestamp / 1000.0)) as hour_bucket
+                FROM historical_trades
+                WHERE currency = %s
+                  AND date_trunc('hour', to_timestamp(trade_timestamp / 1000.0)) NOT IN (
+                      SELECT DISTINCT snapshot_hour
+                      FROM hourly_snapshots
+                      WHERE currency = %s
+                  )
+                ORDER BY hour_bucket
+            """, (currency, currency))
+
+            return [row[0] for row in cursor.fetchall()]
+
+    def get_trades_for_hour(
+        self,
+        currency: str,
+        hour_start: datetime,
+        hour_end: datetime
+    ) -> List[tuple]:
+        """
+        Fetch all trades for a specific hour bucket.
+
+        Returns trades in format needed by HourlyAggregationService:
+        (instrument_name, price, amount, direction, iv, index_price, mark_price)
+
+        Args:
+            currency: Currency symbol.
+            hour_start: Start of hour bucket.
+            hour_end: End of hour bucket.
+
+        Returns:
+            List of trade tuples.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                SELECT
+                    instrument_name,
+                    price,
+                    amount,
+                    direction,
+                    iv,
+                    index_price,
+                    mark_price
+                FROM historical_trades
+                WHERE currency = %s
+                  AND to_timestamp(trade_timestamp / 1000.0) >= %s
+                  AND to_timestamp(trade_timestamp / 1000.0) < %s
+                ORDER BY trade_timestamp
+            """, (currency, hour_start, hour_end))
+
+            return cursor.fetchall()
+
+    def get_latest_snapshot_oi(
+        self,
+        currency: str,
+        around_time: datetime
+    ) -> Dict[str, float]:
+        """
+        Get latest open interest values from snapshots table.
+
+        Used to enrich hourly snapshots with OI data.
+
+        Args:
+            currency: Currency symbol.
+            around_time: Timestamp to search around (finds closest snapshots).
+
+        Returns:
+            Dictionary mapping instrument_name -> open_interest.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                SELECT DISTINCT ON (instrument_name)
+                    instrument_name,
+                    open_interest
+                FROM snapshots
+                WHERE currency = %s
+                  AND captured_at <= %s
+                  AND open_interest IS NOT NULL
+                ORDER BY instrument_name, captured_at DESC
+            """, (currency, around_time))
+
+            return {row[0]: row[1] for row in cursor.fetchall()}
+
+    def save_hourly_snapshots(self, snapshots: List[Dict]) -> int:
+        """
+        Save aggregated hourly snapshots to database.
+
+        Uses ON CONFLICT to handle duplicates (same instrument + hour).
+
+        Args:
+            snapshots: List of snapshot dictionaries from HourlyAggregationService.
+
+        Returns:
+            Number of snapshots inserted.
+        """
+        if not snapshots:
+            return 0
+
+        with self._db_cursor() as cursor:
+            insert_sql = """
+                INSERT INTO hourly_snapshots (
+                    snapshot_hour, captured_at, instrument_name, currency,
+                    strike, expiration, option_type,
+                    trade_count, total_volume, vwap,
+                    bid_price, ask_price, mark_price, mark_iv,
+                    open_interest, index_price, futures_price, basis,
+                    avg_delta, avg_gamma, avg_theta, avg_vega
+                ) VALUES (
+                    %(snapshot_hour)s, %(captured_at)s, %(instrument_name)s, %(currency)s,
+                    %(strike)s, %(expiration)s, %(option_type)s,
+                    %(trade_count)s, %(total_volume)s, %(vwap)s,
+                    %(bid_price)s, %(ask_price)s, %(mark_price)s, %(mark_iv)s,
+                    %(open_interest)s, %(index_price)s, %(futures_price)s, %(basis)s,
+                    %(avg_delta)s, %(avg_gamma)s, %(avg_theta)s, %(avg_vega)s
+                )
+                ON CONFLICT (instrument_name, snapshot_hour)
+                DO UPDATE SET
+                    captured_at = EXCLUDED.captured_at,
+                    trade_count = EXCLUDED.trade_count,
+                    total_volume = EXCLUDED.total_volume,
+                    vwap = EXCLUDED.vwap,
+                    bid_price = EXCLUDED.bid_price,
+                    ask_price = EXCLUDED.ask_price,
+                    mark_price = EXCLUDED.mark_price,
+                    mark_iv = EXCLUDED.mark_iv,
+                    open_interest = EXCLUDED.open_interest,
+                    index_price = EXCLUDED.index_price,
+                    avg_delta = EXCLUDED.avg_delta,
+                    avg_gamma = EXCLUDED.avg_gamma,
+                    avg_theta = EXCLUDED.avg_theta,
+                    avg_vega = EXCLUDED.avg_vega
+            """
+
+            rows_inserted = 0
+            for snapshot in snapshots:
+                cursor.execute(insert_sql, snapshot)
+                rows_inserted += cursor.rowcount
+
+            return rows_inserted
