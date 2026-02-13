@@ -37,6 +37,7 @@ class OnChainAnalyzer:
         self.underlying_price: float = 0.0
         self.parsed_data: Dict[str, List[Dict]] = {}
         self.gex_dex_data: Dict[str, str] = {}  # Stores GEX/DEX report per expiration
+        self.buy_sell_flow_data: Dict[str, str] = {}  # Stores buy/sell flow report per expiration
         self.market_metrics: Dict[str, Any] = {}  # Stores DVOL, funding rate, etc.
 
         # Extract underlying price using most common value (mode)
@@ -825,6 +826,10 @@ class OnChainAnalyzer:
             if expiration in self.gex_dex_data:
                 lines.append(self.gex_dex_data[expiration])
 
+            # Buy/Sell Flow section (if available for this expiration)
+            if expiration in self.buy_sell_flow_data:
+                lines.append(self.buy_sell_flow_data[expiration])
+
             lines.append(separator)
             lines.append("")
 
@@ -850,6 +855,16 @@ class OnChainAnalyzer:
             report_text: Formatted GEX/DEX report section text.
         """
         self.gex_dex_data[expiration] = report_text
+
+    def set_buy_sell_flow_data(self, expiration: str, report_text: str) -> None:
+        """
+        Store buy/sell flow report text for an expiration.
+
+        Args:
+            expiration: Expiration date string (e.g., "27DEC24").
+            report_text: Formatted buy/sell flow report section text.
+        """
+        self.buy_sell_flow_data[expiration] = report_text
 
     def set_market_metrics(
         self,

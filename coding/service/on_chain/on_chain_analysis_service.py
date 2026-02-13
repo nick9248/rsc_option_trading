@@ -8,8 +8,10 @@ import logging
 import time
 from typing import Callable, Dict, Optional
 
+from coding.core.analytics.buy_sell_flow_analyzer import BuySellFlowAnalyzer
 from coding.core.analytics.gex_dex_calculator import GexDexCalculator
 from coding.core.analytics.on_chain_analyzer import OnChainAnalyzer
+from coding.core.database.repository import DatabaseRepository
 from coding.service.deribit.deribit_api_service import DeribitApiService
 
 logger = logging.getLogger(__name__)
@@ -23,19 +25,26 @@ class OnChainAnalysisService:
     and report generation.
     """
 
-    def __init__(self, api_service: DeribitApiService):
+    def __init__(
+        self,
+        api_service: DeribitApiService,
+        repository: Optional[DatabaseRepository] = None
+    ):
         """
-        Initialize service with API service.
+        Initialize service with API service and optional database repository.
 
         Args:
             api_service: Deribit API service instance.
+            repository: Database repository for querying trade data (optional).
         """
         self.api = api_service
+        self.repository = repository
 
     def fetch_and_analyze(
         self,
         currency: str,
         fetch_gex_dex: bool = False,
+        fetch_buy_sell_flow: bool = False,
         progress_callback: Optional[Callable[[str], None]] = None
     ) -> str:
         """
@@ -44,6 +53,7 @@ class OnChainAnalysisService:
         Args:
             currency: Currency symbol (BTC, ETH).
             fetch_gex_dex: Whether to fetch Greeks and calculate GEX/DEX.
+            fetch_buy_sell_flow: Whether to fetch and analyze buy/sell flow.
             progress_callback: Optional callback for progress updates.
 
         Returns:
@@ -79,7 +89,11 @@ class OnChainAnalysisService:
         if fetch_gex_dex:
             self._fetch_greeks_and_store_gex_dex(analyzer, progress)
 
-        # Generate report (includes GEX/DEX if data was fetched)
+        # Optionally fetch buy/sell flow
+        if fetch_buy_sell_flow:
+            self._calculate_buy_sell_flow(analyzer, progress)
+
+        # Generate report (includes GEX/DEX and flow if data was fetched)
         progress("Generating analysis report...")
         report = analyzer.generate_report()
 
@@ -133,6 +147,42 @@ class OnChainAnalysisService:
                 )
                 gex_dex_report = calculator.generate_report_section()
                 analyzer.set_gex_dex_data(expiration, gex_dex_report)
+
+    def _calculate_buy_sell_flow(
+        self,
+        analyzer: OnChainAnalyzer,
+        progress_callback: Callable[[str], None]
+    ) -> None:
+        """
+        Calculate buy/sell flow for all expirations and store in analyzer.
+
+        Args:
+            analyzer: OnChainAnalyzer with parsed data.
+            progress_callback: Callback for progress updates.
+        """
+        if self.repository is None:
+            logger.warning("Repository not available - skipping buy/sell flow analysis")
+            progress_callback("Warning: Repository not available for buy/sell flow")
+            return
+
+        for expiration in analyzer.get_expirations():
+            progress_callback(f"Calculating buy/sell flow for {expiration}...")
+
+            try:
+                flow_analyzer = BuySellFlowAnalyzer(
+                    repository=self.repository,
+                    currency=analyzer.currency,
+                    expiration=expiration,
+                    spot_price=analyzer.underlying_price,
+                    lookback_hours=24
+                )
+
+                flow_report = flow_analyzer.generate_report_section()
+                analyzer.set_buy_sell_flow_data(expiration, flow_report)
+
+            except Exception as e:
+                logger.warning(f"Failed to calculate buy/sell flow for {expiration}: {e}")
+                progress_callback(f"Warning: Failed to calculate flow for {expiration}")
 
     def _fetch_market_metrics(
         self,

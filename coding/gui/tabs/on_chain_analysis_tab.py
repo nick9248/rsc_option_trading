@@ -32,6 +32,7 @@ from PySide6.QtGui import QFont
 
 from coding.gui.components.log_viewer import LogViewer, GuiLogHandler
 from coding.gui.theme.colors import Colors
+from coding.core.database.repository import DatabaseRepository
 from coding.service.deribit.deribit_api_service import DeribitApiService
 from coding.service.on_chain.on_chain_analysis_service import OnChainAnalysisService
 
@@ -55,6 +56,7 @@ class OnChainAnalysisWorker(QThread):
         self,
         currency: str,
         fetch_gex_dex: bool = False,
+        fetch_buy_sell_flow: bool = False,
         parent: Optional[QWidget] = None
     ):
         """
@@ -63,20 +65,28 @@ class OnChainAnalysisWorker(QThread):
         Args:
             currency: Currency symbol (ETH, BTC).
             fetch_gex_dex: Whether to fetch Greeks and calculate GEX/DEX.
+            fetch_buy_sell_flow: Whether to fetch and analyze buy/sell flow.
             parent: Parent widget.
         """
         super().__init__(parent)
         self.currency = currency
         self.fetch_gex_dex = fetch_gex_dex
+        self.fetch_buy_sell_flow = fetch_buy_sell_flow
 
     def run(self) -> None:
         """Execute data fetch and analysis."""
         try:
+            # Initialize repository if needed for buy/sell flow
+            repository = None
+            if self.fetch_buy_sell_flow:
+                repository = DatabaseRepository()
+
             with DeribitApiService() as api_service:
-                service = OnChainAnalysisService(api_service)
+                service = OnChainAnalysisService(api_service, repository=repository)
                 report = service.fetch_and_analyze(
                     currency=self.currency,
                     fetch_gex_dex=self.fetch_gex_dex,
+                    fetch_buy_sell_flow=self.fetch_buy_sell_flow,
                     progress_callback=lambda msg: self.progress.emit(msg)
                 )
                 self.finished.emit(report)
@@ -235,6 +245,30 @@ class OnChainAnalysisTab(QWidget):
         """)
         controls_layout.addWidget(self.gex_dex_checkbox)
 
+        # Buy/Sell Flow checkbox
+        self.buy_sell_flow_checkbox = QCheckBox("Include Buy/Sell Flow")
+        self.buy_sell_flow_checkbox.setToolTip(
+            "Analyze trade direction to identify buying/selling pressure (requires historical trades database)"
+        )
+        self.buy_sell_flow_checkbox.setStyleSheet(f"""
+            QCheckBox {{
+                color: {Colors.TEXT_SECONDARY};
+                spacing: 8px;
+            }}
+            QCheckBox::indicator {{
+                width: 16px;
+                height: 16px;
+                border: 1px solid {Colors.BORDER};
+                border-radius: 4px;
+                background-color: {Colors.INPUT_BACKGROUND};
+            }}
+            QCheckBox::indicator:checked {{
+                background-color: {Colors.ACCENT};
+                border-color: {Colors.ACCENT};
+            }}
+        """)
+        controls_layout.addWidget(self.buy_sell_flow_checkbox)
+
         # Load button
         self.load_btn = QPushButton("Load Analysis")
         self.load_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -285,12 +319,16 @@ class OnChainAnalysisTab(QWidget):
 
         currency = self.currency_combo.currentText()
         fetch_gex_dex = self.gex_dex_checkbox.isChecked()
+        fetch_buy_sell_flow = self.buy_sell_flow_checkbox.isChecked()
 
+        log_msg = f"Starting on-chain analysis for {currency}..."
         if fetch_gex_dex:
-            self.log_viewer.log_info(f"Starting on-chain analysis with GEX/DEX for {currency}...")
+            self.log_viewer.log_info(f"{log_msg} (with GEX/DEX)")
             self.log_viewer.log_info("Note: GEX/DEX requires fetching Greeks per instrument (may take a while)")
-        else:
-            self.log_viewer.log_info(f"Starting on-chain analysis for {currency}...")
+        if fetch_buy_sell_flow:
+            self.log_viewer.log_info(f"{log_msg} (with Buy/Sell Flow)")
+        if not fetch_gex_dex and not fetch_buy_sell_flow:
+            self.log_viewer.log_info(log_msg)
 
         self.load_btn.setEnabled(False)
         self.export_btn.setEnabled(False)
@@ -298,7 +336,11 @@ class OnChainAnalysisTab(QWidget):
         self.status_label.setStyleSheet(f"color: {Colors.WARNING};")
         self.report_display.clear()
 
-        self.worker = OnChainAnalysisWorker(currency=currency, fetch_gex_dex=fetch_gex_dex)
+        self.worker = OnChainAnalysisWorker(
+            currency=currency,
+            fetch_gex_dex=fetch_gex_dex,
+            fetch_buy_sell_flow=fetch_buy_sell_flow
+        )
         self.worker.progress.connect(self._on_progress)
         self.worker.finished.connect(self._on_analysis_finished)
         self.worker.error.connect(self._on_error)
