@@ -2,36 +2,83 @@
 
 This directory contains comprehensive documentation for the Options Trading Platform.
 
-## Naming Pattern
+**Last Updated**: February 13, 2026 - Reorganized into logical subdirectories
 
-All documentation files follow a consistent naming pattern: `{type}_{name}.md`
+## 📁 Directory Structure
 
-### Documentation Types
+```
+documentation/
+├── README.md                          # This file
+├── system_overview.md                 # High-level system architecture
+├── strategy_scoring_calculation_example.md
+│
+├── ml/                                # ML & Analytics Documentation
+│   ├── ml_for_decision_making_complete.md     # Complete ML system guide
+│   └── ml_data_collection_system.md           # Data collection technical reference
+│
+├── gui_tabs/                          # GUI Tab Documentation
+│   ├── tab_api_connection.md
+│   ├── tab_database.md
+│   ├── tab_snapshot.md
+│   ├── tab_on_chain_analysis.md
+│   ├── tab_market_regime.md
+│   ├── tab_strategies.md
+│   └── tab_system_validation.md
+│
+├── features/                          # Feature Implementation Guides
+│   ├── feature_market_regime_detection.md
+│   └── feature_strategy_system.md
+│
+└── archive/                           # Historical/Deprecated Documentation
+    └── ... (old docs and research)
+```
 
-#### Tab Documentation (`tab_*.md`)
-GUI tab-specific documentation covering features, usage, and workflows.
+## 📚 Documentation Categories
 
-- `tab_api_connection.md` - API Connection tab
-- `tab_snapshot.md` - Snapshot tab (option chain data export)
-- `tab_on_chain_analysis.md` - On Chain Analysis tab (market analysis reports)
-- `tab_database.md` - Database tab (historical data capture and charts)
-- `tab_strategies.md` - Strategies tab (strategy evaluation and ranking)
-- `tab_market_regime.md` - Market Regime tab (regime detection)
-- `tab_system_validation.md` - System Validation tab (health checks)
+### 🔬 ML & Analytics (`ml/`)
 
-#### Feature Documentation (`feature_*.md`)
-Detailed guides for major system features and subsystems.
+Machine learning and analytics systems:
 
-- `feature_strategy_system.md` - Strategy evaluation system architecture
-- `feature_market_regime_detection.md` - Market regime detection methodology
+- **`ml_for_decision_making_complete.md`** ⭐ - **COMPREHENSIVE ML GUIDE**
+  - Complete project goals, architecture, and status
+  - What was achieved (data collection infrastructure)
+  - What remains (ML model training)
+  - Feature engineering (Flow-based GEX, VRP, 80+ features)
+  - Database verification results
+  - Timeline and roadmap
 
-#### System Documentation (`system_*.md`)
-System-level documentation covering architecture, setup, and maintenance.
+- **`ml_data_collection_system.md`** - Technical data collection reference
+  - TradeCollector, ProspectiveCollector, UnifiedScheduler
+  - Architecture diagrams
+  - Database schemas
+  - API endpoints
+  - Troubleshooting guide
 
-- `system_overview.md` - Comprehensive system documentation
+### 🎨 GUI Tabs (`gui_tabs/`)
 
-#### Examples and References
-- `strategy_scoring_calculation_example.md` - Detailed scoring calculation walkthrough
+Documentation for each PySide6 GUI tab:
+
+- **`tab_api_connection.md`** - API connection testing
+- **`tab_database.md`** - Database operations and capture controls
+- **`tab_snapshot.md`** - Real-time snapshot viewer
+- **`tab_on_chain_analysis.md`** - On-chain analytics (max pain, GEX/DEX)
+- **`tab_market_regime.md`** - Market regime detection
+- **`tab_strategies.md`** - Strategy evaluation and scoring
+- **`tab_system_validation.md`** - System health checks
+
+### 🚀 Features (`features/`)
+
+Detailed feature implementation guides:
+
+- **`feature_market_regime_detection.md`** - Regime detection methodology
+- **`feature_strategy_system.md`** - Strategy evaluation framework
+
+### 📊 Top-Level
+
+Core system documentation:
+
+- **`system_overview.md`** - High-level system architecture
+- **`strategy_scoring_calculation_example.md`** - Scoring methodology
 
 ## Documentation Structure
 
