@@ -1,8 +1,8 @@
 """
 Historical trades backfill script.
 
-Downloads historical option trades from Deribit API (6-12 months).
-Calculates Greeks using Black-Scholes and aggregates into hourly snapshots.
+Downloads historical option trades from Deribit API for specified time periods.
+Uses time-range endpoint with pagination for reliable data capture.
 
 Usage:
     python -m scripts.backfill_historical_trades --months 6 --currency BTC
@@ -12,10 +12,10 @@ import argparse
 import logging
 import time
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List
 
-from coding.core.database.database_config import get_connection_pool
-from coding.service.deribit.deribit_api_service import DeribitAPIService
+from coding.service.deribit.deribit_api_service import DeribitApiService
+from coding.core.database.repository import DatabaseRepository
 from coding.core.logging.logging_setup import init_logging
 
 # Initialize logging
@@ -26,15 +26,16 @@ logger = logging.getLogger(__name__)
 class HistoricalBackfillService:
     """Service for backfilling historical trades from Deribit API."""
 
-    def __init__(self, api_service: DeribitAPIService):
+    def __init__(self, api_service: DeribitApiService, repository: DatabaseRepository):
         """
         Initialize backfill service.
 
         Args:
             api_service: Deribit API service instance
+            repository: Database repository for storing trades
         """
         self.api_service = api_service
-        self.connection_pool = get_connection_pool()
+        self.repository = repository
 
     def backfill_trades(
         self,
@@ -137,7 +138,7 @@ class HistoricalBackfillService:
         end_timestamp: int
     ) -> List[Dict]:
         """
-        Fetch trades for a specific time range.
+        Fetch trades for a specific time range with pagination.
 
         Args:
             currency: Currency (BTC or ETH)
@@ -148,22 +149,40 @@ class HistoricalBackfillService:
             List of trade dictionaries
         """
         try:
-            response = self.api_service.get_last_trades_by_currency(
+            # Initial fetch
+            result = self.api_service.get_last_trades_by_currency_and_time(
                 currency=currency,
+                kind="option",
                 start_timestamp=start_timestamp,
                 end_timestamp=end_timestamp,
-                count=1000  # Max per request
+                count=1000,  # Max per request
+                include_old=True
             )
 
-            # Extract trades from response
-            if isinstance(response, dict) and "result" in response:
-                trades = response["result"].get("trades", [])
-                return trades
-            elif isinstance(response, list):
-                return response
-            else:
-                logger.warning(f"Unexpected response format: {type(response)}")
-                return []
+            trades = result.get("trades", [])
+            has_more = result.get("has_more", False)
+
+            # Handle pagination
+            all_trades = trades.copy()
+            while has_more and len(trades) > 0:
+                # Use last trade timestamp as new start
+                last_ts = trades[-1]["timestamp"]
+                logger.debug(f"Pagination: fetching more trades after {datetime.fromtimestamp(last_ts/1000)}")
+
+                result = self.api_service.get_last_trades_by_currency_and_time(
+                    currency=currency,
+                    kind="option",
+                    start_timestamp=last_ts + 1,  # +1 to avoid duplicate
+                    end_timestamp=end_timestamp,
+                    count=1000,
+                    include_old=True
+                )
+
+                trades = result.get("trades", [])
+                has_more = result.get("has_more", False)
+                all_trades.extend(trades)
+
+            return all_trades
 
         except Exception as e:
             logger.error(f"Error fetching trades: {e}")
@@ -174,68 +193,66 @@ class HistoricalBackfillService:
         Store trades in database with deduplication.
 
         Args:
-            trades: List of trade dictionaries
-            currency: Currency (BTC or ETH)
+            trades: List of trade dictionaries from API
+            currency: Currency symbol
 
         Returns:
-            Number of trades stored (excluding duplicates)
+            Number of trades actually stored (excludes duplicates)
         """
         if not trades:
             return 0
 
         stored_count = 0
-        connection = self.connection_pool.getconn()
 
-        try:
-            cursor = connection.cursor()
-
+        with self.repository._db_cursor() as cursor:
             for trade in trades:
                 try:
-                    # Extract fields
-                    trade_id = trade.get("trade_id")
-                    instrument_name = trade.get("instrument_name")
-                    price = trade.get("price")
-                    amount = trade.get("amount")
-                    direction = trade.get("direction")
-                    timestamp = trade.get("timestamp")
-                    iv = trade.get("iv")
-                    index_price = trade.get("index_price")
-                    mark_price = trade.get("mark_price")
+                    # Parse instrument name
+                    instrument_name = trade.get("instrument_name", "")
+                    parts = instrument_name.split("-")
 
-                    # Insert with ON CONFLICT DO NOTHING (deduplication)
+                    expiration = parts[1] if len(parts) > 1 else None
+                    strike = float(parts[2]) if len(parts) > 2 else None
+                    option_type = parts[3] if len(parts) > 3 else None
+
+                    # Insert with ON CONFLICT DO NOTHING (deduplication by trade_id)
                     cursor.execute(
                         """
                         INSERT INTO historical_trades (
-                            trade_id, instrument_name, price, amount, direction,
-                            timestamp, iv, index_price, mark_price, currency
+                            trade_id, trade_seq, trade_timestamp, instrument_name,
+                            currency, expiration, strike, option_type,
+                            price, amount, direction, iv, mark_price, index_price
+                        ) VALUES (
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                         )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (trade_id, timestamp) DO NOTHING
+                        ON CONFLICT (trade_id) DO NOTHING
+                        RETURNING trade_id
                         """,
                         (
-                            trade_id, instrument_name, price, amount, direction,
-                            datetime.fromtimestamp(timestamp / 1000),
-                            iv, index_price, mark_price, currency
+                            trade.get("trade_id"),
+                            trade.get("trade_seq"),
+                            trade.get("timestamp"),
+                            instrument_name,
+                            currency,
+                            expiration,
+                            strike,
+                            option_type,
+                            trade.get("price"),
+                            trade.get("amount"),
+                            trade.get("direction"),
+                            trade.get("iv"),
+                            trade.get("mark_price"),
+                            trade.get("index_price")
                         )
                     )
 
-                    if cursor.rowcount > 0:
+                    # Check if a row was returned (meaning it was inserted)
+                    if cursor.fetchone() is not None:
                         stored_count += 1
 
                 except Exception as e:
-                    logger.warning(f"Error storing trade {trade.get('trade_id')}: {e}")
+                    logger.error(f"Error storing trade {trade.get('trade_id')}: {e}")
                     continue
-
-            connection.commit()
-            cursor.close()
-
-        except Exception as e:
-            logger.error(f"Database error: {e}")
-            connection.rollback()
-            raise
-
-        finally:
-            self.connection_pool.putconn(connection)
 
         return stored_count
 
@@ -249,17 +266,13 @@ class HistoricalBackfillService:
         Returns:
             Status dictionary with earliest/latest dates and trade count
         """
-        connection = self.connection_pool.getconn()
-
-        try:
-            cursor = connection.cursor()
-
+        with self.repository._db_cursor() as cursor:
             cursor.execute(
                 """
                 SELECT
                     COUNT(*) as total_trades,
-                    MIN(timestamp) as earliest_trade,
-                    MAX(timestamp) as latest_trade,
+                    MIN(trade_timestamp) as earliest_trade,
+                    MAX(trade_timestamp) as latest_trade,
                     COUNT(DISTINCT instrument_name) as unique_instruments,
                     COUNT(CASE WHEN iv IS NOT NULL THEN 1 END) * 100.0 / COUNT(*) as iv_coverage
                 FROM historical_trades
@@ -269,19 +282,25 @@ class HistoricalBackfillService:
             )
 
             row = cursor.fetchone()
-            cursor.close()
 
-            return {
-                "currency": currency,
-                "total_trades": row[0],
-                "earliest_trade": row[1],
-                "latest_trade": row[2],
-                "unique_instruments": row[3],
-                "iv_coverage_percent": float(row[4]) if row[4] else 0.0
-            }
-
-        finally:
-            self.connection_pool.putconn(connection)
+            if row and row[0] > 0:
+                return {
+                    "currency": currency,
+                    "total_trades": row[0],
+                    "earliest_trade": datetime.fromtimestamp(row[1] / 1000) if row[1] else None,
+                    "latest_trade": datetime.fromtimestamp(row[2] / 1000) if row[2] else None,
+                    "unique_instruments": row[3],
+                    "iv_coverage_percent": float(row[4]) if row[4] else 0.0
+                }
+            else:
+                return {
+                    "currency": currency,
+                    "total_trades": 0,
+                    "earliest_trade": None,
+                    "latest_trade": None,
+                    "unique_instruments": 0,
+                    "iv_coverage_percent": 0.0
+                }
 
 
 def main():
@@ -315,44 +334,45 @@ def main():
     args = parser.parse_args()
 
     # Initialize services
-    api_service = DeribitAPIService()
-    backfill_service = HistoricalBackfillService(api_service)
+    with DeribitApiService() as api_service:
+        repository = DatabaseRepository()
+        backfill_service = HistoricalBackfillService(api_service, repository)
 
-    if args.status_only:
-        # Show status only
+        if args.status_only:
+            # Show status only
+            status = backfill_service.get_backfill_status(args.currency)
+            logger.info(f"Backfill status for {args.currency}:")
+            logger.info(f"  Total trades: {status['total_trades']:,}")
+            logger.info(f"  Earliest: {status['earliest_trade']}")
+            logger.info(f"  Latest: {status['latest_trade']}")
+            logger.info(f"  Unique instruments: {status['unique_instruments']}")
+            logger.info(f"  IV coverage: {status['iv_coverage_percent']:.2f}%")
+            return
+
+        # Calculate date range
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=args.months * 30)
+
+        logger.info(f"=== Historical Backfill ===")
+        logger.info(f"Currency: {args.currency}")
+        logger.info(f"Period: {start_date.date()} to {end_date.date()}")
+        logger.info(f"Batch size: {args.batch_hours} hour(s)")
+        logger.info(f"===========================")
+
+        # Run backfill
+        stats = backfill_service.backfill_trades(
+            currency=args.currency,
+            start_date=start_date,
+            end_date=end_date,
+            batch_hours=args.batch_hours
+        )
+
+        # Show final status
         status = backfill_service.get_backfill_status(args.currency)
-        logger.info(f"Backfill status for {args.currency}:")
-        logger.info(f"  Total trades: {status['total_trades']:,}")
-        logger.info(f"  Earliest: {status['earliest_trade']}")
-        logger.info(f"  Latest: {status['latest_trade']}")
-        logger.info(f"  Unique instruments: {status['unique_instruments']}")
-        logger.info(f"  IV coverage: {status['iv_coverage_percent']:.2f}%")
-        return
-
-    # Calculate date range
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=args.months * 30)
-
-    logger.info(f"=== Historical Backfill ===")
-    logger.info(f"Currency: {args.currency}")
-    logger.info(f"Period: {start_date.date()} to {end_date.date()}")
-    logger.info(f"Batch size: {args.batch_hours} hour(s)")
-    logger.info(f"===========================")
-
-    # Run backfill
-    stats = backfill_service.backfill_trades(
-        currency=args.currency,
-        start_date=start_date,
-        end_date=end_date,
-        batch_hours=args.batch_hours
-    )
-
-    # Show final status
-    status = backfill_service.get_backfill_status(args.currency)
-    logger.info(f"=== Final Status ===")
-    logger.info(f"Total trades: {status['total_trades']:,}")
-    logger.info(f"IV coverage: {status['iv_coverage_percent']:.2f}%")
-    logger.info(f"Date range: {status['earliest_trade']} to {status['latest_trade']}")
+        logger.info(f"=== Final Status ===")
+        logger.info(f"Total trades: {status['total_trades']:,}")
+        logger.info(f"IV coverage: {status['iv_coverage_percent']:.2f}%")
+        logger.info(f"Date range: {status['earliest_trade']} to {status['latest_trade']}")
 
 
 if __name__ == "__main__":

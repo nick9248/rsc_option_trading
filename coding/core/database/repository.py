@@ -70,6 +70,31 @@ class DatabaseRepository:
             cursor.close()
             self._return_connection(conn)
 
+    def execute_query(self, query: str, params: Dict[str, Any] = None) -> List[Any]:
+        """
+        Execute a parameterized query and return results.
+
+        Args:
+            query: SQL query with named parameters (%(param_name)s format).
+            params: Dictionary of parameter values.
+
+        Returns:
+            List of results (if query has RETURNING clause).
+            Empty list for INSERT/UPDATE/DELETE without RETURNING.
+
+        Example:
+            result = repo.execute_query(
+                "INSERT INTO trades (id, price) VALUES (%(id)s, %(price)s) RETURNING id",
+                {"id": 123, "price": 50000}
+            )
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute(query, params or {})
+            # Check if query has RETURNING clause
+            if query.strip().upper().find("RETURNING") != -1:
+                return cursor.fetchall()
+            return []
+
     def save_snapshot(
         self,
         currency: str,

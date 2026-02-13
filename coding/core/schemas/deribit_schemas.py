@@ -268,6 +268,7 @@ class DeribitSchemas:
             "/public/get_volatility_index_data": cls.VOLATILITY_INDEX_DATA,
             "/public/get_tradingview_chart_data": cls.TRADINGVIEW_CHART_DATA,
             "/public/get_last_trades_by_currency": cls.LAST_TRADES_BY_CURRENCY,
+            "/public/get_last_trades_by_currency_and_time": cls.LAST_TRADES_BY_CURRENCY,  # Same schema
         }
 
         if endpoint_path not in schema_map:
