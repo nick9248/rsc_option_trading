@@ -288,6 +288,59 @@ class DeribitApiService:
             csv_subdirectory="trades"
         )
 
+    def get_last_trades_by_currency_and_time(
+        self,
+        currency: str = "ETH",
+        start_timestamp: int = None,
+        end_timestamp: int = None,
+        kind: Optional[str] = "option",
+        count: int = 1000,
+        include_old: bool = True,
+        save_to_csv: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Get historical trades for a currency within a specific time range.
+
+        Args:
+            currency: Currency symbol (ETH, BTC).
+            start_timestamp: Start time in milliseconds (required).
+            end_timestamp: End time in milliseconds (required).
+            kind: Instrument type filter (option, future, spot).
+            count: Number of trades to retrieve per request (max 1000).
+            include_old: Include historical data.
+            save_to_csv: Whether to save results to CSV.
+
+        Returns:
+            Dictionary with trades data including 'trades' list and 'has_more' flag.
+
+        Raises:
+            ValueError: If start_timestamp or end_timestamp not provided.
+        """
+        if start_timestamp is None or end_timestamp is None:
+            raise ValueError("start_timestamp and end_timestamp are required")
+
+        parameters = {
+            "currency": currency,
+            "start_timestamp": start_timestamp,
+            "end_timestamp": end_timestamp,
+            "count": count,
+            "include_old": include_old
+        }
+        if kind:
+            parameters["kind"] = kind
+
+        return fetch_and_process(
+            connection=self.connection,
+            parser=self.parser,
+            validator=self.validator,
+            endpoint=DeribitEndpoints.GET_LAST_TRADES_BY_CURRENCY_AND_TIME,
+            parameters=parameters,
+            validate_responses=self.validate_responses,
+            save_to_csv=save_to_csv,
+            csv_filename=f"historical_trades_{currency.lower()}_{start_timestamp}_{end_timestamp}",
+            csv_subdirectory="trades/historical"
+        )
+
     def get_ticker(
         self,
         instrument_name: str,

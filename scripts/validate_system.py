@@ -54,6 +54,7 @@ class SystemValidator:
         self._check_database_connection()
         self._check_required_tables()
         self._check_collection_daemon()
+        self._check_trade_collector()  # NEW: Check trade collector daemon
         self._check_data_freshness()
         self._check_historical_trades()
         self._check_hourly_snapshots()
@@ -69,7 +70,7 @@ class SystemValidator:
 
     def _check_api_connectivity(self):
         """Check Deribit API connectivity."""
-        logger.info("\n[1/10] Checking API Connectivity...")
+        logger.info("\n[1/12] Checking API Connectivity...")
         logger.info("-" * 80)
 
         try:
@@ -93,7 +94,7 @@ class SystemValidator:
 
     def _check_database_connection(self):
         """Check database connection."""
-        logger.info("\n[2/10] Checking Database Connection...")
+        logger.info("\n[2/12] Checking Database Connection...")
         logger.info("-" * 80)
 
         try:
@@ -117,7 +118,7 @@ class SystemValidator:
 
     def _check_required_tables(self):
         """Check all required tables exist."""
-        logger.info("\n[3/10] Checking Required Tables...")
+        logger.info("\n[3/12] Checking Required Tables...")
         logger.info("-" * 80)
 
         required_tables = [
@@ -165,7 +166,7 @@ class SystemValidator:
 
     def _check_collection_daemon(self):
         """Check if collection daemon is running."""
-        logger.info("\n[4/10] Checking Collection Daemon...")
+        logger.info("\n[4/12] Checking Collection Daemon...")
         logger.info("-" * 80)
 
         import os
@@ -207,9 +208,100 @@ class SystemValidator:
             logger.error(f"  Error checking daemon: {e}")
             self.results["failed"].append(f"Daemon check failed: {e}")
 
+    def _check_trade_collector(self):
+        """Check if trade collector is running and collecting data."""
+        logger.info("\n[5/12] Checking Trade Collector...")
+        logger.info("-" * 80)
+
+        try:
+            conn = self.repo._get_connection()
+            cursor = conn.cursor()
+
+            # Check for recent trade collection activity (last 5 minutes)
+            cursor.execute("""
+                SELECT
+                    COUNT(*) as trade_count,
+                    MAX(trade_timestamp) as latest_trade,
+                    COUNT(DISTINCT currency) as currencies
+                FROM historical_trades
+                WHERE trade_timestamp >= EXTRACT(EPOCH FROM NOW() - INTERVAL '5 minutes') * 1000
+            """)
+
+            result = cursor.fetchone()
+            trade_count = result[0]
+            latest_trade_ts = result[1]
+            currencies_count = result[2]
+
+            cursor.close()
+            self.repo._return_connection(conn)
+
+            if latest_trade_ts:
+                latest_trade = datetime.fromtimestamp(latest_trade_ts / 1000)
+                minutes_ago = (datetime.now() - latest_trade).total_seconds() / 60
+
+                logger.info(f"  Trade Collector Status:")
+                logger.info(f"    Trades (last 5 min): {trade_count:,}")
+                logger.info(f"    Currencies active: {currencies_count}")
+                logger.info(f"    Latest trade: {latest_trade} ({minutes_ago:.1f} min ago)")
+
+                if minutes_ago < 2:
+                    logger.info(f"  Status: ACTIVE")
+                    self.results["passed"].append(f"Trade Collector Active ({trade_count} trades/5min)")
+                elif minutes_ago < 5:
+                    logger.warning(f"  Status: POSSIBLY INACTIVE (last trade {minutes_ago:.1f} min ago)")
+                    self.results["warnings"].append(f"Trade collector may be inactive ({minutes_ago:.1f} min)")
+                else:
+                    logger.error(f"  Status: STOPPED (last trade {minutes_ago:.1f} min ago)")
+                    self.results["failed"].append(f"Trade collector stopped ({minutes_ago:.1f} min ago)")
+
+            else:
+                logger.error(f"  Status: NO RECENT TRADES (last 5 minutes)")
+                logger.warning(f"  Trade collector may not be running")
+                self.results["warnings"].append("No trades collected in last 5 minutes")
+
+            # Check for trade direction field (critical for flow-based GEX)
+            conn = self.repo._get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                SELECT
+                    COUNT(*) as total,
+                    COUNT(CASE WHEN direction IS NOT NULL THEN 1 END) as with_direction,
+                    COUNT(CASE WHEN iv IS NOT NULL THEN 1 END) as with_iv
+                FROM historical_trades
+                LIMIT 10000
+            """)
+
+            result = cursor.fetchone()
+            total = result[0]
+            with_direction = result[1]
+            with_iv = result[2]
+
+            cursor.close()
+            self.repo._return_connection(conn)
+
+            if total > 0:
+                direction_pct = (with_direction / total) * 100
+                iv_pct = (with_iv / total) * 100
+
+                logger.info(f"\n  Data Quality:")
+                logger.info(f"    Direction field: {direction_pct:.1f}% populated")
+                logger.info(f"    IV field: {iv_pct:.1f}% populated")
+
+                if direction_pct > 95:
+                    self.results["passed"].append(f"Trade direction data quality ({direction_pct:.1f}%)")
+                elif direction_pct > 80:
+                    self.results["warnings"].append(f"Trade direction coverage only {direction_pct:.1f}%")
+                else:
+                    self.results["failed"].append(f"Trade direction coverage too low ({direction_pct:.1f}%)")
+
+        except Exception as e:
+            logger.error(f"  Error checking trade collector: {e}")
+            self.results["failed"].append(f"Trade collector check failed: {e}")
+
     def _check_data_freshness(self):
         """Check if data is fresh (recently collected)."""
-        logger.info("\n[5/10] Checking Data Freshness...")
+        logger.info("\n[6/12] Checking Data Freshness...")
         logger.info("-" * 80)
 
         tables_to_check = {
@@ -252,7 +344,7 @@ class SystemValidator:
 
     def _check_historical_trades(self):
         """Check historical trades collection."""
-        logger.info("\n[6/10] Checking Historical Trades...")
+        logger.info("\n[7/12] Checking Historical Trades...")
         logger.info("-" * 80)
 
         conn = self.repo._get_connection()
@@ -286,7 +378,7 @@ class SystemValidator:
 
     def _check_hourly_snapshots(self):
         """Check hourly snapshots."""
-        logger.info("\n[7/10] Checking Hourly Snapshots...")
+        logger.info("\n[8/12] Checking Hourly Snapshots...")
         logger.info("-" * 80)
 
         conn = self.repo._get_connection()
@@ -320,7 +412,7 @@ class SystemValidator:
 
     def _check_backfill_status(self):
         """Check backfill coverage."""
-        logger.info("\n[8/10] Checking Backfill Status...")
+        logger.info("\n[9/12] Checking Backfill Status...")
         logger.info("-" * 80)
 
         conn = self.repo._get_connection()
@@ -359,7 +451,7 @@ class SystemValidator:
 
     def _check_data_quality(self):
         """Check data quality metrics."""
-        logger.info("\n[9/10] Checking Data Quality...")
+        logger.info("\n[10/12] Checking Data Quality...")
         logger.info("-" * 80)
 
         conn = self.repo._get_connection()
@@ -393,7 +485,7 @@ class SystemValidator:
 
     def _check_prospective_collection(self):
         """Check prospective collection (real-time)."""
-        logger.info("\n[10/11] Checking Prospective Collection...")
+        logger.info("\n[11/12] Checking Prospective Collection...")
         logger.info("-" * 80)
 
         conn = self.repo._get_connection()
@@ -425,7 +517,7 @@ class SystemValidator:
 
     def _check_ml_pipeline(self):
         """Check ML models and data pipeline readiness."""
-        logger.info("\n[11/11] Checking ML Pipeline...")
+        logger.info("\n[12/12] Checking ML Pipeline...")
         logger.info("-" * 80)
 
         import os
