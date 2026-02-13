@@ -165,8 +165,8 @@ class SystemValidator:
             self.repo._return_connection(conn)
 
     def _check_collection_daemon(self):
-        """Check if collection daemon is running."""
-        logger.info("\n[4/12] Checking Collection Daemon...")
+        """Check if unified scheduler is running."""
+        logger.info("\n[4/12] Checking Unified Scheduler...")
         logger.info("-" * 80)
 
         import os
@@ -178,12 +178,12 @@ class SystemValidator:
 
             # Use absolute path relative to script location
             project_root = Path(__file__).parent.parent
-            log_pattern = str(project_root / "output" / "log" / "collection_daemon_????????_??????.log")
+            log_pattern = str(project_root / "output" / "log" / "unified_scheduler_????????_??????.log")
             log_files = glob.glob(log_pattern)
 
             if not log_files:
-                logger.warning("  Daemon Logs: NOT FOUND")
-                self.results["warnings"].append("No daemon logs found")
+                logger.warning("  Scheduler Logs: NOT FOUND")
+                self.results["warnings"].append("No unified scheduler logs found")
                 return
 
             # Read most recent log
@@ -192,21 +192,21 @@ class SystemValidator:
             hours_ago = (datetime.now() - mod_time).total_seconds() / 3600
 
             if hours_ago < 0.25:  # Modified in last 15 minutes
-                logger.info(f"  Daemon Status: ACTIVE")
+                logger.info(f"  Scheduler Status: ACTIVE")
                 logger.info(f"  Last Activity: {mod_time} ({hours_ago*60:.0f} min ago)")
-                self.results["passed"].append("Collection Daemon Running")
+                self.results["passed"].append("Unified Scheduler Running")
             elif hours_ago < 2:
-                logger.warning(f"  Daemon Status: POSSIBLY INACTIVE")
+                logger.warning(f"  Scheduler Status: POSSIBLY INACTIVE")
                 logger.warning(f"  Last Activity: {hours_ago:.1f} hours ago")
-                self.results["warnings"].append(f"Daemon may be inactive ({hours_ago:.1f}h since last log)")
+                self.results["warnings"].append(f"Unified scheduler may be inactive ({hours_ago:.1f}h since last log)")
             else:
-                logger.error(f"  Daemon Status: STOPPED")
+                logger.error(f"  Scheduler Status: STOPPED")
                 logger.error(f"  Last Activity: {hours_ago:.1f} hours ago")
-                self.results["failed"].append(f"Daemon stopped ({hours_ago:.1f}h ago)")
+                self.results["failed"].append(f"Unified scheduler stopped ({hours_ago:.1f}h ago)")
 
         except Exception as e:
-            logger.error(f"  Error checking daemon: {e}")
-            self.results["failed"].append(f"Daemon check failed: {e}")
+            logger.error(f"  Error checking scheduler: {e}")
+            self.results["failed"].append(f"Scheduler check failed: {e}")
 
     def _check_trade_collector(self):
         """Check if trade collector is running and collecting data."""
