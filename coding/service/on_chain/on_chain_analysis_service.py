@@ -5,7 +5,10 @@ Orchestrates fetching and analyzing on-chain option data.
 """
 
 import logging
+import re
 import time
+from datetime import datetime
+from pathlib import Path
 from typing import Callable, Dict, Optional
 
 from coding.core.analytics.buy_sell_flow_analyzer import BuySellFlowAnalyzer
@@ -43,21 +46,19 @@ class OnChainAnalysisService:
     def fetch_and_analyze(
         self,
         currency: str,
-        fetch_gex_dex: bool = False,
-        fetch_buy_sell_flow: bool = False,
         progress_callback: Optional[Callable[[str], None]] = None
     ) -> str:
         """
         Fetch and analyze on-chain data for a currency.
 
+        Always includes GEX/DEX and buy/sell flow analysis.
+
         Args:
             currency: Currency symbol (BTC, ETH).
-            fetch_gex_dex: Whether to fetch Greeks and calculate GEX/DEX.
-            fetch_buy_sell_flow: Whether to fetch and analyze buy/sell flow.
             progress_callback: Optional callback for progress updates.
 
         Returns:
-            Analysis report as formatted string.
+            Analysis report text.
         """
         def progress(message: str):
             """Send progress update if callback provided."""
@@ -85,17 +86,18 @@ class OnChainAnalysisService:
         # Fetch market metrics (DVOL, funding rate)
         self._fetch_market_metrics(analyzer, progress)
 
-        # Optionally fetch Greeks for GEX/DEX
-        if fetch_gex_dex:
-            self._fetch_greeks_and_store_gex_dex(analyzer, progress)
+        # Always fetch Greeks for GEX/DEX
+        self._fetch_greeks_and_store_gex_dex(analyzer, progress)
 
-        # Optionally fetch buy/sell flow
-        if fetch_buy_sell_flow:
-            self._calculate_buy_sell_flow(analyzer, progress)
+        # Always fetch buy/sell flow
+        self._calculate_buy_sell_flow(analyzer, progress)
 
-        # Generate report (includes GEX/DEX and flow if data was fetched)
+        # Generate report (includes GEX/DEX and flow)
         progress("Generating analysis report...")
         report = analyzer.generate_report()
+
+        # Save reports per expiration
+        self._save_reports_per_expiration(report, currency, analyzer)
 
         progress("Analysis complete")
         return report
@@ -156,6 +158,8 @@ class OnChainAnalysisService:
         """
         Calculate buy/sell flow for all expirations and store in analyzer.
 
+        Also saves flow metrics to database for chart generation.
+
         Args:
             analyzer: OnChainAnalyzer with parsed data.
             progress_callback: Callback for progress updates.
@@ -177,6 +181,23 @@ class OnChainAnalysisService:
                     lookback_hours=24
                 )
 
+                # Calculate flow data
+                flow_result = flow_analyzer.calculate()
+
+                # Save to database for chart queries
+                try:
+                    self.repository.save_flow_metrics(
+                        currency=analyzer.currency,
+                        expiration=expiration,
+                        flow_data=flow_result["flow_data"],
+                        underlying_price=analyzer.underlying_price,
+                        window_hours=24
+                    )
+                    logger.info(f"Saved flow metrics to database for {expiration}")
+                except Exception as save_error:
+                    logger.warning(f"Failed to save flow metrics for {expiration}: {save_error}")
+
+                # Generate report section and store in analyzer
                 flow_report = flow_analyzer.generate_report_section()
                 analyzer.set_buy_sell_flow_data(expiration, flow_report)
 
@@ -258,3 +279,92 @@ class OnChainAnalysisService:
             current_funding=current_funding,
             funding_8h=funding_8h
         )
+
+    def _save_reports_per_expiration(
+        self,
+        full_report: str,
+        currency: str,
+        analyzer: OnChainAnalyzer
+    ) -> None:
+        """
+        Parse full report and save per-expiration sections.
+
+        Each expiration folder gets only its section (header + expiration data).
+        Full report remains in GUI only.
+
+        Directory: output/data/onchain_analysis/{currency}/{expiration}/
+        Filename: report_{timestamp}.txt
+
+        Args:
+            full_report: Full analysis report text.
+            currency: Currency symbol (BTC, ETH).
+            analyzer: OnChainAnalyzer instance with parsed data.
+        """
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+            # Get project root (3 levels up from this file)
+            project_root = Path(__file__).parent.parent.parent.parent
+
+            # Split report into lines for parsing
+            lines = full_report.split('\n')
+
+            # Find header (everything before first "EXPIRATION:")
+            header_lines = []
+            first_exp_idx = None
+            for i, line in enumerate(lines):
+                if line.startswith("EXPIRATION:"):
+                    first_exp_idx = i
+                    break
+                header_lines.append(line)
+
+            if first_exp_idx is None:
+                logger.warning("No EXPIRATION sections found in report")
+                return
+
+            header = '\n'.join(header_lines)
+
+            # Find all expiration sections
+            exp_sections = {}
+            current_exp = None
+            current_lines = []
+
+            for i in range(first_exp_idx, len(lines)):
+                line = lines[i]
+
+                if line.startswith("EXPIRATION:"):
+                    # Save previous section if exists
+                    if current_exp and current_lines:
+                        exp_sections[current_exp] = '\n'.join(current_lines)
+
+                    # Start new section
+                    current_exp = line.split(":", 1)[1].strip()
+                    current_lines = [line]
+                elif current_exp:
+                    current_lines.append(line)
+
+            # Save last section
+            if current_exp and current_lines:
+                exp_sections[current_exp] = '\n'.join(current_lines)
+
+            logger.info(f"Parsed {len(exp_sections)} expiration sections")
+
+            # Save each section to its folder
+            for expiration, section_content in exp_sections.items():
+                # Create directory structure
+                output_dir = project_root / "output" / "data" / "onchain_analysis" / currency / expiration
+                output_dir.mkdir(parents=True, exist_ok=True)
+
+                # Save header + section (not full report)
+                report_path = output_dir / f"report_{timestamp}.txt"
+                with open(report_path, "w", encoding="utf-8") as f:
+                    f.write(header)
+                    if header and not header.endswith('\n'):
+                        f.write('\n')
+                    f.write('\n')
+                    f.write(section_content)
+
+                logger.info(f"Saved report for {expiration} to {report_path}")
+
+        except Exception as e:
+            logger.error(f"Failed to save per-expiration reports: {e}", exc_info=True)

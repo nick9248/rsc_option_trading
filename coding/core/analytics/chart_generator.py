@@ -5,7 +5,8 @@ Uses Plotly to create interactive charts saved as HTML and PNG files.
 """
 
 import logging
-from datetime import datetime
+from collections import defaultdict
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -790,3 +791,577 @@ def generate_snapshot_volume_distribution(
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     filename = f"volume_snapshot_{currency}_{timestamp}"
     return save_chart(fig, filename, subfolder=f"snapshot/{expiration}")
+
+
+def generate_flow_distribution_chart(
+    flow_data: Dict[str, Any],
+    spot_price: float,
+    currency: str,
+    expiration: str
+) -> go.Figure:
+    """
+    Generate dual-sided buy/sell flow distribution chart per strike.
+
+    Creates a population pyramid style chart with:
+    - Puts on left (negative x-axis)
+    - Calls on right (positive x-axis)
+    - 4 bars per strike: call-buy, call-sell, put-buy, put-sell
+    - Toggle buttons for notional/volume/count metrics
+
+    Args:
+        flow_data: Result from BuySellFlowAnalyzer.calculate().
+        spot_price: Current underlying spot price.
+        currency: Currency symbol (BTC or ETH).
+        expiration: Expiration date string.
+
+    Returns:
+        Plotly figure object.
+    """
+    per_strike_data = flow_data.get("flow_data", {})
+
+    if not per_strike_data:
+        logger.warning("No flow data for distribution chart")
+        # Return empty figure
+        fig = go.Figure()
+        fig.update_layout(
+            title=f"No flow data available - {currency} {expiration}",
+            **get_chart_theme()
+        )
+        return fig
+
+    theme = get_chart_theme()
+    strikes = sorted(per_strike_data.keys())
+
+    # Extract data for each metric type
+    call_buy_notional = []
+    call_sell_notional = []
+    put_buy_notional = []
+    put_sell_notional = []
+
+    call_buy_volume = []
+    call_sell_volume = []
+    put_buy_volume = []
+    put_sell_volume = []
+
+    call_buy_count = []
+    call_sell_count = []
+    put_buy_count = []
+    put_sell_count = []
+
+    for strike in strikes:
+        strike_data = per_strike_data[strike]
+
+        # Calls
+        call_data = strike_data.get("C", {})
+        call_buy_notional.append(call_data.get("buy_notional", 0))
+        call_sell_notional.append(call_data.get("sell_notional", 0))
+        call_buy_volume.append(call_data.get("buy_volume", 0))
+        call_sell_volume.append(call_data.get("sell_volume", 0))
+        call_buy_count.append(call_data.get("buy_count", 0))
+        call_sell_count.append(call_data.get("sell_count", 0))
+
+        # Puts (negative for left side)
+        put_data = strike_data.get("P", {})
+        put_buy_notional.append(-put_data.get("buy_notional", 0))
+        put_sell_notional.append(-put_data.get("sell_notional", 0))
+        put_buy_volume.append(-put_data.get("buy_volume", 0))
+        put_sell_volume.append(-put_data.get("sell_volume", 0))
+        put_buy_count.append(-put_data.get("buy_count", 0))
+        put_sell_count.append(-put_data.get("sell_count", 0))
+
+    strike_labels = [f"${s:,.0f}" for s in strikes]
+
+    # Create figure with all traces (will toggle visibility with buttons)
+    fig = go.Figure()
+
+    # Notional traces (visible by default)
+    # 4 distinct colors: bright green, bright red, cyan, orange
+    fig.add_trace(go.Bar(
+        y=strike_labels,
+        x=call_buy_notional,
+        name="Call Buy",
+        orientation="h",
+        marker_color="#00ff88",  # Bright green
+        visible=True,
+        legendgroup="notional",
+        hovertemplate="<b>%{y}</b><br>Call Buy: $%{x:,.0f}<extra></extra>"
+    ))
+
+    fig.add_trace(go.Bar(
+        y=strike_labels,
+        x=call_sell_notional,
+        name="Call Sell",
+        orientation="h",
+        marker_color="#ff4444",  # Bright red
+        visible=True,
+        legendgroup="notional",
+        hovertemplate="<b>%{y}</b><br>Call Sell: $%{x:,.0f}<extra></extra>"
+    ))
+
+    fig.add_trace(go.Bar(
+        y=strike_labels,
+        x=put_buy_notional,
+        name="Put Buy",
+        orientation="h",
+        marker_color="#00d4ff",  # Cyan
+        visible=True,
+        legendgroup="notional",
+        hovertemplate="<b>%{y}</b><br>Put Buy: $%{x:,.0f}<extra></extra>"
+    ))
+
+    fig.add_trace(go.Bar(
+        y=strike_labels,
+        x=put_sell_notional,
+        name="Put Sell",
+        orientation="h",
+        marker_color="#ff9500",  # Orange
+        visible=True,
+        legendgroup="notional",
+        hovertemplate="<b>%{y}</b><br>Put Sell: $%{x:,.0f}<extra></extra>"
+    ))
+
+    # Volume traces (hidden by default)
+    fig.add_trace(go.Bar(
+        y=strike_labels,
+        x=call_buy_volume,
+        name="Call Buy",
+        orientation="h",
+        marker_color="#00ff88",  # Bright green
+        visible=False,
+        legendgroup="volume",
+        hovertemplate="<b>%{y}</b><br>Call Buy: %{x:.4f} {currency}<extra></extra>".replace("{currency}", currency)
+    ))
+
+    fig.add_trace(go.Bar(
+        y=strike_labels,
+        x=call_sell_volume,
+        name="Call Sell",
+        orientation="h",
+        marker_color="#ff4444",  # Bright red
+        visible=False,
+        legendgroup="volume",
+        hovertemplate="<b>%{y}</b><br>Call Sell: %{x:.4f} {currency}<extra></extra>".replace("{currency}", currency)
+    ))
+
+    fig.add_trace(go.Bar(
+        y=strike_labels,
+        x=put_buy_volume,
+        name="Put Buy",
+        orientation="h",
+        marker_color="#00d4ff",  # Cyan
+        visible=False,
+        legendgroup="volume",
+        hovertemplate="<b>%{y}</b><br>Put Buy: %{x:.4f} {currency}<extra></extra>".replace("{currency}", currency)
+    ))
+
+    fig.add_trace(go.Bar(
+        y=strike_labels,
+        x=put_sell_volume,
+        name="Put Sell",
+        orientation="h",
+        marker_color="#ff9500",  # Orange
+        visible=False,
+        legendgroup="volume",
+        hovertemplate="<b>%{y}</b><br>Put Sell: %{x:.4f} {currency}<extra></extra>".replace("{currency}", currency)
+    ))
+
+    # Count traces (hidden by default)
+    fig.add_trace(go.Bar(
+        y=strike_labels,
+        x=call_buy_count,
+        name="Call Buy",
+        orientation="h",
+        marker_color="#00ff88",  # Bright green
+        visible=False,
+        legendgroup="count",
+        hovertemplate="<b>%{y}</b><br>Call Buy: %{x:.0f} trades<extra></extra>"
+    ))
+
+    fig.add_trace(go.Bar(
+        y=strike_labels,
+        x=call_sell_count,
+        name="Call Sell",
+        orientation="h",
+        marker_color="#ff4444",  # Bright red
+        visible=False,
+        legendgroup="count",
+        hovertemplate="<b>%{y}</b><br>Call Sell: %{x:.0f} trades<extra></extra>"
+    ))
+
+    fig.add_trace(go.Bar(
+        y=strike_labels,
+        x=put_buy_count,
+        name="Put Buy",
+        orientation="h",
+        marker_color="#00d4ff",  # Cyan
+        visible=False,
+        legendgroup="count",
+        hovertemplate="<b>%{y}</b><br>Put Buy: %{x:.0f} trades<extra></extra>"
+    ))
+
+    fig.add_trace(go.Bar(
+        y=strike_labels,
+        x=put_sell_count,
+        name="Put Sell",
+        orientation="h",
+        marker_color="#ff9500",  # Orange
+        visible=False,
+        legendgroup="count",
+        hovertemplate="<b>%{y}</b><br>Put Sell: %{x:.0f} trades<extra></extra>"
+    ))
+
+    # Add toggle buttons for metric selection
+    fig.update_layout(
+        updatemenus=[
+            dict(
+                type="buttons",
+                direction="left",
+                buttons=list([
+                    dict(
+                        args=[{"visible": [True, True, True, True, False, False, False, False, False, False, False, False]}],
+                        label="Notional ($)",
+                        method="update"
+                    ),
+                    dict(
+                        args=[{"visible": [False, False, False, False, True, True, True, True, False, False, False, False]}],
+                        label="Volume",
+                        method="update"
+                    ),
+                    dict(
+                        args=[{"visible": [False, False, False, False, False, False, False, False, True, True, True, True]}],
+                        label="Trade Count",
+                        method="update"
+                    ),
+                ]),
+                pad={"r": 10, "t": 10},
+                showactive=True,
+                x=0.5,
+                xanchor="center",
+                y=1.25,
+                yanchor="top"
+            ),
+        ]
+    )
+
+    # Find closest strike to spot price for annotation
+    closest_strike_idx = min(range(len(strikes)), key=lambda i: abs(strikes[i] - spot_price))
+
+    fig.add_annotation(
+        x=0,
+        y=closest_strike_idx,
+        text=f"Spot: ${spot_price:,.0f}",
+        showarrow=True,
+        arrowhead=2,
+        arrowcolor="#ffd93d",
+        font={"color": "#ffd93d", "size": 12},
+        ax=-40,
+        ay=0
+    )
+
+    fig.update_layout(
+        title=f"Buy/Sell Flow Distribution - {currency} {expiration}",
+        xaxis_title="Flow (Put ← → Call)",
+        yaxis_title="Strike Price",
+        barmode="group",  # Grouped bars (side-by-side) instead of stacked
+        hovermode="y unified",
+        autosize=True,  # Let chart resize to container
+        legend=dict(
+            itemclick="toggleothers",  # Click to isolate trace
+            itemdoubleclick="toggle",  # Double-click to toggle trace
+        ),
+        **theme
+    )
+
+    return fig
+
+
+def generate_net_flow_chart(
+    flow_data: Dict[str, Any],
+    spot_price: float,
+    currency: str,
+    expiration: str
+) -> go.Figure:
+    """
+    Generate net flow chart showing buy - sell conviction per strike.
+
+    Green bars = net buying (buy_volume > sell_volume)
+    Red bars = net selling (sell_volume > buy_volume)
+    Separate traces for calls and puts.
+
+    Args:
+        flow_data: Result from BuySellFlowAnalyzer.calculate().
+        spot_price: Current underlying spot price.
+        currency: Currency symbol (BTC or ETH).
+        expiration: Expiration date string.
+
+    Returns:
+        Plotly figure object.
+    """
+    per_strike_data = flow_data.get("flow_data", {})
+
+    if not per_strike_data:
+        logger.warning("No flow data for net flow chart")
+        fig = go.Figure()
+        fig.update_layout(
+            title=f"No flow data available - {currency} {expiration}",
+            **get_chart_theme()
+        )
+        return fig
+
+    theme = get_chart_theme()
+    strikes = sorted(per_strike_data.keys())
+
+    call_net_flow = []
+    put_net_flow = []
+    call_colors = []
+    put_colors = []
+
+    for strike in strikes:
+        strike_data = per_strike_data[strike]
+
+        # Call net flow
+        call_data = strike_data.get("C", {})
+        call_net = call_data.get("net_flow", 0)
+        call_net_flow.append(call_net)
+        call_colors.append("#2ecc71" if call_net > 0 else "#e74c3c")
+
+        # Put net flow
+        put_data = strike_data.get("P", {})
+        put_net = put_data.get("net_flow", 0)
+        put_net_flow.append(put_net)
+        put_colors.append("#2ecc71" if put_net > 0 else "#e74c3c")
+
+    fig = go.Figure()
+
+    # Call net flow bars
+    fig.add_trace(go.Bar(
+        x=strikes,
+        y=call_net_flow,
+        name="Call Net Flow",
+        marker_color=call_colors,
+        opacity=0.8,
+        hovertemplate="<b>Strike: $%{x:,.0f}</b><br>Call Net Flow: %{y:.4f} " + currency + "<extra></extra>"
+    ))
+
+    # Put net flow bars
+    fig.add_trace(go.Bar(
+        x=strikes,
+        y=put_net_flow,
+        name="Put Net Flow",
+        marker_color=put_colors,
+        opacity=0.6,
+        hovertemplate="<b>Strike: $%{x:,.0f}</b><br>Put Net Flow: %{y:.4f} " + currency + "<extra></extra>"
+    ))
+
+    # Add zero line
+    fig.add_hline(
+        y=0,
+        line_dash="dash",
+        line_color="#666666",
+        annotation_text="Balance",
+        annotation_position="right"
+    )
+
+    # Add spot price line
+    fig.add_vline(
+        x=spot_price,
+        line_dash="dash",
+        line_color="#ffd93d",
+        annotation_text=f"Spot: ${spot_price:,.0f}",
+        annotation_position="top"
+    )
+
+    fig.update_layout(
+        title=f"Net Flow by Strike (Buy - Sell) - {currency} {expiration}",
+        xaxis_title="Strike Price ($)",
+        yaxis_title=f"Net Flow ({currency})",
+        barmode="group",
+        hovermode="x unified",
+        autosize=True,  # Let chart resize to container
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            itemclick="toggleothers",  # Click to isolate trace
+            itemdoubleclick="toggle",  # Double-click to toggle trace
+        ),
+        **theme
+    )
+
+    return fig
+
+
+def generate_flow_trend_chart(
+    repository: Any,
+    currency: str,
+    expiration: str,
+    lookback_days: int = 7
+) -> go.Figure:
+    """
+    Generate hourly flow trend chart over time.
+
+    Shows:
+    - Call buy/sell volume (green/red solid lines)
+    - Put buy/sell volume (green/red dashed lines)
+    - Net total flow (blue thick line)
+
+    Args:
+        repository: DatabaseRepository instance for querying trades.
+        currency: Currency symbol (BTC or ETH).
+        expiration: Expiration date string.
+        lookback_days: Number of days to look back (default: 7).
+
+    Returns:
+        Plotly figure object.
+    """
+    # Calculate time range
+    end_time = datetime.now()
+    start_time = end_time - timedelta(days=lookback_days)
+
+    start_ts = int(start_time.timestamp() * 1000)
+    end_ts = int(end_time.timestamp() * 1000)
+
+    # Query hourly aggregated data
+    query = """
+        SELECT
+            DATE_TRUNC('hour', TO_TIMESTAMP(trade_timestamp / 1000)) AS hour,
+            option_type,
+            direction,
+            SUM(amount) AS total_volume
+        FROM historical_trades
+        WHERE currency = %s
+            AND expiration = %s
+            AND trade_timestamp >= %s
+            AND trade_timestamp <= %s
+            AND direction IS NOT NULL
+        GROUP BY hour, option_type, direction
+        ORDER BY hour ASC
+    """
+
+    with repository._db_cursor() as cursor:
+        cursor.execute(query, (currency, expiration, start_ts, end_ts))
+        results = cursor.fetchall()
+
+    if not results:
+        logger.warning(f"No hourly flow data for {currency} {expiration}")
+        fig = go.Figure()
+        fig.update_layout(
+            title=f"No flow trend data available - {currency} {expiration}",
+            **get_chart_theme()
+        )
+        return fig
+
+    # Organize data by hour
+    hourly_data = defaultdict(lambda: {
+        "call_buy": 0.0,
+        "call_sell": 0.0,
+        "put_buy": 0.0,
+        "put_sell": 0.0
+    })
+
+    for hour, option_type, direction, volume in results:
+        if option_type == "C":
+            if direction == "buy":
+                hourly_data[hour]["call_buy"] += float(volume)
+            else:
+                hourly_data[hour]["call_sell"] += float(volume)
+        else:  # option_type == "P"
+            if direction == "buy":
+                hourly_data[hour]["put_buy"] += float(volume)
+            else:
+                hourly_data[hour]["put_sell"] += float(volume)
+
+    # Sort by time
+    hours = sorted(hourly_data.keys())
+
+    call_buy = [hourly_data[h]["call_buy"] for h in hours]
+    call_sell = [hourly_data[h]["call_sell"] for h in hours]
+    put_buy = [hourly_data[h]["put_buy"] for h in hours]
+    put_sell = [hourly_data[h]["put_sell"] for h in hours]
+
+    # Calculate net flow
+    net_flow = [
+        (hourly_data[h]["call_buy"] + hourly_data[h]["put_buy"]) -
+        (hourly_data[h]["call_sell"] + hourly_data[h]["put_sell"])
+        for h in hours
+    ]
+
+    theme = get_chart_theme()
+    fig = go.Figure()
+
+    # Call buy volume
+    fig.add_trace(go.Scatter(
+        x=hours,
+        y=call_buy,
+        name="Call Buy",
+        mode="lines",
+        line=dict(color="#2ecc71", width=2),
+        hovertemplate="<b>%{x}</b><br>Call Buy: %{y:.4f} " + currency + "<extra></extra>"
+    ))
+
+    # Call sell volume
+    fig.add_trace(go.Scatter(
+        x=hours,
+        y=call_sell,
+        name="Call Sell",
+        mode="lines",
+        line=dict(color="#e74c3c", width=2),
+        hovertemplate="<b>%{x}</b><br>Call Sell: %{y:.4f} " + currency + "<extra></extra>"
+    ))
+
+    # Put buy volume
+    fig.add_trace(go.Scatter(
+        x=hours,
+        y=put_buy,
+        name="Put Buy",
+        mode="lines",
+        line=dict(color="#27ae60", width=2, dash="dash"),
+        hovertemplate="<b>%{x}</b><br>Put Buy: %{y:.4f} " + currency + "<extra></extra>"
+    ))
+
+    # Put sell volume
+    fig.add_trace(go.Scatter(
+        x=hours,
+        y=put_sell,
+        name="Put Sell",
+        mode="lines",
+        line=dict(color="#c0392b", width=2, dash="dash"),
+        hovertemplate="<b>%{x}</b><br>Put Sell: %{y:.4f} " + currency + "<extra></extra>"
+    ))
+
+    # Net total flow
+    fig.add_trace(go.Scatter(
+        x=hours,
+        y=net_flow,
+        name="Net Flow",
+        mode="lines",
+        line=dict(color="#3498db", width=3),
+        hovertemplate="<b>%{x}</b><br>Net Flow: %{y:.4f} " + currency + "<extra></extra>"
+    ))
+
+    # Add zero line
+    fig.add_hline(
+        y=0,
+        line_dash="dot",
+        line_color="#666666",
+        annotation_text="Balance",
+        annotation_position="right"
+    )
+
+    fig.update_layout(
+        title=f"Flow Trend Over Time - {currency} {expiration}",
+        xaxis_title="Time",
+        yaxis_title=f"Volume ({currency})",
+        hovermode="x unified",
+        autosize=True,  # Let chart resize to container
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            itemclick="toggleothers",  # Click to isolate trace
+            itemdoubleclick="toggle",  # Double-click to toggle trace
+        ),
+        **theme
+    )
+
+    return fig

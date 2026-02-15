@@ -38,6 +38,7 @@ class OnChainAnalyzer:
         self.parsed_data: Dict[str, List[Dict]] = {}
         self.gex_dex_data: Dict[str, str] = {}  # Stores GEX/DEX report per expiration
         self.buy_sell_flow_data: Dict[str, str] = {}  # Stores buy/sell flow report per expiration
+        self.buy_sell_flow_charts: Dict[str, Dict[str, str]] = {}  # Stores chart paths per expiration
         self.market_metrics: Dict[str, Any] = {}  # Stores DVOL, funding rate, etc.
 
         # Extract underlying price using most common value (mode)
@@ -865,6 +866,16 @@ class OnChainAnalyzer:
             report_text: Formatted buy/sell flow report section text.
         """
         self.buy_sell_flow_data[expiration] = report_text
+
+    def set_buy_sell_flow_charts(self, expiration: str, chart_paths: Dict[str, str]) -> None:
+        """
+        Store buy/sell flow chart paths for an expiration.
+
+        Args:
+            expiration: Expiration date string (e.g., "27DEC24").
+            chart_paths: Dict with keys: distribution, net_flow, trend (values are file paths).
+        """
+        self.buy_sell_flow_charts[expiration] = chart_paths
 
     def set_market_metrics(
         self,
