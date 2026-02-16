@@ -15,8 +15,11 @@ class GexDexCalculator:
     """
     Calculate GEX and DEX from options data with Greeks.
 
-    Formulas:
-    - Net GEX per strike = (Call Gamma - Put Gamma) * Spot Price * OI
+    Formulas (Industry Standard):
+    - Net GEX per strike = (Call Gamma - Put Gamma) * Spot Price² * 0.01
+      * Gamma is weighted by OI during aggregation
+      * Spot² accounts for notional dollar exposure
+      * 0.01 scales to 1% underlying move
     - Net DEX per strike = Call Delta + Put Delta (put delta is negative)
 
     Key Levels:
@@ -100,14 +103,18 @@ class GexDexCalculator:
         """
         Calculate Net GEX and Net DEX per strike.
 
-        Net GEX = (Call Gamma - Put Gamma) * Spot Price
+        Net GEX = (Call Gamma - Put Gamma) * Spot Price² * 0.01
+        - Spot² accounts for notional exposure to underlying moves
+        - 0.01 converts to percentage-based move (1%)
+        - Gamma values are already weighted by OI from aggregation
+
         Net DEX = Call Delta + Put Delta (put delta is already negative)
         """
         for strike, data in self.strike_data.items():
-            # Net GEX: (Call Gamma - Put Gamma) * Spot Price
+            # Net GEX: (Call Gamma - Put Gamma) * Spot² * 0.01 (industry standard)
             # The gamma values are already weighted by OI from aggregation
             net_gamma = data["call_gamma"] - data["put_gamma"]
-            data["net_gex"] = net_gamma * self.spot_price
+            data["net_gex"] = net_gamma * (self.spot_price ** 2) * 0.01
 
             # Net DEX: Call Delta + Put Delta
             # Put delta is negative, so this gives net directional exposure
