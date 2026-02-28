@@ -1222,3 +1222,160 @@ class DatabaseRepository:
 
             logger.info(f"Found {len(results)} active expirations with flow data for {currency}")
             return results
+
+    def save_daily_oi_snapshot(
+        self,
+        currency: str,
+        expiration: str,
+        instruments: List[Dict[str, Any]],
+        underlying_price: float,
+        snapshot_date: Optional[datetime] = None
+    ) -> int:
+        """
+        Save daily OI snapshot for all instruments in an expiration.
+
+        Uses UPSERT to avoid duplicates within the same day.
+
+        Args:
+            currency: Currency symbol.
+            expiration: Expiration date string.
+            instruments: List of enriched instrument dicts with strike, option_type,
+                        open_interest, mark_iv.
+            underlying_price: Current underlying price.
+            snapshot_date: Date for snapshot. Uses today if not provided.
+
+        Returns:
+            Number of rows upserted.
+        """
+        if not instruments:
+            return 0
+
+        from datetime import date as date_type
+        snap_date = snapshot_date or datetime.now().date()
+        if isinstance(snap_date, datetime):
+            snap_date = snap_date.date()
+
+        try:
+            with self._db_cursor() as cursor:
+                insert_sql = """
+                    INSERT INTO daily_oi_snapshots (
+                        snapshot_date, currency, expiration, strike,
+                        option_type, open_interest, mark_iv, underlying_price
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (snapshot_date, currency, expiration, strike, option_type)
+                    DO UPDATE SET
+                        open_interest = EXCLUDED.open_interest,
+                        mark_iv = EXCLUDED.mark_iv,
+                        underlying_price = EXCLUDED.underlying_price
+                """
+
+                rows = []
+                for inst in instruments:
+                    rows.append((
+                        snap_date,
+                        currency,
+                        expiration,
+                        inst["strike"],
+                        inst["option_type"],
+                        inst.get("open_interest", 0),
+                        inst.get("mark_iv"),
+                        underlying_price,
+                    ))
+
+                cursor.executemany(insert_sql, rows)
+
+                logger.info(
+                    f"Saved {len(rows)} daily OI snapshots for "
+                    f"{currency} {expiration} ({snap_date})"
+                )
+                return len(rows)
+
+        except Exception as e:
+            logger.error(f"Failed to save daily OI snapshot: {e}")
+            raise
+
+    def get_previous_oi_snapshot(
+        self,
+        currency: str,
+        expiration: str,
+        before_date: Optional[datetime] = None
+    ) -> Dict[str, float]:
+        """
+        Get the most recent OI snapshot before a given date.
+
+        Args:
+            currency: Currency symbol.
+            expiration: Expiration date string.
+            before_date: Get snapshot before this date. Uses yesterday if not provided.
+
+        Returns:
+            Dict mapping (strike, option_type) -> open_interest.
+        """
+        from datetime import date as date_type, timedelta
+        if before_date is None:
+            target_date = datetime.now().date() - timedelta(days=1)
+        elif isinstance(before_date, datetime):
+            target_date = before_date.date()
+        else:
+            target_date = before_date
+
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                SELECT strike, option_type, open_interest
+                FROM daily_oi_snapshots
+                WHERE currency = %s
+                  AND expiration = %s
+                  AND snapshot_date = (
+                      SELECT MAX(snapshot_date)
+                      FROM daily_oi_snapshots
+                      WHERE currency = %s
+                        AND expiration = %s
+                        AND snapshot_date <= %s
+                  )
+            """, (currency, expiration, currency, expiration, target_date))
+
+            result = {}
+            for row in cursor.fetchall():
+                strike, opt_type, oi = row
+                result[(float(strike), opt_type)] = float(oi)
+
+            return result
+
+    def get_atm_iv_history(
+        self,
+        currency: str,
+        expiration: str,
+        strike: float,
+        option_type: str = "C",
+        limit: int = 90
+    ) -> List[Dict[str, Any]]:
+        """
+        Get historical ATM IV values for IV percentile calculation.
+
+        Args:
+            currency: Currency symbol.
+            expiration: Expiration date string.
+            strike: ATM strike price.
+            option_type: Option type to query (default "C").
+            limit: Maximum days of history.
+
+        Returns:
+            List of dicts with snapshot_date and mark_iv.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                SELECT snapshot_date, mark_iv
+                FROM daily_oi_snapshots
+                WHERE currency = %s
+                  AND expiration = %s
+                  AND strike = %s
+                  AND option_type = %s
+                  AND mark_iv IS NOT NULL
+                ORDER BY snapshot_date DESC
+                LIMIT %s
+            """, (currency, expiration, strike, option_type, limit))
+
+            columns = ["snapshot_date", "mark_iv"]
+            results = [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+            return list(reversed(results))
