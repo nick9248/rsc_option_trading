@@ -5,6 +5,7 @@ Provides interface to select endpoints, configure parameters, and view results.
 """
 
 import logging
+import time as time_module
 from typing import Any, Dict, List, Optional
 
 from PySide6.QtWidgets import (
@@ -27,6 +28,7 @@ from coding.gui.components.log_viewer import LogViewer, GuiLogHandler
 from coding.gui.theme.colors import Colors
 from coding.core.endpoints.deribit_endpoints import DeribitEndpoints
 from coding.service.deribit.deribit_api_service import DeribitApiService
+from coding.core.api.external_apis import ExternalMetricsFetcher
 
 
 logger = logging.getLogger(__name__)
@@ -77,6 +79,9 @@ class ApiWorker(QThread):
                     "Get Funding Chart": service.get_funding_chart_data,
                     "Get Historical Volatility": service.get_historical_volatility,
                     "Get Volatility Index": service.get_volatility_index_data,
+                    "Get Last Trades": service.get_last_trades_by_currency,
+                    "Get Last Trades By Time": service.get_last_trades_by_currency_and_time,
+                    "Get TradingView Chart": service.get_tradingview_chart_data,
                 }
 
                 method = method_map.get(self.endpoint_name)
@@ -84,7 +89,11 @@ class ApiWorker(QThread):
                     if self.endpoint_name == "Test Connection":
                         result = method()
                     else:
-                        result = method(**self.parameters)
+                        params = dict(self.parameters)
+                        if self.endpoint_name == "Get Last Trades By Time":
+                            params["start_timestamp"] = int(params["start_timestamp"])
+                            params["end_timestamp"] = int(params["end_timestamp"])
+                        result = method(**params)
                     self.finished.emit(result)
                 else:
                     self.error.emit(f"Unknown endpoint: {self.endpoint_name}")
@@ -121,6 +130,34 @@ class InstrumentLoaderWorker(QThread):
 
         except Exception as error:
             logger.exception("Error loading instruments")
+            self.error.emit(str(error))
+
+
+class ExternalApiWorker(QThread):
+    """Worker thread for executing external API calls (Fear & Greed, CoinGecko)."""
+
+    finished = Signal(object)
+    error = Signal(str)
+
+    EXTERNAL_ENDPOINTS = {"Fear & Greed Index", "CoinGecko Market Data"}
+
+    def __init__(self, endpoint_name: str, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.endpoint_name = endpoint_name
+
+    def run(self) -> None:
+        """Execute the external API call in background."""
+        try:
+            fetcher = ExternalMetricsFetcher()
+            if self.endpoint_name == "Fear & Greed Index":
+                result = fetcher.fear_greed.get_latest()
+            elif self.endpoint_name == "CoinGecko Market Data":
+                result = fetcher.coingecko.get_global_market_data()
+            else:
+                self.error.emit(f"Unknown external endpoint: {self.endpoint_name}")
+                return
+            self.finished.emit(result)
+        except Exception as error:
             self.error.emit(str(error))
 
 
@@ -198,6 +235,40 @@ class ApiConnectionTab(QWidget):
                 {"name": "resolution", "type": "number", "default": 3600, "min": 1, "max": 86400}
             ]
         },
+        "Get Last Trades": {
+            "description": "Get recent trades by currency",
+            "parameters": [
+                {"name": "currency", "type": "dropdown", "options": ["ETH", "BTC"], "default": "ETH"},
+                {"name": "kind", "type": "dropdown", "options": ["option", "future", "spot"], "default": "option"},
+                {"name": "count", "type": "number", "default": 100, "min": 1, "max": 1000}
+            ]
+        },
+        "Get Last Trades By Time": {
+            "description": "Get historical trades within a time range",
+            "parameters": [
+                {"name": "currency", "type": "dropdown", "options": ["ETH", "BTC"], "default": "ETH"},
+                {"name": "kind", "type": "dropdown", "options": ["option", "future", "spot"], "default": "option"},
+                {"name": "start_timestamp", "type": "timestamp", "default": "now-1h"},
+                {"name": "end_timestamp", "type": "timestamp", "default": "now"},
+                {"name": "count", "type": "number", "default": 100, "min": 1, "max": 1000}
+            ]
+        },
+        "Get TradingView Chart": {
+            "description": "Get historical OHLCV data (TradingView format)",
+            "parameters": [
+                {"name": "currency", "type": "dropdown", "options": ["ETH", "BTC"], "default": "BTC"},
+                {"name": "instrument_name", "type": "perpetual_selector", "default": ""},
+                {"name": "resolution", "type": "dropdown", "options": ["1", "3", "5", "10", "15", "30", "60", "120", "180", "360", "720", "1D"], "default": "1D"}
+            ]
+        },
+        "Fear & Greed Index": {
+            "description": "Get latest Fear & Greed Index (Alternative.me)",
+            "parameters": []
+        },
+        "CoinGecko Market Data": {
+            "description": "Get global crypto market data - BTC/ETH dominance (CoinGecko)",
+            "parameters": []
+        },
     }
 
     def __init__(self, parent: Optional[QWidget] = None):
@@ -210,6 +281,7 @@ class ApiConnectionTab(QWidget):
         super().__init__(parent)
         self.parameter_widgets: Dict[str, QWidget] = {}
         self.worker: Optional[ApiWorker] = None
+        self.external_worker: Optional[ExternalApiWorker] = None
 
         self._setup_ui()
         self._setup_logging()
@@ -425,6 +497,19 @@ class ApiConnectionTab(QWidget):
                 widget.setValue(param.get("default", 0))
                 widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
+            elif param["type"] == "timestamp":
+                widget = QLineEdit()
+                default = param.get("default", "now")
+                now_ms = int(time_module.time() * 1000)
+                if default == "now":
+                    widget.setText(str(now_ms))
+                elif default == "now-1h":
+                    widget.setText(str(now_ms - 3_600_000))
+                else:
+                    widget.setText(str(default))
+                widget.setPlaceholderText("Timestamp in milliseconds")
+                widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
             elif param["type"] == "instrument_selector":
                 widget = QComboBox()
                 widget.setPlaceholderText("Click 'Load Instruments' first")
@@ -583,7 +668,8 @@ class ApiConnectionTab(QWidget):
 
     def _run_endpoint(self) -> None:
         """Execute the selected API endpoint."""
-        if self.worker is not None and self.worker.isRunning():
+        active_worker = self.external_worker if self.external_worker and self.external_worker.isRunning() else self.worker
+        if active_worker is not None and active_worker.isRunning():
             self.log_viewer.log_warning("A request is already in progress")
             return
 
@@ -598,10 +684,16 @@ class ApiConnectionTab(QWidget):
         self.status_label.setText("Running...")
         self.status_label.setStyleSheet(f"color: {Colors.WARNING};")
 
-        self.worker = ApiWorker(endpoint_name, parameters)
-        self.worker.finished.connect(self._on_request_finished)
-        self.worker.error.connect(self._on_request_error)
-        self.worker.start()
+        if endpoint_name in ExternalApiWorker.EXTERNAL_ENDPOINTS:
+            self.external_worker = ExternalApiWorker(endpoint_name)
+            self.external_worker.finished.connect(self._on_request_finished)
+            self.external_worker.error.connect(self._on_request_error)
+            self.external_worker.start()
+        else:
+            self.worker = ApiWorker(endpoint_name, parameters)
+            self.worker.finished.connect(self._on_request_finished)
+            self.worker.error.connect(self._on_request_error)
+            self.worker.start()
 
     def _on_request_finished(self, result: Any) -> None:
         """
