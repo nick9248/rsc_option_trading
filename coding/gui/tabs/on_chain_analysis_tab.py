@@ -32,6 +32,7 @@ from coding.gui.theme.colors import Colors
 from coding.core.database.repository import DatabaseRepository
 from coding.service.deribit.deribit_api_service import DeribitApiService
 from coding.service.on_chain.on_chain_analysis_service import OnChainAnalysisService
+from coding.service.morning_note.morning_note_service import MorningNoteService
 
 
 logger = logging.getLogger(__name__)
@@ -61,17 +62,22 @@ class OnChainAnalysisWorker(QThread):
         self.currency = currency
 
     def run(self) -> None:
-        """Execute data fetch and analysis."""
+        """Execute data fetch and analysis, then save report bundle."""
         try:
-            # Always initialize repository for buy/sell flow
             repository = DatabaseRepository()
 
             with DeribitApiService() as api_service:
                 service = OnChainAnalysisService(api_service, repository=repository)
-                report = service.fetch_and_analyze(
+                report, analyzer = service.fetch_and_analyze(
                     currency=self.currency,
-                    progress_callback=lambda msg: self.progress.emit(msg)
+                    progress_callback=lambda msg: self.progress.emit(msg),
+                    return_analyzer=True,
                 )
+
+                morning_service = MorningNoteService(service)
+                synthesis = morning_service.generate_from_analyzer(analyzer)
+                morning_service.save_report_bundle(self.currency, report, synthesis)
+
                 self.finished.emit(report)
 
         except Exception as error:
