@@ -40,6 +40,14 @@ class OnChainAnalyzer:
         self.buy_sell_flow_data: Dict[str, str] = {}  # Stores buy/sell flow report per expiration
         self.buy_sell_flow_charts: Dict[str, Dict[str, str]] = {}  # Stores chart paths per expiration
         self.market_metrics: Dict[str, Any] = {}  # Stores DVOL, funding rate, etc.
+        self.enriched_instruments: Dict[str, List[Dict]] = {}  # Instruments with full Greeks/IV
+        self.volatility_surface_data: Dict[str, str] = {}  # Vol surface report per expiration
+        self.oi_changes_data: Dict[str, str] = {}  # OI changes report per expiration
+        self.market_wide_sections: Dict[str, str] = {}  # Market-wide report sections
+        self.gex_dex_structured: Dict[str, Dict] = {}           # Raw GEX/DEX data per expiry
+        self.buy_sell_flow_structured: Dict[str, Dict] = {}     # Raw flow data per expiry
+        self.volatility_surface_structured: Dict[str, Dict] = {}  # Raw vol surface per expiry
+        self.market_wide_structured: Dict[str, Any] = {}        # Raw market-wide metrics
 
         # Extract underlying price using most common value (mode)
         # Different instruments may have slightly different underlying_price values
@@ -134,6 +142,7 @@ class OnChainAnalyzer:
                 "volume": item.get("volume", 0) or 0,
                 "volume_usd": item.get("volume_usd", 0) or 0,
                 "mark_price": item.get("mark_price", 0) or 0,
+                "mark_iv": item.get("mark_iv"),
             }
 
             if expiration not in grouped:
@@ -831,8 +840,36 @@ class OnChainAnalyzer:
             if expiration in self.buy_sell_flow_data:
                 lines.append(self.buy_sell_flow_data[expiration])
 
+            # Volatility Surface section (if available for this expiration)
+            if expiration in self.volatility_surface_data:
+                lines.append(self.volatility_surface_data[expiration])
+
+            # OI Changes section (if available for this expiration)
+            if expiration in self.oi_changes_data:
+                lines.append(self.oi_changes_data[expiration])
+
             lines.append(separator)
             lines.append("")
+
+        # Market-wide sections (appended after all per-expiry sections)
+        if self.market_wide_sections:
+            lines.append(separator)
+            lines.append(
+                f"{'MARKET-WIDE METRICS':^80}"
+            )
+            lines.append(separator)
+            lines.append("")
+
+            for section_name in [
+                "iv_term_structure", "futures_basis",
+                "realized_volatility", "vrp", "volatility_cone",
+                "perpetual_funding", "block_trades", "cross_asset_correlation"
+            ]:
+                if section_name in self.market_wide_sections:
+                    lines.append(self.market_wide_sections[section_name])
+                    lines.append("")
+
+            lines.append(separator)
 
         return "\n".join(lines)
 
@@ -876,6 +913,34 @@ class OnChainAnalyzer:
             chart_paths: Dict with keys: distribution, net_flow, trend (values are file paths).
         """
         self.buy_sell_flow_charts[expiration] = chart_paths
+
+    def set_volatility_surface_data(self, expiration: str, report_text: str) -> None:
+        """Store volatility surface report text for an expiration."""
+        self.volatility_surface_data[expiration] = report_text
+
+    def set_oi_changes_data(self, expiration: str, report_text: str) -> None:
+        """Store OI changes report text for an expiration."""
+        self.oi_changes_data[expiration] = report_text
+
+    def set_market_wide_section(self, section_name: str, report_text: str) -> None:
+        """Store a market-wide report section."""
+        self.market_wide_sections[section_name] = report_text
+
+    def set_gex_dex_structured(self, expiration: str, data: Dict) -> None:
+        """Store raw GEX/DEX structured data for an expiration."""
+        self.gex_dex_structured[expiration] = data
+
+    def set_buy_sell_flow_structured(self, expiration: str, data: Dict) -> None:
+        """Store raw buy/sell flow structured data for an expiration."""
+        self.buy_sell_flow_structured[expiration] = data
+
+    def set_volatility_surface_structured(self, expiration: str, data: Dict) -> None:
+        """Store raw volatility surface structured data for an expiration."""
+        self.volatility_surface_structured[expiration] = data
+
+    def set_market_wide_structured(self, data: Dict) -> None:
+        """Store raw market-wide structured metrics."""
+        self.market_wide_structured = data
 
     def set_market_metrics(
         self,
