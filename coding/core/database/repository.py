@@ -1341,6 +1341,306 @@ class DatabaseRepository:
 
             return result
 
+    def save_technical_indicators(
+        self,
+        currency: str,
+        date,
+        indicators: Dict[str, Any]
+    ) -> None:
+        """
+        Save calculated technical indicators to the database.
+
+        Args:
+            currency: Currency symbol (e.g., "BTC", "ETH").
+            date: Timestamp for these indicators.
+            indicators: Dict of indicator values (sma_50, sma_200, ema_50, ema_200,
+                        adx, plus_di, minus_di, atr, atr_percentile, rsi,
+                        macd, macd_signal, macd_histogram).
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO technical_indicators (
+                    currency, date,
+                    sma_50, sma_200, ema_50, ema_200,
+                    adx, plus_di, minus_di,
+                    atr, atr_percentile, rsi,
+                    macd, macd_signal, macd_histogram
+                ) VALUES (
+                    %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s, %s
+                )
+                ON CONFLICT (currency, date) DO UPDATE SET
+                    sma_50 = EXCLUDED.sma_50,
+                    sma_200 = EXCLUDED.sma_200,
+                    ema_50 = EXCLUDED.ema_50,
+                    ema_200 = EXCLUDED.ema_200,
+                    adx = EXCLUDED.adx,
+                    plus_di = EXCLUDED.plus_di,
+                    minus_di = EXCLUDED.minus_di,
+                    atr = EXCLUDED.atr,
+                    atr_percentile = EXCLUDED.atr_percentile,
+                    rsi = EXCLUDED.rsi,
+                    macd = EXCLUDED.macd,
+                    macd_signal = EXCLUDED.macd_signal,
+                    macd_histogram = EXCLUDED.macd_histogram
+            """, (
+                currency, date,
+                indicators.get("sma_50"), indicators.get("sma_200"),
+                indicators.get("ema_50"), indicators.get("ema_200"),
+                indicators.get("adx"), indicators.get("plus_di"), indicators.get("minus_di"),
+                indicators.get("atr"), indicators.get("atr_percentile"), indicators.get("rsi"),
+                indicators.get("macd"), indicators.get("macd_signal"), indicators.get("macd_histogram"),
+            ))
+            logger.info(f"Saved technical indicators for {currency} at {date}")
+
+    def save_funding_rate(
+        self,
+        currency: str,
+        instrument_name: str,
+        timestamp: int,
+        date,
+        funding_rate: float
+    ) -> None:
+        """
+        Save funding rate from a perpetual contract to the database.
+
+        Args:
+            currency: Currency symbol (e.g., "BTC", "ETH").
+            instrument_name: Perpetual instrument name (e.g., "BTC-PERPETUAL").
+            timestamp: Unix timestamp in milliseconds.
+            date: Datetime object for this entry.
+            funding_rate: Funding rate as a decimal (e.g., 0.0001 for 0.01%).
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO funding_rate_history (
+                    currency, instrument_name, timestamp, date, funding_rate
+                ) VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (instrument_name, timestamp) DO NOTHING
+            """, (currency, instrument_name, timestamp, date, funding_rate))
+            logger.info(f"Saved funding rate for {instrument_name}: {funding_rate:.8f}")
+
+    def save_dvol(
+        self,
+        currency: str,
+        index_name: str,
+        timestamp: int,
+        date,
+        dvol: float
+    ) -> None:
+        """
+        Save DVOL (Deribit Volatility Index) value to the database.
+
+        Args:
+            currency: Currency symbol (e.g., "BTC", "ETH").
+            index_name: Index name (e.g., "BTCDVOL").
+            timestamp: Unix timestamp in milliseconds.
+            date: Datetime object for this entry.
+            dvol: DVOL value.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO volatility_index_history (
+                    currency, index_name, timestamp, date, dvol
+                ) VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (index_name, timestamp) DO NOTHING
+            """, (currency, index_name, timestamp, date, dvol))
+            logger.info(f"Saved DVOL for {index_name}: {dvol:.2f}")
+
+    def save_external_metrics(
+        self,
+        date,
+        fear_greed_value,
+        fear_greed_classification,
+        btc_dominance,
+        eth_dominance
+    ) -> None:
+        """
+        Save external sentiment metrics to the database.
+
+        Args:
+            date: Datetime for this snapshot.
+            fear_greed_value: Fear & Greed index value (0-100).
+            fear_greed_classification: Classification string (e.g., "Extreme Fear").
+            btc_dominance: BTC market dominance percentage.
+            eth_dominance: ETH market dominance percentage.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO external_metrics (
+                    date, fear_greed_value, fear_greed_classification,
+                    btc_dominance, eth_dominance
+                ) VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (date) DO UPDATE SET
+                    fear_greed_value = EXCLUDED.fear_greed_value,
+                    fear_greed_classification = EXCLUDED.fear_greed_classification,
+                    btc_dominance = EXCLUDED.btc_dominance,
+                    eth_dominance = EXCLUDED.eth_dominance
+            """, (date, fear_greed_value, fear_greed_classification, btc_dominance, eth_dominance))
+            logger.info(f"Saved external metrics: Fear&Greed={fear_greed_value}, BTC dom={btc_dominance}")
+
+    def save_onchain_snapshot(
+        self,
+        snapshot_hour,
+        currency: str,
+        expiration: str,
+        analysis_data: Dict[str, Any],
+        gex_dex_data: Dict[str, Any],
+        underlying_price: float
+    ) -> None:
+        """
+        Save on-chain analysis snapshot to the database.
+
+        Args:
+            snapshot_hour: Timestamp of the snapshot hour.
+            currency: Currency symbol (e.g., "BTC", "ETH").
+            expiration: Expiration date string (e.g., "27DEC24").
+            analysis_data: Output of OnChainAnalyzer.analyze_expiration().
+            gex_dex_data: Output of GexDexCalculator.calculate().
+            underlying_price: Current underlying asset price.
+        """
+        max_pain = analysis_data.get("max_pain", {})
+        put_call = analysis_data.get("put_call_ratio", {})
+        volume_stats = analysis_data.get("volume_stats", {})
+        moneyness = analysis_data.get("moneyness", {})
+        support_resistance = analysis_data.get("support_resistance", {})
+        key_levels = gex_dex_data.get("key_levels", {})
+
+        max_pain_strike = max_pain.get("max_pain_strike")
+        max_pain_distance_pct = (
+            (max_pain_strike - underlying_price) / underlying_price * 100
+            if max_pain_strike and underlying_price
+            else None
+        )
+
+        resistance_levels = support_resistance.get("resistance_levels", [])
+        support_levels = support_resistance.get("support_levels", [])
+        resistance_1 = resistance_levels[0] if resistance_levels else {}
+        support_1 = support_levels[0] if support_levels else {}
+
+        volume_stats_call = volume_stats.get("total_call_volume", 0)
+        volume_stats_put = volume_stats.get("total_put_volume", 0)
+        put_call_ratio_volume = (
+            volume_stats_put / volume_stats_call if volume_stats_call > 0 else None
+        )
+
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO onchain_analysis_snapshots (
+                    snapshot_hour, currency, expiration,
+                    max_pain_strike, max_pain_distance_pct,
+                    put_call_ratio_oi, put_call_ratio_volume,
+                    total_call_oi, total_put_oi,
+                    total_net_gex, total_net_dex,
+                    call_resistance_strike, put_support_strike, hvl_level,
+                    resistance_1_strike, resistance_1_call_oi,
+                    support_1_strike, support_1_put_oi,
+                    total_volume,
+                    itm_call_oi_pct, otm_call_oi_pct,
+                    itm_put_oi_pct, otm_put_oi_pct,
+                    underlying_price
+                ) VALUES (
+                    %s, %s, %s,
+                    %s, %s,
+                    %s, %s,
+                    %s, %s,
+                    %s, %s,
+                    %s, %s, %s,
+                    %s, %s,
+                    %s, %s,
+                    %s,
+                    %s, %s,
+                    %s, %s,
+                    %s
+                )
+                ON CONFLICT (snapshot_hour, currency, expiration) DO UPDATE SET
+                    max_pain_strike = EXCLUDED.max_pain_strike,
+                    max_pain_distance_pct = EXCLUDED.max_pain_distance_pct,
+                    put_call_ratio_oi = EXCLUDED.put_call_ratio_oi,
+                    put_call_ratio_volume = EXCLUDED.put_call_ratio_volume,
+                    total_call_oi = EXCLUDED.total_call_oi,
+                    total_put_oi = EXCLUDED.total_put_oi,
+                    total_net_gex = EXCLUDED.total_net_gex,
+                    total_net_dex = EXCLUDED.total_net_dex,
+                    call_resistance_strike = EXCLUDED.call_resistance_strike,
+                    put_support_strike = EXCLUDED.put_support_strike,
+                    hvl_level = EXCLUDED.hvl_level,
+                    resistance_1_strike = EXCLUDED.resistance_1_strike,
+                    resistance_1_call_oi = EXCLUDED.resistance_1_call_oi,
+                    support_1_strike = EXCLUDED.support_1_strike,
+                    support_1_put_oi = EXCLUDED.support_1_put_oi,
+                    total_volume = EXCLUDED.total_volume,
+                    itm_call_oi_pct = EXCLUDED.itm_call_oi_pct,
+                    otm_call_oi_pct = EXCLUDED.otm_call_oi_pct,
+                    itm_put_oi_pct = EXCLUDED.itm_put_oi_pct,
+                    otm_put_oi_pct = EXCLUDED.otm_put_oi_pct,
+                    underlying_price = EXCLUDED.underlying_price
+            """, (
+                snapshot_hour, currency, expiration,
+                max_pain_strike, max_pain_distance_pct,
+                put_call.get("ratio"), put_call_ratio_volume,
+                put_call.get("total_call_oi"), put_call.get("total_put_oi"),
+                gex_dex_data.get("total_net_gex"), gex_dex_data.get("total_net_dex"),
+                key_levels.get("call_resistance"), key_levels.get("put_support"), key_levels.get("hvl"),
+                resistance_1.get("strike"), resistance_1.get("call_oi"),
+                support_1.get("strike"), support_1.get("put_oi"),
+                volume_stats.get("total_volume"),
+                moneyness.get("calls", {}).get("itm_pct"),
+                moneyness.get("calls", {}).get("otm_pct"),
+                moneyness.get("puts", {}).get("itm_pct"),
+                moneyness.get("puts", {}).get("otm_pct"),
+                underlying_price,
+            ))
+            logger.info(f"Saved on-chain snapshot for {currency} {expiration} at {snapshot_hour}")
+
+    def get_regime_detections(
+        self,
+        currency: str,
+        start_time,
+        end_time
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieve regime detection results from the database.
+
+        Args:
+            currency: Currency symbol (e.g., "BTC", "ETH").
+            start_time: Start of the time range.
+            end_time: End of the time range.
+
+        Returns:
+            List of dicts with regime detection records.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                SELECT
+                    id, currency, detected_at, regime, confidence_score,
+                    trend_score, volatility_score, momentum_score,
+                    onchain_score, sentiment_score,
+                    current_price, sma_50, sma_200,
+                    adx, atr_percentile, rsi,
+                    funding_rate, put_call_ratio, fear_greed,
+                    reasoning, created_at
+                FROM regime_detections
+                WHERE currency = %s
+                  AND detected_at >= %s
+                  AND detected_at <= %s
+                ORDER BY detected_at DESC
+            """, (currency, start_time, end_time))
+
+            columns = [
+                "id", "currency", "detected_at", "regime", "confidence_score",
+                "trend_score", "volatility_score", "momentum_score",
+                "onchain_score", "sentiment_score",
+                "current_price", "sma_50", "sma_200",
+                "adx", "atr_percentile", "rsi",
+                "funding_rate", "put_call_ratio", "fear_greed",
+                "reasoning", "created_at",
+            ]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
     def get_atm_iv_history(
         self,
         currency: str,
