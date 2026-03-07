@@ -780,18 +780,22 @@ class OnChainAnalysisService:
 
             if dvol_data and "data" in dvol_data and dvol_data["data"]:
                 # Data format: [timestamp, open, high, low, close]
-                close_values = [point[4] for point in dvol_data["data"] if len(point) > 4]
+                valid_points = [point for point in dvol_data["data"] if len(point) > 4]
+                close_values = [point[4] for point in valid_points]
+                high_values = [point[2] for point in valid_points]
+                low_values = [point[3] for point in valid_points]
 
                 if close_values:
                     dvol = close_values[-1]  # Current DVOL (most recent close)
 
-                    # Calculate IV percentile
+                    # Calculate IV percentile (% of daily closes below current)
                     values_below = sum(1 for v in close_values if v < dvol)
                     iv_percentile = (values_below / len(close_values)) * 100
 
-                    # Calculate IV rank (52-week range)
-                    dvol_min = min(close_values)
-                    dvol_max = max(close_values)
+                    # Calculate IV rank using true range (daily high/low) — matches Deribit website
+                    # Deribit uses max(daily_high) and min(daily_low) for the 365d range
+                    dvol_min = min(low_values)
+                    dvol_max = max(high_values)
                     if dvol_max > dvol_min:
                         iv_rank = (dvol - dvol_min) / (dvol_max - dvol_min) * 100
                     else:
