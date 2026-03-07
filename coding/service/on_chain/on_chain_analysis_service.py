@@ -168,7 +168,8 @@ class OnChainAnalysisService:
                 progress_callback(f"Calculating GEX/DEX for {expiration}...")
                 calculator = GexDexCalculator(
                     instruments_with_greeks,
-                    analyzer.underlying_price
+                    analyzer.underlying_price,
+                    currency=analyzer.currency
                 )
                 gex_structured = calculator.calculate()
                 analyzer.set_gex_dex_structured(expiration, gex_structured)
