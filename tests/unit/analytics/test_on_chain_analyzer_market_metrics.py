@@ -1,7 +1,7 @@
 """
 Unit tests for OnChainAnalyzer market metrics rendering.
 
-Tests IV Rank (52w) and expected daily/weekly/monthly move display
+Tests IV Rank (365d) and expected daily/weekly/monthly move display
 in the generated report.
 """
 
@@ -27,7 +27,7 @@ def test_market_metrics_iv_rank_rendered(sample_analyzer):
     """IV Rank appears in report when set."""
     sample_analyzer.set_market_metrics(dvol=75.95, iv_percentile=92.6, iv_rank=78.4)
     report = sample_analyzer.generate_report()
-    assert "IV Rank (52w): 78.4%" in report
+    assert "IV Rank (365d): 78.4%" in report
 
 
 def test_market_metrics_iv_rank_none_skipped(sample_analyzer):
@@ -41,14 +41,14 @@ def test_market_metrics_iv_rank_zero(sample_analyzer):
     """IV Rank of 0.0 is rendered (not skipped as falsy)."""
     sample_analyzer.set_market_metrics(dvol=75.95, iv_percentile=10.0, iv_rank=0.0)
     report = sample_analyzer.generate_report()
-    assert "IV Rank (52w): 0.0%" in report
+    assert "IV Rank (365d): 0.0%" in report
 
 
 def test_market_metrics_iv_rank_100(sample_analyzer):
     """IV Rank of 100.0 is rendered correctly."""
     sample_analyzer.set_market_metrics(dvol=75.95, iv_percentile=99.9, iv_rank=100.0)
     report = sample_analyzer.generate_report()
-    assert "IV Rank (52w): 100.0%" in report
+    assert "IV Rank (365d): 100.0%" in report
 
 
 # ---------------------------------------------------------------------------
@@ -131,7 +131,7 @@ def test_market_metrics_order_in_report(sample_analyzer):
 
     pos_dvol = report.index("DVOL (Volatility Index)")
     pos_percentile = report.index("IV Percentile (365d)")
-    pos_rank = report.index("IV Rank (52w)")
+    pos_rank = report.index("IV Rank (365d)")
     pos_daily = report.index("Expected Daily Move:")
 
     assert pos_dvol < pos_percentile < pos_rank < pos_daily

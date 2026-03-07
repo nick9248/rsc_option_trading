@@ -619,7 +619,7 @@ class OnChainAnalyzer:
             if iv_percentile is not None:
                 lines.append(f"IV Percentile (365d): {iv_percentile:.1f}%")
             if iv_rank is not None:
-                lines.append(f"IV Rank (52w): {iv_rank:.1f}%")
+                lines.append(f"IV Rank (365d): {iv_rank:.1f}%")
             if dvol is not None:
                 daily_move = dvol / 100 / math.sqrt(365) * self.underlying_price
                 weekly_move = dvol / 100 / math.sqrt(52) * self.underlying_price

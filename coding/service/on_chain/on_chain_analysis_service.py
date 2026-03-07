@@ -811,10 +811,10 @@ class OnChainAnalysisService:
             funding_8h = perpetual_ticker.get("funding_8h")
 
             if current_funding is not None:
-                progress_callback(
-                    f"Current Funding: {current_funding * 100:.4f}%, "
-                    f"8h Funding: {funding_8h * 100:.4f}%"
-                )
+                funding_str = f"Current Funding: {current_funding * 100:.4f}%"
+                if funding_8h is not None:
+                    funding_str += f", 8h Funding: {funding_8h * 100:.4f}%"
+                progress_callback(funding_str)
 
         except Exception as e:
             logger.warning(f"Failed to fetch funding rate: {e}")
