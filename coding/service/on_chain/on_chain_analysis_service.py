@@ -106,6 +106,9 @@ class OnChainAnalysisService:
         # Calculate market-wide metrics (term structure, basis, RV, VRP, etc.)
         self._calculate_market_wide_metrics(analyzer, currency, progress)
 
+        # Fetch previous DB snapshots for trend comparison
+        self._fetch_trend_data(analyzer, progress)
+
         # Generate report (includes GEX/DEX and flow)
         progress("Generating analysis report...")
         report = analyzer.generate_report()
@@ -828,6 +831,69 @@ class OnChainAnalysisService:
             current_funding=current_funding,
             funding_8h=funding_8h
         )
+
+    def _fetch_trend_data(
+        self,
+        analyzer: OnChainAnalyzer,
+        progress_callback: Callable[[str], None],
+    ) -> None:
+        """
+        Fetch previous DB snapshots per expiration for trend comparison.
+
+        Requires repository. Silently skipped when repository is None.
+        Each expiration gets the oldest of the 2 most-recent DB records
+        as its "previous" value to compare against live API data.
+
+        Args:
+            analyzer: OnChainAnalyzer with parsed data.
+            progress_callback: Callback for progress updates.
+        """
+        if self.repository is None:
+            return
+
+        progress_callback("Fetching trend data for report comparison...")
+
+        for expiration in analyzer.get_expirations():
+            try:
+                mp_history = self.repository.get_max_pain_history(
+                    analyzer.currency, expiration, limit=2
+                )
+                oi_history = self.repository.get_open_interest_history(
+                    analyzer.currency, expiration, limit=2
+                )
+                vol_history = self.repository.get_volume_history(
+                    analyzer.currency, expiration, limit=2
+                )
+
+                prev_mp = mp_history[0] if mp_history else None
+                prev_oi = oi_history[0] if oi_history else None
+                prev_vol = vol_history[0] if vol_history else None
+
+                if not any([prev_mp, prev_oi, prev_vol]):
+                    analyzer.set_trend_data(expiration, None)
+                    continue
+
+                trend: Dict[str, Any] = {}
+                if prev_mp:
+                    trend["max_pain_strike"] = float(prev_mp["max_pain_strike"])
+                if prev_oi:
+                    trend["call_oi"] = float(prev_oi["total_call_oi"])
+                    trend["put_oi"] = float(prev_oi["total_put_oi"])
+                    pc = prev_oi.get("put_call_ratio")
+                    trend["pc_ratio"] = float(pc) if pc is not None else None
+                if prev_vol:
+                    trend["total_volume"] = (
+                        float(prev_vol["total_call_volume"])
+                        + float(prev_vol["total_put_volume"])
+                    )
+                    vr = prev_vol.get("volume_put_call_ratio")
+                    trend["volume_ratio"] = float(vr) if vr is not None else None
+
+                analyzer.set_trend_data(expiration, trend)
+
+            except Exception as e:
+                logger.warning(f"Failed to fetch trend data for {expiration}: {e}")
+                analyzer.set_trend_data(expiration, None)
 
     def _save_reports_per_expiration(
         self,
