@@ -756,6 +756,7 @@ class OnChainAnalysisService:
         """
         dvol = None
         iv_percentile = None
+        iv_rank = None
         current_funding = None
         funding_8h = None
 
@@ -784,8 +785,17 @@ class OnChainAnalysisService:
                     values_below = sum(1 for v in close_values if v < dvol)
                     iv_percentile = (values_below / len(close_values)) * 100
 
+                    # Calculate IV rank (52-week range)
+                    dvol_min = min(close_values)
+                    dvol_max = max(close_values)
+                    if dvol_max > dvol_min:
+                        iv_rank = (dvol - dvol_min) / (dvol_max - dvol_min) * 100
+                    else:
+                        iv_rank = 50.0
+
                     progress_callback(
-                        f"DVOL: {dvol:.2f}, IV Percentile: {iv_percentile:.1f}% "
+                        f"DVOL: {dvol:.2f}, IV Percentile: {iv_percentile:.1f}%, "
+                        f"IV Rank: {iv_rank:.1f}% "
                         f"(based on {len(close_values)} days)"
                     )
 
@@ -813,6 +823,7 @@ class OnChainAnalysisService:
         analyzer.set_market_metrics(
             dvol=dvol,
             iv_percentile=iv_percentile,
+            iv_rank=iv_rank,
             current_funding=current_funding,
             funding_8h=funding_8h
         )
