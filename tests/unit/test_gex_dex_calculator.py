@@ -332,6 +332,36 @@ class TestGexDexCalculator:
         assert "Put Support" in report or "None found" in report
         assert "HVL" in report
 
+    def test_gex_report_shows_usd_unit(self):
+        """GEX values are labeled USD in the report."""
+        instruments = [
+            {"strike": 70000, "option_type": "C", "gamma": 0.00005, "delta": 0.5, "open_interest": 1000},
+            {"strike": 72000, "option_type": "P", "gamma": 0.00003, "delta": -0.5, "open_interest": 1000},
+        ]
+        calc = GexDexCalculator(instruments, spot_price=70000, currency="BTC")
+        report = calc.generate_report_section()
+        assert "USD" in report
+
+    def test_dex_report_shows_currency_unit_eth(self):
+        """DEX values are labeled with currency (ETH)."""
+        instruments = [
+            {"strike": 2000, "option_type": "C", "gamma": 0.00005, "delta": 0.5, "open_interest": 100},
+            {"strike": 2000, "option_type": "P", "gamma": 0.00003, "delta": -0.5, "open_interest": 100},
+        ]
+        calc = GexDexCalculator(instruments, spot_price=2000.0, currency="ETH")
+        report = calc.generate_report_section()
+        assert "ETH" in report
+
+    def test_dex_report_shows_currency_unit_btc(self):
+        """DEX values are labeled with currency (BTC)."""
+        instruments = [
+            {"strike": 50000, "option_type": "C", "gamma": 0.00005, "delta": 0.5, "open_interest": 100},
+            {"strike": 50000, "option_type": "P", "gamma": 0.00003, "delta": -0.5, "open_interest": 100},
+        ]
+        calc = GexDexCalculator(instruments, spot_price=50000.0, currency="BTC")
+        report = calc.generate_report_section()
+        assert "BTC" in report
+
     def test_multiple_strikes_multiple_instruments(self):
         """Test realistic scenario with multiple strikes and instruments."""
         instruments = [

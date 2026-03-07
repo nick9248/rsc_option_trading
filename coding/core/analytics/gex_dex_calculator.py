@@ -32,6 +32,7 @@ class GexDexCalculator:
         self,
         instruments: List[Dict[str, Any]],
         spot_price: float,
+        currency: str = "BTC",
     ):
         """
         Initialize calculator with instrument data containing Greeks.
@@ -39,9 +40,12 @@ class GexDexCalculator:
         Args:
             instruments: List of instrument dicts with gamma, delta, OI, strike, option_type.
             spot_price: Current underlying spot price.
+            currency: Underlying currency symbol (e.g. "BTC", "ETH"). Used for unit labels.
+                      GEX is always in USD; DEX is in this currency.
         """
         self.instruments = instruments
         self.spot_price = spot_price
+        self.currency = currency
         self.strike_data: Dict[float, Dict[str, Any]] = {}
 
     def calculate(self) -> Dict[str, Any]:
@@ -292,7 +296,7 @@ class GexDexCalculator:
             cr = key_levels["call_resistance"]
             lines.append(
                 f"  Call Resistance: ${cr['strike']:,.0f} "
-                f"(Net GEX: {cr['net_gex']:+,.2f})"
+                f"(Net GEX: {cr['net_gex']:+,.2f} USD)"
             )
         else:
             lines.append("  Call Resistance: None found")
@@ -301,7 +305,7 @@ class GexDexCalculator:
             ps = key_levels["put_support"]
             lines.append(
                 f"  Put Support: ${ps['strike']:,.0f} "
-                f"(Net GEX: {ps['net_gex']:+,.2f})"
+                f"(Net GEX: {ps['net_gex']:+,.2f} USD)"
             )
         else:
             lines.append("  Put Support: None found")
@@ -315,8 +319,8 @@ class GexDexCalculator:
 
         # Totals
         lines.append("TOTALS:")
-        lines.append(f"  Total Net GEX: {result['total_net_gex']:+,.2f}")
-        lines.append(f"  Total Net DEX: {result['total_net_dex']:+,.2f}")
+        lines.append(f"  Total Net GEX: {result['total_net_gex']:+,.2f} USD")
+        lines.append(f"  Total Net DEX: {result['total_net_dex']:+,.4f} {self.currency}")
         lines.append("")
 
         # Interpretation
@@ -343,12 +347,12 @@ class GexDexCalculator:
         lines.append("GEX/DEX BY STRIKE:")
         lines.append(separator)
         lines.append(
-            f"{'Strike':>10}  {'Net GEX':>12}  {'Net DEX':>12}  "
-            f"{'Cum GEX':>12}  {'Cum DEX':>12}  Notes"
+            f"{'Strike':>10}  {'Net GEX(USD)':>13}  {'Net DEX(' + self.currency + ')':>12}  "
+            f"{'Cum GEX(USD)':>13}  {'Cum DEX(' + self.currency + ')':>12}  Notes"
         )
         lines.append(
-            f"{'------':>10}  {'-------':>12}  {'-------':>12}  "
-            f"{'-------':>12}  {'-------':>12}  -----"
+            f"{'------':>10}  {'-------':>13}  {'-------':>12}  "
+            f"{'-------':>13}  {'-------':>12}  -----"
         )
 
         sorted_strikes = sorted(result["strike_data"].keys())
