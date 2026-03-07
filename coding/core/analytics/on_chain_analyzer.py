@@ -6,6 +6,7 @@ and generates formatted text reports per expiration.
 """
 
 import logging
+import math
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -611,11 +612,30 @@ class OnChainAnalyzer:
             iv_percentile = self.market_metrics.get("iv_percentile")
             current_funding = self.market_metrics.get("current_funding")
             funding_8h = self.market_metrics.get("funding_8h")
+            iv_rank = self.market_metrics.get("iv_rank")
 
             if dvol is not None:
                 lines.append(f"DVOL (Volatility Index): {dvol:.2f}")
             if iv_percentile is not None:
                 lines.append(f"IV Percentile (365d): {iv_percentile:.1f}%")
+            if iv_rank is not None:
+                lines.append(f"IV Rank (52w): {iv_rank:.1f}%")
+            if dvol is not None:
+                daily_move = dvol / 100 / math.sqrt(365) * self.underlying_price
+                weekly_move = dvol / 100 / math.sqrt(52) * self.underlying_price
+                monthly_move = dvol / 100 / math.sqrt(12) * self.underlying_price
+                daily_pct = dvol / 100 / math.sqrt(365) * 100
+                weekly_pct = dvol / 100 / math.sqrt(52) * 100
+                monthly_pct = dvol / 100 / math.sqrt(12) * 100
+                lines.append(
+                    f"Expected Daily Move:    ${daily_move:,.2f}  ({daily_pct:.1f}%)"
+                )
+                lines.append(
+                    f"Expected Weekly Move:   ${weekly_move:,.2f}  ({weekly_pct:.1f}%)"
+                )
+                lines.append(
+                    f"Expected Monthly Move:  ${monthly_move:,.2f}  ({monthly_pct:.1f}%)"
+                )
             if current_funding is not None:
                 # Convert to percentage and annualized
                 funding_pct = current_funding * 100
@@ -948,9 +968,10 @@ class OnChainAnalyzer:
         iv_percentile: Optional[float] = None,
         current_funding: Optional[float] = None,
         funding_8h: Optional[float] = None,
+        iv_rank: Optional[float] = None,
     ) -> None:
         """
-        Store market-wide metrics (DVOL, funding rate).
+        Store market-wide metrics (DVOL, funding rate, IV rank).
 
         These metrics are currency-wide, not from the book summary data.
 
@@ -959,10 +980,12 @@ class OnChainAnalyzer:
             iv_percentile: IV percentile based on past 365 days.
             current_funding: Current funding rate from perpetual.
             funding_8h: 8-hour funding rate from perpetual.
+            iv_rank: IV rank over 52 weeks (0-100 scale).
         """
         self.market_metrics = {
             "dvol": dvol,
             "iv_percentile": iv_percentile,
             "current_funding": current_funding,
             "funding_8h": funding_8h,
+            "iv_rank": iv_rank,
         }
