@@ -141,6 +141,13 @@ class MarketWideMetrics:
     # Block trades
     block_trades: List[dict] = field(default_factory=list)
 
+    # Aggregate GEX/DEX across all expirations
+    aggregate_total_gex: float = 0.0
+    aggregate_total_dex: float = 0.0
+    aggregate_call_resistance: Optional[Dict] = None
+    aggregate_put_support: Optional[Dict] = None
+    aggregate_hvl: Optional[float] = None
+
 
 # =============================================================================
 # SECTION 2: SCORING ENGINE
@@ -1288,9 +1295,14 @@ class SynthesisEngine:
         )
         dir_confidence *= fragility_multiplier
 
-        # Vol regime (use aggregate GEX from largest expiry, normalized by spot)
+        # Vol regime — prefer market-wide aggregate GEX; fall back to largest expiry
+        gex_for_regime = (
+            market.aggregate_total_gex
+            if market.aggregate_total_gex != 0.0
+            else largest_expiry.total_gex
+        )
         vol_regime, vol_reasons = self.classifier.classify_vol_regime(
-            largest_expiry.total_gex,
+            gex_for_regime,
             iv_pctile_score[0],
             vrp_score[0],
             skew_score[0],
@@ -1731,6 +1743,10 @@ class SynthesisMapper:
         # ordered data. We trust insertion order from the source.
         futures_basis = raw_basis
 
+        # Aggregate GEX/DEX from AGGREGATE key in gex_dex_structured
+        agg_gex = getattr(analyzer, "gex_dex_structured", {}).get("AGGREGATE", {})
+        agg_key_levels = agg_gex.get("key_levels", {})
+
         return MarketWideMetrics(
             spot_price=mw.get("spot_price") or analyzer.underlying_price,
             dvol=mw.get("dvol") or 0.0,
@@ -1754,6 +1770,11 @@ class SynthesisMapper:
             btc_eth_price_corr=mw.get("btc_eth_price_corr") or 0.0,
             btc_eth_dvol_corr=mw.get("btc_eth_dvol_corr") or 0.0,
             block_trades=mw.get("block_trades") or [],
+            aggregate_total_gex=agg_gex.get("total_net_gex") or 0.0,
+            aggregate_total_dex=agg_gex.get("total_net_dex") or 0.0,
+            aggregate_call_resistance=agg_key_levels.get("call_resistance"),
+            aggregate_put_support=agg_key_levels.get("put_support"),
+            aggregate_hvl=agg_key_levels.get("hvl"),
         )
 
     @classmethod

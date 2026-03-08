@@ -99,6 +99,13 @@ OnChainAnalyzer (live run)
 | `btc_eth_price_corr` | `market_wide_structured["btc_eth_price_corr"]` | -1.0 to +1.0 |
 | `btc_eth_dvol_corr` | `market_wide_structured["btc_eth_dvol_corr"]` | -1.0 to +1.0 |
 | `block_trades` | `market_wide_structured["block_trades"]` | list of dicts |
+| `aggregate_total_gex` | `gex_dex_structured["AGGREGATE"]["total_net_gex"]` | raw USD value |
+| `aggregate_total_dex` | `gex_dex_structured["AGGREGATE"]["total_net_dex"]` | raw currency units |
+| `aggregate_call_resistance` | `gex_dex_structured["AGGREGATE"]["key_levels"]["call_resistance"]` | `{strike, net_gex}` dict or None |
+| `aggregate_put_support` | `gex_dex_structured["AGGREGATE"]["key_levels"]["put_support"]` | `{strike, net_gex}` dict or None |
+| `aggregate_hvl` | `gex_dex_structured["AGGREGATE"]["key_levels"]["hvl"]` | strike price or None |
+
+Note: These aggregate fields come from `gex_dex_structured` (not `market_wide_structured`), via `SynthesisMapper.build_market_wide()`.
 
 **Validation rules:**
 - `term_structure_shape` must be exactly `"CONTANGO"` or `"BACKWARDATION"`. If the source provides any other value (e.g., `"FLAT"`), the mapper must normalize: `spread < 0.5` → `"CONTANGO"` with `spread = 0`.
@@ -494,7 +501,7 @@ Must use `IntEnum` (not `Enum`) so `.value` returns these integers. The TRANSITI
 
 ### Vol Regime Classification
 
-Decision tree. Inputs: GEX total from largest expiry by OI, normalized by spot.
+Decision tree. Inputs: Market-wide aggregate GEX (equal-weight summation across all expirations), normalized by spot. Falls back to largest expiry GEX when aggregate is unavailable (zero). Aggregate is preferred because dealers hedge total portfolio gamma, not per-expiry.
 
 ```
 gex_normalized = gex_total / spot
@@ -516,6 +523,8 @@ else:
 ```
 
 **Normalization math**: `gex_total / spot`. At BTC $100K: threshold 20 = $2M GEX. At $50K: threshold 20 = $1M. Scales linearly with price.
+
+**Calibration note**: The thresholds (20 / -20) were originally calibrated against single-expiry GEX. Aggregate GEX has a naturally wider distribution because term-structure gamma is correlated (when the market buys calls, they buy across the curve). Monitor aggregate `gex_normalized` values empirically — if SUPPRESSED/EXPLOSIVE fire too frequently, the thresholds may need raising (e.g., 30–40). Per Perplexity: log aggregate gex_normalized historically and confirm that the threshold still corresponds to 'meaningful pinning' days.
 - VRP and term structure now participate: ELEVATED requires either VRP confirmation (premium is genuinely rich, not just percentile noise) or term structure stress. This prevents ELEVATED from firing on IV percentile alone when VRP says "no edge."
 - The old `score_gex` method (which always returned score 0) is removed. GEX enters the system only through `classify_vol_regime` and through `score_vanna_charm` weight adjustment.
 
@@ -701,10 +710,12 @@ SCORING DETAIL:
 ## Key Design Decisions
 
 ### 1. GEX is a regime input, not a directional score
-GEX has no directional scorer. It enters the system through:
-- Vol regime classification (SUPPRESSED vs EXPLOSIVE thresholds)
-- Vanna/charm weight adjustment (amplifying vs dampening environment)
-- Risk factor flags (deeply negative GEX)
+GEX has no directional scorer. It enters the system at three different scopes:
+- **Vol regime classification**: Uses **market-wide aggregate GEX** (summed across all expirations). Aggregate reflects total dealer gamma and therefore net hedging pressure. Falls back to largest-expiry GEX when aggregate is unavailable.
+- **Vanna/charm weight adjustment**: Uses **per-expiry** GEX. Vanna/charm are term-specific Greeks; whether that expiry's gamma amplifies or dampens second-order flows is a local property.
+- **Risk factor flags**: Uses **largest-expiry** GEX (by OI). This is the more conservative choice — a single expiry with deeply negative gamma can cause cascading stop-outs even if aggregate gamma is mildly positive due to offsetting expirations. The risk flag should not be masked by netting.
+- **Regime & trade narratives**: Uses **largest-expiry** GEX for display (the dominant expiry's gamma environment).
+
 Direction comes from DEX, P/C ratio, flow, max pain, vanna/charm, funding, and futures basis.
 
 ### 2. Top-3 expiries by OI drive directional scoring (excluding DTE 0)
@@ -734,6 +745,13 @@ GEX thresholds use `gex_total / spot` (e.g., threshold 20 = $2M at $100K, $1M at
 ### 10. Term structure participates in vol regime
 v1 computed `score_term_structure` but never used it. In v2, backwardation (term_structure_score <= -1) is an alternative confirmer for ELEVATED regime alongside VRP. Deep backwardation signals front-end stress even when VRP alone is ambiguous.
 
+### 11. Aggregate GEX uses equal-weight summation
+Market-wide aggregate GEX sums OI-weighted gamma across all expirations without DTE-weighting. This is the industry standard (SqueezeMetrics, SpotGamma, Glassnode, Amberdata). Gamma already encodes time-to-expiry via Black-Scholes — near-term options have ~5x the gamma of far-term options at the same OI — so DTE-weighting would double-count.
+
+**Limitation**: Pure aggregate can mask localized convexity risk. Example: weekly expiry with deeply negative gamma near spot + monthly expiry with positive gamma farther away = mildly positive aggregate. The vol regime says SUPPRESSED but the next 24-72 hours may see amplified moves from the front expiry. This is why risk factors use largest-expiry GEX as a separate check — it serves as a "stress override" that fires even when aggregate is benign.
+
+**Future enhancement**: A concentration modifier (`abs(largest_expiry_gex) / abs(aggregate_gex)`) could distinguish broad stable suppression from concentrated fragile suppression. Not implemented yet.
+
 ---
 
 ## Data Flow Dependency
@@ -741,8 +759,12 @@ v1 computed `score_term_structure` but never used it. In v2, backwardation (term
 ```
 OnChainAnalysisService.fetch_and_analyze()
     |
-    |-- GexDexCalculator.calculate(instruments)
+    |-- GexDexCalculator.calculate(instruments)      [per expiry]
     |       -> stores result in analyzer.gex_dex_structured[expiry]
+    |
+    |-- GexDexCalculator.aggregate_across_expirations()  [after all expiries]
+    |       -> stores result in analyzer.gex_dex_structured["AGGREGATE"]
+    |       -> stores report in analyzer.market_wide_sections["aggregate_gex_dex"]
     |
     |-- VolatilitySurfaceCalculator.calculate(instruments)
     |       -> stores result in analyzer.volatility_surface_structured[expiry]
@@ -754,7 +776,7 @@ OnChainAnalysisService.fetch_and_analyze()
             -> stores result in analyzer.market_wide_structured
                    |
                    v
-        SynthesisMapper reads these four dicts
+        SynthesisMapper reads these four dicts + gex_dex_structured["AGGREGATE"]
                    |
                    v
         SynthesisEngine.run(market, expiries)

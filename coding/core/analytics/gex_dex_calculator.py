@@ -272,6 +272,177 @@ class GexDexCalculator:
             "gamma_flip": gamma_flip,
         }
 
+    @staticmethod
+    def aggregate_across_expirations(
+        gex_dex_by_expiry: Dict[str, Dict],
+        spot_price: float,
+        currency: str = "BTC",
+    ) -> Dict[str, Any]:
+        """
+        Aggregate GEX/DEX data across all expirations using equal-weight summation.
+
+        Industry standard (SqueezeMetrics, SpotGamma, Glassnode): gamma already
+        encodes time-to-expiry via the Black-Scholes formula, so DTE-weighting
+        would double-count that effect.
+
+        Args:
+            gex_dex_by_expiry: Dict mapping expiry → calculate() result dict.
+                               Keys named "AGGREGATE" are skipped.
+            spot_price: Current underlying spot price (used for GEX formula).
+            currency: Underlying currency symbol for unit labels.
+
+        Returns:
+            Dict with same structure as calculate() plus expiration_count.
+        """
+        merged_strike_data: Dict[float, Dict[str, Any]] = {}
+        expiration_count = 0
+
+        for expiry, result in gex_dex_by_expiry.items():
+            if expiry == "AGGREGATE":
+                continue
+            expiration_count += 1
+
+            for strike, data in result.get("strike_data", {}).items():
+                if strike not in merged_strike_data:
+                    merged_strike_data[strike] = {
+                        "call_gamma": 0.0,
+                        "put_gamma": 0.0,
+                        "call_delta": 0.0,
+                        "put_delta": 0.0,
+                        "call_oi": 0.0,
+                        "put_oi": 0.0,
+                        "net_gex": 0.0,
+                        "net_dex": 0.0,
+                    }
+                merged_strike_data[strike]["call_gamma"] += data.get("call_gamma", 0.0)
+                merged_strike_data[strike]["put_gamma"] += data.get("put_gamma", 0.0)
+                merged_strike_data[strike]["call_delta"] += data.get("call_delta", 0.0)
+                merged_strike_data[strike]["put_delta"] += data.get("put_delta", 0.0)
+                merged_strike_data[strike]["call_oi"] += data.get("call_oi", 0.0)
+                merged_strike_data[strike]["put_oi"] += data.get("put_oi", 0.0)
+
+        if not merged_strike_data:
+            return {
+                "strike_data": {},
+                "cumulative_gex": {},
+                "cumulative_dex": {},
+                "key_levels": {
+                    "call_resistance": None,
+                    "put_support": None,
+                    "hvl": None,
+                    "gamma_flip": None,
+                },
+                "spot_price": spot_price,
+                "total_net_gex": 0.0,
+                "total_net_dex": 0.0,
+                "expiration_count": expiration_count,
+            }
+
+        # Inject merged strike data into a temporary calculator instance and re-run formulas
+        agg_calc = GexDexCalculator([], spot_price=spot_price, currency=currency)
+        agg_calc.strike_data = merged_strike_data
+
+        agg_calc._calculate_gex_dex()
+        cumulative = agg_calc._calculate_cumulative_profiles()
+        key_levels = agg_calc._detect_key_levels()
+
+        return {
+            "strike_data": agg_calc.strike_data,
+            "cumulative_gex": cumulative["cumulative_gex"],
+            "cumulative_dex": cumulative["cumulative_dex"],
+            "key_levels": key_levels,
+            "spot_price": spot_price,
+            "total_net_gex": sum(d["net_gex"] for d in agg_calc.strike_data.values()),
+            "total_net_dex": sum(d["net_dex"] for d in agg_calc.strike_data.values()),
+            "expiration_count": expiration_count,
+        }
+
+    @staticmethod
+    def generate_aggregate_report_section(
+        result: Dict[str, Any],
+        spot_price: float,
+        currency: str = "BTC",
+    ) -> str:
+        """
+        Generate formatted text report for aggregate (market-wide) GEX/DEX.
+
+        No per-strike table — with hundreds of strikes merged across expirations
+        it would be unreadable. Per-strike data remains in the structured dict
+        for programmatic access.
+
+        Args:
+            result: Return value of aggregate_across_expirations().
+            spot_price: Current underlying spot price.
+            currency: Underlying currency symbol for unit labels.
+
+        Returns:
+            Formatted string for inclusion in the market-wide report section.
+        """
+        lines = []
+        separator = "-" * 80
+        expiration_count = result.get("expiration_count", 0)
+
+        lines.append(
+            f"MARKET-WIDE GEX/DEX LEVELS (All {expiration_count} Expirations Aggregated)"
+        )
+        lines.append(separator)
+        lines.append(f"Spot Price: ${spot_price:,.2f}")
+        lines.append("")
+
+        key_levels = result["key_levels"]
+        lines.append("KEY LEVELS:")
+
+        if key_levels["call_resistance"]:
+            cr = key_levels["call_resistance"]
+            lines.append(
+                f"  Call Resistance: ${cr['strike']:,.0f} "
+                f"(Net GEX: {cr['net_gex']:+,.2f} USD)"
+            )
+        else:
+            lines.append("  Call Resistance: None found")
+
+        if key_levels["put_support"]:
+            ps = key_levels["put_support"]
+            lines.append(
+                f"  Put Support: ${ps['strike']:,.0f} "
+                f"(Net GEX: {ps['net_gex']:+,.2f} USD)"
+            )
+        else:
+            lines.append("  Put Support: None found")
+
+        if key_levels["hvl"]:
+            lines.append(f"  HVL (Zero Gamma): ${key_levels['hvl']:,.0f}")
+        else:
+            lines.append("  HVL (Zero Gamma): Not detected")
+
+        lines.append("")
+
+        lines.append("TOTALS:")
+        lines.append(f"  Total Net GEX: {result['total_net_gex']:+,.2f} USD")
+        lines.append(f"  Total Net DEX: {result['total_net_dex']:+,.4f} {currency}")
+        lines.append("")
+
+        total_gex = result["total_net_gex"]
+        if total_gex > 0:
+            gex_interp = "Positive (Dealers long gamma - stabilizing, buy dips/sell rallies)"
+        elif total_gex < 0:
+            gex_interp = "Negative (Dealers short gamma - amplifying volatility)"
+        else:
+            gex_interp = "Neutral"
+        lines.append(f"  GEX Environment: {gex_interp}")
+
+        total_dex = result["total_net_dex"]
+        if total_dex > 0:
+            dex_interp = "Positive (Net long delta - bullish pressure)"
+        elif total_dex < 0:
+            dex_interp = "Negative (Net short delta - bearish pressure)"
+        else:
+            dex_interp = "Neutral"
+        lines.append(f"  DEX Environment: {dex_interp}")
+        lines.append("")
+
+        return "\n".join(lines)
+
     def generate_report_section(self) -> str:
         """
         Generate formatted text report section for GEX/DEX.

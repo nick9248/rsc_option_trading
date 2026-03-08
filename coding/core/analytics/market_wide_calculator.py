@@ -424,7 +424,7 @@ class MarketWideCalculator:
             structured["perp_funding_trend"] = trend
 
             lines.append(
-                f"  Perp OI: {perp_oi:,.0f} {self.currency}  |  "
+                f"  Perp OI: {perp_oi:,.0f} USD  |  "
                 f"Funding: {funding_pct:.4f}%  |  Trend: {trend}"
             )
 

@@ -36,13 +36,15 @@ GUI Layer (coding/gui/tabs/on_chain_analysis_tab.py)
 DeribitApiService
     ↓
 OnChainAnalysisService.fetch_and_analyze(return_analyzer=True)
-    ↓ populates 4 structured dicts on OnChainAnalyzer:
+    ↓ populates structured dicts on OnChainAnalyzer:
     ├── analyzer.gex_dex_structured        {expiry: {total_net_gex, key_levels, ...}}
+    │                                      + ["AGGREGATE"] key after all expiries processed
     ├── analyzer.buy_sell_flow_structured  {expiry: {bias_interpretation, flow_trend, ...}}
     ├── analyzer.volatility_surface_structured  {expiry: {atm_iv, skew_25d, ...}}
     └── analyzer.market_wide_structured    {rv_10d, rv_20d, rv_30d, vrp, funding_rate, ...}
     ↓
 SynthesisMapper.build_all(analyzer)
+    ↓ reads all 4 dicts + gex_dex_structured["AGGREGATE"]
     ↓ returns (MarketWideMetrics, List[ExpiryMetrics])
     ↓
 SynthesisEngine.run(market, expiries)
@@ -66,7 +68,6 @@ output/data/onchain_analysis/{BTC|ETH}/report/{YYYYMMDD_HHMMSS}/
 | Scorer | Range | Key thresholds |
 |---|---|---|
 | `score_pc_ratio` | ±2 | <0.60 strong bull, >1.30 strong bear |
-| `score_gex` | 0 only | Negative GEX → breakout risk flag |
 | `score_dex` | ±2 | >500 strong bull, <-500 strong bear |
 | `score_max_pain_gravity` | ±2 | >±10% from spot = ±2 |
 | `score_funding` | ±2 | Uses `funding_8h × 3 × 365`; >20% ann = ±2 |
@@ -90,6 +91,8 @@ Direction scores → Signal enum (STRONG_BULLISH/BULLISH/NEUTRAL/BEARISH/STRONG_
 Vol scores → VolRegime enum (SUPPRESSED/NORMAL/ELEVATED/EXPLOSIVE)
 Signal + VolRegime → MarketRegime enum (TRENDING_UP/RANGE_BOUND/TRANSITION/...)
 ```
+
+**Vol Regime GEX input**: Uses `aggregate_total_gex` (market-wide, all expirations summed). Falls back to the largest-expiry GEX when aggregate is zero. Aggregate is preferred because dealers hedge total portfolio gamma. Risk factor flags still use the largest-expiry GEX as a conservative check.
 
 ## Unit Conventions
 
@@ -159,12 +162,34 @@ All are labelled in output with `(model:` prefix or `NOTE [model]:` when appropr
 ## Tests
 
 ```
-tests/unit/analytics/test_synthesis.py  — 18 tests
-    TestScoreFundingBugFix      (3)  — funding_8h used for annualized rate
-    TestBuildMarketWide         (2)  — mapper unit conversion
-    TestBuildExpiryMetrics      (5)  — missing data handling
-    TestBuildAll                (2)  — full pipeline assembly
-    TestSynthesisEngineRun      (6)  — no-crash, regime labels, trade recs
+tests/unit/analytics/test_synthesis.py     — 74 tests
+    TestScorePcRatio            — contrarian dampening, DTE clamping
+    TestScoreDex                — normalized thresholds, DTE clamping
+    TestScoreMaxPainGravity     — DTE-scaled weight
+    TestScoreFunding            — funding_8h annualization, contrarian logic
+    TestScoreFlow               — bias + trend adjustment
+    TestScoreVannaCharm         — IV-regime-conditional vanna, gamma weight
+    TestScoreFuturesBasis       — front basis thresholds
+    TestFragilityDetection      — confidence multiplier, not score
+    TestScoreIvPercentile       — richness axis
+    TestScoreVrp                — stale correction (high/low cone)
+    TestScoreTermStructure      — shape + spread, kink detection
+    TestScoreSkew               — fear axis, complacency
+    TestClassifyVolRegime       — SUPPRESSED/EXPLOSIVE/ELEVATED/NORMAL
+    TestClassifyMarketRegime    — 12-regime matrix, TRANSITION magnitude guard
+    TestTradeRecommendations    — IC skew adjustment, risk reversal exclusion
+    TestBuildMarketWide         — mapper unit conversion, shape normalization
+    TestBuildExpiryMetrics      — missing data handling, removed fields
+    TestBuildAll                — full pipeline assembly, GEX-missing skip
+    TestSynthesisEngineRun      — no-crash, regime labels, trade recs, DTE-0 exclusion
+
+tests/unit/analytics/test_gex_dex_calculator.py — 27 tests
+    TestGexDexCalculator              (20) — formula, key levels, report, units
+    TestAggregateAcrossExpirations    (7)  — summation, key levels, empty, recursion guard
 ```
 
-Run: `pytest tests/unit/analytics/test_synthesis.py -v`
+Run:
+```bash
+pytest tests/unit/analytics/test_synthesis.py -v
+pytest tests/unit/analytics/test_gex_dex_calculator.py -v
+```
