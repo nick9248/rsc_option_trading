@@ -156,7 +156,7 @@ This implementation follows the methodology used by:
 - `coding/service/database/capture_strategies.py` - GexDexCaptureStrategy for database storage
 
 **Tests:**
-- `tests/unit/test_gex_dex_calculator.py` - Comprehensive unit tests (17 tests, 100% coverage)
+- `tests/unit/analytics/test_gex_dex_calculator.py` - Comprehensive unit tests (27 tests, 100% coverage)
 
 ## Example Calculation
 
@@ -287,9 +287,11 @@ Stores GEX/DEX data in database for historical analysis and charting.
 
 ### Unit Tests
 
-Location: `tests/unit/test_gex_dex_calculator.py`
+Location: `tests/unit/analytics/test_gex_dex_calculator.py`
 
-**Test Coverage:**
+**Test Coverage (27 tests):**
+
+`TestGexDexCalculator` (20 tests):
 - ✓ Formula validation (Spot² × 0.01)
 - ✓ Aggregation by strike
 - ✓ Weighting by OI
@@ -301,10 +303,20 @@ Location: `tests/unit/test_gex_dex_calculator.py`
 - ✓ Edge cases (empty data, missing Greeks, all positive/negative)
 - ✓ Total GEX/DEX summation
 - ✓ Multi-strike scenarios
+- ✓ USD units in GEX report, currency units in DEX report
+
+`TestAggregateAcrossExpirations` (7 tests):
+- ✓ Single-expiry aggregate matches original per-expiry result
+- ✓ Overlapping strikes summed correctly across expirations
+- ✓ Non-overlapping strikes all present in aggregate
+- ✓ Aggregate key levels differ from single-expiry (multi-expiry interaction)
+- ✓ Empty input returns safe zero result
+- ✓ Existing "AGGREGATE" key skipped (no recursion)
+- ✓ Aggregate report section contains expected content
 
 **Run Tests:**
 ```bash
-pytest tests/unit/test_gex_dex_calculator.py -v
+pytest tests/unit/analytics/test_gex_dex_calculator.py -v
 ```
 
 ### Investigation Script
@@ -340,6 +352,62 @@ Net GEX = net_gamma × spot_price
 
 This was off by a factor of (spot × 0.01), leading to incorrect magnitude scaling.
 
+## Market-Wide Aggregate GEX/DEX
+
+### Overview
+
+In addition to per-expiry analysis, the system computes a **market-wide aggregate** that sums GEX and DEX across all active expirations. This gives a single view of total dealer positioning across the entire term structure.
+
+### Method: `aggregate_across_expirations()`
+
+```python
+GexDexCalculator.aggregate_across_expirations(
+    gex_dex_by_expiry: Dict[str, Dict],  # per-expiry calculate() results
+    spot_price: float,
+    currency: str = "BTC",
+) -> Dict[str, Any]
+```
+
+**Algorithm:**
+1. Skip any key named `"AGGREGATE"` (prevents recursion)
+2. Merge `strike_data` from all expirations — summing gamma, delta, and OI at each strike
+3. Re-run `_calculate_gex_dex()`, `_calculate_cumulative_profiles()`, and `_detect_key_levels()` on the merged data
+4. Return a dict with the same structure as `calculate()`, plus `expiration_count`
+
+### Why Equal-Weight Summation (No DTE-Weighting)
+
+Gamma already encodes time-to-expiry via the Black-Scholes formula — near-term options have approximately 5× the gamma of far-term options at the same OI. Applying an additional DTE weight would double-count this effect.
+
+This is the industry standard methodology (SqueezeMetrics, SpotGamma, Glassnode, Amberdata).
+
+### How It's Used in the Synthesis Engine
+
+The aggregate result is stored at `analyzer.gex_dex_structured["AGGREGATE"]` and used by `SynthesisMapper.build_market_wide()` to populate five fields on `MarketWideMetrics`:
+
+| Field | Source |
+|-------|--------|
+| `aggregate_total_gex` | `gex_dex_structured["AGGREGATE"]["total_net_gex"]` |
+| `aggregate_total_dex` | `gex_dex_structured["AGGREGATE"]["total_net_dex"]` |
+| `aggregate_call_resistance` | `gex_dex_structured["AGGREGATE"]["key_levels"]["call_resistance"]` |
+| `aggregate_put_support` | `gex_dex_structured["AGGREGATE"]["key_levels"]["put_support"]` |
+| `aggregate_hvl` | `gex_dex_structured["AGGREGATE"]["key_levels"]["hvl"]` |
+
+The **vol regime classifier** uses `aggregate_total_gex` (falling back to the largest expiry when aggregate is zero) to determine SUPPRESSED vs. EXPLOSIVE regime. This is preferred over single-expiry GEX because dealers hedge total portfolio gamma, not per-expiry.
+
+### Limitation: Aggregate Can Mask Localized Risk
+
+A weekly expiry with deeply negative GEX near spot and a monthly expiry with positive GEX farther away may net to a mildly positive aggregate. The vol regime says SUPPRESSED, but the near-term expiry can still drive amplified moves. This is why **risk factors always use the largest-expiry GEX** as a separate check — it fires even when aggregate is benign.
+
+### Report Section: `generate_aggregate_report_section()`
+
+Generates a formatted text block for the market-wide report. Unlike per-expiry sections, no per-strike table is shown (too many strikes to be readable). Shows:
+- Spot price
+- KEY LEVELS: Call Resistance, Put Support, HVL
+- TOTALS: Total Net GEX (USD), Total Net DEX (currency)
+- GEX/DEX environment interpretation
+
+---
+
 ## Future Enhancements
 
 Potential improvements for closer alignment with institutional analytics:
@@ -362,7 +430,7 @@ These would be implemented in a separate `EnhancedGexDexCalculator` class to mai
 
 ---
 
-**Document Version:** 1.0
-**Last Updated:** 2026-02-16
+**Document Version:** 1.1
+**Last Updated:** 2026-03-08
 **Author:** Claude Code
 **Validated Against:** MentorQ, QuantData, Perfiliev methodology

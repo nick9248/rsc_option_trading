@@ -205,6 +205,14 @@ class DatabaseCaptureService:
         # API calls and processing here
 ```
 
+## Workflow Orchestration
+
+1. **Plan Mode Default**: Enter plan mode for any non-trivial task (3+ steps or architectural decisions). Write detailed specs upfront to reduce ambiguity. Use plan mode for verification steps, not just building.
+
+2. **Stop-and-Replan Rule**: If implementation goes sideways — unexpected errors, wrong approach, or growing complexity — STOP immediately and re-plan. Don't keep pushing a failing approach.
+
+3. **Subagent Strategy**: Use subagents to keep the main context window clean. Offload research, exploration, and parallel analysis to subagents. One task per subagent for focused execution.
+
 ## Problem-Solving Approach
 
 When fixing bugs or issues, follow structural thinking - not quick patches:

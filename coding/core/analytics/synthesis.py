@@ -8,12 +8,12 @@ Architecture:
     Raw Metrics → Scoring Engine → Regime Classification → Narrative Templates → Executive Summary
 
 Author: Nick (Wuppertal University / Institutional Options Desk)
-Version: 1.1
+Version: 2.0
 """
 
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Optional, Any
-from enum import Enum
+from enum import Enum, IntEnum
 import logging
 from datetime import datetime, timedelta
 
@@ -24,8 +24,8 @@ logger = logging.getLogger(__name__)
 # SECTION 1: DATA STRUCTURES
 # =============================================================================
 
-class Signal(Enum):
-    """Directional signal strength"""
+class Signal(IntEnum):
+    """Directional signal strength. IntEnum for arithmetic in TRANSITION logic."""
     STRONG_BEARISH = -2
     BEARISH = -1
     NEUTRAL = 0
@@ -43,9 +43,11 @@ class VolRegime(Enum):
 
 class MarketRegime(Enum):
     """Overall market regime"""
-    RISK_OFF = "risk_off"  # Bearish + elevated vol
-    RANGE_BOUND = "range_bound"  # Neutral direction + suppressed vol
-    TRENDING_UP = "trending_up"  # Bullish + normal/suppressed vol
+    RANGE_BOUND_NEUTRAL = "range_bound_neutral"  # Neutral + suppressed/normal vol
+    RANGE_BOUND_BULLISH = "range_bound_bullish"  # Bullish + suppressed vol
+    RANGE_BOUND_BEARISH = "range_bound_bearish"  # Bearish + suppressed vol
+    RANGE_BOUND_ELEVATED = "range_bound_elevated"  # Neutral + elevated vol
+    TRENDING_UP = "trending_up"  # Bullish + normal vol
     TRENDING_DOWN = "trending_down"  # Bearish + normal vol
     VOLATILE_BULLISH = "vol_bullish"  # Bullish + elevated/explosive vol
     VOLATILE_BEARISH = "vol_bearish"  # Bearish + elevated/explosive vol
@@ -61,7 +63,6 @@ class ExpiryMetrics:
     notional: float
     max_pain: float
     pc_ratio: float
-    volume_pc_ratio: float
 
     # GEX/DEX
     total_gex: float
@@ -78,8 +79,6 @@ class ExpiryMetrics:
     skew_25d: float  # put IV - call IV
     put_25d_iv: float
     call_25d_iv: float
-    vwap_iv: float
-    mark_iv: float
 
     # Moneyness P/C
     pc_atm: float
@@ -93,11 +92,11 @@ class ExpiryMetrics:
     # Flow
     flow_bias: str  # "Heavy Buying", "Moderate Selling", etc.
     flow_trend: str
+
+    # Fields with defaults
+    total_volume: int = 0
     top_buy_strikes: List[dict] = field(default_factory=list)
     top_sell_strikes: List[dict] = field(default_factory=list)
-
-    # OI changes
-    large_oi_changes: List[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -142,6 +141,13 @@ class MarketWideMetrics:
     # Block trades
     block_trades: List[dict] = field(default_factory=list)
 
+    # Aggregate GEX/DEX across all expirations
+    aggregate_total_gex: float = 0.0
+    aggregate_total_dex: float = 0.0
+    aggregate_call_resistance: Optional[Dict] = None
+    aggregate_put_support: Optional[Dict] = None
+    aggregate_hvl: Optional[float] = None
+
 
 # =============================================================================
 # SECTION 2: SCORING ENGINE
@@ -161,143 +167,130 @@ class ScoringEngine:
     # -------------------------------------------------------------------------
 
     @staticmethod
-    def score_pc_ratio(pc_ratio: float) -> Tuple[float, float, str]:
+    def score_pc_ratio(pc_ratio: float, dte: Optional[int] = None) -> Tuple[float, float, str]:
         """
-        Put/Call ratio interpretation.
+        Put/Call ratio interpretation with contrarian dampening at extremes
+        and DTE score clamping.
 
-        Thresholds (OI-based):
-            < 0.60  → Strong Bullish (+2)   — extreme call dominance
-            0.60-0.80 → Bullish (+1)        — moderate call lean
-            0.80-1.00 → Neutral (0)         — balanced
-            1.00-1.30 → Bearish (-1)        — moderate put lean
-            > 1.30  → Strong Bearish (-2)   — extreme hedging / fear
+        Extremes (<0.40 or >2.00) are contrarian-dampened: reduced score
+        magnitude and lower weight, similar to how score_funding treats
+        extreme positioning.
 
-        IMPORTANT NUANCE: Very high P/C (>2.0) in short-dated expiries
-        often signals hedging, not directional bearishness. The weight
-        should decrease for 0-3 DTE expiries with extreme P/C.
+        DTE <= 2: scores clamped to ±1.0 (settlement-day noise).
         """
-        if pc_ratio < 0.60:
-            return (2.0, 0.7, f"P/C {pc_ratio:.2f}: Extreme call dominance")
+        if pc_ratio < 0.40:
+            score, weight = 1.0, 0.5
+            reason = f"P/C {pc_ratio:.2f}: Extreme call dominance — contrarian caution"
+        elif pc_ratio < 0.60:
+            score, weight = 2.0, 0.7
+            reason = f"P/C {pc_ratio:.2f}: Strong call dominance"
         elif pc_ratio < 0.80:
-            return (1.0, 0.7, f"P/C {pc_ratio:.2f}: Bullish call lean")
+            score, weight = 1.0, 0.7
+            reason = f"P/C {pc_ratio:.2f}: Bullish call lean"
         elif pc_ratio < 1.00:
-            return (0.0, 0.5, f"P/C {pc_ratio:.2f}: Balanced")
+            score, weight = 0.0, 0.5
+            reason = f"P/C {pc_ratio:.2f}: Balanced"
         elif pc_ratio < 1.30:
-            return (-1.0, 0.7, f"P/C {pc_ratio:.2f}: Moderate put lean")
+            score, weight = -1.0, 0.7
+            reason = f"P/C {pc_ratio:.2f}: Moderate put lean"
+        elif pc_ratio <= 2.00:
+            score, weight = -2.0, 0.7
+            reason = f"P/C {pc_ratio:.2f}: Extreme hedging/fear"
         else:
-            return (-2.0, 0.7, f"P/C {pc_ratio:.2f}: Extreme hedging/fear")
+            score, weight = -1.0, 0.5
+            reason = f"P/C {pc_ratio:.2f}: Extreme put dominance — contrarian caution"
+
+        # DTE score clamping
+        if dte is not None and dte <= 2:
+            score = max(-1.0, min(1.0, score))
+            reason += " [DTE≤2 clamped]"
+
+        return (score, weight, reason)
 
     @staticmethod
-    def score_gex(total_gex: float, spot: float) -> Tuple[float, float, str]:
+    def score_dex(total_dex: float, spot: float = 100000.0,
+                  dte: Optional[int] = None) -> Tuple[float, float, str]:
         """
-        Gamma Exposure interpretation.
+        Delta Exposure interpretation, normalized by spot price.
 
-        GEX doesn't give direction — it gives REGIME.
-        Positive GEX → dealers dampen moves → range-bound (neutral score)
-        Negative GEX → dealers amplify moves → breakout likely
+        Positive DEX → market net long delta → dealers short delta →
+        dealers buy underlying to hedge → bullish.
 
-        The directional signal comes from DEX, not GEX.
-        GEX magnitude relative to notional matters.
-
-        Thresholds (absolute, BTC-calibrated):
-            > +5M  → Strong dampening    (score: 0, high confidence range)
-            > +1M  → Moderate dampening   (score: 0, moderate confidence)
-            ±1M    → Neutral gamma        (score: 0, low confidence)
-            < -1M  → Moderate amplifying  (score: 0, but flag breakout risk)
-            < -5M  → Strong amplifying    (score: 0, HIGH breakout risk)
+        Thresholds normalized: dex/spot.
+        At BTC $100K: ±0.005 = ±500, ±0.001 = ±100.
         """
-        gex_millions = total_gex / 1_000_000
+        if spot <= 0:
+            spot = 100000.0
+        dex_norm = total_dex / spot
 
-        if gex_millions > 5:
-            return (0.0, 0.3, f"GEX +{gex_millions:.1f}M: Strong dampening — range likely")
-        elif gex_millions > 1:
-            return (0.0, 0.3, f"GEX +{gex_millions:.1f}M: Moderate dampening")
-        elif gex_millions > -1:
-            return (0.0, 0.2, f"GEX {gex_millions:.1f}M: Neutral gamma")
-        elif gex_millions > -5:
-            return (0.0, 0.3, f"GEX {gex_millions:.1f}M: Amplifying — breakout risk")
+        if dex_norm > 0.005:
+            score, weight = 2.0, 0.8
+            reason = f"DEX/spot {dex_norm:+.4f}: Strong bullish dealer pressure"
+        elif dex_norm > 0.001:
+            score, weight = 1.0, 0.8
+            reason = f"DEX/spot {dex_norm:+.4f}: Moderate bullish pressure"
+        elif dex_norm > -0.001:
+            score, weight = 0.0, 0.5
+            reason = f"DEX/spot {dex_norm:+.4f}: Neutral dealer delta"
+        elif dex_norm > -0.005:
+            score, weight = -1.0, 0.8
+            reason = f"DEX/spot {dex_norm:+.4f}: Moderate bearish pressure"
         else:
-            return (0.0, 0.4, f"GEX {gex_millions:.1f}M: EXTREME amplification — explosive move likely")
+            score, weight = -2.0, 0.8
+            reason = f"DEX/spot {dex_norm:+.4f}: Strong bearish dealer pressure"
+
+        # DTE score clamping
+        if dte is not None and dte <= 2:
+            score = max(-1.0, min(1.0, score))
+            reason += " [DTE≤2 clamped]"
+
+        return (score, weight, reason)
 
     @staticmethod
-    def score_dex(total_dex: float) -> Tuple[float, float, str]:
+    def score_max_pain_gravity(max_pain: float, spot: float,
+                               dte: Optional[int] = None) -> Tuple[float, float, str]:
         """
-        Delta Exposure interpretation.
+        Max pain pull interpretation with DTE-scaled weight.
 
-        DEX represents net dealer delta — the directional pressure
-        from options market makers' hedging activity.
-
-        Positive DEX → dealers are net long → bullish hedging pressure
-        Negative DEX → dealers are net short → bearish hedging pressure
-
-        Thresholds (BTC-calibrated):
-            > +500   → Strong bullish pressure (+2)
-            > +100   → Moderate bullish (+1)
-            ±100     → Neutral (0)
-            < -100   → Moderate bearish (-1)
-            < -500   → Strong bearish (-2)
-
-        For very large expiries (>50K OI), scale thresholds up by 5x.
-        """
-        if total_dex > 500:
-            return (2.0, 0.8, f"DEX +{total_dex:.0f}: Strong bullish dealer pressure")
-        elif total_dex > 100:
-            return (1.0, 0.8, f"DEX +{total_dex:.0f}: Moderate bullish pressure")
-        elif total_dex > -100:
-            return (0.0, 0.5, f"DEX {total_dex:.0f}: Neutral dealer delta")
-        elif total_dex > -500:
-            return (-1.0, 0.8, f"DEX {total_dex:.0f}: Moderate bearish pressure")
-        else:
-            return (-2.0, 0.8, f"DEX {total_dex:.0f}: Strong bearish dealer pressure")
-
-    @staticmethod
-    def score_max_pain_gravity(max_pain: float, spot: float) -> Tuple[float, float, str]:
-        """
-        Max pain pull interpretation.
-
-        Max pain exerts gravitational pull on price, especially for
-        large expiries within 7 DTE. The effect weakens with:
-        - Time to expiry (>14 DTE: minimal effect)
-        - Distance from spot (>10%: unlikely to reach)
-        - OI size (small expiry: weak pull)
-
-        Score based on direction of pull:
-            Max pain > spot + 5% → Bullish pull (+1 to +2)
-            Max pain within ±5%  → Neutral (weak pull)
-            Max pain < spot - 5% → Bearish pull (-1 to -2)
+        Gravity effect is strongest near expiration and weakens with time.
+        DTE-based weight: 0-7→0.5, 8-14→0.4, 15-30→0.3, >30→0.15.
+        Neutral always uses weight 0.2 regardless of DTE.
         """
         distance_pct = (max_pain - spot) / spot * 100
 
+        # DTE-scaled weight for non-neutral scores
+        if dte is not None:
+            if dte <= 7:
+                dte_weight = 0.5
+            elif dte <= 14:
+                dte_weight = 0.4
+            elif dte <= 30:
+                dte_weight = 0.3
+            else:
+                dte_weight = 0.15
+        else:
+            dte_weight = 0.4  # default fallback
+
         if distance_pct > 10:
-            return (2.0, 0.4, f"Max pain ${max_pain:,.0f} is {distance_pct:+.1f}% above spot — strong upward pull")
+            return (2.0, dte_weight, f"Max pain ${max_pain:,.0f} is {distance_pct:+.1f}% above spot — strong upward pull")
         elif distance_pct > 5:
-            return (1.0, 0.4, f"Max pain ${max_pain:,.0f} is {distance_pct:+.1f}% above — moderate pull up")
+            return (1.0, dte_weight, f"Max pain ${max_pain:,.0f} is {distance_pct:+.1f}% above — moderate pull up")
         elif distance_pct > -5:
-            # Reduce weight when max pain is near spot — less informative
             return (0.0, 0.2, f"Max pain ${max_pain:,.0f} is near spot ({distance_pct:+.1f}%)")
         elif distance_pct > -10:
-            return (-1.0, 0.4, f"Max pain ${max_pain:,.0f} is {distance_pct:+.1f}% below — pull down")
+            return (-1.0, dte_weight, f"Max pain ${max_pain:,.0f} is {distance_pct:+.1f}% below — pull down")
         else:
-            return (-2.0, 0.4, f"Max pain ${max_pain:,.0f} is {distance_pct:+.1f}% below — strong downward pull")
+            return (-2.0, dte_weight, f"Max pain ${max_pain:,.0f} is {distance_pct:+.1f}% below — strong downward pull")
 
     @staticmethod
-    def score_funding(funding_rate: float, funding_8h: float) -> Tuple[float, float, str]:
+    def score_funding(funding_8h: float) -> Tuple[float, float, str]:
         """
-        Funding rate interpretation.
+        Funding rate interpretation. Uses funding_8h only.
 
-        Positive funding → longs pay shorts → crowded long → mildly bearish
-        Negative funding → shorts pay longs → crowded short → mildly bullish
-        Zero → balanced
-
-        Thresholds (annualized):
-            > 20%  → Extremely crowded long (-2)
-            > 10%  → Crowded long (-1)
-            ±5%    → Neutral (0)
-            < -10% → Crowded short (+1)
-            < -20% → Extremely crowded short (+2)
+        Annualized rate = funding_8h × 3 × 365.
+        Positive funding → crowded long → contrarian bearish.
+        Negative funding → crowded short → contrarian bullish.
         """
-        # Bug fix: use funding_8h (8h rate) for the annualized calculation
-        # funding_8h × 3 periods/day × 365 days = annualized rate
         ann_rate = funding_8h * 3 * 365
 
         if abs(ann_rate) < 5:
@@ -341,6 +334,8 @@ class ScoringEngine:
             "Heavy Buying": 2.0,
             "Moderate Buying": 1.0,
             "Mixed/Neutral": 0.0,
+            "Balanced": 0.0,
+            "No Data": 0.0,
             "Moderate Selling": -1.0,
             "Heavy Selling": -2.0,
         }
@@ -357,54 +352,81 @@ class ScoringEngine:
             "Mixed/Neutral Flow": 0.0,
         }
 
-        base = bias_map.get(flow_bias, 0.0)
-        adjustment = trend_map.get(flow_trend, 0.0)
+        base = bias_map.get(flow_bias, None)
+        if base is None:
+            logger.warning(f"Unrecognized flow_bias: '{flow_bias}' — defaulting to 0.0")
+            base = 0.0
+
+        adjustment = trend_map.get(flow_trend, None)
+        if adjustment is None:
+            logger.warning(f"Unrecognized flow_trend: '{flow_trend}' — defaulting to 0.0")
+            adjustment = 0.0
+
         score = max(-2.0, min(2.0, base + adjustment))
 
         return (score, 0.6, f"Flow: {flow_bias} + {flow_trend} → net {score:+.1f}")
 
     @staticmethod
-    def score_vanna_charm(net_vanna: float, net_charm: float) -> Tuple[float, float, str]:
+    def score_vanna_charm(net_vanna: float, net_charm: float,
+                          iv_pctile: float = 50.0, gex_total: float = 0.0,
+                          spot: float = 100000.0) -> Tuple[float, float, str]:
         """
         Second-order Greeks interpretation.
 
-        Vanna: How delta changes with IV.
-            Positive vanna + IV dropping → dealers buy underlying (bullish)
-            Positive vanna + IV rising  → dealers sell underlying (bearish)
-            Since we're in high IV percentile (likely to mean-revert down),
-            positive vanna is bullish.
+        Vanna is IV-regime-conditional:
+        - iv_pctile > 60: IV likely to drop → positive vanna = bullish
+        - iv_pctile < 40: IV likely to rise → positive vanna = BEARISH (reversed)
+        - 40-60: no clear IV direction → vanna signal = 0
 
-        Charm: How delta changes with time.
-            Positive charm → time decay pushes dealer delta positive (bullish drift)
-            Negative charm → time decay pushes dealer delta negative (bearish drift)
+        Zero inputs produce 0 signal (no phantom signals).
 
-        These are low-weight but persistent signals.
+        Gamma-adjusted weight: negative GEX amplifies, positive GEX dampens.
         """
-        vanna_signal = 1.0 if net_vanna > 0 else -1.0
-        charm_signal = 1.0 if net_charm > 0 else -1.0
+        # Vanna signal (IV-regime-conditional)
+        if net_vanna == 0:
+            vanna_signal = 0.0
+            vanna_dir = "zero"
+        elif iv_pctile > 60:
+            vanna_signal = 1.0 if net_vanna > 0 else -1.0
+            vanna_dir = "bullish" if net_vanna > 0 else "bearish"
+        elif iv_pctile < 40:
+            # Reversed: IV rising, not falling
+            vanna_signal = -1.0 if net_vanna > 0 else 1.0
+            vanna_dir = "bearish(IV rising)" if net_vanna > 0 else "bullish(IV rising)"
+        else:
+            vanna_signal = 0.0
+            vanna_dir = "neutral(IV mid-range)"
 
-        # Average the two, weight low
+        # Charm signal
+        if net_charm == 0:
+            charm_signal = 0.0
+            charm_dir = "zero"
+        else:
+            charm_signal = 1.0 if net_charm > 0 else -1.0
+            charm_dir = "bullish" if net_charm > 0 else "bearish"
+
         combined = (vanna_signal + charm_signal) / 2
 
-        vanna_dir = "bullish" if net_vanna > 0 else "bearish"
-        charm_dir = "bullish" if net_charm > 0 else "bearish"
+        # Gamma-adjusted weight
+        if spot <= 0:
+            spot = 100000.0
+        gex_normalized = gex_total / spot
+        if gex_normalized < -50:
+            weight = 0.4
+        elif gex_normalized > 50:
+            weight = 0.15
+        else:
+            weight = 0.3
 
-        return (combined, 0.3, f"Vanna {vanna_dir} + Charm {charm_dir} → structural drift {combined:+.1f}")
+        return (combined, weight, f"Vanna {vanna_dir} + Charm {charm_dir} → structural drift {combined:+.1f}")
 
     @staticmethod
-    def score_futures_basis(basis_front: float, basis_back: float) -> Tuple[float, float, str]:
+    def score_futures_basis(basis_front: float) -> Tuple[float, float, str]:
         """
-        Futures basis interpretation.
+        Futures basis interpretation (front contract only).
 
-        Contango (positive basis) → market expects higher prices → bullish
-        Backwardation (negative basis) → stress, forced selling → bearish
-
-        Thresholds (annualized premium):
-            > 10%  → Strong contango, bullish structural demand (+2)
-            > 5%   → Moderate contango (+1)
-            ±2%    → Flat (0)
-            < -2%  → Mild backwardation (-1)
-            < -5%  → Strong backwardation, stress (-2)
+        Contango (positive basis) → bullish structural demand.
+        Backwardation (negative basis) → stress.
         """
         if basis_front > 10:
             return (2.0, 0.5, f"Basis {basis_front:.1f}% front: Strong contango — bullish demand")
@@ -462,18 +484,20 @@ class ScoringEngine:
         Forward VRP = DVOL - avg(10d RV, 20d RV)
         Use forward VRP when 30d cone percentile > 85th or < 15th.
         """
-        # Check if 30d RV is at extreme (stale signal)
-        use_forward = cone_30d_pctile > 85 or cone_30d_pctile < 15
-
-        if use_forward:
+        # Stale-data correction: only for cone > 85 (spike inflated 30d RV)
+        # Cone < 15 (abnormally quiet) uses raw VRP — 10d/20d are equally quiet
+        if cone_30d_pctile > 85:
             forward_rv = (rv_10d + rv_20d) / 2
-            # Recalculate forward VRP using DVOL implied from context
-            # We approximate: DVOL ≈ VRP + rv_30d
             dvol_approx = vrp + rv_30d
             forward_vrp = dvol_approx - forward_rv
             effective_vrp = forward_vrp
             stale_note = (f"30d RV at {cone_30d_pctile:.0f}th pctile (STALE). "
                           f"Forward VRP using 10d/20d avg: {forward_vrp:+.1f}pts")
+        elif cone_30d_pctile < 15:
+            effective_vrp = vrp
+            stale_note = (f"30d RV at {cone_30d_pctile:.0f}th pctile — abnormally quiet period. "
+                          f"If realized vol reverts to historical norms, VRP will compress. "
+                          f"Treat current sell-vol edge as potentially overstated")
         else:
             effective_vrp = vrp
             stale_note = f"30d RV within normal range"
@@ -492,16 +516,11 @@ class ScoringEngine:
     @staticmethod
     def score_skew(skew_25d: float) -> Tuple[float, float, str]:
         """
-        25-Delta Skew interpretation.
+        25-Delta Skew — FEAR INDICATOR axis (not buy/sell vol).
 
-        Positive skew → puts more expensive than calls → hedging demand
-
-        Thresholds:
-            > 12%  → Extreme fear/hedging (+2 vol score, skew trades attractive)
-            > 8%   → Heavy hedging demand (+1)
-            4-8%   → Normal hedging (0)
-            < 4%   → Complacent (-1)
-            < 0%   → Inverted skew (-2, rare, extremely bullish or complacent)
+        +2 = extreme fear/hedging, -2 = extreme complacency.
+        Feeds into: vol regime classifier, risk factors, trade recs,
+        vol assessment narrative. Does NOT feed into directional scoring.
         """
         if skew_25d > 12:
             return (2.0, 0.6, f"Skew {skew_25d:+.1f}%: Extreme put demand — fear elevated")
@@ -560,33 +579,47 @@ class ScoringEngine:
             else:
                 return (0.0, 0.3, f"Backwardation -{spread:.0f}pts: Mild{kink_note}")
 
+    # -------------------------------------------------------------------------
+    # FRAGILITY DETECTION (post-scoring confidence adjustment)
+    # -------------------------------------------------------------------------
+
     @staticmethod
-    def score_vwap_vs_mark(vwap_iv: float, mark_iv: float) -> Tuple[float, float, str]:
+    def detect_fragility(
+            all_direction_scores: List[Tuple[float, float, str]],
+            funding_8h: float
+    ) -> Tuple[float, str]:
         """
-        VWAP IV vs Mark IV interpretation.
+        Detect fragile crowding setups where flow consensus is strong
+        but positioning is extreme.
 
-        VWAP < Mark → Sellers aggressive (filling below mid) → bearish flow
-        VWAP > Mark → Buyers aggressive (paying above mid) → bullish flow
-
-        Thresholds:
-            Diff > +5%  → Strong buyer urgency
-            Diff > +2%  → Moderate buyer pressure
-            ±2%         → Balanced
-            Diff < -2%  → Moderate seller pressure
-            Diff < -5%  → Strong seller urgency
+        Returns (multiplier, level): HIGH→0.5, MODERATE→0.7, NONE→1.0.
+        This is NOT a scorer — it's a post-hoc confidence multiplier.
         """
-        diff = vwap_iv - mark_iv
+        # Compute directional avg excluding funding scores
+        non_funding = [(s, w, r) for s, w, r in all_direction_scores
+                       if "funding" not in r.lower()]
 
-        if diff > 5:
-            return (1.0, 0.4, f"VWAP-Mark {diff:+.1f}%: Buyers paying up aggressively")
-        elif diff > 2:
-            return (0.5, 0.3, f"VWAP-Mark {diff:+.1f}%: Moderate buyer urgency")
-        elif diff > -2:
-            return (0.0, 0.2, f"VWAP-Mark {diff:+.1f}%: Balanced flow")
-        elif diff > -5:
-            return (-0.5, 0.3, f"VWAP-Mark {diff:+.1f}%: Sellers aggressive")
-        else:
-            return (-1.0, 0.4, f"VWAP-Mark {diff:+.1f}%: Strong seller urgency")
+        if not non_funding:
+            return (1.0, "NONE")
+
+        weighted_sum = sum(s * w for s, w, _ in non_funding)
+        total_weight = sum(w for _, w, _ in non_funding)
+        if total_weight == 0:
+            return (1.0, "NONE")
+
+        avg_excl_funding = weighted_sum / total_weight
+        ann_rate = funding_8h * 3 * 365
+
+        bullish_fragile = avg_excl_funding > 0.8 and ann_rate > 15
+        bearish_fragile = avg_excl_funding < -0.8 and ann_rate < -15
+
+        if bullish_fragile or bearish_fragile:
+            if abs(ann_rate) > 25:
+                return (0.5, "HIGH")
+            else:
+                return (0.7, "MODERATE")
+
+        return (1.0, "NONE")
 
 
 # =============================================================================
@@ -642,29 +675,37 @@ class RegimeClassifier:
             gex_total: float,
             iv_pctile_score: float,
             vrp_score: float,
-            skew_score: float
+            skew_score: float,
+            spot: float = 100000.0,
+            term_structure_score: float = 0.0,
     ) -> Tuple[VolRegime, List[str]]:
         """
-        Classify volatility regime from vol-related scores.
+        Classify volatility regime. GEX normalized by spot.
 
         Decision tree:
-            1. If GEX strongly positive AND IV low → SUPPRESSED
-            2. If GEX negative AND IV high AND skew extreme → EXPLOSIVE
-            3. If IV high but GEX positive → ELEVATED (capped upside on vol)
-            4. Otherwise → NORMAL
+            1. GEX/spot > 20 AND IV low → SUPPRESSED
+            2. GEX/spot < -20 AND IV high AND skew extreme → EXPLOSIVE
+            3. IV high AND (VRP confirms OR term structure stressed) → ELEVATED
+            4. IV high alone → ELEVATED (mixed confirmation)
+            5. Otherwise → NORMAL
         """
-        gex_millions = gex_total / 1_000_000
+        if spot <= 0:
+            spot = 100000.0
+        gex_normalized = gex_total / spot
         reasons = []
 
-        if gex_millions > 2 and iv_pctile_score <= 0:
+        if gex_normalized > 20 and iv_pctile_score <= 0:
             regime = VolRegime.SUPPRESSED
-            reasons.append(f"Positive GEX ({gex_millions:+.1f}M) + low IV → Volatility suppressed")
-        elif gex_millions < -2 and iv_pctile_score >= 1 and skew_score >= 1:
+            reasons.append(f"Positive GEX (norm {gex_normalized:+.1f}) + low IV → Volatility suppressed")
+        elif gex_normalized < -20 and iv_pctile_score >= 1 and skew_score >= 1:
             regime = VolRegime.EXPLOSIVE
-            reasons.append(f"Negative GEX ({gex_millions:+.1f}M) + high IV + steep skew → Explosive regime")
+            reasons.append(f"Negative GEX (norm {gex_normalized:+.1f}) + high IV + steep skew → Explosive regime")
+        elif iv_pctile_score >= 1 and (vrp_score >= 1 or term_structure_score <= -1):
+            regime = VolRegime.ELEVATED
+            reasons.append(f"High IV + {'VRP confirms' if vrp_score >= 1 else 'term structure stressed'} → Elevated vol")
         elif iv_pctile_score >= 1:
             regime = VolRegime.ELEVATED
-            reasons.append(f"High IV ({iv_pctile_score:+.1f}) but mixed gamma → Elevated vol")
+            reasons.append(f"High IV ({iv_pctile_score:+.1f}), mixed confirmation → Elevated vol")
         else:
             regime = VolRegime.NORMAL
             reasons.append("Normal volatility regime")
@@ -681,12 +722,13 @@ class RegimeClassifier:
         """
         Combine direction + vol regime into market regime.
 
-        Also checks for TRANSITION regime when near-term and
-        far-term signals conflict.
+        TRANSITION requires conflicting signals AND magnitude >= 2
+        (at least one side STRONG, or both moderate).
         """
-        # Check for conflicting timeframes
-        if (near_term_direction.value * far_term_direction.value < 0 and
-                abs(near_term_direction.value) > 0 and abs(far_term_direction.value) > 0):
+        # Check for conflicting timeframes with minimum magnitude
+        magnitude = abs(near_term_direction.value) + abs(far_term_direction.value)
+        conflicting = near_term_direction.value * far_term_direction.value < 0
+        if conflicting and magnitude >= 2:
             return (MarketRegime.TRANSITION,
                     f"Conflicting signals: near-term {near_term_direction.name} vs far-term {far_term_direction.name}")
 
@@ -695,7 +737,7 @@ class RegimeClassifier:
             if vol_regime in (VolRegime.ELEVATED, VolRegime.EXPLOSIVE):
                 return (MarketRegime.VOLATILE_BEARISH, "Bearish + elevated vol = risk-off")
             elif vol_regime == VolRegime.SUPPRESSED:
-                return (MarketRegime.RANGE_BOUND, "Bearish lean but vol suppressed = grind lower in range")
+                return (MarketRegime.RANGE_BOUND_BEARISH, "Bearish lean but vol suppressed = grind lower in range")
             else:
                 return (MarketRegime.TRENDING_DOWN, "Bearish + normal vol = trending lower")
 
@@ -703,17 +745,19 @@ class RegimeClassifier:
             if vol_regime in (VolRegime.ELEVATED, VolRegime.EXPLOSIVE):
                 return (MarketRegime.VOLATILE_BULLISH, "Bullish + elevated vol = volatile rally")
             elif vol_regime == VolRegime.SUPPRESSED:
-                return (MarketRegime.RANGE_BOUND, "Bullish lean but vol suppressed = consolidation")
+                return (MarketRegime.RANGE_BOUND_BULLISH, "Bullish lean but vol suppressed = consolidation")
             else:
                 return (MarketRegime.TRENDING_UP, "Bullish + normal vol = trending higher")
 
         else:  # Neutral
             if vol_regime == VolRegime.EXPLOSIVE:
                 return (MarketRegime.TRANSITION, "Neutral direction + explosive vol = breakout imminent")
+            elif vol_regime == VolRegime.ELEVATED:
+                return (MarketRegime.RANGE_BOUND_ELEVATED, "Neutral + elevated vol = premium selling opportunity")
             elif vol_regime == VolRegime.SUPPRESSED:
-                return (MarketRegime.RANGE_BOUND, "Neutral + suppressed vol = range-bound")
+                return (MarketRegime.RANGE_BOUND_NEUTRAL, "Neutral + suppressed vol = range-bound")
             else:
-                return (MarketRegime.RANGE_BOUND, "Neutral direction = range-bound")
+                return (MarketRegime.RANGE_BOUND_NEUTRAL, "Neutral direction = range-bound")
 
 
 # =============================================================================
@@ -731,16 +775,27 @@ class NarrativeGenerator:
     # -------------------------------------------------------------------------
 
     REGIME_TEMPLATES = {
-        MarketRegime.RISK_OFF: (
-            "RISK-OFF regime. Bearish price action amplified by negative gamma. "
-            "Dealers are short gamma and will accelerate selling into weakness. "
-            "Priority: capital preservation, long puts, reduce notional exposure."
-        ),
-        MarketRegime.RANGE_BOUND: (
-            "RANGE-BOUND regime. {gex_detail} "
+        MarketRegime.RANGE_BOUND_NEUTRAL: (
+            "RANGE-BOUND (NEUTRAL) regime. {gex_detail} "
             "Expect price to oscillate between put support at ${put_support:,.0f} "
             "and call resistance at ${call_resistance:,.0f}. "
-            "Priority: sell premium via iron condors/strangles, harvest theta decay."
+            "Priority: sell premium via symmetric iron condors/strangles, harvest theta decay."
+        ),
+        MarketRegime.RANGE_BOUND_BULLISH: (
+            "RANGE-BOUND (BULLISH) regime. Vol suppressed but bullish lean. {gex_detail} "
+            "Expect grind-higher in range toward ${call_resistance:,.0f}. "
+            "Priority: sell put spreads preferred, skew short strikes higher."
+        ),
+        MarketRegime.RANGE_BOUND_BEARISH: (
+            "RANGE-BOUND (BEARISH) regime. Vol suppressed but bearish lean. {gex_detail} "
+            "Expect grind-lower in range toward ${put_support:,.0f}. "
+            "Priority: sell call spreads preferred, skew short strikes lower."
+        ),
+        MarketRegime.RANGE_BOUND_ELEVATED: (
+            "RANGE-BOUND (ELEVATED VOL) regime. No directional lean but vol is expensive. "
+            "Best premium-selling environment — widest wings, most aggressive capture. "
+            "Put support at ${put_support:,.0f}, call resistance at ${call_resistance:,.0f}. "
+            "Priority: wide iron condors at GEX support/resistance."
         ),
         MarketRegime.TRENDING_UP: (
             "TRENDING-UP regime. Bullish structural positioning with normal volatility. "
@@ -847,7 +902,7 @@ class NarrativeGenerator:
         else:
             gex_detail = f"Negative gamma ({gex_millions:.1f}M GEX) is amplifying moves — dealers chase momentum both directions."
 
-        template = cls.REGIME_TEMPLATES.get(regime, cls.REGIME_TEMPLATES[MarketRegime.RANGE_BOUND])
+        template = cls.REGIME_TEMPLATES.get(regime, cls.REGIME_TEMPLATES[MarketRegime.RANGE_BOUND_NEUTRAL])
 
         return template.format(
             put_support=put_support,
@@ -871,19 +926,25 @@ class NarrativeGenerator:
     ) -> str:
         """Generate volatility assessment narrative."""
 
-        # Determine which template
+        # Determine which template — unified ±5 thresholds matching VRP scorer
         if vrp > 10:
             template_key = "sell_strong"
-        elif vrp > 3:
+        elif vrp > 5:
             template_key = "sell_moderate"
-        elif vrp > -3:
+        elif vrp > -5:
             template_key = "neutral"
         elif vrp > -10:
             template_key = "buy_moderate"
         else:
             template_key = "buy_strong"
 
-        rich_side = "OTM" if skew > 6 else "ATM"
+        # Rich/cheap side based on skew
+        if skew > 8:
+            rich_side = "OTM puts are rich — selling put premium has edge"
+        elif skew >= 4:
+            rich_side = "Skew is normal — no clear rich/cheap side"
+        else:
+            rich_side = "OTM puts are cheap relative to calls — tail risk underpriced"
         cheap_side = "calls" if skew > 4 else "puts"
 
         template = cls.VOL_TEMPLATES[template_key]
@@ -908,7 +969,9 @@ class NarrativeGenerator:
             largest_expiry_dte: int,
             funding_8h: float,
             skew: float,
-            funding_rate: float = 0.0,
+            spot: float = 100000.0,
+            fragility_multiplier: float = 1.0,
+            fragility_level: str = "NONE",
     ) -> str:
         """Generate risk factor list based on thresholds."""
 
@@ -918,20 +981,22 @@ class NarrativeGenerator:
             risks.append(
                 f"30d RV at {cone_30d_pctile:.0f}th percentile — recent extreme move may repeat or mean-revert violently")
 
-        gex_m = gex_total / 1_000_000
-        if gex_m < -5:
+        # GEX threshold normalized by spot
+        if spot <= 0:
+            spot = 100000.0
+        gex_norm = gex_total / spot
+        if gex_norm < -50:
+            gex_m = gex_total / 1_000_000
             risks.append(
-                f"Deeply negative GEX ({gex_m:.1f}M) — cascading stop-outs possible on any directional trigger")
+                f"Deeply negative GEX ({gex_m:.1f}M, norm {gex_norm:.0f}) — cascading stop-outs possible")
 
         if largest_expiry_dte <= 3:
             risks.append(f"Major expiry in {largest_expiry_dte} DTE — pin risk and gamma spike around max pain")
 
-        # funding_8h is in pct (e.g. -0.0148% per 8h). Threshold |8h| > 0.01%.
-        # Annualized rate uses funding_rate (= current_funding × 100), the same
-        # formula the report's PERPETUAL FUNDING section uses: rate × 3 × 365.
-        if abs(funding_8h) > 0.01:
+        # Funding threshold: |funding_8h| > 0.03% per 8h (~32.85% ann)
+        if abs(funding_8h) > 0.03:
             direction = "long" if funding_8h > 0 else "short"
-            ann_rate = abs(funding_rate) * 3 * 365  # matches report's annualization
+            ann_rate = abs(funding_8h) * 3 * 365
             level = "Extreme" if ann_rate > 20 else "Elevated"
             risks.append(
                 f"{level} funding ({funding_8h:.4f}% per 8h, ~{ann_rate:.1f}% ann) "
@@ -940,6 +1005,12 @@ class NarrativeGenerator:
 
         if skew > 12:
             risks.append(f"Extreme skew ({skew:+.1f}%) — tail hedging elevated, crash risk priced in")
+
+        # Fragility flag
+        if fragility_multiplier < 1.0:
+            risks.append(
+                f"Fragility {fragility_level}: directional consensus + extreme positioning — reversal risk elevated"
+            )
 
         if not risks:
             risks.append("No elevated risk factors detected")
@@ -973,14 +1044,36 @@ class NarrativeGenerator:
         """
         recommendations = []
 
-        # Strategy 1: Premium selling conditions
-        if (regime in (MarketRegime.RANGE_BOUND,) and
+        # Strategy 1: Premium selling conditions (all RANGE_BOUND variants)
+        range_bound_regimes = (
+            MarketRegime.RANGE_BOUND_NEUTRAL,
+            MarketRegime.RANGE_BOUND_BULLISH,
+            MarketRegime.RANGE_BOUND_BEARISH,
+            MarketRegime.RANGE_BOUND_ELEVATED,
+        )
+        if (regime in range_bound_regimes and
                 iv_pctile > 70 and
                 vol_regime != VolRegime.EXPLOSIVE):
+            # Skew-adjusted IC
+            if skew > 8:
+                skew_adj = "Puts are rich — keep short put at 25-delta, push long put protection further OTM (5-delta). "
+            elif skew < 2:
+                skew_adj = "Calls relatively expensive — keep short call at 25-delta, push long call protection further OTM. "
+            else:
+                skew_adj = "Normal skew — symmetric wings at GEX support/resistance levels. "
+
+            # Regime-specific center shift
+            if regime == MarketRegime.RANGE_BOUND_BULLISH:
+                skew_adj += "Bullish lean: shift IC center upward."
+            elif regime == MarketRegime.RANGE_BOUND_BEARISH:
+                skew_adj += "Bearish lean: shift IC center downward."
+            elif regime == MarketRegime.RANGE_BOUND_ELEVATED:
+                skew_adj += "Elevated vol: widest wings for maximum premium capture."
+
             recommendations.append(
                 f"PRIMARY — Short Iron Condor ({near_term_expiry}): "
                 f"Sell premium in range-bound regime. IV at {iv_pctile:.0f}th pctile provides edge. "
-                f"Place short strikes at GEX support/resistance levels. "
+                f"{skew_adj}"
                 f"Target 50% of max profit, close before final 3 DTE."
             )
 
@@ -1006,8 +1099,13 @@ class NarrativeGenerator:
                 f"Steep skew ({skew:+.1f}%) makes puts expensive — use spreads to offset."
             )
 
-        # Strategy 4: Skew trade
-        if skew > 10 and regime not in (MarketRegime.VOLATILE_BEARISH, MarketRegime.RISK_OFF):
+        # Strategy 4: Skew trade — exclude bearish regimes
+        bearish_exclusions = (
+            MarketRegime.VOLATILE_BEARISH,
+            MarketRegime.TRENDING_DOWN,
+            MarketRegime.RANGE_BOUND_BEARISH,
+        )
+        if skew > 10 and regime not in bearish_exclusions:
             skew_src = f" [{skew_expiry}]" if skew_expiry else ""
             recommendations.append(
                 f"OPPORTUNISTIC — Risk Reversal ({skew_expiry or near_term_expiry}): "
@@ -1055,7 +1153,7 @@ class SynthesisEngine:
         Returns: Formatted executive summary string.
         """
 
-        # Sort expiries by DTE
+        # Sort expiries by DTE, exclude DTE=0 from scoring pool
         expiries_sorted = sorted(expiries, key=lambda e: e.dte)
 
         # Separate near-term (0-7 DTE) and far-term (>7 DTE) expiries
@@ -1072,65 +1170,91 @@ class SynthesisEngine:
             expiries_sorted[0]
         )
 
-        # Find the largest far-term expiry
-        meaningful_far = max(
-            (e for e in expiries_sorted if e.dte > 14),
-            key=lambda e: e.total_oi,
-            default=expiries_sorted[-1]
-        )
+        # Best buy expiry: highest volume where DTE > 14 (volume = execution quality proxy)
+        # Fallback: highest OI with DTE > 14. If nothing: furthest-DTE expiry.
+        far_candidates = [e for e in expiries_sorted if e.dte > 14]
+        vol_candidates = [e for e in far_candidates if e.total_volume > 0]
+        if vol_candidates:
+            meaningful_far = max(vol_candidates, key=lambda e: e.total_volume)
+        elif far_candidates:
+            meaningful_far = max(far_candidates, key=lambda e: e.total_oi)
+        else:
+            meaningful_far = expiries_sorted[-1]
+
+        spot = market.spot_price
 
         # =====================================================================
         # STEP 1: Score all directional metrics
         # =====================================================================
 
-        # Aggregate scores across key expiries (weight by OI)
         all_direction_scores = []
 
         # Market-wide scores
         all_direction_scores.append(
-            self.scorer.score_funding(market.funding_rate, market.funding_8h)
+            self.scorer.score_funding(market.funding_8h)
         )
 
-        # Futures basis
+        # Futures basis (front only)
         basis_values = list(market.futures_basis.values())
-        if len(basis_values) >= 2:
+        if basis_values:
             all_direction_scores.append(
-                self.scorer.score_futures_basis(basis_values[0], basis_values[-1])
+                self.scorer.score_futures_basis(basis_values[0])
             )
 
-        # Score the 3 most important expiries by OI
-        top_expiries = sorted(expiries_sorted, key=lambda e: e.total_oi, reverse=True)[:3]
+        # Score the 3 most important expiries by OI, excluding DTE=0
+        top_expiries = sorted(
+            [e for e in expiries_sorted if e.dte > 0],
+            key=lambda e: e.total_oi, reverse=True
+        )[:3]
 
         for exp in top_expiries:
-            all_direction_scores.append(self.scorer.score_pc_ratio(exp.pc_ratio))
-            all_direction_scores.append(self.scorer.score_dex(exp.total_dex))
             all_direction_scores.append(
-                self.scorer.score_max_pain_gravity(exp.max_pain, market.spot_price)
-            )
+                self.scorer.score_pc_ratio(exp.pc_ratio, dte=exp.dte))
             all_direction_scores.append(
-                self.scorer.score_flow(exp.flow_bias, exp.flow_trend)
-            )
+                self.scorer.score_dex(exp.total_dex, spot=spot, dte=exp.dte))
             all_direction_scores.append(
-                self.scorer.score_vanna_charm(exp.net_vanna, exp.net_charm)
-            )
+                self.scorer.score_max_pain_gravity(exp.max_pain, spot, dte=exp.dte))
+            all_direction_scores.append(
+                self.scorer.score_flow(exp.flow_bias, exp.flow_trend))
+            all_direction_scores.append(
+                self.scorer.score_vanna_charm(
+                    exp.net_vanna, exp.net_charm,
+                    iv_pctile=market.iv_percentile_365d,
+                    gex_total=exp.total_gex, spot=spot))
 
-        # Near-term scores (for transition detection)
+        # Near-term scores (for transition detection) — full scorer set
         near_direction_scores = []
         for exp in near_term[:3]:
-            near_direction_scores.append(self.scorer.score_pc_ratio(exp.pc_ratio))
-            near_direction_scores.append(self.scorer.score_dex(exp.total_dex))
             near_direction_scores.append(
-                self.scorer.score_flow(exp.flow_bias, exp.flow_trend)
-            )
+                self.scorer.score_pc_ratio(exp.pc_ratio, dte=exp.dte))
+            near_direction_scores.append(
+                self.scorer.score_dex(exp.total_dex, spot=spot, dte=exp.dte))
+            near_direction_scores.append(
+                self.scorer.score_max_pain_gravity(exp.max_pain, spot, dte=exp.dte))
+            near_direction_scores.append(
+                self.scorer.score_flow(exp.flow_bias, exp.flow_trend))
+            near_direction_scores.append(
+                self.scorer.score_vanna_charm(
+                    exp.net_vanna, exp.net_charm,
+                    iv_pctile=market.iv_percentile_365d,
+                    gex_total=exp.total_gex, spot=spot))
 
-        # Far-term scores
+        # Far-term scores — full scorer set
         far_direction_scores = []
         for exp in far_term[:3]:
-            far_direction_scores.append(self.scorer.score_pc_ratio(exp.pc_ratio))
-            far_direction_scores.append(self.scorer.score_dex(exp.total_dex))
             far_direction_scores.append(
-                self.scorer.score_flow(exp.flow_bias, exp.flow_trend)
-            )
+                self.scorer.score_pc_ratio(exp.pc_ratio, dte=exp.dte))
+            far_direction_scores.append(
+                self.scorer.score_dex(exp.total_dex, spot=spot, dte=exp.dte))
+            far_direction_scores.append(
+                self.scorer.score_max_pain_gravity(exp.max_pain, spot, dte=exp.dte))
+            far_direction_scores.append(
+                self.scorer.score_flow(exp.flow_bias, exp.flow_trend))
+            far_direction_scores.append(
+                self.scorer.score_vanna_charm(
+                    exp.net_vanna, exp.net_charm,
+                    iv_pctile=market.iv_percentile_365d,
+                    gex_total=exp.total_gex, spot=spot))
 
         # =====================================================================
         # STEP 2: Score all vol metrics
@@ -1143,7 +1267,6 @@ class SynthesisEngine:
             market.cone_30d_pctile
         )
 
-        # Use largest expiry's skew as representative
         skew_score = self.scorer.score_skew(largest_expiry.skew_25d)
 
         term_score = self.scorer.score_term_structure(
@@ -1166,12 +1289,25 @@ class SynthesisEngine:
         # Far-term direction
         far_direction, _, _ = self.classifier.classify_direction(far_direction_scores)
 
-        # Vol regime (use aggregate GEX from largest expiry)
+        # Fragility detection (after direction, before regime)
+        fragility_multiplier, fragility_level = self.scorer.detect_fragility(
+            all_direction_scores, market.funding_8h
+        )
+        dir_confidence *= fragility_multiplier
+
+        # Vol regime — prefer market-wide aggregate GEX; fall back to largest expiry
+        gex_for_regime = (
+            market.aggregate_total_gex
+            if market.aggregate_total_gex != 0.0
+            else largest_expiry.total_gex
+        )
         vol_regime, vol_reasons = self.classifier.classify_vol_regime(
-            largest_expiry.total_gex,
+            gex_for_regime,
             iv_pctile_score[0],
             vrp_score[0],
-            skew_score[0]
+            skew_score[0],
+            spot=spot,
+            term_structure_score=term_score[0],
         )
 
         # Market regime
@@ -1185,12 +1321,6 @@ class SynthesisEngine:
 
         forward_rv = (market.rv_10d + market.rv_20d) / 2
         forward_vrp = market.dvol - forward_rv
-
-        # effective_vrp always tracks the primary VRP (DVOL − 30d RV).
-        # Forward VRP is a MODEL ESTIMATE only — included as a note but never
-        # used to override the recommendation direction.  Overriding would
-        # create an internal contradiction between the header (primary VRP)
-        # and the VOL ASSESSMENT text.
         effective_vrp = market.vrp
 
         if market.cone_30d_pctile > 85:
@@ -1219,18 +1349,15 @@ class SynthesisEngine:
         # STEP 5: Generate narrative
         # =====================================================================
 
-        # Find aggregate support/resistance from largest expiry
         put_support = largest_expiry.put_support_strike
         call_resistance = largest_expiry.call_resistance_strike
         max_pain = largest_expiry.max_pain
 
-        # Header
         header = self._generate_header(market, overall_direction, vol_regime, market_regime)
 
-        # Regime narrative
         regime_narrative = self.narrator.generate_regime_narrative(
             regime=market_regime,
-            spot=market.spot_price,
+            spot=spot,
             put_support=put_support,
             call_resistance=call_resistance,
             max_pain=max_pain,
@@ -1239,24 +1366,21 @@ class SynthesisEngine:
             transition_window=self._estimate_transition_window(expiries_sorted),
         )
 
-        # Near-term section
         near_term_narrative = self._generate_timeframe_section(
-            "NEAR-TERM (0-7 DTE)", near_term, market.spot_price, near_direction
+            "NEAR-TERM (0-7 DTE)", near_term, spot, near_direction
         )
-
-        # Mid-term section
         mid_term_narrative = self._generate_timeframe_section(
-            "MID-TERM (7-30 DTE)", mid_term, market.spot_price, overall_direction
+            "MID-TERM (7-30 DTE)", mid_term, spot, overall_direction
         )
-
-        # Far-term section
         far_term_narrative = self._generate_timeframe_section(
-            "FAR-TERM (30+ DTE)", far_term, market.spot_price, far_direction
+            "FAR-TERM (30+ DTE)", far_term, spot, far_direction
         )
 
-        # Vol assessment
-        # Find best near-term expiry for selling (highest ATM IV with good liquidity)
+        # Vol assessment — best sell expiry
         sellable_near = [e for e in expiries_sorted if 5 <= e.dte <= 30 and e.total_oi > 2000]
+        if not sellable_near:
+            # Fallback: nearest meaningful expiry
+            sellable_near = [e for e in expiries_sorted if e.dte >= 1 and e.total_oi > 500]
         best_sell_expiry = max(sellable_near, key=lambda e: e.atm_iv) if sellable_near else meaningful_near
 
         vol_narrative = self.narrator.generate_vol_narrative(
@@ -1269,14 +1393,15 @@ class SynthesisEngine:
             buy_expiry=meaningful_far.expiry,
         )
 
-        # Risk factors
         risk_narrative = self.narrator.generate_risk_factors(
             cone_30d_pctile=market.cone_30d_pctile,
             gex_total=largest_expiry.total_gex,
             largest_expiry_dte=largest_expiry.dte,
             funding_8h=market.funding_8h,
-            funding_rate=market.funding_rate,
             skew=largest_expiry.skew_25d,
+            spot=spot,
+            fragility_multiplier=fragility_multiplier,
+            fragility_level=fragility_level,
         )
 
         # Trade recommendations
@@ -1319,6 +1444,7 @@ TRADE RECOMMENDATIONS:
 
 SCORING DETAIL:
   Direction: {overall_direction.name} (confidence: {dir_confidence:.0%})
+  Fragility: {fragility_level}
   Near-term: {near_direction.name} | Far-term: {far_direction.name}
   Vol Regime: {vol_regime.value}
   Market Regime: {market_regime.value}
@@ -1496,13 +1622,10 @@ class SynthesisMapper:
 
         dte = cls._calculate_dte(expiration)
 
-        # Total OI and volumes from parsed_data
+        # Total OI and volume from parsed_data
         total_oi = sum(i.get("open_interest", 0) for i in instruments)
+        total_volume = sum(i.get("volume", 0) for i in instruments)
         notional = total_oi * analyzer.underlying_price
-
-        call_vol = sum(i.get("volume", 0) for i in instruments if i.get("option_type") == "C")
-        put_vol = sum(i.get("volume", 0) for i in instruments if i.get("option_type") == "P")
-        volume_pc_ratio = (put_vol / call_vol) if call_vol > 0 else 0.0
 
         # Max pain and OI P/C ratio
         strike_data = analyzer.group_by_strike(instruments)
@@ -1556,9 +1679,9 @@ class SynthesisMapper:
             dte=dte,
             total_oi=int(total_oi),
             notional=notional,
+            total_volume=int(total_volume),
             max_pain=float(max_pain),
             pc_ratio=float(pc_ratio),
-            volume_pc_ratio=volume_pc_ratio,
             total_gex=total_gex,
             total_dex=total_dex,
             gex_environment=gex_environment,
@@ -1571,8 +1694,6 @@ class SynthesisMapper:
             skew_25d=float(skew_25d),
             put_25d_iv=float(put_25d_iv),
             call_25d_iv=float(call_25d_iv),
-            vwap_iv=0.0,  # Not captured in calculate() — only in generate_report_section()
-            mark_iv=0.0,
             pc_atm=float(pc_atm),
             pc_near_otm=float(pc_near_otm),
             pc_far_otm=float(pc_far_otm),
@@ -1601,14 +1722,39 @@ class SynthesisMapper:
         funding_rate = (mw.get("funding_rate") or 0.0) * 100
         funding_8h = (mw.get("funding_8h") or 0.0) * 100
 
+        # Validate term_structure_shape: must be CONTANGO or BACKWARDATION only
+        raw_shape = mw.get("shape") or ""
+        raw_spread = mw.get("spread") or 0.0
+        if raw_shape in ("CONTANGO", "BACKWARDATION"):
+            ts_shape = raw_shape
+            ts_spread = raw_spread
+        else:
+            # Normalize: spread < 0.5 → CONTANGO with spread=0
+            if raw_spread >= 0.5:
+                ts_shape = "CONTANGO"
+                ts_spread = raw_spread
+            else:
+                ts_shape = "CONTANGO"
+                ts_spread = 0.0
+
+        # Ensure futures_basis is ordered by DTE ascending
+        raw_basis = mw.get("futures_basis") or {}
+        # Re-sort not possible by label alone, but the upstream should provide
+        # ordered data. We trust insertion order from the source.
+        futures_basis = raw_basis
+
+        # Aggregate GEX/DEX from AGGREGATE key in gex_dex_structured
+        agg_gex = getattr(analyzer, "gex_dex_structured", {}).get("AGGREGATE", {})
+        agg_key_levels = agg_gex.get("key_levels", {})
+
         return MarketWideMetrics(
             spot_price=mw.get("spot_price") or analyzer.underlying_price,
             dvol=mw.get("dvol") or 0.0,
             iv_percentile_365d=mw.get("iv_percentile_365d") or 0.0,
             funding_rate=funding_rate,
             funding_8h=funding_8h,
-            term_structure_shape=mw.get("shape") or "FLAT",
-            term_structure_spread=mw.get("spread") or 0.0,
+            term_structure_shape=ts_shape,
+            term_structure_spread=ts_spread,
             term_structure_spread_signed=mw.get("spread_signed") or 0.0,
             iv_by_dte=mw.get("iv_by_dte") or {},
             rv_10d=rv_10d,
@@ -1618,12 +1764,17 @@ class SynthesisMapper:
             cone_10d_pctile=mw.get("cone_10d_pctile") or 0.0,
             cone_20d_pctile=mw.get("cone_20d_pctile") or 0.0,
             cone_30d_pctile=mw.get("cone_30d_pctile") or 0.0,
-            futures_basis=mw.get("futures_basis") or {},
+            futures_basis=futures_basis,
             perp_oi=mw.get("perp_oi") or 0.0,
             perp_funding_trend=mw.get("perp_funding_trend") or "Stable",
             btc_eth_price_corr=mw.get("btc_eth_price_corr") or 0.0,
             btc_eth_dvol_corr=mw.get("btc_eth_dvol_corr") or 0.0,
             block_trades=mw.get("block_trades") or [],
+            aggregate_total_gex=agg_gex.get("total_net_gex") or 0.0,
+            aggregate_total_dex=agg_gex.get("total_net_dex") or 0.0,
+            aggregate_call_resistance=agg_key_levels.get("call_resistance"),
+            aggregate_put_support=agg_key_levels.get("put_support"),
+            aggregate_hvl=agg_key_levels.get("hvl"),
         )
 
     @classmethod
@@ -1699,14 +1850,14 @@ def build_from_current_data():
         ExpiryMetrics(
             expiry="28FEB26", dte=0, total_oi=6181,
             notional=406_145_555, max_pain=66000, pc_ratio=2.39,
-            volume_pc_ratio=3.23,
+
             total_gex=-12_402_566, total_dex=-390.66,
             gex_environment="Negative",
             call_resistance_strike=66000, call_resistance_gex=265785,
             put_support_strike=65000, put_support_gex=-4_578_703,
             hvl_strike=66000,
             atm_iv=30.3, skew_25d=11.7, put_25d_iv=37.3, call_25d_iv=25.6,
-            vwap_iv=50.3, mark_iv=74.5,
+
             pc_atm=2.60, pc_near_otm=2.37, pc_far_otm=0.0,
             net_vanna=0.000062, net_charm=59.96,
             flow_bias="Heavy Buying", flow_trend="Decelerating Buy Pressure",
@@ -1714,14 +1865,14 @@ def build_from_current_data():
         ExpiryMetrics(
             expiry="6MAR26", dte=6, total_oi=23883,
             notional=1_569_282_663, max_pain=67000, pc_ratio=1.23,
-            volume_pc_ratio=1.05,
+
             total_gex=-7_885_127, total_dex=-1496.14,
             gex_environment="Negative",
             call_resistance_strike=70000, call_resistance_gex=2_263_058,
             put_support_strike=58000, put_support_gex=-4_456_432,
             hvl_strike=65500,
             atm_iv=49.1, skew_25d=8.9, put_25d_iv=55.3, call_25d_iv=46.5,
-            vwap_iv=61.1, mark_iv=56.2,
+
             pc_atm=2.45, pc_near_otm=0.82, pc_far_otm=1.72,
             net_vanna=0.000349, net_charm=93.19,
             flow_bias="Heavy Buying", flow_trend="Reversing to Sell Pressure",
@@ -1729,14 +1880,14 @@ def build_from_current_data():
         ExpiryMetrics(
             expiry="13MAR26", dte=13, total_oi=8785,
             notional=577_248_276, max_pain=66000, pc_ratio=0.93,
-            volume_pc_ratio=0.75,
+
             total_gex=-13_297, total_dex=-146.97,
             gex_environment="Negative",
             call_resistance_strike=75000, call_resistance_gex=1_200_177,
             put_support_strike=55000, put_support_gex=-1_147_244,
             hvl_strike=66000,
             atm_iv=49.0, skew_25d=10.4, put_25d_iv=57.2, call_25d_iv=46.8,
-            vwap_iv=50.2, mark_iv=53.5,
+
             pc_atm=1.44, pc_near_otm=0.60, pc_far_otm=1.75,
             net_vanna=0.000179, net_charm=22.69,
             flow_bias="Moderate Buying", flow_trend="Reversing to Sell Pressure",
@@ -1744,14 +1895,14 @@ def build_from_current_data():
         ExpiryMetrics(
             expiry="27MAR26", dte=27, total_oi=149488,
             notional=9_822_511_753, max_pain=80000, pc_ratio=0.70,
-            volume_pc_ratio=0.64,
+
             total_gex=-14_812_074, total_dex=-26914.66,
             gex_environment="Negative",
             call_resistance_strike=80000, call_resistance_gex=3_116_454,
             put_support_strike=60000, put_support_gex=-6_600_975,
             hvl_strike=67000,
             atm_iv=49.2, skew_25d=9.2, put_25d_iv=55.8, call_25d_iv=46.7,
-            vwap_iv=76.8, mark_iv=76.5,
+
             pc_atm=1.38, pc_near_otm=1.81, pc_far_otm=0.51,
             net_vanna=0.001561, net_charm=94.23,
             flow_bias="Heavy Selling", flow_trend="Decelerating Sell Pressure",
@@ -1759,14 +1910,14 @@ def build_from_current_data():
         ExpiryMetrics(
             expiry="24APR26", dte=55, total_oi=39117,
             notional=2_570_273_003, max_pain=70000, pc_ratio=0.68,
-            volume_pc_ratio=0.47,
+
             total_gex=3_072_631, total_dex=-1179.31,
             gex_environment="Positive",
             call_resistance_strike=75000, call_resistance_gex=2_095_712,
             put_support_strike=60000, put_support_gex=-3_372_438,
             hvl_strike=84000,
             atm_iv=48.0, skew_25d=8.6, put_25d_iv=53.9, call_25d_iv=45.3,
-            vwap_iv=49.7, mark_iv=51.3,
+
             pc_atm=2.00, pc_near_otm=0.95, pc_far_otm=0.41,
             net_vanna=0.000944, net_charm=27.06,
             flow_bias="Heavy Buying", flow_trend="Mixed/Neutral Flow",
@@ -1774,14 +1925,14 @@ def build_from_current_data():
         ExpiryMetrics(
             expiry="26JUN26", dte=118, total_oi=70893,
             notional=4_658_212_431, max_pain=85000, pc_ratio=0.91,
-            volume_pc_ratio=0.67,
+
             total_gex=-8_447_524, total_dex=-11001.86,
             gex_environment="Negative",
             call_resistance_strike=90000, call_resistance_gex=489_690,
             put_support_strike=60000, put_support_gex=-2_930_370,
             hvl_strike=72000,
             atm_iv=48.7, skew_25d=7.4, put_25d_iv=53.7, call_25d_iv=46.3,
-            vwap_iv=48.4, mark_iv=61.1,
+
             pc_atm=1.54, pc_near_otm=3.37, pc_far_otm=0.64,
             net_vanna=0.001305, net_charm=17.56,
             flow_bias="Moderate Selling", flow_trend="Steady Sell Pressure",
@@ -1789,14 +1940,13 @@ def build_from_current_data():
         ExpiryMetrics(
             expiry="25DEC26", dte=300, total_oi=45475,
             notional=2_988_048_812, max_pain=80000, pc_ratio=0.60,
-            volume_pc_ratio=0.20,
+
             total_gex=2_890_951, total_dex=352.39,
             gex_environment="Positive",
             call_resistance_strike=120000, call_resistance_gex=2_422_244,
             put_support_strike=60000, put_support_gex=-1_777_383,
             hvl_strike=120000,
             atm_iv=50.3, skew_25d=4.8, put_25d_iv=52.8, call_25d_iv=48.0,
-            vwap_iv=54.4, mark_iv=51.8,
             pc_atm=1.01, pc_near_otm=5.94, pc_far_otm=0.41,
             net_vanna=0.000954, net_charm=5.22,
             flow_bias="Moderate Selling", flow_trend="Accelerating Sell Pressure",

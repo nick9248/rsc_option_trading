@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QPlainTextEdit,
     QSplitter,
+    QCheckBox,
 )
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QFont
@@ -105,6 +106,7 @@ class OnChainAnalysisTab(QWidget):
         super().__init__(parent)
         self.report_text: str = ""
         self.worker: Optional[OnChainAnalysisWorker] = None
+        self._queue: list = []  # Currencies waiting to be processed
 
         self._setup_ui()
         self._setup_logging()
@@ -196,17 +198,38 @@ class OnChainAnalysisTab(QWidget):
         controls_layout.setContentsMargins(16, 16, 16, 16)
         controls_layout.setSpacing(12)
 
-        # Currency selection
+        # Currency checkboxes (replaces single dropdown — supports queued multi-run)
         currency_label = QLabel("Currency:")
         currency_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY};")
         controls_layout.addWidget(currency_label)
 
-        self.currency_combo = QComboBox()
-        self.currency_combo.addItems(["ETH", "BTC"])
-        self.currency_combo.setSizePolicy(
-            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
-        )
-        controls_layout.addWidget(self.currency_combo)
+        checkbox_style = f"""
+            QCheckBox {{
+                color: {Colors.TEXT_SECONDARY};
+                spacing: 6px;
+            }}
+            QCheckBox::indicator {{
+                width: 16px;
+                height: 16px;
+                border-radius: 4px;
+                border: 1px solid {Colors.BORDER};
+                background-color: {Colors.INPUT_BACKGROUND};
+            }}
+            QCheckBox::indicator:checked {{
+                background-color: {Colors.ACCENT};
+                border-color: {Colors.ACCENT};
+            }}
+        """
+
+        self.btc_checkbox = QCheckBox("BTC")
+        self.btc_checkbox.setChecked(True)
+        self.btc_checkbox.setStyleSheet(checkbox_style)
+        controls_layout.addWidget(self.btc_checkbox)
+
+        self.eth_checkbox = QCheckBox("ETH")
+        self.eth_checkbox.setChecked(False)
+        self.eth_checkbox.setStyleSheet(checkbox_style)
+        controls_layout.addWidget(self.eth_checkbox)
 
         controls_layout.addStretch()
 
@@ -214,6 +237,21 @@ class OnChainAnalysisTab(QWidget):
         self.load_btn = QPushButton("Load Analysis")
         self.load_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         controls_layout.addWidget(self.load_btn)
+
+        # Clear button
+        self.clear_btn = QPushButton("Clear")
+        self.clear_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {Colors.BUTTON_SECONDARY};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+            }}
+            QPushButton:hover {{
+                background-color: {Colors.BUTTON_SECONDARY_HOVER};
+            }}
+        """)
+        self.clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        controls_layout.addWidget(self.clear_btn)
 
         # View Flow Charts button
         self.view_charts_btn = QPushButton("View Flow Charts")
@@ -251,24 +289,59 @@ class OnChainAnalysisTab(QWidget):
     def _connect_signals(self) -> None:
         """Connect widget signals to slots."""
         self.load_btn.clicked.connect(self._load_analysis)
+        self.clear_btn.clicked.connect(self._clear)
         self.view_charts_btn.clicked.connect(self._open_flow_charts)
 
+    def _clear(self) -> None:
+        """Clear report display and log viewer."""
+        self.report_display.clear()
+        self.log_viewer.clear_logs()
+        self.report_text = ""
+        self.status_label.setText("")
+
     def _load_analysis(self) -> None:
-        """Load on-chain analysis data."""
+        """Build queue from selected currencies and start processing."""
         if self.worker is not None and self.worker.isRunning():
-            self.log_viewer.log_warning("A request is already in progress")
+            self.log_viewer.log_warning("Analysis already in progress")
             return
 
-        currency = self.currency_combo.currentText()
+        selected = []
+        if self.btc_checkbox.isChecked():
+            selected.append("BTC")
+        if self.eth_checkbox.isChecked():
+            selected.append("ETH")
 
-        self.log_viewer.log_info(f"Starting on-chain analysis for {currency}...")
-        self.log_viewer.log_info("Note: Analysis includes GEX/DEX and Buy/Sell Flow")
+        if not selected:
+            self.log_viewer.log_warning("Select at least one currency (BTC / ETH)")
+            return
 
+        self._queue = selected
+        self.report_display.clear()
+        self.report_text = ""
         self.load_btn.setEnabled(False)
         self.view_charts_btn.setEnabled(False)
-        self.status_label.setText("Loading...")
+
+        self._start_next_in_queue()
+
+    def _start_next_in_queue(self) -> None:
+        """Pop the next currency from the queue and start its worker."""
+        if not self._queue:
+            # All done
+            self.load_btn.setEnabled(True)
+            self.view_charts_btn.setEnabled(True)
+            self.status_label.setText("Ready")
+            self.status_label.setStyleSheet(f"color: {Colors.SUCCESS};")
+            return
+
+        currency = self._queue.pop(0)
+        remaining = len(self._queue)
+        queue_info = f" ({remaining} more queued)" if remaining else ""
+
+        self.log_viewer.log_info(
+            f"Starting on-chain analysis for {currency}...{queue_info}"
+        )
+        self.status_label.setText(f"Running {currency}...")
         self.status_label.setStyleSheet(f"color: {Colors.WARNING};")
-        self.report_display.clear()
 
         self.worker = OnChainAnalysisWorker(currency=currency)
         self.worker.progress.connect(self._on_progress)
@@ -277,31 +350,35 @@ class OnChainAnalysisTab(QWidget):
         self.worker.start()
 
     def _on_analysis_finished(self, report: str) -> None:
-        """Handle successful analysis completion."""
-        self.report_text = report
-        self.report_display.setPlainText(report)
+        """Append completed report and start next queued currency if any."""
+        if self.report_text:
+            self.report_text += "\n\n" + "=" * 80 + "\n\n" + report
+        else:
+            self.report_text = report
 
-        self.load_btn.setEnabled(True)
-        self.view_charts_btn.setEnabled(True)
-        self.status_label.setText("Ready")
-        self.status_label.setStyleSheet(f"color: {Colors.SUCCESS};")
-
+        self.report_display.setPlainText(self.report_text)
         self.log_viewer.log_info("Analysis report generated successfully")
+
+        # Continue with next in queue
+        self._start_next_in_queue()
 
     def _on_progress(self, message: str) -> None:
         """Handle progress updates."""
         self.log_viewer.log_info(message)
 
     def _on_error(self, error_message: str) -> None:
-        """Handle error."""
-        self.load_btn.setEnabled(True)
+        """Log error and continue with next queued currency if any."""
+        self.log_viewer.log_error(f"Failed: {error_message}")
         self.status_label.setText("Error")
         self.status_label.setStyleSheet(f"color: {Colors.ERROR};")
-        self.log_viewer.log_error(f"Failed: {error_message}")
+
+        # Still attempt remaining currencies in the queue
+        self._start_next_in_queue()
 
     def _open_flow_charts(self) -> None:
         """Open fullscreen flow charts window."""
-        currency = self.currency_combo.currentText()
+        # Use BTC if checked, otherwise ETH
+        currency = "BTC" if self.btc_checkbox.isChecked() else "ETH"
         repository = DatabaseRepository()
 
         dialog = FlowChartsWindow(currency, repository, parent=self)

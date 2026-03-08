@@ -106,6 +106,9 @@ class OnChainAnalysisService:
         # Calculate market-wide metrics (term structure, basis, RV, VRP, etc.)
         self._calculate_market_wide_metrics(analyzer, currency, progress)
 
+        # Fetch previous DB snapshots for trend comparison
+        self._fetch_trend_data(analyzer, progress)
+
         # Generate report (includes GEX/DEX and flow)
         progress("Generating analysis report...")
         report = analyzer.generate_report()
@@ -168,12 +171,25 @@ class OnChainAnalysisService:
                 progress_callback(f"Calculating GEX/DEX for {expiration}...")
                 calculator = GexDexCalculator(
                     instruments_with_greeks,
-                    analyzer.underlying_price
+                    analyzer.underlying_price,
+                    currency=analyzer.currency
                 )
                 gex_structured = calculator.calculate()
                 analyzer.set_gex_dex_structured(expiration, gex_structured)
                 gex_dex_report = calculator.generate_report_section()
                 analyzer.set_gex_dex_data(expiration, gex_dex_report)
+
+        # Aggregate GEX/DEX across all expirations after per-expiry loop
+        if analyzer.gex_dex_structured:
+            progress_callback("Calculating market-wide aggregate GEX/DEX...")
+            aggregate_result = GexDexCalculator.aggregate_across_expirations(
+                analyzer.gex_dex_structured, analyzer.underlying_price, analyzer.currency
+            )
+            analyzer.set_gex_dex_structured("AGGREGATE", aggregate_result)
+            aggregate_report = GexDexCalculator.generate_aggregate_report_section(
+                aggregate_result, analyzer.underlying_price, analyzer.currency
+            )
+            analyzer.set_market_wide_section("aggregate_gex_dex", aggregate_report)
 
     def _calculate_buy_sell_flow(
         self,
@@ -756,6 +772,7 @@ class OnChainAnalysisService:
         """
         dvol = None
         iv_percentile = None
+        iv_rank = None
         current_funding = None
         funding_8h = None
 
@@ -775,17 +792,30 @@ class OnChainAnalysisService:
 
             if dvol_data and "data" in dvol_data and dvol_data["data"]:
                 # Data format: [timestamp, open, high, low, close]
-                close_values = [point[4] for point in dvol_data["data"] if len(point) > 4]
+                valid_points = [point for point in dvol_data["data"] if len(point) > 4]
+                close_values = [point[4] for point in valid_points]
+                high_values = [point[2] for point in valid_points]
+                low_values = [point[3] for point in valid_points]
 
                 if close_values:
                     dvol = close_values[-1]  # Current DVOL (most recent close)
 
-                    # Calculate IV percentile
+                    # Calculate IV percentile (% of daily closes below current)
                     values_below = sum(1 for v in close_values if v < dvol)
                     iv_percentile = (values_below / len(close_values)) * 100
 
+                    # Calculate IV rank using true range (daily high/low) — matches Deribit website
+                    # Deribit uses max(daily_high) and min(daily_low) for the 365d range
+                    dvol_min = min(low_values)
+                    dvol_max = max(high_values)
+                    if dvol_max > dvol_min:
+                        iv_rank = (dvol - dvol_min) / (dvol_max - dvol_min) * 100
+                    else:
+                        iv_rank = 50.0
+
                     progress_callback(
-                        f"DVOL: {dvol:.2f}, IV Percentile: {iv_percentile:.1f}% "
+                        f"DVOL: {dvol:.2f}, IV Percentile: {iv_percentile:.1f}%, "
+                        f"IV Rank: {iv_rank:.1f}% "
                         f"(based on {len(close_values)} days)"
                     )
 
@@ -801,10 +831,10 @@ class OnChainAnalysisService:
             funding_8h = perpetual_ticker.get("funding_8h")
 
             if current_funding is not None:
-                progress_callback(
-                    f"Current Funding: {current_funding * 100:.4f}%, "
-                    f"8h Funding: {funding_8h * 100:.4f}%"
-                )
+                funding_str = f"Current Funding: {current_funding * 100:.4f}%"
+                if funding_8h is not None:
+                    funding_str += f", 8h Funding: {funding_8h * 100:.4f}%"
+                progress_callback(funding_str)
 
         except Exception as e:
             logger.warning(f"Failed to fetch funding rate: {e}")
@@ -813,9 +843,73 @@ class OnChainAnalysisService:
         analyzer.set_market_metrics(
             dvol=dvol,
             iv_percentile=iv_percentile,
+            iv_rank=iv_rank,
             current_funding=current_funding,
             funding_8h=funding_8h
         )
+
+    def _fetch_trend_data(
+        self,
+        analyzer: OnChainAnalyzer,
+        progress_callback: Callable[[str], None],
+    ) -> None:
+        """
+        Fetch previous DB snapshots per expiration for trend comparison.
+
+        Requires repository. Silently skipped when repository is None.
+        Each expiration gets the oldest of the 2 most-recent DB records
+        as its "previous" value to compare against live API data.
+
+        Args:
+            analyzer: OnChainAnalyzer with parsed data.
+            progress_callback: Callback for progress updates.
+        """
+        if self.repository is None:
+            return
+
+        progress_callback("Fetching trend data for report comparison...")
+
+        for expiration in analyzer.get_expirations():
+            try:
+                mp_history = self.repository.get_max_pain_history(
+                    analyzer.currency, expiration, limit=2
+                )
+                oi_history = self.repository.get_open_interest_history(
+                    analyzer.currency, expiration, limit=2
+                )
+                vol_history = self.repository.get_volume_history(
+                    analyzer.currency, expiration, limit=2
+                )
+
+                prev_mp = mp_history[0] if mp_history else None
+                prev_oi = oi_history[0] if oi_history else None
+                prev_vol = vol_history[0] if vol_history else None
+
+                if not any([prev_mp, prev_oi, prev_vol]):
+                    analyzer.set_trend_data(expiration, None)
+                    continue
+
+                trend: Dict[str, Any] = {}
+                if prev_mp:
+                    trend["max_pain_strike"] = float(prev_mp["max_pain_strike"])
+                if prev_oi:
+                    trend["call_oi"] = float(prev_oi["total_call_oi"])
+                    trend["put_oi"] = float(prev_oi["total_put_oi"])
+                    pc = prev_oi.get("put_call_ratio")
+                    trend["pc_ratio"] = float(pc) if pc is not None else None
+                if prev_vol:
+                    trend["total_volume"] = (
+                        float(prev_vol["total_call_volume"])
+                        + float(prev_vol["total_put_volume"])
+                    )
+                    vr = prev_vol.get("volume_put_call_ratio")
+                    trend["volume_ratio"] = float(vr) if vr is not None else None
+
+                analyzer.set_trend_data(expiration, trend)
+
+            except Exception as e:
+                logger.warning(f"Failed to fetch trend data for {expiration}: {e}")
+                analyzer.set_trend_data(expiration, None)
 
     def _save_reports_per_expiration(
         self,

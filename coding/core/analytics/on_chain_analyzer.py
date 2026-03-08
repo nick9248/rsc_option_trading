@@ -6,6 +6,7 @@ and generates formatted text reports per expiration.
 """
 
 import logging
+import math
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -48,6 +49,7 @@ class OnChainAnalyzer:
         self.buy_sell_flow_structured: Dict[str, Dict] = {}     # Raw flow data per expiry
         self.volatility_surface_structured: Dict[str, Dict] = {}  # Raw vol surface per expiry
         self.market_wide_structured: Dict[str, Any] = {}        # Raw market-wide metrics
+        self.trend_data: Dict[str, Optional[Dict]] = {}         # Previous DB snapshot per expiry
 
         # Extract underlying price using most common value (mode)
         # Different instruments may have slightly different underlying_price values
@@ -611,11 +613,30 @@ class OnChainAnalyzer:
             iv_percentile = self.market_metrics.get("iv_percentile")
             current_funding = self.market_metrics.get("current_funding")
             funding_8h = self.market_metrics.get("funding_8h")
+            iv_rank = self.market_metrics.get("iv_rank")
 
             if dvol is not None:
                 lines.append(f"DVOL (Volatility Index): {dvol:.2f}")
             if iv_percentile is not None:
                 lines.append(f"IV Percentile (365d): {iv_percentile:.1f}%")
+            if iv_rank is not None:
+                lines.append(f"IV Rank (365d): {iv_rank:.1f}%")
+            if dvol is not None:
+                daily_move = dvol / 100 / math.sqrt(365) * self.underlying_price
+                weekly_move = dvol / 100 / math.sqrt(52) * self.underlying_price
+                monthly_move = dvol / 100 / math.sqrt(12) * self.underlying_price
+                daily_pct = dvol / 100 / math.sqrt(365) * 100
+                weekly_pct = dvol / 100 / math.sqrt(52) * 100
+                monthly_pct = dvol / 100 / math.sqrt(12) * 100
+                lines.append(
+                    f"Expected Daily Move:    ${daily_move:,.2f}  ({daily_pct:.1f}%)"
+                )
+                lines.append(
+                    f"Expected Weekly Move:   ${weekly_move:,.2f}  ({weekly_pct:.1f}%)"
+                )
+                lines.append(
+                    f"Expected Monthly Move:  ${monthly_move:,.2f}  ({monthly_pct:.1f}%)"
+                )
             if current_funding is not None:
                 # Convert to percentage and annualized
                 funding_pct = current_funding * 100
@@ -662,6 +683,14 @@ class OnChainAnalyzer:
                 lines.append(f"Distance from Current: ${diff:+,.2f} ({diff_pct:+.2f}%)")
             else:
                 lines.append("Max Pain Strike: N/A")
+
+            prev = self.trend_data.get(expiration)
+            if prev:
+                prev_mp = prev.get("max_pain_strike")
+                if prev_mp is not None and max_pain_strike is not None:
+                    trend_str = self._format_trend(max_pain_strike, prev_mp)
+                    lines.append(f"Trend (Max Pain): {trend_str.strip()}")
+
             lines.append("")
 
             # Put/Call Ratio
@@ -674,6 +703,23 @@ class OnChainAnalyzer:
                 lines.append(f"P/C Ratio: {pcr['ratio']:.2f} ({pcr['bias']})")
             else:
                 lines.append(f"P/C Ratio: N/A (No Call OI)")
+
+            if prev:
+                prev_call_oi = prev.get("call_oi")
+                prev_put_oi = prev.get("put_oi")
+                prev_pc = prev.get("pc_ratio")
+                if prev_call_oi is not None:
+                    lines.append(
+                        f"Trend (Call OI):  {self._format_trend(pcr['total_call_oi'], prev_call_oi).strip()}"
+                    )
+                    lines.append(
+                        f"Trend (Put OI):   {self._format_trend(pcr['total_put_oi'], prev_put_oi).strip()}"
+                    )
+                if prev_pc is not None and pcr["ratio"] != float("inf"):
+                    lines.append(
+                        f"Trend (P/C):      {self._format_trend(pcr['ratio'], prev_pc, is_ratio=True).strip()}"
+                    )
+
             lines.append("")
 
             # Volume Stats
@@ -687,6 +733,19 @@ class OnChainAnalyzer:
                 lines.append(f"Volume P/C Ratio: {vol['volume_ratio']:.2f}")
             else:
                 lines.append("Volume P/C Ratio: N/A (No Call Volume)")
+
+            if prev:
+                prev_vol = prev.get("total_volume")
+                prev_vr = prev.get("volume_ratio")
+                if prev_vol is not None:
+                    lines.append(
+                        f"Trend (Volume):   {self._format_trend(vol['total_volume'], prev_vol).strip()}"
+                    )
+                if prev_vr is not None and vol["volume_ratio"] != float("inf"):
+                    lines.append(
+                        f"Trend (Vol P/C):  {self._format_trend(vol['volume_ratio'], prev_vr, is_ratio=True).strip()}"
+                    )
+
             lines.append("")
 
             # ITM/OTM Analysis (Deribit-style, no ATM)
@@ -861,6 +920,7 @@ class OnChainAnalyzer:
             lines.append("")
 
             for section_name in [
+                "aggregate_gex_dex",
                 "iv_term_structure", "futures_basis",
                 "realized_volatility", "vrp", "volatility_cone",
                 "perpetual_funding", "block_trades", "cross_asset_correlation"
@@ -942,15 +1002,52 @@ class OnChainAnalyzer:
         """Store raw market-wide structured metrics."""
         self.market_wide_structured = data
 
+    def set_trend_data(self, expiration: str, data: Optional[Dict]) -> None:
+        """
+        Store previous DB snapshot for trend comparison in report.
+
+        Args:
+            expiration: Expiration string (e.g. '10MAR26').
+            data: Dict with prev values, or None if no prior record.
+                  Keys: max_pain_strike, call_oi, put_oi, pc_ratio,
+                        total_volume, volume_ratio.
+        """
+        self.trend_data[expiration] = data
+
+    def _format_trend(
+        self, current: float, previous: Optional[float], is_ratio: bool = False
+    ) -> str:
+        """
+        Format trend vs previous value.
+
+        Args:
+            current: Current value.
+            previous: Previous value, or None if unavailable.
+            is_ratio: If True, format as ratio (2 decimal places); otherwise as integer.
+
+        Returns:
+            Formatted trend string, or empty string if no previous value.
+        """
+        if previous is None:
+            return ""
+        delta = current - previous
+        if delta == 0:
+            return "  [→ unchanged]"
+        arrow = "↑" if delta > 0 else "↓"
+        if is_ratio:
+            return f"  [{arrow} from {previous:.2f}, {delta:+.2f}]"
+        return f"  [{arrow} from {previous:,.0f}, {delta:+,.0f}]"
+
     def set_market_metrics(
         self,
         dvol: Optional[float] = None,
         iv_percentile: Optional[float] = None,
         current_funding: Optional[float] = None,
         funding_8h: Optional[float] = None,
+        iv_rank: Optional[float] = None,
     ) -> None:
         """
-        Store market-wide metrics (DVOL, funding rate).
+        Store market-wide metrics (DVOL, funding rate, IV rank).
 
         These metrics are currency-wide, not from the book summary data.
 
@@ -959,10 +1056,12 @@ class OnChainAnalyzer:
             iv_percentile: IV percentile based on past 365 days.
             current_funding: Current funding rate from perpetual.
             funding_8h: 8-hour funding rate from perpetual.
+            iv_rank: IV rank over 52 weeks (0-100 scale).
         """
         self.market_metrics = {
             "dvol": dvol,
             "iv_percentile": iv_percentile,
             "current_funding": current_funding,
             "funding_8h": funding_8h,
+            "iv_rank": iv_rank,
         }
