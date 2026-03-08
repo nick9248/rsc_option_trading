@@ -179,6 +179,18 @@ class OnChainAnalysisService:
                 gex_dex_report = calculator.generate_report_section()
                 analyzer.set_gex_dex_data(expiration, gex_dex_report)
 
+        # Aggregate GEX/DEX across all expirations after per-expiry loop
+        if analyzer.gex_dex_structured:
+            progress_callback("Calculating market-wide aggregate GEX/DEX...")
+            aggregate_result = GexDexCalculator.aggregate_across_expirations(
+                analyzer.gex_dex_structured, analyzer.underlying_price, analyzer.currency
+            )
+            analyzer.set_gex_dex_structured("AGGREGATE", aggregate_result)
+            aggregate_report = GexDexCalculator.generate_aggregate_report_section(
+                aggregate_result, analyzer.underlying_price, analyzer.currency
+            )
+            analyzer.set_market_wide_section("aggregate_gex_dex", aggregate_report)
+
     def _calculate_buy_sell_flow(
         self,
         analyzer: OnChainAnalyzer,

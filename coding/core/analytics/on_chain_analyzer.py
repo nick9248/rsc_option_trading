@@ -920,6 +920,7 @@ class OnChainAnalyzer:
             lines.append("")
 
             for section_name in [
+                "aggregate_gex_dex",
                 "iv_term_structure", "futures_basis",
                 "realized_volatility", "vrp", "volatility_cone",
                 "perpetual_funding", "block_trades", "cross_asset_correlation"
