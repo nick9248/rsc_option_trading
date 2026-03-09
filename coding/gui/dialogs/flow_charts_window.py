@@ -202,9 +202,8 @@ class FlowChartsWindow(QDialog):
                 label = f"{exp['expiration']} (OI: {exp['total_oi']:,.0f})"
                 self.expiration_combo.addItem(label, exp['expiration'])
 
-            # Load first expiration
-            if len(expirations) > 0:
-                self._on_expiration_changed(0)
+            # Load default view: "All Expirations" is always index 0
+            self._on_expiration_changed(0)
 
         except Exception as e:
             logger.error(f"Failed to load expirations: {e}")
