@@ -1198,7 +1198,7 @@ class DatabaseRepository:
         """
         query = """
             WITH latest_per_expiry AS (
-                SELECT
+                SELECT DISTINCT ON (expiration, strike, option_type)
                     strike,
                     option_type,
                     buy_count,
@@ -1209,14 +1209,9 @@ class DatabaseRepository:
                     sell_notional,
                     net_flow,
                     underlying_price
-                FROM buy_sell_flow_metrics b
+                FROM buy_sell_flow_metrics
                 WHERE currency = %s
-                  AND captured_at = (
-                      SELECT MAX(captured_at)
-                      FROM buy_sell_flow_metrics
-                      WHERE currency = b.currency
-                        AND expiration = b.expiration
-                  )
+                ORDER BY expiration, strike, option_type, captured_at DESC
             )
             SELECT
                 strike,
