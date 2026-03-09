@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtWebEngineWidgets import QWebEngineView
 
+from coding.core.analytics.chart_generator import inject_hover_js
 from coding.core.database.repository import DatabaseRepository
 from coding.gui.theme.colors import Colors
 
@@ -189,6 +190,9 @@ class FlowChartsWindow(QDialog):
 
             self.expiration_combo.clear()
 
+            # Always add aggregated view as first option
+            self.expiration_combo.addItem("🌐 All Expirations", "__ALL__")
+
             if not expirations:
                 self.expiration_combo.addItem("No data available", None)
                 logger.warning(f"No active expirations with flow data found for {self.currency}")
@@ -210,6 +214,8 @@ class FlowChartsWindow(QDialog):
         """
         Regenerate charts when expiration changes.
 
+        Routes to aggregate charts when 'All Expirations' is selected.
+
         Args:
             index: Combo box index.
         """
@@ -218,8 +224,13 @@ class FlowChartsWindow(QDialog):
             return
 
         self.current_expiration = expiration
-        logger.info(f"Loading charts for {expiration}")
-        self._generate_charts_from_db(expiration)
+
+        if expiration == "__ALL__":
+            logger.info("Loading aggregated charts for all expirations")
+            self._generate_aggregate_charts()
+        else:
+            logger.info(f"Loading charts for {expiration}")
+            self._generate_charts_from_db(expiration)
 
     def _generate_charts_from_db(self, expiration: str) -> None:
         """
@@ -301,12 +312,9 @@ class FlowChartsWindow(QDialog):
             logger.info(f"Charts saved to {temp_dir}")
 
             # Add hover highlighting via post-processing (optional)
-            try:
-                self._add_hover_highlighting(dist_path)
-                self._add_hover_highlighting(net_path)
-                self._add_hover_highlighting(trend_path)
-            except Exception as e:
-                logger.warning(f"Failed to add hover highlighting: {e}")
+            inject_hover_js(dist_path)
+            inject_hover_js(net_path)
+            inject_hover_js(trend_path)
 
             # Load charts into web views
             dist_url = QUrl.fromLocalFile(str(dist_path.resolve()))
@@ -325,7 +333,80 @@ class FlowChartsWindow(QDialog):
             logger.info(f"Charts loaded for {expiration}")
 
         except Exception as e:
+            import traceback
             logger.error(f"Failed to generate charts for {expiration}: {e}")
+            logger.error(traceback.format_exc())
+            self._show_empty_charts()
+
+    def _generate_aggregate_charts(self) -> None:
+        """
+        Generate all three charts aggregated across all expirations.
+
+        Uses get_aggregated_flow_metrics for distribution and net flow,
+        and expiration=None mode of generate_flow_trend_chart for the trend.
+        """
+        try:
+            from coding.core.analytics.chart_generator import (
+                generate_flow_distribution_chart,
+                generate_net_flow_chart,
+                generate_flow_trend_chart,
+            )
+
+            logger.info(f"Fetching aggregated flow metrics for {self.currency}")
+            metrics = self.repository.get_aggregated_flow_metrics(self.currency)
+
+            if not metrics or not metrics.get("flow_data"):
+                logger.warning(f"No aggregated flow data for {self.currency}")
+                self._show_empty_charts()
+                return
+
+            spot_price = metrics.get("spot_price", 0)
+            label = "All Expirations"
+
+            fig_dist = generate_flow_distribution_chart(
+                flow_data=metrics,
+                spot_price=spot_price,
+                currency=self.currency,
+                expiration=label,
+            )
+            fig_net = generate_net_flow_chart(
+                flow_data=metrics,
+                spot_price=spot_price,
+                currency=self.currency,
+                expiration=label,
+            )
+            fig_trend = generate_flow_trend_chart(
+                repository=self.repository,
+                currency=self.currency,
+                expiration=None,
+                lookback_days=7,
+            )
+
+            temp_dir = Path(tempfile.gettempdir()) / "flow_charts"
+            temp_dir.mkdir(exist_ok=True)
+
+            dist_path = temp_dir / f"dist_{self.currency}_all.html"
+            net_path = temp_dir / f"net_{self.currency}_all.html"
+            trend_path = temp_dir / f"trend_{self.currency}_all.html"
+
+            fig_dist.write_html(str(dist_path))
+            fig_net.write_html(str(net_path))
+            fig_trend.write_html(str(trend_path))
+
+            inject_hover_js(dist_path)
+            inject_hover_js(net_path)
+            inject_hover_js(trend_path)
+
+            self.distribution_view.setUrl(QUrl.fromLocalFile(str(dist_path.resolve())))
+            self.net_flow_view.setUrl(QUrl.fromLocalFile(str(net_path.resolve())))
+            self.trend_view.setUrl(QUrl.fromLocalFile(str(trend_path.resolve())))
+
+            logger.info("Aggregated charts loaded successfully")
+
+        except Exception as e:
+            import traceback
+            logger.error(f"Failed to generate aggregate charts: {e}")
+            logger.error(traceback.format_exc())
             self._show_empty_charts()
 
     def _show_empty_charts(self) -> None:
@@ -354,71 +435,6 @@ class FlowChartsWindow(QDialog):
         self.net_flow_view.setHtml(empty_html)
         self.trend_view.setHtml(empty_html)
 
-    def _add_hover_highlighting(self, html_path: Path) -> None:
-        """
-        Add hover highlighting JavaScript to chart HTML.
-
-        Args:
-            html_path: Path to HTML file.
-        """
-        try:
-            with open(html_path, 'r', encoding='utf-8') as f:
-                html_content = f.read()
-
-            # Add hover script that's safe and won't break if elements don't exist
-            hover_script = """
-<script>
-// Wait for Plotly to be fully loaded
-window.addEventListener('load', function() {
-    setTimeout(function() {
-        try {
-            var plotDiv = document.querySelector('.plotly-graph-div');
-            if (!plotDiv || !plotDiv.data) return;
-
-            // Get all legend groups
-            var legendGroups = document.querySelectorAll('.legend .groups .traces');
-            if (legendGroups.length === 0) {
-                legendGroups = document.querySelectorAll('.legendtoggle');
-            }
-
-            legendGroups.forEach(function(group, idx) {
-                group.addEventListener('mouseenter', function() {
-                    if (!plotDiv.data) return;
-                    var opacity = [];
-                    for (var i = 0; i < plotDiv.data.length; i++) {
-                        opacity.push(i === idx ? 1.0 : 0.15);
-                    }
-                    Plotly.restyle(plotDiv, {'opacity': opacity});
-                });
-
-                group.addEventListener('mouseleave', function() {
-                    if (!plotDiv.data) return;
-                    var opacity = [];
-                    for (var i = 0; i < plotDiv.data.length; i++) {
-                        opacity.push(1.0);
-                    }
-                    Plotly.restyle(plotDiv, {'opacity': opacity});
-                });
-            });
-        } catch(e) {
-            console.log('Hover highlighting setup failed:', e);
-        }
-    }, 500);
-});
-</script>
-"""
-
-            # Inject before closing body tag
-            if '</body>' in html_content:
-                html_content = html_content.replace('</body>', hover_script + '\n</body>')
-
-                with open(html_path, 'w', encoding='utf-8') as f:
-                    f.write(html_content)
-
-        except Exception as e:
-            logger.warning(f"Failed to add hover highlighting to {html_path}: {e}")
-            # Don't raise - chart should still work without hover highlighting
-
     def _show_chart_info(self) -> None:
         """Show detailed information about the current chart."""
         current_tab = self.tab_widget.currentIndex()
@@ -427,21 +443,15 @@ window.addEventListener('load', function() {
             title = "Distribution by Strike - Chart Guide"
             info = """
 <b>What This Chart Shows:</b><br>
-A population pyramid showing buy/sell flow distribution across strike prices.<br><br>
+Clustered bar chart showing total call and put flow activity across strike prices.<br><br>
 
 <b>Chart Structure:</b><br>
-• <span style='color:#00d4ff'>PUTS (Left Side)</span>: Put options displayed as negative bars<br>
-• <span style='color:#00ff88'>CALLS (Right Side)</span>: Call options displayed as positive bars<br>
-• Y-Axis: Strike prices (vertical)<br>
-• X-Axis: Flow volume/notional/count (horizontal)<br><br>
+• X-Axis: Strike prices<br>
+• Y-Axis: Total flow (notional / volume / trade count)<br>
+• <span style='color:#06b6d4'>■ Teal bar</span>: Total Call flow at that strike<br>
+• <span style='color:#a855f7'>■ Purple bar</span>: Total Put flow at that strike<br><br>
 
-<b>Color Legend:</b><br>
-• <span style='color:#00ff88'>■ Bright Green</span> = Call Buy (bullish aggression)<br>
-• <span style='color:#ff4444'>■ Bright Red</span> = Call Sell (bearish aggression on calls)<br>
-• <span style='color:#00d4ff'>■ Cyan</span> = Put Buy (bearish protection/conviction)<br>
-• <span style='color:#ff9500'>■ Orange</span> = Put Sell (bullish, selling downside protection)<br><br>
-
-<b>Metrics Toggle (Top Center):</b><br>
+<b>Metrics Toggle (Top Right):</b><br>
 • <b>Notional ($):</b> Dollar value of trades (volume × price)<br>
 • <b>Volume:</b> Number of contracts traded<br>
 • <b>Trade Count:</b> Number of individual trades<br><br>
@@ -473,8 +483,8 @@ Net buying/selling pressure per strike (Buy Volume - Sell Volume).<br><br>
 
 <b>Chart Structure:</b><br>
 • Separate bars for Calls and Puts at each strike<br>
-• <span style='color:#2ecc71'>Green bars</span> = Net Buying (buy > sell)<br>
-• <span style='color:#e74c3c'>Red bars</span> = Net Selling (sell > buy)<br>
+• <span style='color:#22c55e'>Green bars</span> = Net Buying (buy > sell)<br>
+• <span style='color:#f87171'>Red bars</span> = Net Selling (sell > buy)<br>
 • Bar height = magnitude of net flow<br><br>
 
 <b>Interactive Legend:</b><br>
