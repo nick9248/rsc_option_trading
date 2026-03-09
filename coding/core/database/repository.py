@@ -1183,6 +1183,91 @@ class DatabaseRepository:
                 "spot_price": underlying_price
             }
 
+    def get_aggregated_flow_metrics(self, currency: str) -> Dict[str, Any]:
+        """
+        Get flow metrics aggregated across all expirations for a currency.
+
+        Uses the latest snapshot per (expiration, strike, option_type) then
+        sums all flow columns by (strike, option_type) across expirations.
+
+        Args:
+            currency: Currency symbol (BTC, ETH).
+
+        Returns:
+            Dict with flow_data structure (same format as get_flow_metrics) and median spot_price.
+        """
+        query = """
+            WITH latest_per_expiry AS (
+                SELECT
+                    strike,
+                    option_type,
+                    buy_count,
+                    buy_volume,
+                    buy_notional,
+                    sell_count,
+                    sell_volume,
+                    sell_notional,
+                    net_flow,
+                    underlying_price
+                FROM buy_sell_flow_metrics b
+                WHERE currency = %s
+                  AND captured_at = (
+                      SELECT MAX(captured_at)
+                      FROM buy_sell_flow_metrics
+                      WHERE currency = b.currency
+                        AND expiration = b.expiration
+                  )
+            )
+            SELECT
+                strike,
+                option_type,
+                SUM(buy_count)        AS buy_count,
+                SUM(buy_volume)       AS buy_volume,
+                SUM(buy_notional)     AS buy_notional,
+                SUM(sell_count)       AS sell_count,
+                SUM(sell_volume)      AS sell_volume,
+                SUM(sell_notional)    AS sell_notional,
+                SUM(net_flow)         AS net_flow,
+                AVG(underlying_price) AS underlying_price
+            FROM latest_per_expiry
+            GROUP BY strike, option_type
+            ORDER BY strike, option_type
+        """
+
+        with self._db_cursor() as cursor:
+            cursor.execute(query, (currency,))
+            rows = cursor.fetchall()
+
+        if not rows:
+            return {"flow_data": {}, "spot_price": 0.0}
+
+        flow_data: Dict[float, Dict[str, Any]] = {}
+        prices = []
+
+        for row in rows:
+            strike, opt_type, buy_count, buy_vol, buy_not, sell_count, sell_vol, sell_not, net_flow, price = row
+
+            strike_f = float(strike)
+            if strike_f not in flow_data:
+                flow_data[strike_f] = {}
+
+            sell_vol_f = float(sell_vol)
+            flow_data[strike_f][opt_type] = {
+                "buy_count":     int(buy_count),
+                "buy_volume":    float(buy_vol),
+                "buy_notional":  float(buy_not),
+                "sell_count":    int(sell_count),
+                "sell_volume":   sell_vol_f,
+                "sell_notional": float(sell_not),
+                "net_flow":      float(net_flow),
+                "buy_sell_ratio": float(buy_vol) / sell_vol_f if sell_vol_f > 0 else None,
+            }
+            prices.append(float(price))
+
+        spot_price = sorted(prices)[len(prices) // 2] if prices else 0.0  # median
+
+        return {"flow_data": flow_data, "spot_price": spot_price}
+
     def get_active_expirations_with_flow(
         self,
         currency: str
