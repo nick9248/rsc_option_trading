@@ -442,102 +442,93 @@ class FlowChartsWindow(QDialog):
             title = "Distribution by Strike - Chart Guide"
             info = """
 <b>What This Chart Shows:</b><br>
-Clustered bar chart showing total call and put flow activity across strike prices.<br><br>
+Population pyramid showing call and put flow activity per strike — calls extend right (positive), puts extend left (negative). Each strike has up to 4 bars split by direction and option type.<br><br>
 
-<b>Chart Structure:</b><br>
-• X-Axis: Strike prices<br>
-• Y-Axis: Total flow (notional / volume / trade count)<br>
-• <span style='color:#06b6d4'>■ Teal bar</span>: Total Call flow at that strike<br>
-• <span style='color:#a855f7'>■ Purple bar</span>: Total Put flow at that strike<br><br>
+<b>4-Bar Structure per Strike:</b><br>
+• <span style='color:#10b981'>■ Call Buying</span> (emerald, right) — aggressive call buyers, bullish conviction<br>
+• <span style='color:#f43f5e'>■ Call Selling</span> (rose, right) — writing calls, capping upside or closing longs<br>
+• <span style='color:#818cf8'>■ Put Buying</span> (indigo, left) — bearish hedging or directional shorts<br>
+• <span style='color:#f59e0b'>■ Put Selling</span> (amber, left) — selling downside protection, bullish premium collection<br><br>
 
-<b>Metrics Toggle (Top Right):</b><br>
-• <b>Notional ($):</b> Dollar value of trades (volume × price)<br>
-• <b>Volume:</b> Number of contracts traded<br>
-• <b>Trade Count:</b> Number of individual trades<br><br>
+<b>Metric Toggle (Top Right):</b><br>
+• <b>Notional ($):</b> Dollar value of trades (contracts × price × multiplier). Best for sizing institutional flow.<br>
+• <b>Volume:</b> Number of contracts traded. Best for measuring frequency.<br>
+• <b>Trade Count:</b> Number of individual trades. Reveals fragmentation (retail) vs. block activity (institutional).<br><br>
 
-<b>Interactive Legend:</b><br>
-• <b>Single Click</b> on legend item: Isolate that trace (hides others)<br>
-• <b>Double Click</b> on legend item: Toggle that trace on/off<br>
-• Click isolated trace again to restore all traces<br><br>
+<b>Spot Price Marker:</b><br>
+Gold annotation marks the current underlying price. Strikes near spot are most relevant for directional reads.<br><br>
 
 <b>How to Interpret:</b><br>
-• <b>Larger bars</b> = More activity at that strike<br>
-• <b>Call Buy dominance</b> = Bullish conviction<br>
-• <b>Put Buy dominance</b> = Bearish hedging/conviction<br>
-• <b>Balanced bars</b> = Market makers providing liquidity<br>
-• <b>Clustered strikes</b> = Key price levels with high interest<br><br>
+• <b>Dominant call buying near/above spot</b> = Bullish speculation or delta hedging by dealers<br>
+• <b>Dominant put buying near/below spot</b> = Fear, downside hedging, or short positioning<br>
+• <b>Large put selling</b> = Institutions selling downside protection (bullish carry trade)<br>
+• <b>Symmetric buying + selling at same strike</b> = Market makers providing liquidity, not directional<br>
+• <b>Strike clusters with large bars</b> = Key gamma levels; dealers hedge here → price magnetic effect<br><br>
 
-<b>Key Insights:</b><br>
-• Spot price shown as yellow marker (current price)<br>
-• High put buying near spot = fear of downside<br>
-• High call buying above spot = bullish speculation<br>
-• Heavy selling at strikes = potential resistance/support
+<b>Legend Hover:</b> Hover over a legend item to dim all other traces to 15% opacity for isolation.
             """
 
         elif current_tab == 1:  # Net flow chart
             title = "Net Flow by Strike - Chart Guide"
             info = """
 <b>What This Chart Shows:</b><br>
-Net buying/selling pressure per strike (Buy Volume - Sell Volume).<br><br>
+Net buying/selling pressure per strike — each bar equals Buy Volume minus Sell Volume. Positive bars = net buyers dominated at that strike. Negative bars = net sellers dominated. Calls and puts use separate color-coded traces.<br><br>
 
-<b>Chart Structure:</b><br>
-• Separate bars for Calls and Puts at each strike<br>
-• <span style='color:#22c55e'>Green bars</span> = Net Buying (buy > sell)<br>
-• <span style='color:#f87171'>Red bars</span> = Net Selling (sell > buy)<br>
-• Bar height = magnitude of net flow<br><br>
-
-<b>Interactive Legend:</b><br>
-• <b>Single Click</b>: Isolate Call Net Flow or Put Net Flow<br>
-• <b>Double Click</b>: Toggle trace on/off<br><br>
+<b>4-Trace Color System:</b><br>
+• <span style='color:#10b981'>■ Call Buying</span> (emerald) — strikes where call buyers outpaced sellers<br>
+• <span style='color:#f43f5e'>■ Call Selling</span> (rose) — strikes where call sellers outpaced buyers<br>
+• <span style='color:#818cf8'>■ Put Buying</span> (indigo) — strikes where put buyers outpaced sellers<br>
+• <span style='color:#f59e0b'>■ Put Selling</span> (amber) — strikes where put sellers outpaced buyers<br>
+Each trace only shows bars where that type had net dominance — absent bars mean the other side won.<br><br>
 
 <b>How to Interpret:</b><br>
-• <b>Tall green call bars</b> = Strong bullish conviction at that strike<br>
-• <b>Tall red call bars</b> = Bearish pressure, selling calls<br>
-• <b>Tall green put bars</b> = Hedging/bearish positioning<br>
-• <b>Tall red put bars</b> = Put selling (bullish, selling protection)<br><br>
+• <b>Tall emerald call bars above spot</b> = Bullish speculation; market positioned for upside<br>
+• <b>Tall rose call bars</b> = Call writing dominant; expected ceiling or resistance forming<br>
+• <b>Tall indigo put bars below spot</b> = Active hedging or directional short positioning<br>
+• <b>Tall amber put bars</b> = Put selling (bullish carry); traders collecting premium by selling protection<br><br>
 
 <b>Key Patterns:</b><br>
-• Net buying at OTM calls + Net selling at OTM puts = Bullish<br>
-• Net buying at OTM puts + Net selling at OTM calls = Bearish<br>
-• Balanced net flow = Neutral/rangebound market<br><br>
+• Net call buying + Net put selling across strikes = Strong bullish signal<br>
+• Net put buying + Net call selling across strikes = Strong bearish signal<br>
+• Balanced net flow (small bars everywhere) = Neutral / range-bound market<br>
+• Concentrated large net flow at one strike = Potential gamma magnet / pin level<br><br>
 
-<b>Spot Price Reference:</b><br>
-Yellow line indicates current underlying price for context.
+<b>Zero Line:</b> Dashed horizontal line — bars above zero = buyers won; below zero = sellers won.<br>
+<b>Spot Price:</b> Yellow vertical dashed line marks current underlying price.<br><br>
+
+<b>Legend Hover:</b> Hover over a legend item to isolate that trace.
             """
 
         else:  # Trend chart
             title = "Flow Trend Over Time - Chart Guide"
             info = """
 <b>What This Chart Shows:</b><br>
-Historical buy/sell flow trends over the past 7 days (hourly aggregation).<br><br>
+Hourly aggregated option flow over the past 7 days — how buying and selling pressure evolved over time. Useful for detecting regime shifts, conviction buildup, and sentiment divergences from price action.<br><br>
 
-<b>Chart Structure:</b><br>
-• Time series showing 4 flows over time<br>
-• <span style='color:#00ff88'>Call Buy</span> (bullish aggression)<br>
-• <span style='color:#ff4444'>Call Sell</span> (bearish on calls)<br>
-• <span style='color:#00d4ff'>Put Buy</span> (bearish/hedging)<br>
-• <span style='color:#ff9500'>Put Sell</span> (bullish, selling protection)<br><br>
-
-<b>Interactive Legend:</b><br>
-• <b>Single Click</b>: Isolate that flow type<br>
-• <b>Double Click</b>: Toggle flow on/off<br><br>
+<b>5 Lines:</b><br>
+• <span style='color:#10b981'>── Call Buy</span> (emerald, solid) — call buying volume per hour<br>
+• <span style='color:#f43f5e'>── Call Sell</span> (rose, solid) — call selling volume per hour<br>
+• <span style='color:#a78bfa'>- - Put Buy</span> (violet, dashed) — put buying volume per hour<br>
+• <span style='color:#fb923c'>- - Put Sell</span> (orange, dashed) — put selling volume per hour<br>
+• <span style='color:#60a5fa'>━━ Net Flow</span> (blue, thick) — net direction = (call buy + put buy) − (call sell + put sell)<br><br>
 
 <b>How to Interpret:</b><br>
-• <b>Spikes in Call Buy</b> = Sudden bullish interest<br>
-• <b>Spikes in Put Buy</b> = Fear events, hedging<br>
-• <b>Sustained high Call Buy</b> = Persistent bullish sentiment<br>
-• <b>Sustained high Put Sell</b> = Bullish (selling downside protection)<br><br>
+• <b>Spikes in Call Buy</b> = Sudden bullish interest, often ahead of moves or on catalysts<br>
+• <b>Spikes in Put Buy</b> = Fear events, tail-risk hedging demand<br>
+• <b>Sustained high Call Buy</b> = Persistent bullish conviction accumulating over hours/days<br>
+• <b>Sustained high Put Sell</b> = Carry trade — traders systematically collecting premium by selling puts<br>
+• <b>Net Flow crossing above zero</b> = Market tilting net bullish in that window<br>
+• <b>Net Flow crossing below zero</b> = Market tilting net bearish<br><br>
 
-<b>Trend Detection:</b><br>
-• <b>Accelerating flows</b> = Increasing conviction<br>
-• <b>Decelerating flows</b> = Weakening sentiment<br>
-• <b>Regime shifts</b> = Flow reversal (buy → sell or vice versa)<br><br>
+<b>Regime Detection:</b><br>
+• <b>Accelerating flows</b> = Growing conviction; follow the direction<br>
+• <b>Decelerating flows</b> = Weakening sentiment; potential reversal ahead<br>
+• <b>Flow reversal (buy → sell)</b> = Regime change; smart money repositioning<br>
+• <b>Divergence</b> (price rising but put buying increases) = Hedged rally; participants cautious despite the move<br><br>
 
-<b>Use Cases:</b><br>
-• Identify when large participants entered/exited positions<br>
-• Detect sentiment changes before price moves<br>
-• Confirm price moves with flow alignment<br>
-• Spot divergences (price up, but put buying increases)
+<b>Timeframe:</b> Each data point = 1 hour aggregated. X-axis spans the last 7 calendar days.<br><br>
+
+<b>Legend Hover:</b> Hover a legend item to isolate that line. Double-click to toggle it on/off.
             """
 
         # Show dialog
