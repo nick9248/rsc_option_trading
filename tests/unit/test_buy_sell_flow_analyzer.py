@@ -499,3 +499,110 @@ def test_notional_calculation(analyzer):
     # Notional = amount * index_price = 10 * 100000 = 1,000,000
     assert call_data["buy_notional"] == 1000000.0
     assert call_data["sell_notional"] == 0.0
+
+
+def test_buy_sell_flow_analyzer_default_trade_filter():
+    """Default trade_filter should be 'all' (no SQL injection needed)."""
+    repo = MagicMock()
+    analyzer = BuySellFlowAnalyzer(
+        repository=repo,
+        currency="BTC",
+        expiration="27MAR26",
+        spot_price=85000.0,
+    )
+    assert analyzer.trade_filter == "all"
+
+
+def test_buy_sell_flow_analyzer_block_filter_param():
+    """trade_filter='block' should be stored on the analyzer."""
+    repo = MagicMock()
+    analyzer = BuySellFlowAnalyzer(
+        repository=repo,
+        currency="BTC",
+        expiration="27MAR26",
+        spot_price=85000.0,
+        trade_filter="block",
+    )
+    assert analyzer.trade_filter == "block"
+
+
+def test_fetch_trades_block_filter_injects_sql(monkeypatch):
+    """Block filter must inject 'AND (amount * index_price) >= 100000' into the SQL."""
+    captured_queries = []
+
+    class FakeCursor:
+        def execute(self, query, params):
+            captured_queries.append(query)
+        def fetchall(self):
+            return []
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+
+    repo = MagicMock()
+    repo._db_cursor.return_value = FakeCursor()
+
+    analyzer = BuySellFlowAnalyzer(
+        repository=repo,
+        currency="BTC",
+        expiration="27MAR26",
+        spot_price=85000.0,
+        trade_filter="block",
+    )
+    analyzer._fetch_trades(lookback_hours=24)
+
+    assert len(captured_queries) == 1
+    assert "(amount * index_price) >= 100000" in captured_queries[0]
+
+
+def test_fetch_trades_non_block_filter_injects_sql(monkeypatch):
+    """Non-block filter must inject 'AND (amount * index_price) < 100000' into SQL."""
+    captured_queries = []
+
+    class FakeCursor:
+        def execute(self, query, params):
+            captured_queries.append(query)
+        def fetchall(self):
+            return []
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+
+    repo = MagicMock()
+    repo._db_cursor.return_value = FakeCursor()
+
+    analyzer = BuySellFlowAnalyzer(
+        repository=repo,
+        currency="BTC",
+        expiration="27MAR26",
+        spot_price=85000.0,
+        trade_filter="non_block",
+    )
+    analyzer._fetch_trades(lookback_hours=24)
+
+    assert "(amount * index_price) < 100000" in captured_queries[0]
+
+
+def test_fetch_trades_all_filter_no_block_clause(monkeypatch):
+    """'all' filter must NOT inject any block filter clause."""
+    captured_queries = []
+
+    class FakeCursor:
+        def execute(self, query, params):
+            captured_queries.append(query)
+        def fetchall(self):
+            return []
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+
+    repo = MagicMock()
+    repo._db_cursor.return_value = FakeCursor()
+
+    analyzer = BuySellFlowAnalyzer(
+        repository=repo,
+        currency="BTC",
+        expiration="27MAR26",
+        spot_price=85000.0,
+        trade_filter="all",
+    )
+    analyzer._fetch_trades(lookback_hours=24)
+
+    assert "(amount * index_price)" not in captured_queries[0]
