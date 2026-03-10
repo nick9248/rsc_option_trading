@@ -1,4 +1,4 @@
-"""Tests for generate_flow_trend_chart optional expiration mode."""
+"""Tests for chart_generator: generate_flow_trend_chart and generate_net_flow_chart."""
 from unittest.mock import MagicMock
 import plotly.graph_objects as go
 from coding.core.analytics.chart_generator import generate_flow_trend_chart, generate_net_flow_chart
@@ -128,3 +128,13 @@ def test_net_flow_chart_empty_data():
     """Empty flow data must return a figure without crashing."""
     fig = generate_net_flow_chart({"flow_data": {}}, spot_price=0.0, currency="BTC", expiration="27MAR26")
     assert fig is not None
+
+
+def test_net_flow_chart_barmode():
+    """barmode must be 'relative' so signed bars extend from x=0 in opposite directions."""
+    flow_data = {
+        "flow_data": {80000.0: {"C": {"net_flow": 1.0}, "P": {"net_flow": -1.0}}},
+        "spot_price": 82000.0,
+    }
+    fig = generate_net_flow_chart(flow_data, spot_price=82000.0, currency="BTC", expiration="27MAR26")
+    assert fig.layout.barmode == "relative"
