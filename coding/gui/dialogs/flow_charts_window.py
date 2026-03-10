@@ -27,6 +27,7 @@ from PySide6.QtWebEngineWidgets import QWebEngineView
 from coding.core.analytics.chart_generator import inject_hover_js
 from coding.core.database.repository import DatabaseRepository
 from coding.gui.theme.colors import Colors
+from coding.service.on_chain.on_chain_analysis_service import OnChainAnalysisService
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,7 @@ class FlowChartsWindow(QDialog):
         super().__init__(parent)
         self.currency = currency
         self.repository = repository
+        self._flow_service = OnChainAnalysisService(repository=self.repository)
         self.current_expiration = None
         self.current_filter: str = "all"
         self._setup_ui()
@@ -406,8 +408,8 @@ class FlowChartsWindow(QDialog):
         Generate all three charts aggregated across all expirations.
 
         When filter == "all": uses get_aggregated_flow_metrics (fast, pre-aggregated).
-        When filter != "all": runs BuySellFlowAnalyzer per expiration and aggregates
-        in Python so the block filter can be applied to raw historical_trades.
+        When filter != "all": delegates to OnChainAnalysisService.get_filtered_aggregate_flow
+        which runs BuySellFlowAnalyzer per expiration so the block filter can be applied.
         """
         try:
             from coding.core.analytics.chart_generator import (
@@ -415,8 +417,6 @@ class FlowChartsWindow(QDialog):
                 generate_net_flow_chart,
                 generate_flow_trend_chart,
             )
-            from coding.core.analytics.buy_sell_flow_analyzer import BuySellFlowAnalyzer
-            from collections import defaultdict
 
             label = "All Expirations"
 
@@ -425,63 +425,13 @@ class FlowChartsWindow(QDialog):
                 logger.info(f"Fetching aggregated flow metrics for {self.currency}")
                 metrics = self.repository.get_aggregated_flow_metrics(self.currency)
             else:
-                # Filtered path: re-run BuySellFlowAnalyzer per expiration
+                # Filtered path: service layer aggregates per-expiration with block filter
                 logger.info(
                     f"Fetching per-expiration flow with filter={self.current_filter} for {self.currency}"
                 )
-                expirations = self.repository.get_active_expirations_with_flow(self.currency)
-                if not expirations:
-                    logger.warning(f"No active expirations found for {self.currency}")
-                    self._show_empty_charts()
-                    return
-
-                # Aggregate flow_data across all expirations in Python
-                agg_flow: dict = defaultdict(lambda: {
-                    "C": {"buy_count": 0, "sell_count": 0, "buy_volume": 0.0, "sell_volume": 0.0,
-                          "buy_notional": 0.0, "sell_notional": 0.0, "net_flow": 0.0,
-                          "buy_sell_ratio": None},
-                    "P": {"buy_count": 0, "sell_count": 0, "buy_volume": 0.0, "sell_volume": 0.0,
-                          "buy_notional": 0.0, "sell_notional": 0.0, "net_flow": 0.0,
-                          "buy_sell_ratio": None},
-                })
-                spot_prices = []
-
-                for exp_info in expirations:
-                    exp = exp_info["expiration"]
-                    try:
-                        analyzer = BuySellFlowAnalyzer(
-                            repository=self.repository,
-                            currency=self.currency,
-                            expiration=exp,
-                            spot_price=0.0,  # placeholder — not used for aggregation
-                            trade_filter=self.current_filter,
-                        )
-                        result = analyzer.calculate()
-                        exp_flow = result.get("flow_data", {})
-                        if result.get("spot_price"):
-                            spot_prices.append(result["spot_price"])
-
-                        for strike, type_data in exp_flow.items():
-                            for opt_type, vals in type_data.items():
-                                target = agg_flow[strike][opt_type]
-                                for field in ("buy_count", "sell_count", "buy_volume",
-                                              "sell_volume", "buy_notional", "sell_notional"):
-                                    target[field] += vals.get(field, 0.0)
-
-                    except Exception as exp_err:
-                        logger.warning(f"Skipping {exp} during aggregation: {exp_err}")
-
-                # Recompute net_flow and buy_sell_ratio from aggregated values
-                for strike_data in agg_flow.values():
-                    for opt_data in strike_data.values():
-                        opt_data["net_flow"] = opt_data["buy_volume"] - opt_data["sell_volume"]
-                        sv = opt_data["sell_volume"]
-                        opt_data["buy_sell_ratio"] = (
-                            opt_data["buy_volume"] / sv if sv > 0 else None
-                        )
-
-                spot_price = (sum(spot_prices) / len(spot_prices)) if spot_prices else 0.0
-                metrics = {"flow_data": dict(agg_flow), "spot_price": spot_price}
+                metrics = self._flow_service.get_filtered_aggregate_flow(
+                    self.currency, self.current_filter
+                )
 
             if not metrics or not metrics.get("flow_data"):
                 logger.warning(f"No aggregated flow data for {self.currency}")
