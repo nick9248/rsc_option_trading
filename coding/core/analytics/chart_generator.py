@@ -1119,13 +1119,40 @@ def generate_net_flow_chart(
         annotation_position="top",
     )
 
-    # Spot price — horizontal annotation on categorical Y-axis
-    # find nearest label
+    # Spot price — find nearest label (annotation added after update_layout)
     spot_label = None
     if strikes:
         nearest_strike = min(strikes, key=lambda s: abs(s - spot_price))
         spot_label = f"${nearest_strike:,.0f}"
 
+    fig.update_layout(
+        title=f"Net Flow by Strike (Buy Vol − Sell Vol) — {currency} {expiration}",
+        xaxis_title=f"Net Flow ({currency})  ·  ← selling  |  buying →",
+        yaxis_title="Strike Price",
+        barmode="group",
+        hovermode="y unified",
+        autosize=True,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.06,
+            itemclick="toggleothers",
+            itemdoubleclick="toggle",
+        ),
+        **theme
+    )
+
+    # Subtitle annotation — after update_layout so it appends cleanly
+    fig.add_annotation(
+        text="Net = Buy Volume − Sell Volume",
+        xref="paper", yref="paper",
+        x=0.0, y=1.04,
+        showarrow=False,
+        font=dict(color="#888888", size=11),
+        xanchor="left",
+    )
+
+    # Spot price annotation — after update_layout
     if spot_label and spot_label in strike_labels:
         spot_idx = strike_labels.index(spot_label)
         fig.add_annotation(
@@ -1139,33 +1166,6 @@ def generate_net_flow_chart(
             xanchor="left",
             yanchor="middle",
         )
-
-    fig.update_layout(
-        title=f"Net Flow by Strike (Buy Vol − Sell Vol) — {currency} {expiration}",
-        xaxis_title=f"Net Flow ({currency})  ·  ← selling  |  buying →",
-        yaxis_title="Strike Price",
-        barmode="relative",
-        hovermode="y unified",
-        autosize=True,
-        annotations=[
-            dict(
-                text="Net = Buy Volume − Sell Volume",
-                xref="paper", yref="paper",
-                x=0.0, y=1.04,
-                showarrow=False,
-                font=dict(color="#888888", size=11),
-                xanchor="left",
-            )
-        ] + list(fig.layout.annotations or []),
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.06,
-            itemclick="toggleothers",
-            itemdoubleclick="toggle",
-        ),
-        **theme
-    )
 
     return fig
 
