@@ -131,13 +131,13 @@ def test_net_flow_chart_empty_data():
 
 
 def test_net_flow_chart_barmode():
-    """barmode must be 'relative' so signed bars extend from x=0 in opposite directions."""
+    """barmode must be 'group' so call and put bars appear side by side per strike."""
     flow_data = {
         "flow_data": {80000.0: {"C": {"net_flow": 1.0}, "P": {"net_flow": -1.0}}},
         "spot_price": 82000.0,
     }
     fig = generate_net_flow_chart(flow_data, spot_price=82000.0, currency="BTC", expiration="27MAR26")
-    assert fig.layout.barmode == "relative"
+    assert fig.layout.barmode == "group"
 
 
 # ── trade_filter Tests ────────────────────────────────────────────────────────
