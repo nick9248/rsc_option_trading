@@ -1173,7 +1173,8 @@ def generate_flow_trend_chart(
     repository: Any,
     currency: str,
     expiration: Optional[str] = None,
-    lookback_days: int = 7
+    lookback_days: int = 7,
+    trade_filter: str = "all",
 ) -> go.Figure:
     """
     Generate hourly flow trend chart over time.
@@ -1188,6 +1189,8 @@ def generate_flow_trend_chart(
         currency: Currency symbol (BTC or ETH).
         expiration: Expiration date string. When None, aggregates across all expirations.
         lookback_days: Number of days to look back (default: 7).
+        trade_filter: Filter trades by size. "block" = notional >= $100k,
+            "non_block" = notional < $100k, "all" = no filter (default).
 
     Returns:
         Plotly figure object.
@@ -1201,9 +1204,14 @@ def generate_flow_trend_chart(
     start_ts = int(start_time.timestamp() * 1000)
     end_ts = int(end_time.timestamp() * 1000)
 
+    filter_clause = {
+        "block":     "AND (amount * index_price) >= 100000",
+        "non_block": "AND (amount * index_price) < 100000",
+    }.get(trade_filter, "")
+
     # Query hourly aggregated data
     if expiration:
-        query = """
+        query = f"""
             SELECT
                 DATE_TRUNC('hour', TO_TIMESTAMP(trade_timestamp / 1000)) AS hour,
                 option_type,
@@ -1215,12 +1223,13 @@ def generate_flow_trend_chart(
                 AND trade_timestamp >= %s
                 AND trade_timestamp <= %s
                 AND direction IS NOT NULL
+                {filter_clause}
             GROUP BY hour, option_type, direction
             ORDER BY hour ASC
         """
         params = (currency, expiration, start_ts, end_ts)
     else:
-        query = """
+        query = f"""
             SELECT
                 DATE_TRUNC('hour', TO_TIMESTAMP(trade_timestamp / 1000)) AS hour,
                 option_type,
@@ -1231,6 +1240,7 @@ def generate_flow_trend_chart(
                 AND trade_timestamp >= %s
                 AND trade_timestamp <= %s
                 AND direction IS NOT NULL
+                {filter_clause}
             GROUP BY hour, option_type, direction
             ORDER BY hour ASC
         """
