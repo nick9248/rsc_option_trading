@@ -60,6 +60,7 @@ class FlowChartsWindow(QDialog):
         self.currency = currency
         self.repository = repository
         self.current_expiration = None
+        self.current_filter: str = "all"
         self._setup_ui()
         self._load_expirations()
 
@@ -102,6 +103,45 @@ class FlowChartsWindow(QDialog):
         """)
         self.expiration_combo.currentIndexChanged.connect(self._on_expiration_changed)
         controls.addWidget(self.expiration_combo)
+
+        # Block filter toggle group
+        filter_label = QLabel("Filter:")
+        filter_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 13px; margin-left: 16px;")
+        controls.addWidget(filter_label)
+
+        self._filter_buttons = {}
+        filter_btn_style_active = f"""
+            QPushButton {{
+                background-color: {Colors.ACCENT};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.ACCENT};
+                border-radius: 6px;
+                padding: 6px 12px;
+                font-weight: 600;
+                font-size: 12px;
+            }}
+        """
+        filter_btn_style_inactive = f"""
+            QPushButton {{
+                background-color: {Colors.SURFACE};
+                color: {Colors.TEXT_SECONDARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 6px;
+                padding: 6px 12px;
+                font-size: 12px;
+            }}
+            QPushButton:hover {{
+                background-color: {Colors.BUTTON_SECONDARY_HOVER};
+                color: {Colors.TEXT_PRIMARY};
+            }}
+        """
+
+        for filter_key, filter_label_text in [("all", "All"), ("block", "Block"), ("non_block", "Non-Block")]:
+            btn = QPushButton(filter_label_text)
+            btn.setStyleSheet(filter_btn_style_active if filter_key == "all" else filter_btn_style_inactive)
+            btn.clicked.connect(lambda checked, k=filter_key: self._on_filter_changed(k))
+            controls.addWidget(btn)
+            self._filter_buttons[filter_key] = (btn, filter_btn_style_active, filter_btn_style_inactive)
 
         controls.addStretch()
 
@@ -231,6 +271,29 @@ class FlowChartsWindow(QDialog):
             logger.info(f"Loading charts for {expiration}")
             self._generate_charts_from_db(expiration)
 
+    def _on_filter_changed(self, filter_mode: str) -> None:
+        """
+        Update active filter and regenerate charts.
+
+        Args:
+            filter_mode: "all", "block", or "non_block".
+        """
+        self.current_filter = filter_mode
+
+        # Update button styles
+        for key, (btn, active_style, inactive_style) in self._filter_buttons.items():
+            btn.setStyleSheet(active_style if key == filter_mode else inactive_style)
+
+        # Regenerate charts with new filter
+        expiration = self.expiration_combo.currentData()
+        if not expiration:
+            return
+
+        if expiration == "__ALL__":
+            self._generate_aggregate_charts()
+        else:
+            self._generate_charts_from_db(expiration)
+
     def _generate_charts_from_db(self, expiration: str) -> None:
         """
         Query database and generate all three charts.
@@ -290,7 +353,8 @@ class FlowChartsWindow(QDialog):
                 repository=self.repository,
                 currency=self.currency,
                 expiration=expiration,
-                lookback_days=7
+                lookback_days=7,
+                trade_filter=self.current_filter,
             )
 
             logger.info("All charts generated successfully")
@@ -341,8 +405,9 @@ class FlowChartsWindow(QDialog):
         """
         Generate all three charts aggregated across all expirations.
 
-        Uses get_aggregated_flow_metrics for distribution and net flow,
-        and expiration=None mode of generate_flow_trend_chart for the trend.
+        When filter == "all": uses get_aggregated_flow_metrics (fast, pre-aggregated).
+        When filter != "all": runs BuySellFlowAnalyzer per expiration and aggregates
+        in Python so the block filter can be applied to raw historical_trades.
         """
         try:
             from coding.core.analytics.chart_generator import (
@@ -350,9 +415,73 @@ class FlowChartsWindow(QDialog):
                 generate_net_flow_chart,
                 generate_flow_trend_chart,
             )
+            from coding.core.analytics.buy_sell_flow_analyzer import BuySellFlowAnalyzer
+            from collections import defaultdict
 
-            logger.info(f"Fetching aggregated flow metrics for {self.currency}")
-            metrics = self.repository.get_aggregated_flow_metrics(self.currency)
+            label = "All Expirations"
+
+            if self.current_filter == "all":
+                # Fast path: use pre-aggregated metrics table
+                logger.info(f"Fetching aggregated flow metrics for {self.currency}")
+                metrics = self.repository.get_aggregated_flow_metrics(self.currency)
+            else:
+                # Filtered path: re-run BuySellFlowAnalyzer per expiration
+                logger.info(
+                    f"Fetching per-expiration flow with filter={self.current_filter} for {self.currency}"
+                )
+                expirations = self.repository.get_active_expirations_with_flow(self.currency)
+                if not expirations:
+                    logger.warning(f"No active expirations found for {self.currency}")
+                    self._show_empty_charts()
+                    return
+
+                # Aggregate flow_data across all expirations in Python
+                agg_flow: dict = defaultdict(lambda: {
+                    "C": {"buy_count": 0, "sell_count": 0, "buy_volume": 0.0, "sell_volume": 0.0,
+                          "buy_notional": 0.0, "sell_notional": 0.0, "net_flow": 0.0,
+                          "buy_sell_ratio": None},
+                    "P": {"buy_count": 0, "sell_count": 0, "buy_volume": 0.0, "sell_volume": 0.0,
+                          "buy_notional": 0.0, "sell_notional": 0.0, "net_flow": 0.0,
+                          "buy_sell_ratio": None},
+                })
+                spot_prices = []
+
+                for exp_info in expirations:
+                    exp = exp_info["expiration"]
+                    try:
+                        analyzer = BuySellFlowAnalyzer(
+                            repository=self.repository,
+                            currency=self.currency,
+                            expiration=exp,
+                            spot_price=0.0,  # placeholder — not used for aggregation
+                            trade_filter=self.current_filter,
+                        )
+                        result = analyzer.calculate()
+                        exp_flow = result.get("flow_data", {})
+                        if result.get("spot_price"):
+                            spot_prices.append(result["spot_price"])
+
+                        for strike, type_data in exp_flow.items():
+                            for opt_type, vals in type_data.items():
+                                target = agg_flow[strike][opt_type]
+                                for field in ("buy_count", "sell_count", "buy_volume",
+                                              "sell_volume", "buy_notional", "sell_notional"):
+                                    target[field] += vals.get(field, 0.0)
+
+                    except Exception as exp_err:
+                        logger.warning(f"Skipping {exp} during aggregation: {exp_err}")
+
+                # Recompute net_flow and buy_sell_ratio from aggregated values
+                for strike_data in agg_flow.values():
+                    for opt_data in strike_data.values():
+                        opt_data["net_flow"] = opt_data["buy_volume"] - opt_data["sell_volume"]
+                        sv = opt_data["sell_volume"]
+                        opt_data["buy_sell_ratio"] = (
+                            opt_data["buy_volume"] / sv if sv > 0 else None
+                        )
+
+                spot_price = (sum(spot_prices) / len(spot_prices)) if spot_prices else 0.0
+                metrics = {"flow_data": dict(agg_flow), "spot_price": spot_price}
 
             if not metrics or not metrics.get("flow_data"):
                 logger.warning(f"No aggregated flow data for {self.currency}")
@@ -360,7 +489,6 @@ class FlowChartsWindow(QDialog):
                 return
 
             spot_price = metrics.get("spot_price", 0)
-            label = "All Expirations"
 
             fig_dist = generate_flow_distribution_chart(
                 flow_data=metrics,
@@ -379,14 +507,16 @@ class FlowChartsWindow(QDialog):
                 currency=self.currency,
                 expiration=None,
                 lookback_days=7,
+                trade_filter=self.current_filter,
             )
 
             temp_dir = Path(tempfile.gettempdir()) / "flow_charts"
             temp_dir.mkdir(exist_ok=True)
 
-            dist_path = temp_dir / f"dist_{self.currency}_all.html"
-            net_path = temp_dir / f"net_{self.currency}_all.html"
-            trend_path = temp_dir / f"trend_{self.currency}_all.html"
+            filter_suffix = f"_{self.current_filter}" if self.current_filter != "all" else ""
+            dist_path = temp_dir / f"dist_{self.currency}_all{filter_suffix}.html"
+            net_path = temp_dir / f"net_{self.currency}_all{filter_suffix}.html"
+            trend_path = temp_dir / f"trend_{self.currency}_all{filter_suffix}.html"
 
             fig_dist.write_html(str(dist_path))
             fig_net.write_html(str(net_path))
@@ -400,7 +530,7 @@ class FlowChartsWindow(QDialog):
             self.net_flow_view.setUrl(QUrl.fromLocalFile(str(net_path.resolve())))
             self.trend_view.setUrl(QUrl.fromLocalFile(str(trend_path.resolve())))
 
-            logger.info("Aggregated charts loaded successfully")
+            logger.info(f"Aggregated charts loaded (filter={self.current_filter})")
 
         except Exception as e:
             import traceback
