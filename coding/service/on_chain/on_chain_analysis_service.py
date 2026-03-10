@@ -40,14 +40,14 @@ class OnChainAnalysisService:
 
     def __init__(
         self,
-        api_service: DeribitApiService,
+        api_service: Optional[DeribitApiService] = None,
         repository: Optional[DatabaseRepository] = None
     ):
         """
         Initialize service with API service and optional database repository.
 
         Args:
-            api_service: Deribit API service instance.
+            api_service: Deribit API service instance (optional for read-only DB operations).
             repository: Database repository for querying trade data (optional).
         """
         self.api = api_service
@@ -299,6 +299,75 @@ class OnChainAnalysisService:
             except Exception as e:
                 logger.warning(f"Failed to calculate buy/sell flow for {expiration}: {e}")
                 progress_callback(f"Warning: Failed to calculate flow for {expiration}")
+
+    def get_filtered_aggregate_flow(
+        self,
+        currency: str,
+        trade_filter: str,
+    ) -> Dict[str, Any]:
+        """
+        Aggregate flow data across all expirations with block trade filtering.
+
+        Used when a Block or Non-Block filter is active with All Expirations view.
+        Bypasses the pre-aggregated buy_sell_flow_metrics table (which lacks raw
+        amount/index_price columns) by re-running BuySellFlowAnalyzer per expiration.
+
+        Args:
+            currency: Currency symbol (BTC, ETH).
+            trade_filter: "block" or "non_block" — applied to raw historical_trades.
+
+        Returns:
+            Dict with "flow_data" and "spot_price" keys matching get_aggregated_flow_metrics format.
+        """
+        if self.repository is None:
+            logger.warning("Repository not available for filtered aggregate flow")
+            return {"flow_data": {}, "spot_price": 0.0}
+
+        expirations = self.repository.get_active_expirations_with_flow(currency)
+        if not expirations:
+            logger.warning(f"No active expirations found for {currency}")
+            return {"flow_data": {}, "spot_price": 0.0}
+
+        # Fetch real spot price from stored metrics for the first expiration
+        first_exp = expirations[0]["expiration"]
+        first_metrics = self.repository.get_flow_metrics(currency, first_exp)
+        spot_price = first_metrics.get("spot_price", 0.0)
+
+        agg_flow: dict = defaultdict(lambda: {
+            "C": {"buy_count": 0, "sell_count": 0, "buy_volume": 0.0, "sell_volume": 0.0,
+                  "buy_notional": 0.0, "sell_notional": 0.0},
+            "P": {"buy_count": 0, "sell_count": 0, "buy_volume": 0.0, "sell_volume": 0.0,
+                  "buy_notional": 0.0, "sell_notional": 0.0},
+        })
+
+        for exp_info in expirations:
+            exp = exp_info["expiration"]
+            try:
+                analyzer = BuySellFlowAnalyzer(
+                    repository=self.repository,
+                    currency=currency,
+                    expiration=exp,
+                    spot_price=spot_price,
+                    trade_filter=trade_filter,
+                )
+                result = analyzer.calculate()
+                for strike, type_data in result.get("flow_data", {}).items():
+                    for opt_type, vals in type_data.items():
+                        target = agg_flow[strike][opt_type]
+                        for field in ("buy_count", "sell_count", "buy_volume",
+                                      "sell_volume", "buy_notional", "sell_notional"):
+                            target[field] += vals.get(field, 0.0)
+            except Exception as exp_err:
+                logger.warning(f"Skipping {exp} during filtered aggregation: {exp_err}")
+
+        # Recompute derived fields from aggregated values
+        for strike_data in agg_flow.values():
+            for opt_data in strike_data.values():
+                opt_data["net_flow"] = opt_data["buy_volume"] - opt_data["sell_volume"]
+                sv = opt_data["sell_volume"]
+                opt_data["buy_sell_ratio"] = opt_data["buy_volume"] / sv if sv > 0 else None
+
+        return {"flow_data": dict(agg_flow), "spot_price": spot_price}
 
     def _calculate_volatility_surface(
         self,
