@@ -1154,10 +1154,9 @@ def generate_net_flow_chart(
 
     # Spot price annotation — after update_layout
     if spot_label and spot_label in strike_labels:
-        spot_idx = strike_labels.index(spot_label)
         fig.add_annotation(
             x=0,
-            y=spot_idx,
+            y=spot_label,
             xref="x",
             yref="y",
             text=f"← Spot ~${spot_price:,.0f}",
