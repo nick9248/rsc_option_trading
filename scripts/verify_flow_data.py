@@ -96,9 +96,9 @@ def check_1_mathematical_consistency(repo, currency: str, expiration: str = None
         print("  First 5 discrepancies:")
         for d in discrepancies[:5]:
             print(d)
-        print("  FAIL ✗")
+        print("  FAIL X")
         return False
-    print("  PASS ✓")
+    print("  PASS OK")
     return True
 
 
@@ -185,9 +185,9 @@ def check_2_trade_count_reconciliation(repo, currency: str, expiration: str = No
         print("  First 5 mismatches:")
         for m in mismatches[:5]:
             print(m)
-        print("  FAIL ✗")
+        print("  FAIL X")
         return False
-    print("  PASS ✓")
+    print("  PASS OK")
     return True
 
 
@@ -278,9 +278,9 @@ def check_3_volume_reconciliation(repo, currency: str, expiration: str = None) -
         print("  First 5 mismatches:")
         for m in mismatches[:5]:
             print(m)
-        print("  FAIL ✗")
+        print("  FAIL X")
         return False
-    print("  PASS ✓")
+    print("  PASS OK")
     return True
 
 
@@ -375,9 +375,9 @@ def check_4_notional_reconciliation(repo, currency: str, expiration: str = None)
         print("  First 5 mismatches:")
         for m in mismatches[:5]:
             print(m)
-        print("  FAIL ✗")
+        print("  FAIL X")
         return False
-    print("  PASS ✓")
+    print("  PASS OK")
     return True
 
 
@@ -495,7 +495,7 @@ def check_6_time_window_verification(repo, currency: str, expiration: str = None
     age_hours = (now - latest_captured_at).total_seconds() / 3600
 
     print(f"  Latest captured_at: {latest_captured_at.strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"  Window: {window_start.strftime('%Y-%m-%d %H:%M:%S')} → {latest_captured_at.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"  Window: {window_start.strftime('%Y-%m-%d %H:%M:%S')} -> {latest_captured_at.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"  Metrics age: {age_hours:.1f}h ago")
 
     # (a) Freshness check
@@ -547,14 +547,14 @@ def check_6_time_window_verification(repo, currency: str, expiration: str = None
     print("  NOTE: historical_trades accumulates all history; out-of-window count is expected to be large.")
 
     if stale:
-        print("  FAIL ✗ — Metrics are stale (captured_at > 30h ago). Run the collection daemon.")
+        print("  FAIL X — Metrics are stale (captured_at > 30h ago). Run the collection daemon.")
         return False
 
     if in_count == 0:
-        print("  FAIL ✗ — No trades found within the 24h window. Pipeline may not have collected data.")
+        print("  FAIL X — No trades found within the 24h window. Pipeline may not have collected data.")
         return False
 
-    print("  PASS ✓")
+    print("  PASS OK")
     return True
 
 
