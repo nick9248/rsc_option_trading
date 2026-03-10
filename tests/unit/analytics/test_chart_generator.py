@@ -138,3 +138,81 @@ def test_net_flow_chart_barmode():
     }
     fig = generate_net_flow_chart(flow_data, spot_price=82000.0, currency="BTC", expiration="27MAR26")
     assert fig.layout.barmode == "relative"
+
+
+# ── trade_filter Tests ────────────────────────────────────────────────────────
+
+def test_trend_chart_block_filter_injects_sql():
+    """Block filter must inject the block clause into the trend chart SQL."""
+    captured_queries = []
+
+    class FakeCursor:
+        def execute(self, query, params):
+            captured_queries.append(query)
+        def fetchall(self):
+            return []
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+
+    repo = MagicMock()
+    repo._db_cursor.return_value = FakeCursor()
+
+    generate_flow_trend_chart(
+        repository=repo,
+        currency="BTC",
+        expiration="27MAR26",
+        trade_filter="block",
+    )
+
+    assert len(captured_queries) == 1
+    assert "(amount * index_price) >= 100000" in captured_queries[0]
+
+
+def test_trend_chart_non_block_filter_injects_sql():
+    """Non-block filter must inject the non-block clause."""
+    captured_queries = []
+
+    class FakeCursor:
+        def execute(self, query, params):
+            captured_queries.append(query)
+        def fetchall(self):
+            return []
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+
+    repo = MagicMock()
+    repo._db_cursor.return_value = FakeCursor()
+
+    generate_flow_trend_chart(
+        repository=repo,
+        currency="BTC",
+        expiration="27MAR26",
+        trade_filter="non_block",
+    )
+
+    assert "(amount * index_price) < 100000" in captured_queries[0]
+
+
+def test_trend_chart_all_filter_no_block_clause():
+    """Default 'all' filter must NOT inject any block clause."""
+    captured_queries = []
+
+    class FakeCursor:
+        def execute(self, query, params):
+            captured_queries.append(query)
+        def fetchall(self):
+            return []
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+
+    repo = MagicMock()
+    repo._db_cursor.return_value = FakeCursor()
+
+    generate_flow_trend_chart(
+        repository=repo,
+        currency="BTC",
+        expiration="27MAR26",
+        trade_filter="all",
+    )
+
+    assert "(amount * index_price)" not in captured_queries[0]
