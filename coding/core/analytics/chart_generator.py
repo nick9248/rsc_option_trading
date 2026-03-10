@@ -1043,17 +1043,18 @@ def generate_net_flow_chart(
     expiration: str
 ) -> go.Figure:
     """
-    Generate net flow chart showing buy - sell conviction per strike.
+    Generate net flow chart showing call and put net flow per strike.
 
-    Green bars = net buying (buy_volume > sell_volume)
-    Red bars = net selling (sell_volume > buy_volume)
-    Separate traces for calls and puts.
+    Horizontal bar chart — strikes on Y-axis, net volume on X-axis.
+    2 traces: Call Net Flow (emerald) and Put Net Flow (indigo).
+    Bar extends right = net buying, left = net selling.
+    Net = buy_volume - sell_volume (signed).
 
     Args:
-        flow_data: Result from BuySellFlowAnalyzer.calculate().
+        flow_data: Result from BuySellFlowAnalyzer.calculate() or repository.
         spot_price: Current underlying spot price.
         currency: Currency symbol (BTC or ETH).
-        expiration: Expiration date string.
+        expiration: Expiration date string (used in title).
 
     Returns:
         Plotly figure object.
@@ -1072,88 +1073,96 @@ def generate_net_flow_chart(
     theme = get_chart_theme()
     strikes = sorted(per_strike_data.keys())
 
-    # Four arrays: positive/negative split per call/put so each trace has one color in the legend
-    call_buy = []   # positive call net flow, None when ≤ 0
-    call_sell = []  # negative call net flow, None when ≥ 0
-    put_buy = []    # positive put net flow, None when ≤ 0
-    put_sell = []   # negative put net flow, None when ≥ 0
+    # Format strike labels for categorical Y-axis (e.g. "$80,000")
+    strike_labels = [f"${s:,.0f}" for s in strikes]
+
+    call_net = []
+    put_net = []
 
     for strike in strikes:
         strike_data = per_strike_data[strike]
-
-        call_net = float(strike_data.get("C", {}).get("net_flow", 0))
-        call_buy.append(call_net if call_net > 0 else None)
-        call_sell.append(call_net if call_net < 0 else None)
-
-        put_net = float(strike_data.get("P", {}).get("net_flow", 0))
-        put_buy.append(put_net if put_net > 0 else None)
-        put_sell.append(put_net if put_net < 0 else None)
+        call_net.append(float(strike_data.get("C", {}).get("net_flow", 0)))
+        put_net.append(float(strike_data.get("P", {}).get("net_flow", 0)))
 
     fig = go.Figure()
 
-    tmpl_call = "<b>Strike: $%{x:,.0f}</b><br>%{fullData.name}: %{y:.4f} " + currency + "<extra></extra>"
-    tmpl_put  = "<b>Strike: $%{x:,.0f}</b><br>%{fullData.name}: %{y:.4f} " + currency + "<extra></extra>"
-
-    # Call Buying — Emerald
+    # Call Net Flow — Emerald
     fig.add_trace(go.Bar(
-        x=strikes, y=call_buy, name="Call Buying",
+        x=call_net,
+        y=strike_labels,
+        name="Call Net Flow",
+        orientation="h",
         marker_color="#10b981",
         marker_line=dict(color="rgba(255,255,255,0.12)", width=0.5),
-        opacity=0.90, hovertemplate=tmpl_call
+        opacity=0.90,
+        hovertemplate="<b>Strike: %{y}</b><br>Call Net: %{x:.4f} " + currency + "<extra></extra>",
     ))
-    # Call Selling — Rose
+
+    # Put Net Flow — Indigo
     fig.add_trace(go.Bar(
-        x=strikes, y=call_sell, name="Call Selling",
-        marker_color="#f43f5e",
-        marker_line=dict(color="rgba(255,255,255,0.12)", width=0.5),
-        opacity=0.90, hovertemplate=tmpl_call
-    ))
-    # Put Buying — Indigo
-    fig.add_trace(go.Bar(
-        x=strikes, y=put_buy, name="Put Buying",
+        x=put_net,
+        y=strike_labels,
+        name="Put Net Flow",
+        orientation="h",
         marker_color="#818cf8",
         marker_line=dict(color="rgba(255,255,255,0.12)", width=0.5),
-        opacity=0.90, hovertemplate=tmpl_put
-    ))
-    # Put Selling — Amber
-    fig.add_trace(go.Bar(
-        x=strikes, y=put_sell, name="Put Selling",
-        marker_color="#f59e0b",
-        marker_line=dict(color="rgba(255,255,255,0.12)", width=0.5),
-        opacity=0.90, hovertemplate=tmpl_put
+        opacity=0.90,
+        hovertemplate="<b>Strike: %{y}</b><br>Put Net: %{x:.4f} " + currency + "<extra></extra>",
     ))
 
-    # Add zero line
-    fig.add_hline(
-        y=0,
+    # Zero line — vertical (x=0 on a horizontal bar chart)
+    fig.add_vline(
+        x=0,
         line_dash="dash",
         line_color="#666666",
-        annotation_text="Balance",
-        annotation_position="right"
+        annotation_text="Zero",
+        annotation_position="top",
     )
 
-    # Add spot price line
-    fig.add_vline(
-        x=spot_price,
-        line_dash="dash",
-        line_color="#ffd93d",
-        annotation_text=f"Spot: ${spot_price:,.0f}",
-        annotation_position="top"
-    )
+    # Spot price — horizontal annotation on categorical Y-axis
+    # find nearest label
+    spot_label = None
+    if strikes:
+        nearest_strike = min(strikes, key=lambda s: abs(s - spot_price))
+        spot_label = f"${nearest_strike:,.0f}"
+
+    if spot_label and spot_label in strike_labels:
+        spot_idx = strike_labels.index(spot_label)
+        fig.add_annotation(
+            x=0,
+            y=spot_idx,
+            xref="x",
+            yref="y",
+            text=f"← Spot ~${spot_price:,.0f}",
+            showarrow=False,
+            font=dict(color="#ffd93d", size=11),
+            xanchor="left",
+            yanchor="middle",
+        )
 
     fig.update_layout(
-        title=f"Net Flow by Strike (Buy - Sell) - {currency} {expiration}",
-        xaxis_title="Strike Price ($)",
-        yaxis_title=f"Net Flow ({currency})",
-        barmode="group",
-        hovermode="x unified",
-        autosize=True,  # Let chart resize to container
+        title=f"Net Flow by Strike (Buy Vol − Sell Vol) — {currency} {expiration}",
+        xaxis_title=f"Net Flow ({currency})  ·  ← selling  |  buying →",
+        yaxis_title="Strike Price",
+        barmode="relative",
+        hovermode="y unified",
+        autosize=True,
+        annotations=[
+            dict(
+                text="Net = Buy Volume − Sell Volume",
+                xref="paper", yref="paper",
+                x=0.0, y=1.04,
+                showarrow=False,
+                font=dict(color="#888888", size=11),
+                xanchor="left",
+            )
+        ] + list(fig.layout.annotations or []),
         legend=dict(
             orientation="h",
             yanchor="bottom",
-            y=1.02,
-            itemclick="toggleothers",  # Click to isolate trace
-            itemdoubleclick="toggle",  # Double-click to toggle trace
+            y=1.06,
+            itemclick="toggleothers",
+            itemdoubleclick="toggle",
         ),
         **theme
     )
