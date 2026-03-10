@@ -24,8 +24,10 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtWebEngineWidgets import QWebEngineView
 
+from coding.core.analytics.chart_generator import inject_hover_js
 from coding.core.database.repository import DatabaseRepository
 from coding.gui.theme.colors import Colors
+from coding.service.on_chain.on_chain_analysis_service import OnChainAnalysisService
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +60,9 @@ class FlowChartsWindow(QDialog):
         super().__init__(parent)
         self.currency = currency
         self.repository = repository
+        self._flow_service = OnChainAnalysisService(repository=self.repository)
         self.current_expiration = None
+        self.current_filter: str = "all"
         self._setup_ui()
         self._load_expirations()
 
@@ -101,6 +105,45 @@ class FlowChartsWindow(QDialog):
         """)
         self.expiration_combo.currentIndexChanged.connect(self._on_expiration_changed)
         controls.addWidget(self.expiration_combo)
+
+        # Block filter toggle group
+        filter_label = QLabel("Filter:")
+        filter_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 13px; margin-left: 16px;")
+        controls.addWidget(filter_label)
+
+        self._filter_buttons = {}
+        filter_btn_style_active = f"""
+            QPushButton {{
+                background-color: {Colors.ACCENT};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.ACCENT};
+                border-radius: 6px;
+                padding: 6px 12px;
+                font-weight: 600;
+                font-size: 12px;
+            }}
+        """
+        filter_btn_style_inactive = f"""
+            QPushButton {{
+                background-color: {Colors.SURFACE};
+                color: {Colors.TEXT_SECONDARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 6px;
+                padding: 6px 12px;
+                font-size: 12px;
+            }}
+            QPushButton:hover {{
+                background-color: {Colors.BUTTON_SECONDARY_HOVER};
+                color: {Colors.TEXT_PRIMARY};
+            }}
+        """
+
+        for filter_key, filter_label_text in [("all", "All"), ("block", "Block"), ("non_block", "Non-Block")]:
+            btn = QPushButton(filter_label_text)
+            btn.setStyleSheet(filter_btn_style_active if filter_key == "all" else filter_btn_style_inactive)
+            btn.clicked.connect(lambda checked, k=filter_key: self._on_filter_changed(k))
+            controls.addWidget(btn)
+            self._filter_buttons[filter_key] = (btn, filter_btn_style_active, filter_btn_style_inactive)
 
         controls.addStretch()
 
@@ -189,6 +232,9 @@ class FlowChartsWindow(QDialog):
 
             self.expiration_combo.clear()
 
+            # Always add aggregated view as first option
+            self.expiration_combo.addItem("🌐 All Expirations", "__ALL__")
+
             if not expirations:
                 self.expiration_combo.addItem("No data available", None)
                 logger.warning(f"No active expirations with flow data found for {self.currency}")
@@ -198,9 +244,8 @@ class FlowChartsWindow(QDialog):
                 label = f"{exp['expiration']} (OI: {exp['total_oi']:,.0f})"
                 self.expiration_combo.addItem(label, exp['expiration'])
 
-            # Load first expiration
-            if len(expirations) > 0:
-                self._on_expiration_changed(0)
+            # Load default view: "All Expirations" is always index 0
+            self._on_expiration_changed(0)
 
         except Exception as e:
             logger.error(f"Failed to load expirations: {e}")
@@ -210,6 +255,8 @@ class FlowChartsWindow(QDialog):
         """
         Regenerate charts when expiration changes.
 
+        Routes to aggregate charts when 'All Expirations' is selected.
+
         Args:
             index: Combo box index.
         """
@@ -218,8 +265,36 @@ class FlowChartsWindow(QDialog):
             return
 
         self.current_expiration = expiration
-        logger.info(f"Loading charts for {expiration}")
-        self._generate_charts_from_db(expiration)
+
+        if expiration == "__ALL__":
+            logger.info("Loading aggregated charts for all expirations")
+            self._generate_aggregate_charts()
+        else:
+            logger.info(f"Loading charts for {expiration}")
+            self._generate_charts_from_db(expiration)
+
+    def _on_filter_changed(self, filter_mode: str) -> None:
+        """
+        Update active filter and regenerate charts.
+
+        Args:
+            filter_mode: "all", "block", or "non_block".
+        """
+        self.current_filter = filter_mode
+
+        # Update button styles
+        for key, (btn, active_style, inactive_style) in self._filter_buttons.items():
+            btn.setStyleSheet(active_style if key == filter_mode else inactive_style)
+
+        # Regenerate charts with new filter
+        expiration = self.expiration_combo.currentData()
+        if not expiration:
+            return
+
+        if expiration == "__ALL__":
+            self._generate_aggregate_charts()
+        else:
+            self._generate_charts_from_db(expiration)
 
     def _generate_charts_from_db(self, expiration: str) -> None:
         """
@@ -280,7 +355,8 @@ class FlowChartsWindow(QDialog):
                 repository=self.repository,
                 currency=self.currency,
                 expiration=expiration,
-                lookback_days=7
+                lookback_days=7,
+                trade_filter=self.current_filter,
             )
 
             logger.info("All charts generated successfully")
@@ -301,12 +377,9 @@ class FlowChartsWindow(QDialog):
             logger.info(f"Charts saved to {temp_dir}")
 
             # Add hover highlighting via post-processing (optional)
-            try:
-                self._add_hover_highlighting(dist_path)
-                self._add_hover_highlighting(net_path)
-                self._add_hover_highlighting(trend_path)
-            except Exception as e:
-                logger.warning(f"Failed to add hover highlighting: {e}")
+            inject_hover_js(dist_path)
+            inject_hover_js(net_path)
+            inject_hover_js(trend_path)
 
             # Load charts into web views
             dist_url = QUrl.fromLocalFile(str(dist_path.resolve()))
@@ -325,7 +398,94 @@ class FlowChartsWindow(QDialog):
             logger.info(f"Charts loaded for {expiration}")
 
         except Exception as e:
+            import traceback
             logger.error(f"Failed to generate charts for {expiration}: {e}")
+            logger.error(traceback.format_exc())
+            self._show_empty_charts()
+
+    def _generate_aggregate_charts(self) -> None:
+        """
+        Generate all three charts aggregated across all expirations.
+
+        When filter == "all": uses get_aggregated_flow_metrics (fast, pre-aggregated).
+        When filter != "all": delegates to OnChainAnalysisService.get_filtered_aggregate_flow
+        which runs BuySellFlowAnalyzer per expiration so the block filter can be applied.
+        """
+        try:
+            from coding.core.analytics.chart_generator import (
+                generate_flow_distribution_chart,
+                generate_net_flow_chart,
+                generate_flow_trend_chart,
+            )
+
+            label = "All Expirations"
+
+            if self.current_filter == "all":
+                # Fast path: use pre-aggregated metrics table
+                logger.info(f"Fetching aggregated flow metrics for {self.currency}")
+                metrics = self.repository.get_aggregated_flow_metrics(self.currency)
+            else:
+                # Filtered path: service layer aggregates per-expiration with block filter
+                logger.info(
+                    f"Fetching per-expiration flow with filter={self.current_filter} for {self.currency}"
+                )
+                metrics = self._flow_service.get_filtered_aggregate_flow(
+                    self.currency, self.current_filter
+                )
+
+            if not metrics or not metrics.get("flow_data"):
+                logger.warning(f"No aggregated flow data for {self.currency}")
+                self._show_empty_charts()
+                return
+
+            spot_price = metrics.get("spot_price", 0)
+
+            fig_dist = generate_flow_distribution_chart(
+                flow_data=metrics,
+                spot_price=spot_price,
+                currency=self.currency,
+                expiration=label,
+            )
+            fig_net = generate_net_flow_chart(
+                flow_data=metrics,
+                spot_price=spot_price,
+                currency=self.currency,
+                expiration=label,
+            )
+            fig_trend = generate_flow_trend_chart(
+                repository=self.repository,
+                currency=self.currency,
+                expiration=None,
+                lookback_days=7,
+                trade_filter=self.current_filter,
+            )
+
+            temp_dir = Path(tempfile.gettempdir()) / "flow_charts"
+            temp_dir.mkdir(exist_ok=True)
+
+            filter_suffix = f"_{self.current_filter}" if self.current_filter != "all" else ""
+            dist_path = temp_dir / f"dist_{self.currency}_all{filter_suffix}.html"
+            net_path = temp_dir / f"net_{self.currency}_all{filter_suffix}.html"
+            trend_path = temp_dir / f"trend_{self.currency}_all{filter_suffix}.html"
+
+            fig_dist.write_html(str(dist_path))
+            fig_net.write_html(str(net_path))
+            fig_trend.write_html(str(trend_path))
+
+            inject_hover_js(dist_path)
+            inject_hover_js(net_path)
+            inject_hover_js(trend_path)
+
+            self.distribution_view.setUrl(QUrl.fromLocalFile(str(dist_path.resolve())))
+            self.net_flow_view.setUrl(QUrl.fromLocalFile(str(net_path.resolve())))
+            self.trend_view.setUrl(QUrl.fromLocalFile(str(trend_path.resolve())))
+
+            logger.info(f"Aggregated charts loaded (filter={self.current_filter})")
+
+        except Exception as e:
+            import traceback
+            logger.error(f"Failed to generate aggregate charts: {e}")
+            logger.error(traceback.format_exc())
             self._show_empty_charts()
 
     def _show_empty_charts(self) -> None:
@@ -354,71 +514,6 @@ class FlowChartsWindow(QDialog):
         self.net_flow_view.setHtml(empty_html)
         self.trend_view.setHtml(empty_html)
 
-    def _add_hover_highlighting(self, html_path: Path) -> None:
-        """
-        Add hover highlighting JavaScript to chart HTML.
-
-        Args:
-            html_path: Path to HTML file.
-        """
-        try:
-            with open(html_path, 'r', encoding='utf-8') as f:
-                html_content = f.read()
-
-            # Add hover script that's safe and won't break if elements don't exist
-            hover_script = """
-<script>
-// Wait for Plotly to be fully loaded
-window.addEventListener('load', function() {
-    setTimeout(function() {
-        try {
-            var plotDiv = document.querySelector('.plotly-graph-div');
-            if (!plotDiv || !plotDiv.data) return;
-
-            // Get all legend groups
-            var legendGroups = document.querySelectorAll('.legend .groups .traces');
-            if (legendGroups.length === 0) {
-                legendGroups = document.querySelectorAll('.legendtoggle');
-            }
-
-            legendGroups.forEach(function(group, idx) {
-                group.addEventListener('mouseenter', function() {
-                    if (!plotDiv.data) return;
-                    var opacity = [];
-                    for (var i = 0; i < plotDiv.data.length; i++) {
-                        opacity.push(i === idx ? 1.0 : 0.15);
-                    }
-                    Plotly.restyle(plotDiv, {'opacity': opacity});
-                });
-
-                group.addEventListener('mouseleave', function() {
-                    if (!plotDiv.data) return;
-                    var opacity = [];
-                    for (var i = 0; i < plotDiv.data.length; i++) {
-                        opacity.push(1.0);
-                    }
-                    Plotly.restyle(plotDiv, {'opacity': opacity});
-                });
-            });
-        } catch(e) {
-            console.log('Hover highlighting setup failed:', e);
-        }
-    }, 500);
-});
-</script>
-"""
-
-            # Inject before closing body tag
-            if '</body>' in html_content:
-                html_content = html_content.replace('</body>', hover_script + '\n</body>')
-
-                with open(html_path, 'w', encoding='utf-8') as f:
-                    f.write(html_content)
-
-        except Exception as e:
-            logger.warning(f"Failed to add hover highlighting to {html_path}: {e}")
-            # Don't raise - chart should still work without hover highlighting
-
     def _show_chart_info(self) -> None:
         """Show detailed information about the current chart."""
         current_tab = self.tab_widget.currentIndex()
@@ -427,108 +522,93 @@ window.addEventListener('load', function() {
             title = "Distribution by Strike - Chart Guide"
             info = """
 <b>What This Chart Shows:</b><br>
-A population pyramid showing buy/sell flow distribution across strike prices.<br><br>
+Population pyramid showing call and put flow activity per strike — calls extend right (positive), puts extend left (negative). Each strike has up to 4 bars split by direction and option type.<br><br>
 
-<b>Chart Structure:</b><br>
-• <span style='color:#00d4ff'>PUTS (Left Side)</span>: Put options displayed as negative bars<br>
-• <span style='color:#00ff88'>CALLS (Right Side)</span>: Call options displayed as positive bars<br>
-• Y-Axis: Strike prices (vertical)<br>
-• X-Axis: Flow volume/notional/count (horizontal)<br><br>
+<b>4-Bar Structure per Strike:</b><br>
+• <span style='color:#10b981'>■ Call Buying</span> (emerald, right) — aggressive call buyers, bullish conviction<br>
+• <span style='color:#f43f5e'>■ Call Selling</span> (rose, right) — writing calls, capping upside or closing longs<br>
+• <span style='color:#818cf8'>■ Put Buying</span> (indigo, left) — bearish hedging or directional shorts<br>
+• <span style='color:#f59e0b'>■ Put Selling</span> (amber, left) — selling downside protection, bullish premium collection<br><br>
 
-<b>Color Legend:</b><br>
-• <span style='color:#00ff88'>■ Bright Green</span> = Call Buy (bullish aggression)<br>
-• <span style='color:#ff4444'>■ Bright Red</span> = Call Sell (bearish aggression on calls)<br>
-• <span style='color:#00d4ff'>■ Cyan</span> = Put Buy (bearish protection/conviction)<br>
-• <span style='color:#ff9500'>■ Orange</span> = Put Sell (bullish, selling downside protection)<br><br>
+<b>Metric Toggle (Top Right):</b><br>
+• <b>Notional ($):</b> Dollar value of trades (contracts × price × multiplier). Best for sizing institutional flow.<br>
+• <b>Volume:</b> Number of contracts traded. Best for measuring frequency.<br>
+• <b>Trade Count:</b> Number of individual trades. Reveals fragmentation (retail) vs. block activity (institutional).<br><br>
 
-<b>Metrics Toggle (Top Center):</b><br>
-• <b>Notional ($):</b> Dollar value of trades (volume × price)<br>
-• <b>Volume:</b> Number of contracts traded<br>
-• <b>Trade Count:</b> Number of individual trades<br><br>
-
-<b>Interactive Legend:</b><br>
-• <b>Single Click</b> on legend item: Isolate that trace (hides others)<br>
-• <b>Double Click</b> on legend item: Toggle that trace on/off<br>
-• Click isolated trace again to restore all traces<br><br>
+<b>Spot Price Marker:</b><br>
+Gold annotation marks the current underlying price. Strikes near spot are most relevant for directional reads.<br><br>
 
 <b>How to Interpret:</b><br>
-• <b>Larger bars</b> = More activity at that strike<br>
-• <b>Call Buy dominance</b> = Bullish conviction<br>
-• <b>Put Buy dominance</b> = Bearish hedging/conviction<br>
-• <b>Balanced bars</b> = Market makers providing liquidity<br>
-• <b>Clustered strikes</b> = Key price levels with high interest<br><br>
+• <b>Dominant call buying near/above spot</b> = Bullish speculation or delta hedging by dealers<br>
+• <b>Dominant put buying near/below spot</b> = Fear, downside hedging, or short positioning<br>
+• <b>Large put selling</b> = Institutions selling downside protection (bullish carry trade)<br>
+• <b>Symmetric buying + selling at same strike</b> = Market makers providing liquidity, not directional<br>
+• <b>Strike clusters with large bars</b> = Key gamma levels; dealers hedge here → price magnetic effect<br><br>
 
-<b>Key Insights:</b><br>
-• Spot price shown as yellow marker (current price)<br>
-• High put buying near spot = fear of downside<br>
-• High call buying above spot = bullish speculation<br>
-• Heavy selling at strikes = potential resistance/support
+<b>Legend Hover:</b> Hover over a legend item to dim all other traces to 15% opacity for isolation.
             """
 
         elif current_tab == 1:  # Net flow chart
             title = "Net Flow by Strike - Chart Guide"
             info = """
 <b>What This Chart Shows:</b><br>
-Net buying/selling pressure per strike (Buy Volume - Sell Volume).<br><br>
+Net buying/selling pressure per strike — each bar equals Buy Volume minus Sell Volume. Positive bars = net buyers dominated at that strike. Negative bars = net sellers dominated. Calls and puts use separate color-coded traces.<br><br>
 
-<b>Chart Structure:</b><br>
-• Separate bars for Calls and Puts at each strike<br>
-• <span style='color:#2ecc71'>Green bars</span> = Net Buying (buy > sell)<br>
-• <span style='color:#e74c3c'>Red bars</span> = Net Selling (sell > buy)<br>
-• Bar height = magnitude of net flow<br><br>
-
-<b>Interactive Legend:</b><br>
-• <b>Single Click</b>: Isolate Call Net Flow or Put Net Flow<br>
-• <b>Double Click</b>: Toggle trace on/off<br><br>
+<b>4-Trace Color System:</b><br>
+• <span style='color:#10b981'>■ Call Buying</span> (emerald) — strikes where call buyers outpaced sellers<br>
+• <span style='color:#f43f5e'>■ Call Selling</span> (rose) — strikes where call sellers outpaced buyers<br>
+• <span style='color:#818cf8'>■ Put Buying</span> (indigo) — strikes where put buyers outpaced sellers<br>
+• <span style='color:#f59e0b'>■ Put Selling</span> (amber) — strikes where put sellers outpaced buyers<br>
+Each trace only shows bars where that type had net dominance — absent bars mean the other side won.<br><br>
 
 <b>How to Interpret:</b><br>
-• <b>Tall green call bars</b> = Strong bullish conviction at that strike<br>
-• <b>Tall red call bars</b> = Bearish pressure, selling calls<br>
-• <b>Tall green put bars</b> = Hedging/bearish positioning<br>
-• <b>Tall red put bars</b> = Put selling (bullish, selling protection)<br><br>
+• <b>Tall emerald call bars above spot</b> = Bullish speculation; market positioned for upside<br>
+• <b>Tall rose call bars</b> = Call writing dominant; expected ceiling or resistance forming<br>
+• <b>Tall indigo put bars below spot</b> = Active hedging or directional short positioning<br>
+• <b>Tall amber put bars</b> = Put selling (bullish carry); traders collecting premium by selling protection<br><br>
 
 <b>Key Patterns:</b><br>
-• Net buying at OTM calls + Net selling at OTM puts = Bullish<br>
-• Net buying at OTM puts + Net selling at OTM calls = Bearish<br>
-• Balanced net flow = Neutral/rangebound market<br><br>
+• Net call buying + Net put selling across strikes = Strong bullish signal<br>
+• Net put buying + Net call selling across strikes = Strong bearish signal<br>
+• Balanced net flow (small bars everywhere) = Neutral / range-bound market<br>
+• Concentrated large net flow at one strike = Potential gamma magnet / pin level<br><br>
 
-<b>Spot Price Reference:</b><br>
-Yellow line indicates current underlying price for context.
+<b>Zero Line:</b> Dashed horizontal line — bars above zero = buyers won; below zero = sellers won.<br>
+<b>Spot Price:</b> Yellow vertical dashed line marks current underlying price.<br><br>
+
+<b>Legend Hover:</b> Hover over a legend item to isolate that trace.
             """
 
         else:  # Trend chart
             title = "Flow Trend Over Time - Chart Guide"
             info = """
 <b>What This Chart Shows:</b><br>
-Historical buy/sell flow trends over the past 7 days (hourly aggregation).<br><br>
+Hourly aggregated option flow over the past 7 days — how buying and selling pressure evolved over time. Useful for detecting regime shifts, conviction buildup, and sentiment divergences from price action.<br><br>
 
-<b>Chart Structure:</b><br>
-• Time series showing 4 flows over time<br>
-• <span style='color:#00ff88'>Call Buy</span> (bullish aggression)<br>
-• <span style='color:#ff4444'>Call Sell</span> (bearish on calls)<br>
-• <span style='color:#00d4ff'>Put Buy</span> (bearish/hedging)<br>
-• <span style='color:#ff9500'>Put Sell</span> (bullish, selling protection)<br><br>
-
-<b>Interactive Legend:</b><br>
-• <b>Single Click</b>: Isolate that flow type<br>
-• <b>Double Click</b>: Toggle flow on/off<br><br>
+<b>5 Lines:</b><br>
+• <span style='color:#10b981'>── Call Buy</span> (emerald, solid) — call buying volume per hour<br>
+• <span style='color:#f43f5e'>── Call Sell</span> (rose, solid) — call selling volume per hour<br>
+• <span style='color:#a78bfa'>- - Put Buy</span> (violet, dashed) — put buying volume per hour<br>
+• <span style='color:#fb923c'>- - Put Sell</span> (orange, dashed) — put selling volume per hour<br>
+• <span style='color:#60a5fa'>━━ Net Flow</span> (blue, thick) — net direction = (call buy + put buy) − (call sell + put sell)<br><br>
 
 <b>How to Interpret:</b><br>
-• <b>Spikes in Call Buy</b> = Sudden bullish interest<br>
-• <b>Spikes in Put Buy</b> = Fear events, hedging<br>
-• <b>Sustained high Call Buy</b> = Persistent bullish sentiment<br>
-• <b>Sustained high Put Sell</b> = Bullish (selling downside protection)<br><br>
+• <b>Spikes in Call Buy</b> = Sudden bullish interest, often ahead of moves or on catalysts<br>
+• <b>Spikes in Put Buy</b> = Fear events, tail-risk hedging demand<br>
+• <b>Sustained high Call Buy</b> = Persistent bullish conviction accumulating over hours/days<br>
+• <b>Sustained high Put Sell</b> = Carry trade — traders systematically collecting premium by selling puts<br>
+• <b>Net Flow crossing above zero</b> = Market tilting net bullish in that window<br>
+• <b>Net Flow crossing below zero</b> = Market tilting net bearish<br><br>
 
-<b>Trend Detection:</b><br>
-• <b>Accelerating flows</b> = Increasing conviction<br>
-• <b>Decelerating flows</b> = Weakening sentiment<br>
-• <b>Regime shifts</b> = Flow reversal (buy → sell or vice versa)<br><br>
+<b>Regime Detection:</b><br>
+• <b>Accelerating flows</b> = Growing conviction; follow the direction<br>
+• <b>Decelerating flows</b> = Weakening sentiment; potential reversal ahead<br>
+• <b>Flow reversal (buy → sell)</b> = Regime change; smart money repositioning<br>
+• <b>Divergence</b> (price rising but put buying increases) = Hedged rally; participants cautious despite the move<br><br>
 
-<b>Use Cases:</b><br>
-• Identify when large participants entered/exited positions<br>
-• Detect sentiment changes before price moves<br>
-• Confirm price moves with flow alignment<br>
-• Spot divergences (price up, but put buying increases)
+<b>Timeframe:</b> Each data point = 1 hour aggregated. X-axis spans the last 7 calendar days.<br><br>
+
+<b>Legend Hover:</b> Hover a legend item to isolate that line. Double-click to toggle it on/off.
             """
 
         # Show dialog

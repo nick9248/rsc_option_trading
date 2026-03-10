@@ -37,6 +37,7 @@ class BuySellFlowAnalyzer:
         expiration: str,
         spot_price: float,
         lookback_hours: int = 24,
+        trade_filter: str = "all",
     ):
         """
         Initialize buy/sell flow analyzer.
@@ -47,12 +48,15 @@ class BuySellFlowAnalyzer:
             expiration: Expiration date string (e.g., "27MAR26").
             spot_price: Current underlying spot price.
             lookback_hours: Hours to look back for trade data (default: 24).
+            trade_filter: Trade size filter — "all" (no filter), "block"
+                (notional >= $100k), or "non_block" (notional < $100k).
         """
         self.repository = repository
         self.currency = currency
         self.expiration = expiration
         self.spot_price = spot_price
         self.lookback_hours = lookback_hours
+        self.trade_filter = trade_filter
 
         # Per-strike flow data: {strike: {option_type: {buy_count, sell_count, ...}}}
         self.flow_data: Dict[float, Dict[str, Dict[str, float]]] = defaultdict(
@@ -151,7 +155,12 @@ class BuySellFlowAnalyzer:
         start_ts = int(start_time.timestamp() * 1000)
         end_ts = int(end_time.timestamp() * 1000)
 
-        query = """
+        filter_clause = {
+            "block":     "AND (amount * index_price) >= 100000",
+            "non_block": "AND (amount * index_price) < 100000",
+        }.get(self.trade_filter, "")
+
+        query = f"""
             SELECT
                 trade_id, trade_timestamp, instrument_name, strike,
                 option_type, price, amount, direction, index_price
@@ -162,6 +171,7 @@ class BuySellFlowAnalyzer:
                 AND trade_timestamp <= %s
                 AND strike IS NOT NULL
                 AND direction IS NOT NULL
+                {filter_clause}
             ORDER BY trade_timestamp ASC
         """
 
