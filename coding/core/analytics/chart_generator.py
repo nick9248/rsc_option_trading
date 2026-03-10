@@ -1129,7 +1129,7 @@ def generate_net_flow_chart(
         title=f"Net Flow by Strike (Buy Vol − Sell Vol) — {currency} {expiration}",
         xaxis_title=f"Net Flow ({currency})  ·  ← selling  |  buying →",
         yaxis_title="Strike Price",
-        barmode="group",
+        barmode="relative",  # relative: signed bars extend in opposite directions from x=0 (diverging chart)
         hovermode="y unified",
         autosize=True,
         legend=dict(
