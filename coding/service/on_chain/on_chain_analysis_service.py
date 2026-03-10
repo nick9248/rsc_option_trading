@@ -13,6 +13,13 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from coding.core.analytics.buy_sell_flow_analyzer import BuySellFlowAnalyzer
+from coding.core.analytics.chart_generator import (
+    generate_flow_distribution_chart,
+    generate_flow_trend_chart,
+    generate_net_flow_chart,
+    inject_hover_js,
+    save_chart,
+)
 from coding.core.analytics.gex_dex_calculator import GexDexCalculator
 from coding.core.analytics.on_chain_analyzer import OnChainAnalyzer
 from coding.core.analytics.market_wide_calculator import MarketWideCalculator
@@ -219,7 +226,8 @@ class OnChainAnalysisService:
                     currency=analyzer.currency,
                     expiration=expiration,
                     spot_price=analyzer.underlying_price,
-                    lookback_hours=24
+                    lookback_hours=24,
+                    trade_filter="all",
                 )
 
                 # Calculate flow data
@@ -237,6 +245,51 @@ class OnChainAnalysisService:
                     logger.info(f"Saved flow metrics to database for {expiration}")
                 except Exception as save_error:
                     logger.warning(f"Failed to save flow metrics for {expiration}: {save_error}")
+
+                # Save flow charts to output/charts/flow_analysis/<expiration>/
+                try:
+                    subfolder = f"flow_analysis/{expiration}"
+                    currency = analyzer.currency
+
+                    fig_dist = generate_flow_distribution_chart(
+                        flow_data=flow_result,
+                        spot_price=analyzer.underlying_price,
+                        currency=currency,
+                        expiration=expiration,
+                    )
+                    dist_path = save_chart(
+                        fig_dist, f"flow_distribution_{currency}_{expiration}",
+                        subfolder=subfolder, save_png=False,
+                    )
+                    inject_hover_js(Path(dist_path))
+
+                    fig_net = generate_net_flow_chart(
+                        flow_data=flow_result,
+                        spot_price=analyzer.underlying_price,
+                        currency=currency,
+                        expiration=expiration,
+                    )
+                    net_path = save_chart(
+                        fig_net, f"net_flow_{currency}_{expiration}",
+                        subfolder=subfolder, save_png=False,
+                    )
+                    inject_hover_js(Path(net_path))
+
+                    fig_trend = generate_flow_trend_chart(
+                        repository=self.repository,
+                        currency=currency,
+                        expiration=expiration,
+                        lookback_days=7,
+                    )
+                    trend_path = save_chart(
+                        fig_trend, f"flow_trend_{currency}_{expiration}",
+                        subfolder=subfolder, save_png=False,
+                    )
+                    inject_hover_js(Path(trend_path))
+
+                    logger.info(f"Saved flow charts to output/charts/{subfolder}/")
+                except Exception as chart_error:
+                    logger.warning(f"Failed to save flow charts for {expiration}: {chart_error}")
 
                 # Store structured flow data and generate text report
                 analyzer.set_buy_sell_flow_structured(expiration, flow_result)
