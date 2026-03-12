@@ -535,6 +535,38 @@ class DatabaseRepository:
 
             return [row[0] for row in cursor.fetchall()]
 
+    def get_last_captured_times(self, currency: str) -> Dict[str, Optional[datetime]]:
+        """
+        Get the most recent captured_at timestamp per capture type for a currency.
+
+        Args:
+            currency: Currency symbol (BTC, ETH).
+
+        Returns:
+            Dict keyed by capture type. Value is datetime if data exists, None if never captured.
+            Keys: "snapshot", "max_pain", "open_interest", "volume", "levels", "gex_dex"
+        """
+        table_map = {
+            "snapshot": "snapshots",
+            "max_pain": "max_pain",
+            "open_interest": "open_interest",
+            "volume": "volume",
+            "levels": "levels",
+            "gex_dex": "gex_dex",
+        }
+        result: Dict[str, Optional[datetime]] = {}
+
+        with self._db_cursor() as cursor:
+            for capture_type, table in table_map.items():
+                cursor.execute(
+                    f"SELECT MAX(captured_at) FROM {table} WHERE currency = %s",
+                    (currency,)
+                )
+                row = cursor.fetchone()
+                result[capture_type] = row[0] if row and row[0] is not None else None
+
+        return result
+
     def save_gex_dex(
         self,
         currency: str,
