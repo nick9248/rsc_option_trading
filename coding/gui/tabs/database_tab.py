@@ -354,6 +354,25 @@ class DatabaseTab(QWidget):
         self.capture_all_both_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         controls_layout.addWidget(self.capture_all_both_btn)
 
+        # Cancel button (hidden by default)
+        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {Colors.ERROR};
+                color: white;
+                border: none;
+                padding: 6px 12px;
+                border-radius: 6px;
+            }}
+            QPushButton:hover {{
+                background-color: {Colors.ERROR};
+                opacity: 0.85;
+            }}
+        """)
+        self.cancel_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.cancel_btn.hide()
+        controls_layout.addWidget(self.cancel_btn)
+
         content_layout.addWidget(controls_frame)
 
         # Tiles grid
@@ -409,7 +428,16 @@ class DatabaseTab(QWidget):
         """Connect widget signals."""
         self.capture_all_btn.clicked.connect(self._on_capture_all)
         self.capture_all_both_btn.clicked.connect(self._on_capture_all_both)
+        self.cancel_btn.clicked.connect(self._on_cancel)
         self.open_charts_btn.clicked.connect(self._on_open_charts_folder)
+
+    def _on_cancel(self) -> None:
+        """Cancel the ongoing Capture All run."""
+        self._capture_queue.clear()
+        self._capture_all_in_progress = False
+        self.cancel_btn.setText("Cancelling...")
+        self.cancel_btn.setEnabled(False)
+        self.log_viewer.log_warning("Capture All cancelled — waiting for current capture to finish...")
 
     def _on_tile_capture(self, capture_type: str) -> None:
         """Handle single tile capture."""
@@ -486,6 +514,8 @@ class DatabaseTab(QWidget):
         self._capture_all_in_progress = False
         self.capture_all_btn.setEnabled(True)
         self.capture_all_both_btn.setEnabled(True)
+        self.cancel_btn.setText("Cancel")
+        self.cancel_btn.setEnabled(True)
         self.cancel_btn.hide()
         if self._active_capture_all_btn is not None:
             if self._active_capture_all_btn is self.capture_all_btn:
