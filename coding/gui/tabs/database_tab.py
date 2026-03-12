@@ -325,6 +325,10 @@ class DatabaseTab(QWidget):
             QPushButton:hover {{
                 background-color: {Colors.BUTTON_SECONDARY_HOVER};
             }}
+            QPushButton:disabled {{
+                background-color: {Colors.BUTTON_SECONDARY};
+                color: {Colors.TEXT_MUTED};
+            }}
         """)
         self.capture_all_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         controls_layout.addWidget(self.capture_all_btn)
