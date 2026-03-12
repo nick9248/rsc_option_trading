@@ -50,6 +50,8 @@ class OnChainAnalyzer:
         self.volatility_surface_structured: Dict[str, Dict] = {}  # Raw vol surface per expiry
         self.market_wide_structured: Dict[str, Any] = {}        # Raw market-wide metrics
         self.trend_data: Dict[str, Optional[Dict]] = {}         # Previous DB snapshot per expiry
+        self._recent_trades: List[Dict[str, Any]] = []          # Recent trades for block trade detection
+        self._atm_ivs: Dict[str, float] = {}                    # ATM IV per expiration (for term structure)
 
         # Extract underlying price using most common value (mode)
         # Different instruments may have slightly different underlying_price values
@@ -1001,6 +1003,25 @@ class OnChainAnalyzer:
     def set_market_wide_structured(self, data: Dict) -> None:
         """Store raw market-wide structured metrics."""
         self.market_wide_structured = data
+
+    def set_recent_trades(self, trades: List[Dict[str, Any]]) -> None:
+        """
+        Store recent trades fetched from API for block trade detection.
+
+        Args:
+            trades: List of recent trade dicts from get_last_trades_by_currency.
+        """
+        self._recent_trades = trades
+
+    def set_atm_iv(self, expiration: str, atm_iv: float) -> None:
+        """
+        Store ATM IV for a specific expiration (used for term structure in market-wide analysis).
+
+        Args:
+            expiration: Expiration string (e.g. '27MAR26').
+            atm_iv: ATM implied volatility as a percentage (e.g. 55.3).
+        """
+        self._atm_ivs[expiration] = atm_iv
 
     def set_trend_data(self, expiration: str, data: Optional[Dict]) -> None:
         """

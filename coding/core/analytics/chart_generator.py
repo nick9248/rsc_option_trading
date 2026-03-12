@@ -467,7 +467,7 @@ def generate_levels_trend(
         "short_term_support": "#1abc9c",
         "call_resistance": "#e67e22",
         "put_support": "#3498db",
-        "hvl_zero_gamma": "#f39c12",
+        "zero_gamma_level": "#f39c12",
     }
 
     for level_type, values in level_types.items():
@@ -662,7 +662,7 @@ def generate_gex_dex_trend(
         x=timestamps,
         y=hvl_strikes,
         mode="lines+markers",
-        name="HVL (Zero Gamma)",
+        name="Zero Gamma Level",
         line={"color": "#e74c3c", "width": 2, "dash": "dot"},
         marker={"size": 6},
     ), row=3, col=1)

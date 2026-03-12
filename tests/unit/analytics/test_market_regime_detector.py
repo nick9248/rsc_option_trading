@@ -85,7 +85,6 @@ def test_user_scenario_before_fix():
         f"Expected negative score, got {result['composite_score']}"
 
     print("\n[PASS] PASS: Correctly classified as bearish trend (not sideways)")
-    return result
 
 
 def test_true_sideways_market():
@@ -152,7 +151,6 @@ def test_true_sideways_market():
         f"Expected Sideways for low ADX market, got {result['regime']}"
 
     print("\n[PASS] PASS: Correctly classified true sideways market")
-    return result
 
 
 def test_strong_bullish_trend():
@@ -219,7 +217,6 @@ def test_strong_bullish_trend():
         f"Expected positive score, got {result['composite_score']}"
 
     print("\n[PASS] PASS: Correctly classified strong bullish trend")
-    return result
 
 
 def test_adx_override():
@@ -284,7 +281,6 @@ def test_adx_override():
         f"ADX override failed: classified as Sideways with ADX={technical_indicators['adx']}"
 
     print("\n[PASS] PASS: ADX override correctly prevented sideways classification")
-    return result
 
 
 def test_sentiment_context_awareness():

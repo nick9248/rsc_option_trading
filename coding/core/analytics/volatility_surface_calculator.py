@@ -41,6 +41,8 @@ class VolatilitySurfaceCalculator:
         self.instruments = instruments
         self.spot_price = spot_price
         self.expiration = expiration
+        self._vwap_iv: Optional[float] = None
+        self._mark_iv_avg: Optional[float] = None
 
     def calculate(self) -> Dict[str, Any]:
         """
@@ -319,14 +321,19 @@ class VolatilitySurfaceCalculator:
         self._vwap_iv = vwap_iv
         self._mark_iv_avg = mark_iv_avg
 
-    def generate_report_section(self) -> str:
+    def generate_report_section(self, result: Optional[Dict[str, Any]] = None) -> str:
         """
         Generate formatted volatility surface report section.
+
+        Args:
+            result: Pre-computed result from calculate(). If None, calculate() is called.
+                    Pass a pre-computed result to avoid calling calculate() twice.
 
         Returns:
             Formatted string for inclusion in analysis report.
         """
-        result = self.calculate()
+        if result is None:
+            result = self.calculate()
         lines = []
         sub_separator = "-" * 80
 
@@ -354,8 +361,8 @@ class VolatilitySurfaceCalculator:
             lines.append("")
 
         # VWAP IV (if available)
-        vwap_iv = getattr(self, "_vwap_iv", None)
-        mark_iv_avg = getattr(self, "_mark_iv_avg", None)
+        vwap_iv = self._vwap_iv
+        mark_iv_avg = self._mark_iv_avg
         if vwap_iv is not None and mark_iv_avg is not None:
             diff = vwap_iv - mark_iv_avg
             if diff > 1:

@@ -330,7 +330,7 @@ class TestGexDexCalculator:
         assert "TOTALS:" in report
         assert "Call Resistance" in report or "None found" in report
         assert "Put Support" in report or "None found" in report
-        assert "HVL" in report
+        assert "Zero Gamma Level" in report
 
     def test_gex_report_shows_usd_unit(self):
         """GEX values are labeled USD in the report."""
