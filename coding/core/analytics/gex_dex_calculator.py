@@ -2,7 +2,7 @@
 GEX (Gamma Exposure) and DEX (Delta Exposure) calculator.
 
 Calculates gamma and delta exposure per strike, cumulative profiles,
-and identifies key levels (Call Resistance, Put Support, HVL).
+and identifies key levels (Call Resistance, Put Support, Zero Gamma Level).
 """
 
 import logging
@@ -25,7 +25,10 @@ class GexDexCalculator:
     Key Levels:
     - Call Resistance: Strike with maximum positive Net GEX
     - Put Support: Strike with maximum negative Net GEX
-    - HVL (High Vol Level): Zero Gamma level where cumulative GEX flips sign
+    - Zero Gamma Level (ZGL): Where cumulative GEX crosses zero.
+      NOTE: This is the SpotGamma/SqueezeMetrics definition, NOT MenthorQ's HVL.
+      MenthorQ HVL = per-strike net GEX sign change (inflection point in slope).
+      ZGL = global cumulative zero crossing. They often differ.
     """
 
     def __init__(
@@ -161,7 +164,7 @@ class GexDexCalculator:
         Detect key trading levels from GEX/DEX data.
 
         Returns:
-            Dict with call_resistance, put_support, hvl (zero gamma), and gamma_flip.
+            Dict with call_resistance, put_support, hvl (Zero Gamma Level = cumulative zero crossing), and gamma_flip.
         """
         if not self.strike_data:
             return {
@@ -411,9 +414,9 @@ class GexDexCalculator:
             lines.append("  Put Support: None found")
 
         if key_levels["hvl"]:
-            lines.append(f"  HVL (Zero Gamma): ${key_levels['hvl']:,.0f}")
+            lines.append(f"  Zero Gamma Level: ${key_levels['hvl']:,.0f}")
         else:
-            lines.append("  HVL (Zero Gamma): Not detected")
+            lines.append("  Zero Gamma Level: Not detected")
 
         lines.append("")
 
@@ -482,9 +485,9 @@ class GexDexCalculator:
             lines.append("  Put Support: None found")
 
         if key_levels["hvl"]:
-            lines.append(f"  HVL (Zero Gamma): ${key_levels['hvl']:,.0f}")
+            lines.append(f"  Zero Gamma Level: ${key_levels['hvl']:,.0f}")
         else:
-            lines.append("  HVL (Zero Gamma): Not detected")
+            lines.append("  Zero Gamma Level: Not detected")
 
         lines.append("")
 
@@ -536,7 +539,7 @@ class GexDexCalculator:
             if key_levels["put_support"] and strike == key_levels["put_support"]["strike"]:
                 notes.append("Put Support")
             if key_levels["hvl"] and strike == key_levels["hvl"]:
-                notes.append("HVL/Zero Gamma")
+                notes.append("Zero Gamma Level")
 
             notes_str = " | ".join(notes) if notes else ""
 

@@ -561,7 +561,7 @@ class DatabaseRepository:
             call_resistance_gex: GEX value at call resistance.
             put_support_strike: Put support strike price.
             put_support_gex: GEX value at put support.
-            hvl_strike: High Volume Level (zero gamma) strike.
+            hvl_strike: Zero Gamma Level (cumulative GEX zero crossing) strike. Not MenthorQ HVL.
             underlying_price: Current underlying price.
             captured_at: Timestamp of capture.
 
