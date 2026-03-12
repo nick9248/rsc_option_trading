@@ -124,7 +124,8 @@
       "WebFetch(domain:modigin.com)",
       "WebFetch(domain:insights.deribit.com)",
       "WebFetch(domain:optionstradingiq.com)",
-      "WebFetch(domain:rpubs.com)"
+      "WebFetch(domain:rpubs.com)",
+      "Bash(find \"/c/Users/Nick/PycharmProjects/option_trading\" -type f \\\\\\( -name \"*.xml\" -o -name \"*scheduler*\" -o -name \"*task*\" \\\\\\) ! -path \"*/.venv/*\" ! -path \"*/.git/*\" ! -path \"*/__pycache__/*\" 2>/dev/null | head -20)"
     ]
   }
 }
