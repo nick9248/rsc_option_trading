@@ -130,7 +130,7 @@ class CaptureTile(QFrame):
             }}
         """)
         self.setMinimumSize(150, 130)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -215,7 +215,8 @@ class CaptureTile(QFrame):
 
     def set_error(self, message: str) -> None:
         """Set error status."""
-        self.status_label.setText(f"Error: {message[:30]}...")
+        truncated = "\n".join(message.splitlines()[:3])
+        self.status_label.setText(f"Error: {truncated}")
         self.status_label.setStyleSheet(f"color: {Colors.ERROR}; font-size: 11px;")
         self.chart_label.setText("")
 
@@ -284,7 +285,7 @@ class DatabaseTab(QWidget):
         controls_layout.addWidget(currency_label)
 
         self.currency_combo = QComboBox()
-        self.currency_combo.addItems(["ETH", "BTC"])
+        self.currency_combo.addItems(["BTC", "ETH"])
         self.currency_combo.setMinimumWidth(80)
         self.currency_combo.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         controls_layout.addWidget(self.currency_combo)
