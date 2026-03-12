@@ -234,8 +234,11 @@ class DatabaseTab(QWidget):
         super().__init__(parent)
         self.worker: Optional[CaptureWorker] = None
         self.tiles: Dict[str, CaptureTile] = {}
-        self._capture_queue: List[str] = []
+        self._capture_queue: List[tuple[str, str]] = []
         self._capture_all_in_progress: bool = False
+        self._capture_all_total: int = 0
+        self._capture_all_completed: int = 0
+        self._active_capture_all_btn: Optional[QPushButton] = None
 
         self._setup_ui()
         self._setup_logging()
@@ -326,6 +329,27 @@ class DatabaseTab(QWidget):
         self.capture_all_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         controls_layout.addWidget(self.capture_all_btn)
 
+        # Capture all (both currencies) button
+        self.capture_all_both_btn = QPushButton("Capture All (BTC/ETH)")
+        self.capture_all_both_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {Colors.BUTTON_SECONDARY};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                padding: 6px 12px;
+                border-radius: 6px;
+            }}
+            QPushButton:hover {{
+                background-color: {Colors.BUTTON_SECONDARY_HOVER};
+            }}
+            QPushButton:disabled {{
+                background-color: {Colors.BUTTON_SECONDARY};
+                color: {Colors.TEXT_MUTED};
+            }}
+        """)
+        self.capture_all_both_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        controls_layout.addWidget(self.capture_all_both_btn)
+
         content_layout.addWidget(controls_frame)
 
         # Tiles grid
@@ -380,6 +404,7 @@ class DatabaseTab(QWidget):
     def _connect_signals(self) -> None:
         """Connect widget signals."""
         self.capture_all_btn.clicked.connect(self._on_capture_all)
+        self.capture_all_both_btn.clicked.connect(self._on_capture_all_both)
         self.open_charts_btn.clicked.connect(self._on_open_charts_folder)
 
     def _on_tile_capture(self, capture_type: str) -> None:
@@ -400,29 +425,50 @@ class DatabaseTab(QWidget):
         self.worker.start()
 
     def _on_capture_all(self) -> None:
-        """Handle capture all button."""
+        """Handle capture all button (current currency)."""
         if self.worker is not None and self.worker.isRunning():
             self.log_viewer.log_warning("A capture is already in progress")
             return
 
-        self._capture_queue = ["snapshot", "max_pain", "open_interest", "volume", "levels", "gex_dex"]
+        currency = self.currency_combo.currentText()
+        capture_types = ["snapshot", "max_pain", "open_interest", "volume", "levels", "gex_dex"]
+        self._capture_queue = [(ct, currency) for ct in capture_types]
+        self._capture_all_total = len(self._capture_queue)
+        self._capture_all_completed = 0
         self._capture_all_in_progress = True
+        self._active_capture_all_btn = self.capture_all_btn
         self.capture_all_btn.setEnabled(False)
-        self.log_viewer.log_info("Starting Capture All...")
+        self.capture_all_both_btn.setEnabled(False)
+        self.cancel_btn.show()
+        self.log_viewer.log_info(f"Starting Capture All ({currency})...")
+        self._start_next_capture()
+
+    def _on_capture_all_both(self) -> None:
+        """Handle capture all for BTC then ETH."""
+        if self.worker is not None and self.worker.isRunning():
+            self.log_viewer.log_warning("A capture is already in progress")
+            return
+
+        capture_types = ["snapshot", "max_pain", "open_interest", "volume", "levels", "gex_dex"]
+        self._capture_queue = [(ct, "BTC") for ct in capture_types] + [(ct, "ETH") for ct in capture_types]
+        self._capture_all_total = len(self._capture_queue)
+        self._capture_all_completed = 0
+        self._capture_all_in_progress = True
+        self._active_capture_all_btn = self.capture_all_both_btn
+        self.capture_all_btn.setEnabled(False)
+        self.capture_all_both_btn.setEnabled(False)
+        self.cancel_btn.show()
+        self.log_viewer.log_info("Starting Capture All (BTC/ETH)...")
         self._start_next_capture()
 
     def _start_next_capture(self) -> None:
         """Start next capture in queue."""
         if not self._capture_queue:
-            self._capture_all_in_progress = False
-            self.capture_all_btn.setEnabled(True)
-            self.log_viewer.log_info("Capture All completed!")
+            self._finish_capture_all()
             return
 
-        capture_type = self._capture_queue.pop(0)
-        currency = self.currency_combo.currentText()
+        capture_type, currency = self._capture_queue.pop(0)
         self.tiles[capture_type].set_capturing(True)
-
         self.log_viewer.log_info(f"[Capture All] Starting {capture_type} for {currency}...")
 
         self.worker = CaptureWorker(capture_type, currency)
@@ -430,6 +476,30 @@ class DatabaseTab(QWidget):
         self.worker.finished.connect(self._on_capture_finished)
         self.worker.error.connect(self._on_capture_error)
         self.worker.start()
+
+    def _finish_capture_all(self) -> None:
+        """Reset state after capture all completes or is cancelled."""
+        self._capture_all_in_progress = False
+        self.capture_all_btn.setEnabled(True)
+        self.capture_all_both_btn.setEnabled(True)
+        self.cancel_btn.hide()
+        if self._active_capture_all_btn is not None:
+            if self._active_capture_all_btn is self.capture_all_btn:
+                self._active_capture_all_btn.setText("Capture All")
+            else:
+                self._active_capture_all_btn.setText("Capture All (BTC/ETH)")
+            self._active_capture_all_btn = None
+
+    def _update_capture_all_progress(self) -> None:
+        """Update the active button label with current progress."""
+        if self._active_capture_all_btn is None:
+            return
+        completed = self._capture_all_completed
+        total = self._capture_all_total
+        if self._active_capture_all_btn is self.capture_all_btn:
+            self._active_capture_all_btn.setText(f"Capture All ({completed}/{total})")
+        else:
+            self._active_capture_all_btn.setText(f"Capture All BTC/ETH ({completed}/{total})")
 
     def _on_open_charts_folder(self) -> None:
         """Open charts folder."""
@@ -447,11 +517,10 @@ class DatabaseTab(QWidget):
         """Handle progress updates."""
         self.log_viewer.log_info(message)
 
-    def _on_capture_finished(self, capture_type: str, count: int, chart_paths: List[str]) -> None:
+    def _on_capture_finished(self, capture_type: str, currency: str, count: int, chart_paths: List[str]) -> None:
         """Handle successful capture."""
         self.tiles[capture_type].set_capturing(False)
         self.tiles[capture_type].set_success(count, len(chart_paths))
-
         self.log_viewer.log_info(f"{capture_type} capture complete: {count} records saved")
 
         if chart_paths:
@@ -462,7 +531,17 @@ class DatabaseTab(QWidget):
             self.log_viewer.log_info("Need at least 2 data points to generate trend charts")
 
         if self._capture_all_in_progress:
+            self._capture_all_completed += 1
+            self._update_capture_all_progress()
+            self._refresh_tile_timestamp(capture_type, currency)
             self._start_next_capture()
+        elif self._active_capture_all_btn is not None:
+            # Was in Capture All mode but cancel was clicked — finish cleanup now
+            self._refresh_tile_timestamp(capture_type, currency)
+            self._finish_capture_all()
+        else:
+            # Single tile capture — refresh its timestamp
+            self._refresh_tile_timestamp(capture_type, currency)
 
     def _on_capture_error(self, error_message: str) -> None:
         """Handle capture error."""
@@ -475,4 +554,9 @@ class DatabaseTab(QWidget):
         self.log_viewer.log_error(f"Capture failed: {error_message}")
 
         if self._capture_all_in_progress:
+            self._capture_all_completed += 1
+            self._update_capture_all_progress()
             self._start_next_capture()
+        elif self._active_capture_all_btn is not None:
+            # Was in Capture All mode but cancel was clicked — finish cleanup now
+            self._finish_capture_all()
