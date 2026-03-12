@@ -181,3 +181,15 @@ class DatabaseCaptureService:
             List of expiration strings.
         """
         return self.repository.get_available_expirations(currency, table)
+
+    def get_last_captured(self, currency: str) -> Dict[str, Optional[datetime]]:
+        """
+        Get the most recent capture timestamp per capture type for a currency.
+
+        Args:
+            currency: Currency symbol (BTC, ETH).
+
+        Returns:
+            Dict keyed by capture type. Value is datetime if data exists, None if never captured.
+        """
+        return self.repository.get_last_captured_times(currency)
