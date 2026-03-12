@@ -866,7 +866,7 @@ class NarrativeGenerator:
         "Resistance ${resistance:,.0f} (call wall {res_oi:,} OI). "
         "Support ${support:,.0f} (put wall {sup_oi:,} OI). "
         "Max pain ${max_pain:,.0f} ({mp_distance:+.1f}% from spot). "
-        "Zero-gamma (HVL) ${hvl:,.0f}."
+        "Zero Gamma Level ${hvl:,.0f}."
     )
 
     # -------------------------------------------------------------------------

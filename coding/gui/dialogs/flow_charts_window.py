@@ -20,11 +20,17 @@ from PySide6.QtWidgets import (
     QTabWidget,
     QMessageBox,
     QSizePolicy,
+    QWidget,
 )
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtWebEngineWidgets import QWebEngineView
 
-from coding.core.analytics.chart_generator import inject_hover_js
+from coding.core.analytics.chart_generator import (
+    inject_hover_js,
+    generate_flow_distribution_chart,
+    generate_net_flow_chart,
+    generate_flow_trend_chart,
+)
 from coding.core.database.repository import DatabaseRepository
 from coding.gui.theme.colors import Colors
 from coding.service.on_chain.on_chain_analysis_service import OnChainAnalysisService
@@ -47,7 +53,7 @@ class FlowChartsWindow(QDialog):
         self,
         currency: str,
         repository: DatabaseRepository,
-        parent: Optional[QDialog] = None
+        parent: Optional[QWidget] = None
     ):
         """
         Initialize flow charts window.
@@ -322,12 +328,6 @@ class FlowChartsWindow(QDialog):
             logger.info(f"Found flow data with {len(metrics.get('flow_data', {}))} strikes")
 
             # Generate charts
-            from coding.core.analytics.chart_generator import (
-                generate_flow_distribution_chart,
-                generate_net_flow_chart,
-                generate_flow_trend_chart,
-            )
-
             spot_price = metrics.get("spot_price", 0)
             logger.info(f"Generating charts for spot price: {spot_price}")
 
@@ -398,9 +398,7 @@ class FlowChartsWindow(QDialog):
             logger.info(f"Charts loaded for {expiration}")
 
         except Exception as e:
-            import traceback
-            logger.error(f"Failed to generate charts for {expiration}: {e}")
-            logger.error(traceback.format_exc())
+            logger.error(f"Failed to generate charts for {expiration}: {e}", exc_info=True)
             self._show_empty_charts()
 
     def _generate_aggregate_charts(self) -> None:
@@ -412,12 +410,6 @@ class FlowChartsWindow(QDialog):
         which runs BuySellFlowAnalyzer per expiration so the block filter can be applied.
         """
         try:
-            from coding.core.analytics.chart_generator import (
-                generate_flow_distribution_chart,
-                generate_net_flow_chart,
-                generate_flow_trend_chart,
-            )
-
             label = "All Expirations"
 
             if self.current_filter == "all":
@@ -483,9 +475,7 @@ class FlowChartsWindow(QDialog):
             logger.info(f"Aggregated charts loaded (filter={self.current_filter})")
 
         except Exception as e:
-            import traceback
-            logger.error(f"Failed to generate aggregate charts: {e}")
-            logger.error(traceback.format_exc())
+            logger.error(f"Failed to generate aggregate charts: {e}", exc_info=True)
             self._show_empty_charts()
 
     def _show_empty_charts(self) -> None:

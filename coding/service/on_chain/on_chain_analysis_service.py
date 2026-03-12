@@ -249,16 +249,15 @@ class OnChainAnalysisService:
                 # Save flow charts to output/charts/flow_analysis/<expiration>/
                 try:
                     subfolder = f"flow_analysis/{expiration}"
-                    currency = analyzer.currency
 
                     fig_dist = generate_flow_distribution_chart(
                         flow_data=flow_result,
                         spot_price=analyzer.underlying_price,
-                        currency=currency,
+                        currency=analyzer.currency,
                         expiration=expiration,
                     )
                     dist_path = save_chart(
-                        fig_dist, f"flow_distribution_{currency}_{expiration}",
+                        fig_dist, f"flow_distribution_{analyzer.currency}_{expiration}",
                         subfolder=subfolder, save_png=False,
                     )
                     inject_hover_js(Path(dist_path))
@@ -266,23 +265,23 @@ class OnChainAnalysisService:
                     fig_net = generate_net_flow_chart(
                         flow_data=flow_result,
                         spot_price=analyzer.underlying_price,
-                        currency=currency,
+                        currency=analyzer.currency,
                         expiration=expiration,
                     )
                     net_path = save_chart(
-                        fig_net, f"net_flow_{currency}_{expiration}",
+                        fig_net, f"net_flow_{analyzer.currency}_{expiration}",
                         subfolder=subfolder, save_png=False,
                     )
                     inject_hover_js(Path(net_path))
 
                     fig_trend = generate_flow_trend_chart(
                         repository=self.repository,
-                        currency=currency,
+                        currency=analyzer.currency,
                         expiration=expiration,
                         lookback_days=7,
                     )
                     trend_path = save_chart(
-                        fig_trend, f"flow_trend_{currency}_{expiration}",
+                        fig_trend, f"flow_trend_{analyzer.currency}_{expiration}",
                         subfolder=subfolder, save_png=False,
                     )
                     inject_hover_js(Path(trend_path))
@@ -401,7 +400,7 @@ class OnChainAnalysisService:
             progress_callback(f"  Received {len(trades)} recent trades")
 
             # Store all trades on analyzer for block trade detection in Phase 5
-            analyzer._recent_trades = trades
+            analyzer.set_recent_trades(trades)
 
             # Group trades by expiration
             for trade in trades:
@@ -415,7 +414,7 @@ class OnChainAnalysisService:
 
         except Exception as e:
             logger.warning(f"Failed to fetch recent trades for VWAP IV: {e}")
-            analyzer._recent_trades = []
+            analyzer.set_recent_trades([])
 
         # Calculate per-expiration volatility surface
         for expiration, instruments in analyzer.enriched_instruments.items():
@@ -433,17 +432,13 @@ class OnChainAnalysisService:
                 vwap_iv, mark_iv_avg = self._calculate_vwap_iv(exp_trades, instruments)
                 calculator.set_vwap_iv_data(vwap_iv, mark_iv_avg)
 
-                # Generate report section and store in analyzer
-                surface_report = calculator.generate_report_section()
-                analyzer.set_volatility_surface_data(expiration, surface_report)
-
-                # Store ATM IV for term structure (used by market-wide calculator)
+                # Calculate once — pass result to both structured storage and report formatter
                 result = calculator.calculate()
+                surface_report = calculator.generate_report_section(result=result)
+                analyzer.set_volatility_surface_data(expiration, surface_report)
                 analyzer.set_volatility_surface_structured(expiration, result)
                 if result["atm_iv"] is not None:
-                    if not hasattr(analyzer, '_atm_ivs'):
-                        analyzer._atm_ivs = {}
-                    analyzer._atm_ivs[expiration] = result["atm_iv"]
+                    analyzer.set_atm_iv(expiration, result["atm_iv"])
 
             except Exception as e:
                 logger.warning(f"Failed to calculate volatility surface for {expiration}: {e}")
@@ -510,7 +505,7 @@ class OnChainAnalysisService:
         market_wide_structured: Dict[str, Any] = {}
 
         # 1. IV Term Structure (uses ATM IVs collected during vol surface phase)
-        atm_ivs = getattr(analyzer, '_atm_ivs', {})
+        atm_ivs = analyzer._atm_ivs
         if atm_ivs:
             progress_callback("Calculating IV term structure...")
             term_structure_text, term_struct = calc.calculate_iv_term_structure(atm_ivs)
@@ -621,7 +616,7 @@ class OnChainAnalysisService:
             logger.warning(f"Failed to calculate perpetual funding trend: {e}")
 
         # 7. Block Trades (reuse trade data from VWAP IV phase)
-        recent_trades = getattr(analyzer, '_recent_trades', [])
+        recent_trades = analyzer._recent_trades
         if recent_trades:
             progress_callback("Detecting block trades...")
             block_text, block_data = calc.detect_block_trades(recent_trades)

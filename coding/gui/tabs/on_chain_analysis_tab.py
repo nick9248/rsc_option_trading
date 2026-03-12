@@ -107,6 +107,7 @@ class OnChainAnalysisTab(QWidget):
         self.report_text: str = ""
         self.worker: Optional[OnChainAnalysisWorker] = None
         self._queue: list = []  # Currencies waiting to be processed
+        self._last_analyzed_currency: Optional[str] = None  # Set when each currency analysis starts
 
         self._setup_ui()
         self._setup_logging()
@@ -334,6 +335,7 @@ class OnChainAnalysisTab(QWidget):
             return
 
         currency = self._queue.pop(0)
+        self._last_analyzed_currency = currency
         remaining = len(self._queue)
         queue_info = f" ({remaining} more queued)" if remaining else ""
 
@@ -376,9 +378,8 @@ class OnChainAnalysisTab(QWidget):
         self._start_next_in_queue()
 
     def _open_flow_charts(self) -> None:
-        """Open fullscreen flow charts window."""
-        # Use BTC if checked, otherwise ETH
-        currency = "BTC" if self.btc_checkbox.isChecked() else "ETH"
+        """Open fullscreen flow charts window for the last analyzed currency."""
+        currency = self._last_analyzed_currency or ("BTC" if self.btc_checkbox.isChecked() else "ETH")
         repository = DatabaseRepository()
 
         dialog = FlowChartsWindow(currency, repository, parent=self)

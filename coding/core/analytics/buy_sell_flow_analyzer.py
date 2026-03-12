@@ -118,7 +118,8 @@ class BuySellFlowAnalyzer:
         self._calculate_derived_metrics()
 
         # Detect flow trends (multi-window comparison)
-        flow_trend = self._detect_flow_trend()
+        # Pass already-fetched trades — sub-windows are filtered client-side (no extra DB queries)
+        flow_trend = self._detect_flow_trend(trades)
 
         # Find top strikes by buying/selling pressure
         top_buy_strikes = self._find_top_strikes_by_buying()
@@ -252,19 +253,26 @@ class BuySellFlowAnalyzer:
                 else:
                     data["buy_sell_ratio"] = float("inf") if buy_vol > 0 else 0.0
 
-    def _detect_flow_trend(self) -> str:
+    def _detect_flow_trend(self, all_trades: List[Dict[str, Any]]) -> str:
         """
         Detect flow trend by comparing rates across multiple time windows.
 
         Compares 1h, 4h, and 24h windows to identify acceleration/deceleration.
+        Filters the already-fetched trades client-side to avoid extra DB queries.
+
+        Args:
+            all_trades: Trades already fetched by calculate() for the full window.
 
         Returns:
             Trend label string.
         """
-        # Fetch trades for each window
-        trades_1h = self._fetch_trades(1)
-        trades_4h = self._fetch_trades(4)
-        trades_24h = self._fetch_trades(24)
+        now_ms = int(datetime.now().timestamp() * 1000)
+        cutoff_1h = now_ms - 1 * 3600 * 1000
+        cutoff_4h = now_ms - 4 * 3600 * 1000
+
+        trades_1h = [t for t in all_trades if t["trade_timestamp"] >= cutoff_1h]
+        trades_4h = [t for t in all_trades if t["trade_timestamp"] >= cutoff_4h]
+        trades_24h = all_trades
 
         # Calculate net flow for each window
         def calc_net_flow(trades: List[Dict[str, Any]]) -> float:
