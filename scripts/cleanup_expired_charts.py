@@ -112,5 +112,9 @@ def cleanup_charts(dry_run: bool = True) -> None:
 if __name__ == "__main__":
     import sys
 
-    dry_run = "--execute" not in sys.argv
+    # Step1 line below will evaluate how many should be deleted and what is the size of the folders
+    #dry_run = "--execute" not in sys.argv
+
+    # Step2  put dry_run to False to remove the folders
+    dry_run = False
     cleanup_charts(dry_run=dry_run)
