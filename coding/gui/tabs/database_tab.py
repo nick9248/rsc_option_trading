@@ -10,6 +10,7 @@ This is a thin GUI layer - all business logic is in the service layer.
 import logging
 import os
 import subprocess
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -42,7 +43,7 @@ class CaptureWorker(QThread):
     """
 
     progress = Signal(str)
-    finished = Signal(str, int, list)  # (capture_type, count, chart_paths)
+    finished = Signal(str, str, int, list)  # (capture_type, currency, count, chart_paths)
     error = Signal(str)
 
     def __init__(
@@ -79,6 +80,7 @@ class CaptureWorker(QThread):
             if result.success:
                 self.finished.emit(
                     result.capture_type,
+                    self.currency,
                     result.record_count,
                     result.chart_paths
                 )
@@ -151,6 +153,11 @@ class CaptureTile(QFrame):
         desc_label.setWordWrap(True)
         layout.addWidget(desc_label)
 
+        # Last captured label
+        self.last_captured_label = QLabel("Last: —")
+        self.last_captured_label.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 10px;")
+        layout.addWidget(self.last_captured_label)
+
         layout.addStretch()
 
         # Status label
@@ -220,6 +227,13 @@ class CaptureTile(QFrame):
         self.status_label.setStyleSheet(f"color: {Colors.ERROR}; font-size: 11px;")
         self.chart_label.setText("")
 
+    def set_last_captured(self, dt: Optional[datetime]) -> None:
+        """Update the last captured timestamp label."""
+        if dt is None:
+            self.last_captured_label.setText("Last: Never")
+        else:
+            self.last_captured_label.setText(f"Last: {dt.strftime('%H:%M')}")
+
 
 class DatabaseTab(QWidget):
     """
@@ -239,6 +253,7 @@ class DatabaseTab(QWidget):
         self._capture_all_total: int = 0
         self._capture_all_completed: int = 0
         self._active_capture_all_btn: Optional[QPushButton] = None
+        self._timestamps_loaded: bool = False
 
         self._setup_ui()
         self._setup_logging()
@@ -430,6 +445,38 @@ class DatabaseTab(QWidget):
         self.capture_all_both_btn.clicked.connect(self._on_capture_all_both)
         self.cancel_btn.clicked.connect(self._on_cancel)
         self.open_charts_btn.clicked.connect(self._on_open_charts_folder)
+        self.currency_combo.currentTextChanged.connect(self._on_currency_changed)
+
+    def showEvent(self, event) -> None:
+        """Load timestamps on first show."""
+        super().showEvent(event)
+        if not self._timestamps_loaded:
+            self._timestamps_loaded = True
+            self._refresh_timestamps()
+
+    def _refresh_timestamps(self) -> None:
+        """Load last captured times for all tiles from the database."""
+        currency = self.currency_combo.currentText()
+        try:
+            service = DatabaseCaptureService()
+            times = service.get_last_captured(currency)
+            for capture_type, tile in self.tiles.items():
+                tile.set_last_captured(times.get(capture_type))
+        except Exception as e:
+            logger.warning(f"Could not load last captured timestamps: {e}")
+
+    def _refresh_tile_timestamp(self, capture_type: str, currency: str) -> None:
+        """Refresh the timestamp for a single tile after a successful capture."""
+        try:
+            service = DatabaseCaptureService()
+            times = service.get_last_captured(currency)
+            self.tiles[capture_type].set_last_captured(times.get(capture_type))
+        except Exception as e:
+            logger.warning(f"Could not refresh timestamp for {capture_type}: {e}")
+
+    def _on_currency_changed(self, currency: str) -> None:
+        """Refresh timestamps when currency selection changes."""
+        self._refresh_timestamps()
 
     def _on_cancel(self) -> None:
         """Cancel the ongoing Capture All run."""
