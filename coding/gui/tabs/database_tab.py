@@ -499,7 +499,7 @@ class DatabaseTab(QWidget):
         if self._active_capture_all_btn is self.capture_all_btn:
             self._active_capture_all_btn.setText(f"Capture All ({completed}/{total})")
         else:
-            self._active_capture_all_btn.setText(f"Capture All BTC/ETH ({completed}/{total})")
+            self._active_capture_all_btn.setText(f"Capture All (BTC/ETH) ({completed}/{total})")
 
     def _on_open_charts_folder(self) -> None:
         """Open charts folder."""
