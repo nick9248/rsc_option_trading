@@ -380,8 +380,7 @@ class DatabaseTab(QWidget):
                 border-radius: 6px;
             }}
             QPushButton:hover {{
-                background-color: {Colors.ERROR};
-                opacity: 0.85;
+                background-color: {Colors.ERROR_MUTED};
             }}
         """)
         self.cancel_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
