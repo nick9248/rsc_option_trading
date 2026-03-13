@@ -391,14 +391,26 @@ class TestOnChainComponent:
         score = d._score_onchain_component(minimal_onchain({"wings_skew": 2.0}))
         assert score == pytest.approx(0.0, abs=0.01)
 
-    def test_funding_rate_very_bullish_fixed_units(self):
-        """
-        UNIT FIX TEST: funding_rate = 0.06 (0.06% per 8h, > 0.05 threshold) → +30.
-        Old code with /100 would have made this 0.0006, landing in neutral zone.
-        """
+    def test_funding_rate_healthy_bullish(self):
+        """0.03% funding (healthy longs paying) → +30."""
+        d = make_detector()
+        score = d._score_onchain_component(minimal_onchain({"funding_rate": 0.03}))
+        assert score == pytest.approx(30.0, rel=0.01)
+
+    def test_funding_rate_elevated_bullish(self):
+        """0.06% funding (elevated but not extreme) → +10, not +30."""
         d = make_detector()
         score = d._score_onchain_component(minimal_onchain({"funding_rate": 0.06}))
-        assert score == pytest.approx(30.0, rel=0.01)
+        assert score == pytest.approx(10.0, rel=0.01)
+
+    def test_funding_rate_extreme_bullish_is_bearish(self):
+        """
+        LONG-SQUEEZE TRAP: funding > 0.10% (~109% ann.) → -20.
+        Overleveraged longs are a mean-reversion risk, not a bullish signal.
+        """
+        d = make_detector()
+        score = d._score_onchain_component(minimal_onchain({"funding_rate": 0.12}))
+        assert score == pytest.approx(-20.0, rel=0.01)
 
     def test_funding_rate_neutral_zone(self):
         """0.01% funding (typical) → stays in neutral zone → 0."""
@@ -406,11 +418,20 @@ class TestOnChainComponent:
         score = d._score_onchain_component(minimal_onchain({"funding_rate": 0.01}))
         assert score == pytest.approx(0.0, abs=0.01)
 
-    def test_funding_rate_very_bearish(self):
-        """Negative funding < -0.05% → -30."""
+    def test_funding_rate_healthy_bearish(self):
+        """Negative funding -0.03% (healthy shorts) → -30."""
         d = make_detector()
-        score = d._score_onchain_component(minimal_onchain({"funding_rate": -0.06}))
+        score = d._score_onchain_component(minimal_onchain({"funding_rate": -0.03}))
         assert score == pytest.approx(-30.0, rel=0.01)
+
+    def test_funding_rate_extreme_negative_is_bullish(self):
+        """
+        SHORT-SQUEEZE TRAP: funding < -0.10% → +20.
+        Overcrowded shorts are a squeeze risk, not a confirmation of bearish trend.
+        """
+        d = make_detector()
+        score = d._score_onchain_component(minimal_onchain({"funding_rate": -0.12}))
+        assert score == pytest.approx(20.0, rel=0.01)
 
     def test_oi_direction_confirmed_longs(self):
         """price_up + oi_rising → +20."""

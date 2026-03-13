@@ -379,18 +379,25 @@ class MarketRegimeDetector:
 
         # Sub-signal 2: Funding rate (raw %, NOT divided by 100 — unit is fixed in service)
         # Typical Deribit 8h range: -0.05% to +0.05%
+        # Non-monotonic by design: extreme funding signals crowded positioning, not conviction.
+        # >0.10%/8h (~109% ann.) = overleveraged longs, mean-reversion risk → bearish
+        # <-0.10%/8h = overleveraged shorts, squeeze risk → bullish
         funding_rate = onchain.get("funding_rate")
         if funding_rate is not None:
-            if funding_rate > 0.05:
-                score += 30
+            if funding_rate > 0.10:
+                score -= 20   # Extreme longs — overcrowded, liquidation risk
+            elif funding_rate > 0.05:
+                score += 10   # Elevated — bullish sentiment but getting crowded
             elif funding_rate > 0.02:
-                score += 20
+                score += 30   # Healthy bullish — longs paying, genuine demand
             elif funding_rate > -0.02:
                 score += 0    # Neutral zone (typical market)
             elif funding_rate > -0.05:
-                score -= 20
+                score -= 30   # Healthy bearish
+            elif funding_rate > -0.10:
+                score -= 10   # Elevated shorts — crowded, squeeze risk rising
             else:
-                score -= 30
+                score += 20   # Extreme shorts — overcrowded, squeeze risk
 
         # Sub-signal 3: OI direction (pre-computed in service, range [-20, +20])
         oi_direction = onchain.get("oi_direction", 0)
