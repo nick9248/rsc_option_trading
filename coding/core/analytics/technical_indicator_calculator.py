@@ -292,3 +292,59 @@ class TechnicalIndicatorCalculator:
             return "STRONG_TREND"
         else:
             return "VERY_STRONG_TREND"
+
+    def get_velocity_indicators(
+        self,
+        df: pd.DataFrame,
+        lookback: int = 5
+    ) -> Dict[str, Optional[float]]:
+        """
+        Return rate-of-change indicators from the indicators DataFrame.
+
+        Args:
+            df: DataFrame from calculate_all_indicators().
+            lookback: Number of bars for RSI velocity only (default 5).
+                      EMA and histogram velocity are always 1-day deltas.
+
+        Returns:
+            Dict with keys:
+              - ema_50_velocity: 1-day pct change of EMA50 (not ADX-scaled, intentional)
+              - rsi_velocity: lookback-day absolute RSI change (uses lookback param)
+              - macd_histogram_velocity: 1-day magnitude change abs(today) - abs(yesterday)
+            Any value is None if insufficient data or NaN in source.
+        """
+        result = {
+            "ema_50_velocity": None,
+            "rsi_velocity": None,
+            "macd_histogram_velocity": None,
+        }
+
+        if df.empty or len(df) < 2:
+            return result
+
+        # EMA velocity: 1-day pct change (lookback NOT applied here)
+        if "ema_50" in df.columns:
+            ema_today = df["ema_50"].iloc[-1]
+            ema_yesterday = df["ema_50"].iloc[-2]
+            if pd.notna(ema_today) and pd.notna(ema_yesterday) and ema_yesterday != 0:
+                result["ema_50_velocity"] = (
+                    (float(ema_today) - float(ema_yesterday)) / float(ema_yesterday) * 100
+                )
+
+        # MACD histogram magnitude velocity: 1-day (lookback NOT applied here)
+        if "macd_histogram" in df.columns:
+            hist_today = df["macd_histogram"].iloc[-1]
+            hist_yesterday = df["macd_histogram"].iloc[-2]
+            if pd.notna(hist_today) and pd.notna(hist_yesterday):
+                result["macd_histogram_velocity"] = (
+                    abs(float(hist_today)) - abs(float(hist_yesterday))
+                )
+
+        # RSI velocity: lookback-day change (lookback IS applied here only)
+        if "rsi" in df.columns and len(df) >= lookback + 1:
+            rsi_today = df["rsi"].iloc[-1]
+            rsi_old = df["rsi"].iloc[-(lookback + 1)]
+            if pd.notna(rsi_today) and pd.notna(rsi_old):
+                result["rsi_velocity"] = float(rsi_today) - float(rsi_old)
+
+        return result
