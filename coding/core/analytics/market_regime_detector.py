@@ -280,17 +280,6 @@ class MarketRegimeDetector:
             else:
                 score += 20   # Extreme complacency — pre-run environment
 
-        # Alignment bonus: all 3 DVOL signals firing in same direction amplifies conviction
-        # Low DVOL + contango + cheap options = strong regime precursor → +20 bonus
-        # High DVOL + backwardation + expensive options = crisis confirmation → -20 bonus
-        if dvol_percentile is not None and dvol_term_ratio is not None and vrp_percentage is not None:
-            all_bullish = dvol_percentile < 20 and dvol_term_ratio < 0.80 and vrp_percentage < -20
-            all_bearish = dvol_percentile > 80 and dvol_term_ratio > 1.25 and vrp_percentage > 20
-            if all_bullish:
-                score += 20
-            elif all_bearish:
-                score -= 20
-
         return max(-100.0, min(100.0, score))
 
     def _score_momentum_component(

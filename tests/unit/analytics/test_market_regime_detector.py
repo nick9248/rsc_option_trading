@@ -276,7 +276,7 @@ class TestVolatilityComponent:
                 "vrp_percentage": -25.0,         # +20
             })
         )
-        assert score == 100.0  # Clamped at max
+        assert score == pytest.approx(80.0, rel=0.01)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
