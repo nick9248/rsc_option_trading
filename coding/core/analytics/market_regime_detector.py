@@ -29,7 +29,14 @@ class MarketRegimeDetector:
         "sentiment":  0.10,
     }
     # Ordered list matching detect_regime scoring order (used by _calculate_confidence)
-    WEIGHTS_LIST = [0.30, 0.15, 0.20, 0.25, 0.10]
+    # Derived from WEIGHTS to ensure they never diverge
+    WEIGHTS_LIST = [
+        WEIGHTS["trend"],
+        WEIGHTS["volatility"],
+        WEIGHTS["momentum"],
+        WEIGHTS["onchain"],
+        WEIGHTS["sentiment"],
+    ]
 
     # Regime thresholds — symmetric around 0
     # Half-open intervals: lower bound inclusive, upper bound exclusive
@@ -387,7 +394,7 @@ class MarketRegimeDetector:
 
         # Sub-signal 3: OI direction (pre-computed in service, range [-20, +20])
         oi_direction = onchain.get("oi_direction", 0)
-        if oi_direction:
+        if oi_direction is not None and oi_direction != 0:
             score += oi_direction
 
         return max(-100.0, min(100.0, score))
@@ -562,7 +569,7 @@ class MarketRegimeDetector:
         sma_200 = indicators.get("sma_200")
         adx = indicators.get("adx")
 
-        if sma_50 and sma_200:
+        if sma_50 is not None and sma_200 is not None:
             adx_str = f"{adx:.1f}" if adx is not None else "N/A"
             if sma_50 > sma_200:
                 reasons.append(f"Trend: Golden Cross structure (50 SMA > 200 SMA), ADX={adx_str}")
@@ -582,7 +589,7 @@ class MarketRegimeDetector:
             elif rsi < 30:
                 reasons.append(f"Momentum: Oversold (RSI={rsi_str})")
             else:
-                reasons.append(f"Momentum: RSI={rsi_str}, MACD={'Bullish' if macd_histogram and macd_histogram > 0 else 'Bearish'}")
+                reasons.append(f"Momentum: RSI={rsi_str}, MACD={'Bullish' if macd_histogram is not None and macd_histogram > 0 else 'Bearish'}")
 
         # Volatility analysis
         dvol_percentile = onchain.get("dvol_percentile")
