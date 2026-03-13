@@ -17,8 +17,6 @@ logger = logging.getLogger(__name__)
 
 PARAM_ORDER = ["trend", "volatility", "momentum", "onchain", "sentiment",
                "sideways_threshold", "strong_threshold"]
-# x[0]=w_trend, x[1]=w_vol, x[2]=w_momentum, x[3]=w_onchain, x[4]=w_sentiment
-# x[5]=sideways_threshold, x[6]=strong_threshold
 
 HORIZON_COLS = ["return_4h", "return_8h", "return_12h", "return_24h",
                 "return_48h", "return_72h", "return_7d", "return_30d"]
@@ -164,7 +162,7 @@ class RegimeWeightOptimizer:
 
         return float(np.mean(sharpes)) if sharpes else 0.0
 
-    def _eval_both(self, x: np.ndarray):
+    def _eval_both(self, x: np.ndarray) -> tuple[float, float]:
         """Evaluate both fitness functions and return (fitness_a, fitness_b)."""
         return self._fitness_a(x), self._fitness_b(x)
 
@@ -276,7 +274,7 @@ class RegimeWeightOptimizer:
             horizon_coverage=coverage,
         )
 
-    def _sample_grid(self, n: int) -> list:
+    def _sample_grid(self, n: int) -> list[np.ndarray]:
         """
         Sample n valid parameter combinations using rejection sampling.
 
