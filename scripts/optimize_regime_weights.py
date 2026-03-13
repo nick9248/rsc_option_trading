@@ -8,6 +8,11 @@ Usage:
 """
 import argparse
 import logging
+import sys
+
+# Force UTF-8 output on Windows so Unicode symbols print correctly
+if sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8')
 
 from coding.core.logging.logging_setup import init_logging
 from coding.core.database.repository import DatabaseRepository

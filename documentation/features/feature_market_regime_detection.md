@@ -10,8 +10,9 @@
 6. [API Reference](#api-reference)
 7. [Database Schema](#database-schema)
 8. [Configuration](#configuration)
-9. [Examples](#examples)
-10. [Troubleshooting](#troubleshooting)
+9. [Weight Optimizer](#weight-optimizer)
+10. [Examples](#examples)
+11. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -19,20 +20,21 @@
 
 The Market Regime Detection System is a multi-factor analysis framework that classifies cryptocurrency market conditions into five distinct regimes:
 
-- **Strong Bullish**: Score ≥ 60
-- **Weak Bullish**: Score ≥ 30
-- **Sideways**: Score ≥ -30
-- **Weak Bearish**: Score ≥ -60
-- **Strong Bearish**: Score < -60
+- **Strong Bullish**: Score ≥ 55
+- **Weak Bullish**: 20 ≤ Score < 55
+- **Sideways**: -20 ≤ Score < 20
+- **Weak Bearish**: -55 ≤ Score < -20
+- **Strong Bearish**: Score < -55
 
 ### Key Features
 
 - Real-time regime detection for BTC and ETH
 - Multi-factor scoring combining 5 components
-- Confidence scoring based on component alignment
+- Confidence scoring based on weighted component alignment
 - Historical data storage for trend analysis
 - GUI integration with detailed reasoning display
 - Uses only free data sources (no paid APIs required)
+- Offline weight optimizer for data-driven weight calibration
 
 ### Supported Assets
 
@@ -75,9 +77,9 @@ Currently supports:
                            │
 ┌──────────────────────────▼──────────────────────────────┐
 │                    Data Sources                         │
-│  - Deribit API (OHLCV, funding, options data)          │
+│  - Deribit API (OHLCV, funding, options data, DVOL)    │
 │  - Alternative.me (Fear & Greed Index)                  │
-│  - CoinGecko (BTC/ETH dominance)                        │
+│  - CoinGecko (BTC/ETH dominance, market cap change)     │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -86,14 +88,14 @@ Currently supports:
 1. **User initiates detection** via GUI or API call
 2. **Service layer orchestrates**:
    - Fetch 200 days of OHLCV data from Deribit
-   - Calculate technical indicators
-   - Fetch on-chain metrics (funding rate, P/C ratio, DVOL)
-   - Fetch external sentiment metrics
+   - Calculate technical indicators and velocity indicators
+   - Fetch on-chain metrics (funding rate, wings skew, OI direction, DVOL metrics)
+   - Fetch external sentiment metrics (F&G 7d average, BTC dominance, market cap change)
 3. **Core algorithm processes**:
    - Score each component (-100 to +100)
    - Calculate weighted composite score
-   - Classify regime based on thresholds
-   - Calculate confidence based on alignment
+   - Classify regime based on thresholds (with ADX override for Sideways)
+   - Calculate confidence based on weighted component alignment
 4. **Results returned** to GUI or caller with detailed reasoning
 
 ---
@@ -108,11 +110,16 @@ Currently supports:
 
 **Indicators Calculated**:
 - **SMA (50, 200)**: Simple Moving Averages for trend identification
-- **EMA (12, 26)**: Exponential Moving Averages for momentum
+- **EMA (12, 26, 50)**: Exponential Moving Averages for momentum and velocity
 - **RSI (14)**: Relative Strength Index for overbought/oversold conditions
 - **MACD (12, 26, 9)**: Moving Average Convergence Divergence for momentum
-- **ADX (14)**: Average Directional Index for trend strength
+- **ADX (14)** + **DI+/DI-**: Average Directional Index with directional indicators
 - **ATR (14)**: Average True Range for volatility measurement
+
+**Velocity Indicators** (5-day change):
+- `ema_50_velocity`: Rate of change of EMA-50 (trend acceleration)
+- `rsi_velocity`: 5-day change in RSI (momentum acceleration)
+- `macd_histogram_velocity`: Change in MACD histogram magnitude (momentum building/fading)
 
 **Key Methods**:
 
@@ -129,15 +136,6 @@ def calculate_all_indicators(self, ohlcv_data: list) -> pd.DataFrame:
     """
 ```
 
-**ATR Percentile Calculation**:
-Uses global percentile rank across the entire dataset (not rolling window):
-
-```python
-df["atr_percentile"] = df["atr"].rank(pct=True) * 100
-```
-
-This ensures volatility is measured relative to the asset's historical range.
-
 ---
 
 ### 2. Market Regime Detector
@@ -150,11 +148,11 @@ This ensures volatility is measured relative to the asset's historical range.
 
 | Component | Weight | Purpose |
 |-----------|--------|---------|
-| Trend | 30% | Price direction and MA alignment |
-| Momentum | 25% | RSI and MACD signals |
-| On-Chain | 20% | Funding rate and P/C ratio |
-| Sentiment | 15% | Fear & Greed Index, BTC dominance |
-| Volatility | 10% | ATR percentile (fear indicator) |
+| Trend | 30% | DI+/DI- spread, MA structure, ADX-scaled, EMA velocity |
+| On-Chain | 25% | Wings skew, funding rate (non-monotonic), OI direction |
+| Momentum | 20% | RSI level + velocity, MACD crossover + histogram velocity |
+| Volatility | 15% | DVOL percentile, term structure ratio, VRP signal |
+| Sentiment | 10% | F&G 7d avg (context-aware), BTC dominance (currency-aware), market cap change |
 
 **Key Methods**:
 
@@ -164,7 +162,9 @@ def detect_regime(
     technical_indicators: Dict,
     onchain_metrics: Dict,
     external_metrics: Dict,
-    current_price: float
+    current_price: float,
+    velocity_indicators: Optional[Dict] = None,
+    currency: str = "BTC",
 ) -> Dict:
     """
     Detect current market regime.
@@ -173,13 +173,6 @@ def detect_regime(
         Dict with regime, scores, confidence, and reasoning
     """
 ```
-
-**Component Scoring Methods**:
-- `_score_trend_component()`: SMA/EMA positioning, golden/death cross, ADX strength
-- `_score_volatility_component()`: ATR percentile interpretation
-- `_score_momentum_component()`: RSI and MACD analysis
-- `_score_onchain_component()`: Funding rate and P/C ratio
-- `_score_sentiment_component()`: Fear & Greed Index (contrarian)
 
 ---
 
@@ -192,19 +185,12 @@ def detect_regime(
 **APIs Used**:
 
 1. **Fear & Greed Index** (Alternative.me)
-   - URL: `https://api.alternative.me/fng/`
-   - Returns: Value 0-100 and classification
-   - Interpretation: Contrarian indicator (extreme fear = buy signal)
+   - Returns: Value 0-100, classification, and 7-day average
+   - Interpretation: Context-aware (contrarian only when trend is weak/ranging)
 
-2. **BTC/ETH Dominance** (CoinGecko)
-   - URL: `https://api.coingecko.com/api/v3/global`
-   - Returns: Market cap percentages
-   - Interpretation: Rising BTC dominance = flight to safety
-
-**Classes**:
-- `FearGreedAPI`: Fetches Fear & Greed Index
-- `CoinGeckoAPI`: Fetches crypto market dominance
-- `ExternalMetricsFetcher`: Combines both APIs
+2. **BTC/ETH Dominance + Market Cap Change** (CoinGecko)
+   - Returns: Market cap percentages + 24h change
+   - Interpretation: Currency-aware — sign inverts for ETH vs BTC
 
 ---
 
@@ -214,29 +200,15 @@ def detect_regime(
 
 **Purpose**: Orchestrates the entire detection process.
 
-**Key Method**:
-
-```python
-def detect_regime(self, currency: str) -> Dict:
-    """
-    Main entry point for regime detection.
-
-    Args:
-        currency: 'BTC' or 'ETH'
-
-    Returns:
-        Complete detection result with all metrics
-    """
-```
-
 **Process**:
 1. Fetch 200 days of OHLCV data (1D resolution)
-2. Calculate technical indicators
+2. Calculate technical indicators and velocity indicators
 3. Fetch on-chain metrics:
-   - Perpetual funding rate
-   - DVOL (Deribit Volatility Index)
-   - Put/Call ratio from options OI
-4. Fetch external sentiment metrics
+   - Perpetual funding rate (raw %, with non-monotonic interpretation)
+   - DVOL percentile, term structure ratio, VRP percentage
+   - Wings skew (OTM put IV - OTM call IV)
+   - OI direction score (pre-computed in service, range [-20, +20])
+4. Fetch external sentiment metrics (F&G 7d avg, BTC dominance, market cap 24h change)
 5. Run detection algorithm
 6. Store results in database
 7. Return complete result with reasoning
@@ -249,206 +221,183 @@ def detect_regime(self, currency: str) -> Dict:
 
 #### 1. Trend Component (30% weight)
 
-**Scoring Logic**:
+Scoring proceeds in 4 steps:
 
+**Step 1: DI+/DI- directional signal**
 ```python
-# Price position relative to MAs (50% of trend score)
-if price > SMA50 and price > SMA200:
-    score += 30  # Bullish (above both MAs)
-elif price < SMA50 and price < SMA200:
-    score -= 30  # Bearish (below both MAs)
-else:
-    score += 0   # Mixed (neutral)
+di_spread = plus_di - minus_di
+if di_spread > 15:   score += 35   # Strong bullish
+elif di_spread > 5:  score += 20
+elif di_spread > -5: score += 0    # Neutral
+elif di_spread > -15: score -= 20
+else:                score -= 35   # Strong bearish
+```
 
-# MA alignment (50% of trend score)
-if SMA50 > SMA200:
-    score += 20  # Golden Cross structure
-elif SMA50 < SMA200:
-    score -= 20  # Death Cross structure
+**Step 2: MA structure (4 states)**
+```python
+if price > sma_50 and sma_50 > sma_200:  score += 20  # Clean uptrend
+elif sma_50 > sma_200 and price < sma_50: score += 10  # Pullback in uptrend
+elif price < sma_50 and sma_50 < sma_200: score -= 20  # Clean downtrend
+elif sma_50 < sma_200 and price > sma_50: score -= 10  # Bounce in downtrend
+```
 
-# ADX strength multiplier
-if ADX > 40:
-    multiplier = 1.5   # Very strong trend
-elif ADX > 25:
-    multiplier = 1.0   # Strong trend
-elif ADX > 20:
-    multiplier = 0.5   # Weak trend
-else:
-    multiplier = 0.2   # No trend
-
+**Step 3: ADX strength multiplier (applied to Steps 1+2 sum)**
+```python
+if adx > 40:   multiplier = 1.4   # Very strong trend
+elif adx > 25: multiplier = 1.0   # Confirmed trend
+elif adx > 20: multiplier = 0.6   # Weak trend
+else:          multiplier = 0.3   # No trend (dampens signal)
 score = score * multiplier
+```
+
+**Step 4: EMA-50 velocity (added after multiplier — not ADX-scaled)**
+```python
+if ema_50_velocity > 0.2:  score += 10   # Accelerating
+elif ema_50_velocity < -0.2: score -= 10  # Decelerating
+```
+
+**ADX override in classifier**: If ADX > 25 and composite score falls in Sideways range (-20 to +20), the classifier uses raw DI+ vs DI- to force a directional classification (Weak Bullish or Weak Bearish) when the spread exceeds 5.
+
+**Range**: -100 to +100
+
+---
+
+#### 2. Volatility Component (15% weight)
+
+Driven by DVOL (Deribit Volatility Index) signals rather than ATR percentile alone. Low DVOL + cheap options = bullish regime precursor. High DVOL + backwardation = fear/crisis = bearish.
+
+**Sub-signal 1: DVOL 30-day rolling percentile (primary)**
+```python
+if dvol_percentile < 20:   score += 40   # Very low vol — calm/complacent
+elif dvol_percentile < 40: score += 20
+elif dvol_percentile < 60: score += 0    # Normal
+elif dvol_percentile < 80: score -= 20
+else:                      score -= 40   # Extreme vol — fear/crisis
+```
+
+**Sub-signal 2: DVOL term structure ratio (current / 30d_avg)**
+```python
+if ratio < 0.80:   score += 20   # Contango — near-term vol cheap
+elif ratio < 0.95: score += 10
+elif ratio < 1.10: score += 0    # Flat
+elif ratio < 1.25: score -= 15   # Mild backwardation
+else:              score -= 25   # Steep backwardation — crisis premium
+```
+
+**Sub-signal 3: VRP signal (IV - RV) / RV × 100**
+```python
+if vrp > 20:    score -= 20   # Options very expensive — hedgers paying up
+elif vrp > 5:   score -= 10
+elif vrp > -5:  score += 0    # Fair pricing
+elif vrp > -20: score += 10   # Cheap options — complacency
+else:           score += 20   # Extreme complacency — pre-run environment
 ```
 
 **Range**: -100 to +100
 
-**Interpretation**:
-- Strong positive: Price above MAs, golden cross, strong ADX
-- Strong negative: Price below MAs, death cross, strong ADX
-- Weak signal: Low ADX dampens the score
+---
+
+#### 3. Momentum Component (20% weight)
+
+**Sub-signal 1: RSI level + velocity**
+```python
+if rsi > 70:   score += 25   # Overbought — bullish but less than 60-70 range
+elif rsi > 60: score += 35   # Strongest bullish range
+elif rsi > 50: score += 15
+elif rsi > 40: score -= 10
+elif rsi > 30: score -= 30
+else:          score -= 15   # Oversold — contrarian bounce reduces bearish signal
+
+# RSI 5-day velocity
+if rsi_velocity > 8:  score += 10   # Accelerating bullish
+elif rsi_velocity < -8: score -= 10  # Decelerating
+```
+
+**Sub-signal 2: MACD crossover + histogram velocity**
+```python
+# Crossover
+if macd > macd_signal: score += 25
+else:                  score -= 25
+
+# Histogram magnitude velocity (independent of crossover direction)
+if hist_velocity > 0:  score += 15   # Momentum building
+elif hist_velocity < 0: score -= 15  # Momentum fading
+```
+
+**Range**: -100 to +100
 
 ---
 
-#### 2. Volatility Component (10% weight)
+#### 4. On-Chain Component (25% weight)
 
-**Scoring Logic**:
-
+**Sub-signal 1: Wings skew (OTM put IV − OTM call IV, in percentage points)**
 ```python
-# ATR Percentile interpretation
-if atr_percentile < 25:
-    score += 0    # LOW volatility = neutral (complacency)
-elif atr_percentile < 75:
-    score += 0    # NORMAL volatility = neutral
-else:
-    score -= 30   # EXTREME volatility = bearish (fear/uncertainty)
-
-# DVOL consideration (if available)
-if dvol > 80:
-    score -= 10   # High implied vol = uncertainty
-elif dvol < 40:
-    score += 10   # Low implied vol = stability
+if wings_skew > 10:   score -= 40   # Strong fear — puts very expensive
+elif wings_skew > 5:  score -= 20
+elif wings_skew > -5: score += 0    # Balanced skew
+elif wings_skew > -10: score += 20
+else:                 score += 40   # Strong call premium — upside positioned
 ```
 
-**Range**: -40 to +10
+**Sub-signal 2: Funding rate — non-monotonic by design**
 
-**Interpretation**:
-- Low/normal volatility is **neutral** (not bullish!)
-- High volatility indicates fear and uncertainty (bearish)
-- Volatility alone doesn't predict direction
+Extreme funding signals *crowded* positioning (liquidation/squeeze risk), not conviction. The scoring is intentionally non-monotonic: moderate positive funding is bullish, but extreme positive flips to bearish.
 
-**Important Note**: Low volatility indicates complacency or lack of conviction, not bullish sentiment. This differs from a "low volatility = safe = bullish" interpretation. Instead, we treat it as neutral since markets can be calm before either direction.
+```python
+# Typical Deribit 8h funding range: -0.05% to +0.05%
+if funding > 0.10:   score -= 20   # Extreme longs — overcrowded, liquidation risk
+elif funding > 0.05: score += 10   # Elevated — bullish but getting crowded
+elif funding > 0.02: score += 30   # Healthy bullish — longs paying, genuine demand
+elif funding > -0.02: score += 0   # Neutral zone
+elif funding > -0.05: score -= 30  # Healthy bearish
+elif funding > -0.10: score -= 10  # Elevated shorts — squeeze risk rising
+else:                score += 20   # Extreme shorts — overcrowded, squeeze risk
+```
+
+**Sub-signal 3: OI direction (pre-computed in service, range [-20, +20])**
+
+Measures whether open interest is expanding in the direction of price movement. Passed directly as a score.
+
+**Range**: -100 to +100
 
 ---
 
-#### 3. Momentum Component (25% weight)
+#### 5. Sentiment Component (10% weight)
 
-**Scoring Logic**:
+**Sub-signal 1: F&G 7-day average — context-aware**
 
-```python
-# RSI scoring (50% of momentum score)
-if rsi > 70:
-    score += 20    # Overbought (weak bullish, potential reversal)
-elif rsi > 60:
-    score += 40    # Strong bullish momentum
-elif rsi > 50:
-    score += 20    # Bullish
-elif rsi > 40:
-    score -= 10    # Neutral/slight bearish
-elif rsi > 30:
-    score -= 30    # Bearish
-else:
-    score -= 20    # Oversold (weak bearish, potential bounce)
-
-# MACD scoring (50% of momentum score)
-if macd > macd_signal:
-    score += 30    # Bullish crossover
-else:
-    score -= 30    # Bearish crossover
-
-# MACD histogram (confirmation)
-if macd_histogram > 0:
-    score += 20    # Positive momentum
-else:
-    score -= 20    # Negative momentum
-```
-
-**Range**: -70 to +90
-
-**Interpretation**:
-- RSI 60-70: Strong bullish momentum (best signal)
-- RSI >70 or <30: Extreme values reduce score (reversal risk)
-- MACD confirms trend direction
-
----
-
-#### 4. On-Chain Component (20% weight)
-
-**Scoring Logic**:
+In a confirmed bearish trend (ADX > 25 and trend score < -30), extreme fear is *not* treated as a contrarian buy signal — it confirms the bearish regime.
 
 ```python
-# Funding Rate scoring (60% of on-chain score)
-# Typical range: -0.03% to +0.03% daily
-if funding_rate > 0.01:         # > 1%
-    score += 40                 # Very bullish (longs paying shorts)
-elif funding_rate > 0.005:      # > 0.5%
-    score += 20                 # Bullish
-elif funding_rate > -0.005:     # ±0.5%
-    score += 0                  # NEUTRAL ZONE (normal conditions)
-elif funding_rate > -0.01:      # < -0.5%
-    score -= 20                 # Bearish (shorts paying longs)
-else:
-    score -= 40                 # Very bearish
-
-# Put/Call Ratio scoring (40% of on-chain score)
-if put_call_ratio > 1.2:
-    score -= 30    # Heavy put bias (> 1.2 = fear)
-elif put_call_ratio > 1.0:
-    score -= 10    # Slight put bias
-elif put_call_ratio > 0.8:
-    score += 0     # Balanced (0.8-1.0 is neutral)
-elif put_call_ratio > 0.6:
-    score += 10    # Slight call bias (moderately bullish)
-else:
-    score += 30    # Heavy call bias (< 0.6 = greed)
+if fg_avg < 25:
+    if in_strong_bearish_trend: score -= 15   # Confirms bear
+    else:                       score += 25   # Contrarian buy
+elif fg_avg < 45: score -= 20    # Fear
+elif fg_avg < 55: score += 0     # Neutral
+elif fg_avg < 75: score += 35    # Greed — bullish
+else:             score += 15    # Extreme greed — potential top warning
 ```
 
-**Range**: -70 to +70
+**Sub-signal 2: BTC dominance — currency-aware**
 
-**Interpretation**:
-- **Funding rate**: Measures perpetual swap costs
-  - Positive = longs dominant (bullish positioning)
-  - Negative = shorts dominant (bearish positioning)
-  - **±0.5% is neutral zone** (normal market fluctuations)
-- **P/C ratio**: Measures options positioning
-  - Ratio > 1.0 = more puts (fear)
-  - Ratio < 1.0 = more calls (greed)
-  - **0.8-1.0 is balanced** (no strong bias)
-
-**Put/Call Ratio Calculation**:
-Aggregates open interest across all strikes and expirations:
-
+Sign inverts depending on which asset is being analyzed:
 ```python
-total_call_oi = sum(call_oi for all strikes)
-total_put_oi = sum(put_oi for all strikes)
-put_call_ratio = total_put_oi / total_call_oi
+# BTC:
+if btc_dom > 55: score += 10   # Capital in BTC — bullish for BTC
+elif btc_dom < 45: score -= 10  # Alt season — capital leaving BTC
+
+# ETH (and other alts):
+if btc_dom > 55: score -= 10   # Capital in BTC, not alts
+elif btc_dom < 45: score += 10  # Alt season — bullish for ETH
 ```
 
----
-
-#### 5. Sentiment Component (15% weight)
-
-**Scoring Logic**:
-
+**Sub-signal 3: Market cap 24h change**
 ```python
-# Fear & Greed Index (70% of sentiment score)
-# Contrarian interpretation
-if value < 25:
-    score += 30    # Extreme fear = buy signal (contrarian)
-elif value < 45:
-    score -= 20    # Fear = slight bearish
-elif value < 55:
-    score += 0     # Neutral
-elif value < 75:
-    score += 40    # Greed = bullish
-else:
-    score += 20    # Extreme greed = potential top (reduced bullish)
-
-# BTC Dominance (30% of sentiment score)
-if btc_dominance > 50:
-    score += 10    # BTC strong (flight to safety)
-else:
-    score -= 10    # Alt season potential (risk-on)
+if mc_change > 3:  score += 10   # Risk-on
+elif mc_change < -3: score -= 10  # Risk-off
 ```
 
-**Range**: -30 to +50
-
-**Interpretation**:
-- **Fear & Greed**: Contrarian indicator
-  - Extreme fear (0-25) = oversold, buy opportunity
-  - Greed (55-75) = bullish momentum
-  - Extreme greed (75-100) = potential top, reduce bullish signal
-- **BTC Dominance**: Market risk appetite
-  - Rising dominance = flight to safety (bearish for alts)
-  - Falling dominance = risk-on (bullish for alts)
+**Range**: -100 to +100
 
 ---
 
@@ -456,57 +405,41 @@ else:
 
 ```python
 composite_score = (
-    trend_score * 0.30 +
-    momentum_score * 0.25 +
-    onchain_score * 0.20 +
-    sentiment_score * 0.15 +
-    volatility_score * 0.10
+    trend_score      * 0.30 +
+    onchain_score    * 0.25 +
+    momentum_score   * 0.20 +
+    volatility_score * 0.15 +
+    sentiment_score  * 0.10
 )
 ```
 
 **Range**: -100 to +100
 
 **Classification**:
-- composite_score ≥ 60 → **Strong Bullish**
-- composite_score ≥ 30 → **Weak Bullish**
-- composite_score ≥ -30 → **Sideways**
-- composite_score ≥ -60 → **Weak Bearish**
-- composite_score < -60 → **Strong Bearish**
+- composite_score ≥ 55 → **Strong Bullish**
+- composite_score ≥ 20 → **Weak Bullish**
+- composite_score ≥ -20 → **Sideways**
+- composite_score ≥ -55 → **Weak Bearish**
+- composite_score < -55 → **Strong Bearish**
+
+Note: An ADX override can reclassify Sideways → Weak Bullish or Weak Bearish when ADX > 25 and DI+/DI- spread > 5. See `_classify_regime()`.
 
 ---
 
 ### Confidence Calculation
 
-Confidence measures how well the components agree on the market direction.
+Confidence measures weighted net agreement between components. Each component's vote is weighted by its WEIGHTS entry (so trend at 30% has 3× the voting power of sentiment at 10%).
 
 ```python
-def _calculate_confidence(component_scores: list) -> float:
-    # Count components by direction
-    bullish_count = sum(1 for score in component_scores if score > 20)
-    bearish_count = sum(1 for score in component_scores if score < -20)
-    neutral_count = len(component_scores) - bullish_count - bearish_count
-
-    # Alignment percentage
-    max_agreement = max(bullish_count, bearish_count)
-    alignment = (max_agreement / total_components) * 100
-
-    # Penalize for neutral components (uncertainty)
-    neutral_penalty = (neutral_count / total_components) * 20
-
-    confidence = alignment - neutral_penalty
-    return max(0, min(100, confidence))
+bullish_weight = sum(w for s, w in zip(scores, WEIGHTS_LIST) if s > 20)
+bearish_weight = sum(w for s, w in zip(scores, WEIGHTS_LIST) if s < -20)
+confidence = (dominant - conflicting) * 100
 ```
 
-**Interpretation**:
-- **High confidence (60-100%)**: Most components agree on direction
-- **Medium confidence (30-60%)**: Mixed signals but some alignment
-- **Low confidence (0-30%)**: Components are conflicting or neutral
-
-**Example**:
-- All 5 components bullish (>20): 100% confidence
-- 4 bullish, 1 neutral: 80% - 20% penalty = 60% confidence
-- 3 bullish, 2 bearish: 60% confidence
-- All neutral: 0% confidence
+**Examples**:
+- All 5 bullish → 100%
+- Only sentiment bullish (weight 0.10) → 10%
+- Trend bullish (0.30) vs onchain bearish (0.25), rest neutral → 5%
 
 ---
 
@@ -550,27 +483,23 @@ from coding.service.deribit.deribit_api_service import DeribitApiService
 from coding.service.regime.regime_detection_service import RegimeDetectionService
 from coding.core.database.repository import DatabaseRepository
 
-# Initialize services
 with DeribitApiService() as api_service:
     repository = DatabaseRepository()
     service = RegimeDetectionService(api_service, repository)
 
-    # Detect regime
     result = service.detect_regime('BTC')
 
-    # Access results
     print(f"Regime: {result['regime']}")
     print(f"Score: {result['composite_score']}")
     print(f"Confidence: {result['confidence']}%")
     print(f"Reasoning: {result['reasoning']}")
 
-    # Access component scores
     comp_scores = result['component_scores']
-    print(f"Trend: {comp_scores['trend']}")
-    print(f"Momentum: {comp_scores['momentum']}")
-    print(f"On-Chain: {comp_scores['onchain']}")
-    print(f"Sentiment: {comp_scores['sentiment']}")
+    print(f"Trend:      {comp_scores['trend']}")
+    print(f"On-Chain:   {comp_scores['onchain']}")
+    print(f"Momentum:   {comp_scores['momentum']}")
     print(f"Volatility: {comp_scores['volatility']}")
+    print(f"Sentiment:  {comp_scores['sentiment']}")
 ```
 
 ---
@@ -580,8 +509,6 @@ with DeribitApiService() as api_service:
 ### RegimeDetectionService
 
 #### `detect_regime(currency: str) -> Dict`
-
-Main entry point for regime detection.
 
 **Parameters**:
 - `currency` (str): Asset symbol ('BTC' or 'ETH')
@@ -610,44 +537,46 @@ Main entry point for regime detection.
         'macd_signal': -300.0,
         'macd_histogram': -200.0,
         'adx': 23.4,
+        'plus_di': 18.2,
+        'minus_di': 24.6,
         'atr': 2500.0,
         'atr_percentile': 6.9
     },
     'onchain_metrics': {
         'funding_rate': 0.00000,
-        'dvol': 54.70,
-        'put_call_ratio': 0.71
+        'wings_skew': 3.5,
+        'oi_direction': -10,
+        'dvol_percentile': 45.0,
+        'dvol_term_structure_ratio': 1.05,
+        'vrp_percentage': 8.0,
     },
     'external_metrics': {
         'fear_greed': {
             'value': 25,
             'classification': 'Extreme Fear'
         },
-        'btc_dominance': 57.59
+        'fear_greed_7d_avg': 28.0,
+        'btc_dominance': 57.59,
+        'market_cap_change_24h': -1.2,
     },
     'reasoning': 'Market Regime: Weak Bearish (Score: -34.5) | ...',
     'detection_time_seconds': 1.61
 }
 ```
 
-**Raises**:
-- `ValueError`: If currency not supported
-- `ConnectionError`: If API connection fails
-- `Exception`: If detection fails
-
 ---
 
 ### MarketRegimeDetector
 
-#### `detect_regime(technical_indicators, onchain_metrics, external_metrics, current_price) -> Dict`
-
-Core detection algorithm.
+#### `detect_regime(...) -> Dict`
 
 **Parameters**:
-- `technical_indicators` (Dict): Must contain sma_50, sma_200, adx, atr_percentile, rsi, macd, macd_signal, macd_histogram
-- `onchain_metrics` (Dict): Must contain funding_rate, put_call_ratio (optional: dvol)
-- `external_metrics` (Dict): Must contain fear_greed dict, btc_dominance
+- `technical_indicators` (Dict): sma_50, sma_200, adx, plus_di, minus_di, atr_percentile, rsi, macd, macd_signal, macd_histogram
+- `onchain_metrics` (Dict): funding_rate, wings_skew, oi_direction, dvol_percentile, dvol_term_structure_ratio, vrp_percentage
+- `external_metrics` (Dict): fear_greed dict, fear_greed_7d_avg, btc_dominance, market_cap_change_24h
 - `current_price` (float): Current asset price
+- `velocity_indicators` (Optional Dict): ema_50_velocity, rsi_velocity, macd_histogram_velocity
+- `currency` (str): 'BTC' or 'ETH' — affects sentiment scoring
 
 **Returns** (Dict):
 ```python
@@ -666,115 +595,12 @@ Core detection algorithm.
 
 ---
 
-### TechnicalIndicatorCalculator
-
-#### `calculate_all_indicators(ohlcv_data: list) -> pd.DataFrame`
-
-Calculate technical indicators from OHLCV data.
-
-**Parameters**:
-- `ohlcv_data` (list): List of [timestamp, open, high, low, close, volume]
-
-**Returns** (DataFrame):
-Columns include: timestamp, open, high, low, close, volume, sma_50, sma_200, ema_12, ema_26, rsi, macd, macd_signal, macd_histogram, adx, atr, atr_percentile
-
-**Raises**:
-- `ValueError`: If data format is invalid or insufficient data points
-
----
-
 ## Database Schema
 
-### Tables Created (Migration 003)
-
-#### `ohlcv_history`
-Stores historical OHLCV data.
-
-```sql
-CREATE TABLE ohlcv_history (
-    id SERIAL PRIMARY KEY,
-    currency VARCHAR(10) NOT NULL,
-    timestamp BIGINT NOT NULL,
-    open DECIMAL(20, 8),
-    high DECIMAL(20, 8),
-    low DECIMAL(20, 8),
-    close DECIMAL(20, 8),
-    volume DECIMAL(20, 8),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(currency, timestamp)
-);
-```
-
-#### `technical_indicators`
-Stores calculated technical indicators.
-
-```sql
-CREATE TABLE technical_indicators (
-    id SERIAL PRIMARY KEY,
-    currency VARCHAR(10) NOT NULL,
-    timestamp BIGINT NOT NULL,
-    sma_50 DECIMAL(20, 8),
-    sma_200 DECIMAL(20, 8),
-    ema_12 DECIMAL(20, 8),
-    ema_26 DECIMAL(20, 8),
-    rsi DECIMAL(10, 4),
-    macd DECIMAL(20, 8),
-    macd_signal DECIMAL(20, 8),
-    macd_histogram DECIMAL(20, 8),
-    adx DECIMAL(10, 4),
-    atr DECIMAL(20, 8),
-    atr_percentile DECIMAL(10, 4),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(currency, timestamp)
-);
-```
-
-#### `funding_rate_history`
-Stores perpetual swap funding rates.
-
-```sql
-CREATE TABLE funding_rate_history (
-    id SERIAL PRIMARY KEY,
-    currency VARCHAR(10) NOT NULL,
-    timestamp BIGINT NOT NULL,
-    funding_rate DECIMAL(20, 10),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(currency, timestamp)
-);
-```
-
-#### `volatility_index_history`
-Stores DVOL (Deribit Volatility Index) data.
-
-```sql
-CREATE TABLE volatility_index_history (
-    id SERIAL PRIMARY KEY,
-    currency VARCHAR(10) NOT NULL,
-    timestamp BIGINT NOT NULL,
-    dvol DECIMAL(10, 4),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(currency, timestamp)
-);
-```
-
-#### `external_metrics`
-Stores Fear & Greed Index and dominance data.
-
-```sql
-CREATE TABLE external_metrics (
-    id SERIAL PRIMARY KEY,
-    timestamp BIGINT NOT NULL,
-    fear_greed_value INTEGER,
-    fear_greed_classification VARCHAR(50),
-    btc_dominance DECIMAL(10, 4),
-    eth_dominance DECIMAL(10, 4),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(timestamp)
-);
-```
+### Tables Used by the Optimizer
 
 #### `regime_detections`
-Stores regime detection results.
+Stores regime detection results. Read by the weight optimizer.
 
 ```sql
 CREATE TABLE regime_detections (
@@ -795,6 +621,24 @@ CREATE TABLE regime_detections (
 );
 ```
 
+#### `ohlcv_history`
+Used by the optimizer for long-horizon (7d, 30d) forward return lookups.
+
+```sql
+CREATE TABLE ohlcv_history (
+    id SERIAL PRIMARY KEY,
+    currency VARCHAR(10) NOT NULL,
+    timestamp BIGINT NOT NULL,
+    open DECIMAL(20, 8),
+    high DECIMAL(20, 8),
+    low DECIMAL(20, 8),
+    close DECIMAL(20, 8),
+    volume DECIMAL(20, 8),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(currency, timestamp)
+);
+```
+
 ---
 
 ## Configuration
@@ -805,20 +649,22 @@ Located in `MarketRegimeDetector.WEIGHTS`:
 
 ```python
 WEIGHTS = {
-    "trend": 0.30,      # 30% - Most important (direction)
-    "momentum": 0.25,   # 25% - Second most important (strength)
-    "onchain": 0.20,    # 20% - Market positioning
-    "sentiment": 0.15,  # 15% - Market psychology
-    "volatility": 0.10, # 10% - Least important (risk indicator)
+    "trend":      0.30,   # 30% — Primary direction signal
+    "onchain":    0.25,   # 25% — Market positioning (raised from 20%)
+    "momentum":   0.20,   # 20% — Momentum strength (lowered from 25%)
+    "volatility": 0.15,   # 15% — Vol regime (raised from 10%)
+    "sentiment":  0.10,   # 10% — Market psychology (lowered from 15%)
 }
 ```
 
-**Rationale**:
-- **Trend** has highest weight because it determines the primary direction
-- **Momentum** confirms trend with RSI/MACD
-- **On-chain** provides unique insights into market positioning
-- **Sentiment** is contrarian indicator (extremes signal reversals)
-- **Volatility** is lowest because it indicates risk, not direction
+**Rationale** (hand-tuned, pending data validation):
+- **Trend** highest because it determines primary direction
+- **On-chain** raised — wings skew and funding capture positioning directly
+- **Momentum** lowered — velocity indicators complement RSI/MACD without needing overweight
+- **Volatility** raised — DVOL regime provides regime-context signal, not just noise
+- **Sentiment** lowest — F&G is useful but lags and can be misleading in strong trends
+
+**Note**: These weights are hand-tuned based on judgment. Use the weight optimizer (see [Weight Optimizer](#weight-optimizer) section) to validate and potentially update these once sufficient historical data has accumulated.
 
 ### Regime Thresholds
 
@@ -826,133 +672,168 @@ Located in `MarketRegimeDetector.REGIME_THRESHOLDS`:
 
 ```python
 REGIME_THRESHOLDS = {
-    "Strong Bullish": 60,   # Very bullish conditions
-    "Weak Bullish": 30,     # Moderately bullish
-    "Sideways": -30,        # Neutral/consolidation
-    "Weak Bearish": -60,    # Moderately bearish
-    "Strong Bearish": -100, # Very bearish conditions
+    "Strong Bullish": 55,    # composite >= 55
+    "Weak Bullish":   20,    # 20 <= composite < 55
+    "Sideways":      -20,    # -20 <= composite < 20
+    "Weak Bearish":  -55,    # -55 <= composite < -20
+    "Strong Bearish": -100,  # composite < -55
 }
 ```
 
-**Distribution**:
-- Strong regimes: |score| ≥ 60 (strong conviction)
-- Weak regimes: 30 ≤ |score| < 60 (moderate conviction)
-- Sideways: |score| < 30 (no clear direction)
+**Design**: Symmetric around 0. Sideways band narrowed (±20 vs old ±30) to classify more detections as directional. Strong threshold lowered (±55 vs old ±60) to be achievable given the new component scoring ranges.
 
-### API Configuration
+---
 
-#### Deribit API
-- Base URL: `https://www.deribit.com/api/v2`
-- Authentication: Not required for public endpoints
-- Rate limits: Managed by API service layer
+## Weight Optimizer
 
-#### Alternative.me (Fear & Greed)
-- URL: `https://api.alternative.me/fng/`
-- Rate limits: Reasonable use (no official limit)
-- Timeout: 10 seconds
+### Overview
 
-#### CoinGecko
-- URL: `https://api.coingecko.com/api/v3/global`
-- Rate limits: 10-50 calls/minute (free tier)
-- Timeout: 10 seconds
+The regime weight optimizer is an offline tool that reads historical regime detections from the database, computes forward returns, and uses numerical optimization to find component weights that would have produced the best directional accuracy and/or risk-adjusted returns.
+
+**It does not write to the database or modify any code.** It is purely a reporting tool. You must manually apply any suggested weights by updating `WEIGHTS` and `REGIME_THRESHOLDS` in `market_regime_detector.py`.
+
+### Files
+
+- **`coding/core/database/regime_dataset_builder.py`** — Queries DB and builds the optimization dataset
+- **`coding/core/analytics/regime_weight_optimizer.py`** — SLSQP optimizer with Dirichlet warm-start
+- **`scripts/optimize_regime_weights.py`** — CLI entry point
+
+### How It Works
+
+1. **Dataset building** (`RegimeDatasetBuilder`):
+   - Fetches all `regime_detections` records from `DATASET_START_DATE` (2020-01-01) onward
+   - Resolves 8 forward-return horizons per detection:
+     - Short (4h, 8h, 12h, 24h, 48h, 72h): matched from the `regime_detections` price pool (±10% window)
+     - Long (7d, 30d): matched from `ohlcv_history` (±10% window)
+   - Drops rows with missing `current_price` or all-horizons-null
+
+2. **Optimization** (`RegimeWeightOptimizer`):
+   - Runs SLSQP with 500 Dirichlet-sampled warm starts
+   - Optimizes for 3 objectives separately: accuracy, per-horizon Sharpe, blended (50/50)
+   - Bounds: weights [0.05, 0.60], sideways threshold [10, 30], strong threshold [40, 70]
+   - Constraint: weights sum to 1.0, strong ≥ sideways + 1
+
+3. **Output**: Reports 4 parameter sets: current (hand-tuned), accuracy-optimal, Sharpe-optimal, blended
+
+### Running the Optimizer
+
+```bash
+# BTC (default)
+python -m scripts.optimize_regime_weights --currency BTC
+
+# ETH
+python -m scripts.optimize_regime_weights --currency ETH
+
+# Custom directional threshold (default 1.5%)
+python -m scripts.optimize_regime_weights --currency BTC --directional-threshold 2.0
+```
+
+### Example Output
+
+```
+=== REGIME WEIGHT OPTIMIZER ===
+Currency: BTC
+Dataset: 87 detections (2025-06-01 → 2026-03-13)
+
+Horizon coverage:
+    4h:   82/87 (94%)
+    8h:   81/87 (93%)
+   12h:   80/87 (92%)
+   24h:   78/87 (90%)
+   48h:   75/87 (86%)
+   72h:   72/87 (83%)
+    7d:   65/87 (75%)
+   30d:   41/87 (47%)
+
+────────────────────────────────────────────────────────────
+CURRENT (hand-tuned):
+  trend=0.30  vol=0.15  momentum=0.20  onchain=0.25  sentiment=0.10
+  sideways=±20  strong=±55
+  Accuracy: 62.0%   Sharpe: 0.38
+
+ACCURACY-OPTIMAL:
+  trend=0.35  vol=0.12  momentum=0.18  onchain=0.28  sentiment=0.07
+  sideways=±18  strong=±52
+  Accuracy: 67.3% (+5.3 pp)   Sharpe: 0.41
+
+SHARPE-OPTIMAL:
+  trend=0.28  vol=0.20  momentum=0.22  onchain=0.23  sentiment=0.07
+  sideways=±22  strong=±58
+  Accuracy: 61.1%   Sharpe: 0.45 (+0.07)
+
+BLENDED (50/50):
+  trend=0.32  vol=0.16  momentum=0.20  onchain=0.26  sentiment=0.06
+  sideways=±20  strong=±55
+  Accuracy: 64.8%   Sharpe: 0.43
+  (no delta — blended has no single natural baseline)
+────────────────────────────────────────────────────────────
+To apply: update WEIGHTS and REGIME_THRESHOLDS in market_regime_detector.py
+```
+
+### When to Re-Run
+
+**The optimizer requires at least 30 regime detections with good horizon coverage to produce meaningful results.**
+
+Current status: as of March 2026, only ~13 detections are stored, meaning optimization results are noise-fitting and should not be applied. The optimizer will warn when the dataset is too small.
+
+**Re-run the optimizer before applying any weight changes**, once:
+- 30+ regime detections exist in the database
+- Short horizons (4h–24h) have ≥ 20 matched rows each
+- Ideally, the dataset spans multiple distinct market regimes (bull, bear, sideways)
+
+After re-running, if the optimized weights differ meaningfully from the current hand-tuned values, update `WEIGHTS` and `REGIME_THRESHOLDS` in `market_regime_detector.py` and commit the change.
 
 ---
 
 ## Examples
 
-### Example 1: Current Market (Weak Bearish)
+### Example 1: Weak Bearish Market
 
-**Input Data** (2026-01-25):
-- Price: $95,432.50 (BTC)
-- Death Cross: SMA50 < SMA200
-- ADX: 20.7 (weak trend)
+**Input Data**:
+- Price: $95,432.50 (BTC), below both MAs (Death Cross)
+- ADX: 20.7 (weak trend), DI-: 24.6, DI+: 18.2
 - RSI: 37.9 (bearish momentum)
 - MACD: Bearish histogram
-- ATR Percentile: 6.9 (very low volatility)
+- DVOL Percentile: 35 (below average)
 - Funding Rate: 0.000% (neutral)
-- P/C Ratio: 0.71 (slight call bias)
-- Fear & Greed: 25 (Extreme Fear)
+- Wings Skew: +3.5 (slight fear premium)
+- Fear & Greed 7d avg: 25 (Extreme Fear)
 
 **Component Scores**:
-- Trend: -50.0 (death cross with weak ADX)
-- Volatility: 0.0 (low vol = neutral)
-- Momentum: -80.0 (bearish RSI and MACD)
-- On-Chain: +10.0 (neutral funding, slight call bias)
-- Sentiment: -10.0 (extreme fear = some contrarian bullish)
+- Trend: ~-30.0 (DI spread -6.4, death cross, low ADX dampens)
+- Volatility: +20.0 (below-average DVOL percentile)
+- Momentum: -50.0 (bearish RSI and MACD)
+- On-Chain: 0.0 (neutral funding, modest wings skew, OI neutral)
+- Sentiment: +10.0 (extreme fear in ranging market = contrarian)
 
-**Composite Score**: -34.5
-- Calculation: (-50 × 0.30) + (0 × 0.10) + (-80 × 0.25) + (10 × 0.20) + (-10 × 0.15)
-- = -15.0 + 0.0 - 20.0 + 2.0 - 1.5 = **-34.5**
+**Approximate Composite Score**: -22.5
 
-**Classification**: Weak Bearish (-60 < score < -30)
-
-**Confidence**: 28.0%
-- 3 components bearish (trend, momentum, sentiment)
-- 1 component bullish (onchain)
-- 1 component neutral (volatility)
-- Alignment: 60% (3/5)
-- Neutral penalty: 20% (1/5)
-- Confidence: 60% - 20% + adjustments = 28%
-
-**Reasoning**:
-"Market Regime: Weak Bearish (Score: -34.5) | Trend: Death Cross structure (50 SMA < 200 SMA), ADX=20.7 | Momentum: RSI=37.9, MACD=Bearish | Volatility: LOW regime (ATR Percentile=6.9) | On-Chain: Funding=0.000%, P/C Ratio=0.71 | Sentiment: Fear & Greed=25 (Extreme Fear)"
+**Classification**: Weak Bearish or Sideways (depending on velocity inputs)
 
 ---
 
-### Example 2: Sideways Market
+### Example 2: Strong Bullish Market
 
 **Input Data**:
-- Price: Oscillating around both MAs
-- ADX: 15 (no trend)
-- RSI: 50 (neutral)
-- MACD: Near zero, flat histogram
-- ATR Percentile: 30 (normal volatility)
-- Funding Rate: 0.002% (neutral zone)
-- P/C Ratio: 0.9 (balanced)
-- Fear & Greed: 50 (Neutral)
+- Price: Above both MAs (Golden Cross), DI+ > DI- by 18
+- ADX: 42 (very strong trend)
+- RSI: 65 (strong momentum)
+- MACD: Bullish, expanding histogram
+- DVOL Percentile: 18 (very low — calm environment)
+- Funding Rate: +0.035% (healthy bullish — not overcrowded)
+- Wings Skew: -8 (calls premium — upside positioned)
+- Fear & Greed 7d avg: 70 (Greed)
 
 **Component Scores**:
-- Trend: 0.0 (mixed MA position, low ADX)
-- Volatility: 0.0 (normal vol)
-- Momentum: 0.0 (neutral RSI, flat MACD)
-- On-Chain: 0.0 (neutral funding, balanced P/C)
-- Sentiment: 0.0 (neutral F&G)
+- Trend: ~+70.0 (strong DI spread, golden cross, high ADX multiplier)
+- Volatility: +50.0 (low DVOL percentile + contango)
+- Momentum: ~+65.0 (RSI 60-70 range + bullish MACD)
+- On-Chain: ~+60.0 (healthy funding + calls premium)
+- Sentiment: +45.0 (Greed + BTC dominance context)
 
-**Composite Score**: 0.0
+**Approximate Composite Score**: +60+
 
-**Classification**: Sideways
-
-**Confidence**: 0% (all components neutral = high uncertainty)
-
----
-
-### Example 3: Strong Bullish Market
-
-**Input Data**:
-- Price: Above both MAs
-- Golden Cross: SMA50 > SMA200
-- ADX: 45 (very strong trend)
-- RSI: 65 (strong momentum, not overbought)
-- MACD: Bullish with positive histogram
-- ATR Percentile: 40 (normal volatility)
-- Funding Rate: +0.015% (longs dominant)
-- P/C Ratio: 0.45 (heavy call buying)
-- Fear & Greed: 70 (Greed)
-
-**Component Scores**:
-- Trend: +75.0 (golden cross with very strong ADX)
-- Volatility: 0.0 (normal vol)
-- Momentum: +90.0 (strong RSI + bullish MACD)
-- On-Chain: +70.0 (strong funding + heavy call bias)
-- Sentiment: +40.0 (greed)
-
-**Composite Score**: +70.5
-- Calculation: (75 × 0.30) + (0 × 0.10) + (90 × 0.25) + (70 × 0.20) + (40 × 0.15)
-- = 22.5 + 0.0 + 22.5 + 14.0 + 6.0 = **+70.5**
-
-**Classification**: Strong Bullish (score ≥ 60)
-
-**Confidence**: 80% (all components bullish or neutral, high alignment)
+**Classification**: Strong Bullish
 
 ---
 
@@ -960,40 +841,37 @@ REGIME_THRESHOLDS = {
 
 ### Common Issues
 
-#### 1. "No schema defined for endpoint"
+#### 1. Optimizer reports "Dataset too small"
+
+**Symptom**: Warning: "N detections available, minimum recommended is 30."
+
+**Cause**: The detection daemon hasn't been running long enough to accumulate sufficient historical data.
+
+**Solution**: Wait until 30+ detections are stored, then re-run. The detection runs each time a user triggers regime detection in the GUI, plus any automated schedule.
+
+---
+
+#### 2. Unicode encoding error on Windows
+
+**Error**:
+```
+UnicodeEncodeError: 'charmap' codec can't encode character '\u2192'
+```
+
+**Cause**: Windows console uses cp1252 encoding by default.
+
+**Solution**: Already fixed in the CLI script — `sys.stdout.reconfigure(encoding='utf-8')` is applied at startup.
+
+---
+
+#### 3. "No schema defined for endpoint"
 
 **Error**:
 ```
 ValueError: No schema defined for endpoint: /public/get_tradingview_chart_data
 ```
 
-**Cause**: Missing schema definition for TradingView endpoint.
-
 **Solution**: Ensure `coding/core/schemas/deribit_schemas.py` has `TRADINGVIEW_CHART_DATA` schema and is mapped in `get_schema_for_endpoint()`.
-
----
-
-#### 2. "Shape of passed values is (201, 1), indices imply (201, 6)"
-
-**Error**: OHLCV data format mismatch.
-
-**Cause**: Deribit API returns columnar format `{ticks: [...], open: [...]}` but calculator expects row format `[[timestamp, open, high, low, close, volume], ...]`.
-
-**Solution**: The service layer transforms columnar to row format. If error persists, check `RegimeDetectionService._fetch_ohlcv_data()` transformation logic.
-
----
-
-#### 3. "TypeError: unsupported format string passed to NoneType"
-
-**Error**: F-string formatting with None value.
-
-**Cause**: Attempting conditional formatting inside f-string: `f"{value:.2f if value else 'N/A'}"`.
-
-**Solution**: Separate string construction:
-```python
-value_str = f"{value:.2f}" if value is not None else "N/A"
-text = f"Value: {value_str}"
-```
 
 ---
 
@@ -1001,29 +879,18 @@ text = f"Value: {value_str}"
 
 **Symptom**: Confidence always very low (0-20%).
 
-**Cause**: Components are neutral or conflicting.
+**Explanation**: Expected when market is in consolidation (all components near zero) or components strongly disagree. Low confidence is a valid signal.
 
-**Explanation**: This is expected behavior when:
-- Market is in consolidation (all components near zero)
-- Components strongly disagree (some bullish, some bearish)
-- Data quality issues (missing metrics)
-
-**Solution**:
-- Check component scores individually
-- Verify data fetching (all APIs returning valid data)
-- Low confidence is a valid signal (uncertain market)
+Confidence is weighted net agreement — if only sentiment (10% weight) is bullish, confidence is 10% even if all other components are neutral.
 
 ---
 
 #### 5. Regime Detection Fails
 
-**Error**: "Regime detection failed: [error message]"
-
 **Troubleshooting Steps**:
 
 1. **Check API connectivity**:
    ```python
-   # Test Deribit connection
    with DeribitApiService() as api:
        ticker = api.get_ticker("BTC-PERPETUAL")
        print(ticker)
@@ -1037,31 +904,7 @@ text = f"Value: {value_str}"
    print(metrics)
    ```
 
-3. **Check data availability**:
-   - Ensure 200+ days of OHLCV data available
-   - Verify currency is supported (BTC or ETH only)
-
-4. **Check database connection**:
-   ```python
-   from coding.core.database.repository import DatabaseRepository
-   repo = DatabaseRepository()
-   # Should not raise error
-   ```
-
----
-
-#### 6. ATR Percentile Always 0 or 100
-
-**Symptom**: ATR percentile stuck at extreme values.
-
-**Cause**: Insufficient data points or calculation error.
-
-**Solution**:
-- Ensure at least 50 data points for meaningful percentiles
-- Check `TechnicalIndicatorCalculator` is using global rank:
-  ```python
-  df["atr_percentile"] = df["atr"].rank(pct=True) * 100
-  ```
+3. **Check data availability**: Ensure 200+ days of OHLCV data available.
 
 ---
 
@@ -1069,44 +912,9 @@ text = f"Value: {value_str}"
 
 #### Slow Detection (>5 seconds)
 
-**Causes**:
-1. External API timeouts (Alternative.me or CoinGecko)
-2. Large OHLCV dataset
-3. Network latency
+**Causes**: External API timeouts (Alternative.me or CoinGecko), large OHLCV dataset, network latency.
 
-**Solutions**:
-- Increase timeout values in external API classes
-- Use cached data for repeated detections
-- Run detection in background thread (GUI already does this)
-
----
-
-### Data Quality Issues
-
-#### Stale or Incorrect Data
-
-**Symptoms**:
-- Price doesn't match current market
-- Funding rate is outdated
-- P/C ratio seems wrong
-
-**Solutions**:
-
-1. **Check data freshness**:
-   - OHLCV data should be within 1 day of current time
-   - Funding rate should update every 8 hours
-   - P/C ratio should use current book summary
-
-2. **Verify data sources**:
-   - Deribit API status: https://status.deribit.com/
-   - Alternative.me API status: Check website
-   - CoinGecko API status: Check website
-
-3. **Clear cached data** (if caching is implemented):
-   ```python
-   # Force fresh data fetch
-   result = service.detect_regime('BTC')
-   ```
+**Solutions**: Increase timeout values in external API classes. The GUI already runs detection in a background thread.
 
 ---
 
@@ -1115,118 +923,44 @@ text = f"Value: {value_str}"
 ### Current Limitations
 
 1. **Supported Assets**: Only BTC and ETH
-   - Other assets would need:
-     - Sufficient OHLCV history
-     - Perpetual swap for funding rate
-     - Options market for P/C ratio
 
-2. **Timeframe**: Daily resolution only
-   - Designed for swing trading/position sizing
-   - Not suitable for intraday trading
+2. **Timeframe**: Daily resolution only — designed for swing trading/position sizing, not intraday
 
-3. **External Dependencies**: Requires 3 external APIs
-   - Deribit (critical)
-   - Alternative.me (can function without)
-   - CoinGecko (can function without)
+3. **External Dependencies**: Requires 3 external APIs (Deribit critical; others degrade gracefully)
 
-4. **Historical Context**: No backtesting framework
-   - Detections are point-in-time
-   - No historical accuracy tracking (yet)
+4. **Hand-tuned weights**: Weights are based on judgment, not backtested. Re-run the optimizer once 30+ detections are available.
 
-5. **Market Conditions**: Optimized for trending markets
-   - May give false signals in choppy consolidation
-   - Low confidence scores during uncertain periods
+5. **DVOL sub-signals**: `dvol_term_structure_ratio` and `vrp_percentage` require additional data fetching in the service layer. If unavailable, those sub-signals score 0 and the volatility component relies only on `dvol_percentile`.
 
 ### Best Practices
 
-1. **Don't rely on a single detection**:
-   - Run multiple detections over days
-   - Look for regime persistence
-   - Consider confidence levels
+1. **Don't rely on a single detection** — run multiple detections over days, look for regime persistence
 
-2. **Combine with other analysis**:
-   - Use regime as context, not sole decision factor
-   - Consider fundamental analysis
-   - Check on-chain metrics directly
+2. **Check confidence levels** — high confidence means clear alignment, low confidence means uncertain market
 
-3. **Understand the components**:
-   - Know what each component measures
-   - Identify which components matter most for your strategy
-   - Check component scores individually, not just composite
+3. **Combine with other analysis** — use regime as context, not sole decision factor
 
-4. **Monitor confidence**:
-   - High confidence = clear market direction
-   - Low confidence = wait for clarity
-   - Don't trade on low-confidence signals
+4. **Re-run optimizer periodically** — as more detections accumulate, re-run to validate weights
 
-5. **Adapt to market evolution**:
-   - Thresholds may need adjustment over time
-   - Market regimes can change rapidly
-   - Extreme events may break the model
+5. **Adapt to market evolution** — extreme events may break the model; monitor and recalibrate
 
 ---
 
 ## Future Enhancements
 
-### Potential Improvements
-
-1. **Volatility-Trend Interaction**:
-   - High volatility in bull market ≠ high volatility in bear market
-   - Context-aware volatility scoring
-
-2. **Machine Learning Integration**:
-   - Train model on historical regime transitions
-   - Predict regime changes before they happen
-   - Adaptive weight adjustment
-
-3. **More Assets**:
-   - Add SOL, ADA, DOT if data available
-   - Unified "crypto market regime"
-   - Individual asset regime vs market regime
-
-4. **Backtesting Framework**:
-   - Historical regime accuracy tracking
-   - Performance metrics by regime
-   - Regime transition analysis
-
-5. **Alerts and Notifications**:
-   - Regime change alerts
-   - Confidence threshold alerts
-   - Component divergence warnings
-
-6. **Advanced Sentiment**:
-   - Social media sentiment (Twitter, Reddit)
-   - News sentiment analysis
-   - Whale transaction monitoring
-
----
-
-## Conclusion
-
-The Market Regime Detection System provides a comprehensive, multi-factor approach to classifying cryptocurrency market conditions. By combining technical analysis, on-chain metrics, and sentiment indicators, it offers a robust framework for understanding the current market state.
-
-**Key Takeaways**:
-- 5 components with 30/25/20/15/10 weighting
-- Composite score from -100 to +100
-- 5 regime classifications (Strong Bullish → Strong Bearish)
-- Confidence scoring based on component alignment
-- Real-time detection with detailed reasoning
-
-**Use Cases**:
-- Position sizing (increase exposure in bullish regimes)
-- Risk management (reduce exposure in bearish regimes)
-- Strategy selection (trend-following vs mean-reversion)
-- Market context for trading decisions
-
-**Remember**: This is a tool for market analysis, not a trading signal. Always combine with fundamental analysis, risk management, and your own judgment.
+1. **Data-validated weights**: Once 30+ detections exist, apply optimizer results if they show meaningful improvement
+2. **Automated optimizer scheduling**: Run optimizer on a schedule (e.g., monthly) as DB fills up
+3. **More assets**: Add SOL if sufficient Deribit options/perp data available
+4. **Alerts**: Regime change notifications with confidence threshold filtering
+5. **Advanced sentiment**: Social media / news sentiment integration
 
 ---
 
 ## References
 
 ### Internal Documentation
-- `GUI_DOCUMENTATION.md` - GUI usage guide
-- `database_tab_on_chain_analysis.md` - On-chain analysis details
+- `GUI_DOCUMENTATION.md` — GUI usage guide
+- `database_tab_on_chain_analysis.md` — On-chain analysis details
 
 ### External Resources
 - Deribit API: https://docs.deribit.com/
@@ -1235,14 +969,14 @@ The Market Regime Detection System provides a comprehensive, multi-factor approa
 - pandas-ta Documentation: https://github.com/twopirllc/pandas-ta
 
 ### Academic References
-- Moving Average Crossovers: Classic technical analysis
-- RSI/MACD: Wilder, J. Welles (1978). "New Concepts in Technical Trading Systems"
-- ATR/ADX: Wilder, J. Welles (1978)
+- ADX/DI+/DI-: Wilder, J. Welles (1978). "New Concepts in Technical Trading Systems"
+- RSI/MACD: Wilder (1978)
 - Funding Rates: Perpetual swap mechanics (BitMEX whitepaper)
 - Fear & Greed Index: CNN Fear & Greed Index adapted for crypto
+- Volatility Risk Premium: Standard options pricing literature
 
 ---
 
-**Version**: 1.0
-**Last Updated**: 2026-01-25
+**Version**: 2.0
+**Last Updated**: 2026-03-13
 **Maintained By**: Options Trading Platform Team
