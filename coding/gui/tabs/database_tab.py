@@ -117,6 +117,7 @@ class CaptureTile(QFrame):
         """
         super().__init__(parent)
         self.capture_type = capture_type
+        self._capture_start_time: Optional[datetime] = None
         self._setup_ui(title, description)
 
     def _setup_ui(self, title: str, description: str) -> None:
@@ -157,6 +158,11 @@ class CaptureTile(QFrame):
         self.last_captured_label = QLabel("Last: —")
         self.last_captured_label.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 10px;")
         layout.addWidget(self.last_captured_label)
+
+        # Last run label
+        self.last_run_label = QLabel("Last Run: —")
+        self.last_run_label.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 10px;")
+        layout.addWidget(self.last_run_label)
 
         layout.addStretch()
 
@@ -202,6 +208,7 @@ class CaptureTile(QFrame):
         """Set tile to capturing state."""
         self.capture_btn.setEnabled(not capturing)
         if capturing:
+            self._capture_start_time = datetime.now()
             self.status_label.setText("Capturing...")
             self.status_label.setStyleSheet(f"color: {Colors.WARNING}; font-size: 11px;")
             self.chart_label.setText("")
@@ -210,7 +217,7 @@ class CaptureTile(QFrame):
 
     def set_success(self, count: int, chart_count: int = 0) -> None:
         """Set success status."""
-        self.status_label.setText(f"Captured {count} records")
+        self.status_label.setText(f"Saved {count} records to DB")
         self.status_label.setStyleSheet(f"color: {Colors.SUCCESS}; font-size: 11px;")
 
         if chart_count > 0:
@@ -220,19 +227,39 @@ class CaptureTile(QFrame):
             self.chart_label.setText("Need more data for charts")
             self.chart_label.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 10px;")
 
+        self._update_last_run_label()
+
     def set_error(self, message: str) -> None:
         """Set error status."""
         truncated = "\n".join(message.splitlines()[:3])
         self.status_label.setText(f"Error: {truncated}")
         self.status_label.setStyleSheet(f"color: {Colors.ERROR}; font-size: 11px;")
         self.chart_label.setText("")
+        self._update_last_run_label()
 
     def set_last_captured(self, dt: Optional[datetime]) -> None:
         """Update the last captured timestamp label."""
         if dt is None:
             self.last_captured_label.setText("Last: Never")
         else:
-            self.last_captured_label.setText(f"Last: {dt.strftime('%H:%M')}")
+            self.last_captured_label.setText(f"Last: {dt.strftime('%d.%m.%Y %H:%M')}")
+
+    def _update_last_run_label(self) -> None:
+        """Update the last run label with current time and elapsed duration."""
+        now = datetime.now()
+        time_str = now.strftime("%d.%m.%Y | %H:%M")
+        if self._capture_start_time is not None:
+            elapsed = (now - self._capture_start_time).total_seconds()
+            if elapsed < 60:
+                duration_str = f"{int(elapsed)}s"
+            else:
+                mins = int(elapsed // 60)
+                secs = int(elapsed % 60)
+                duration_str = f"{mins}m {secs}s" if secs else f"{mins}m"
+            self.last_run_label.setText(f"Last Run: {time_str} | for {duration_str}")
+        else:
+            self.last_run_label.setText(f"Last Run: {time_str}")
+        self.last_run_label.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 10px;")
 
 
 class DatabaseTab(QWidget):
@@ -601,7 +628,7 @@ class DatabaseTab(QWidget):
         """Handle successful capture."""
         self.tiles[capture_type].set_capturing(False)
         self.tiles[capture_type].set_success(count, len(chart_paths))
-        self.log_viewer.log_info(f"{capture_type} capture complete: {count} records saved")
+        self.log_viewer.log_info(f"{capture_type}: saved {count} records to DB")
 
         if chart_paths:
             self.log_viewer.log_info(f"Generated {len(chart_paths)} chart(s):")
