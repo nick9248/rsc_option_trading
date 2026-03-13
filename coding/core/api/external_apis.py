@@ -271,6 +271,7 @@ class ExternalMetricsFetcher:
         metrics = {
             "timestamp": int(time.time()),
             "fear_greed": None,
+            "fear_greed_7d_avg": None,
             "btc_dominance": None,
             "eth_dominance": None,
             "market_cap_change_24h": None,
@@ -280,6 +281,16 @@ class ExternalMetricsFetcher:
         fear_greed_data = self.fear_greed.get_latest()
         if fear_greed_data:
             metrics["fear_greed"] = fear_greed_data
+
+        # 7-day smoothed F&G average
+        try:
+            fear_greed_history = self.fear_greed.get_historical(limit=7)
+            if fear_greed_history and len(fear_greed_history) > 0:
+                values = [entry["value"] for entry in fear_greed_history if entry.get("value") is not None]
+                if values:
+                    metrics["fear_greed_7d_avg"] = sum(values) / len(values)
+        except Exception as e:
+            logger.warning(f"Failed to fetch F&G 7-day history: {e}")
 
         # Fetch CoinGecko global data
         global_data = self.coingecko.get_global_market_data()

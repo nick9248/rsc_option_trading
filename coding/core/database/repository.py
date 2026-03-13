@@ -1753,6 +1753,37 @@ class DatabaseRepository:
             ]
             return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
+    def get_ohlcv_by_date_range(
+        self,
+        currency: str,
+        start: datetime,
+        end: datetime
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieve OHLCV candles for a currency's perpetual instrument within a date range.
+
+        Queries ohlcv_history filtered by instrument_name = '{currency}-PERPETUAL'
+        and date BETWEEN start AND end. Both start and end are timezone-naive UTC datetimes.
+
+        Args:
+            currency: Currency symbol (e.g., "BTC", "ETH").
+            start: Start of date range (timezone-naive UTC).
+            end: End of date range (timezone-naive UTC).
+
+        Returns:
+            List of dicts with {"date": datetime, "close": float}, ordered by date ASC.
+        """
+        instrument_name = f"{currency}-PERPETUAL"
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                SELECT date, close
+                FROM ohlcv_history
+                WHERE instrument_name = %s
+                  AND date BETWEEN %s AND %s
+                ORDER BY date ASC
+            """, (instrument_name, start, end))
+            return [{"date": row[0], "close": float(row[1])} for row in cursor.fetchall()]
+
     def get_atm_iv_history(
         self,
         currency: str,

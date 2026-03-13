@@ -110,6 +110,17 @@ class RegimeDetectionService:
                 return {"error": "Failed to calculate indicators"}
 
             latest_indicators = self.indicator_calculator.get_latest_indicators(indicators_df)
+
+            # Compute velocity indicators (rate-of-change signals)
+            velocity_indicators = self.indicator_calculator.get_velocity_indicators(
+                indicators_df, lookback=5
+            )
+            logger.info(
+                f"Velocity: EMA={velocity_indicators.get('ema_50_velocity', 'N/A')}, "
+                f"RSI={velocity_indicators.get('rsi_velocity', 'N/A')}, "
+                f"Hist={velocity_indicators.get('macd_histogram_velocity', 'N/A')}"
+            )
+
             current_price = latest_indicators.get("close")
 
             if not current_price:
@@ -131,7 +142,7 @@ class RegimeDetectionService:
 
             # Step 3: Get on-chain metrics
             logger.info("Fetching on-chain metrics")
-            onchain_metrics = self._get_onchain_metrics(currency)
+            onchain_metrics = self._get_onchain_metrics(currency, ohlcv_data=ohlcv_data)
 
             # Step 4: Get external sentiment metrics
             logger.info("Fetching external sentiment metrics")
@@ -160,7 +171,9 @@ class RegimeDetectionService:
                 technical_indicators=latest_indicators,
                 onchain_metrics=onchain_metrics,
                 external_metrics=external_metrics,
-                current_price=current_price
+                current_price=current_price,
+                velocity_indicators=velocity_indicators,
+                currency=currency,
             )
 
             # Step 6: Build comprehensive result
@@ -205,7 +218,7 @@ class RegimeDetectionService:
             logger.error(f"Regime detection failed: {e}", exc_info=True)
             return {"error": str(e)}
 
-    def _get_onchain_metrics(self, currency: str) -> Dict:
+    def _get_onchain_metrics(self, currency: str, ohlcv_data: list = None) -> Dict:
         """
         Get on-chain metrics for regime detection.
 
@@ -226,8 +239,7 @@ class RegimeDetectionService:
                 # Funding rate (8h)
                 funding_8h = ticker.get("funding_8h")
                 if funding_8h is not None:
-                    # Convert from percentage to decimal
-                    metrics["funding_rate"] = funding_8h / 100
+                    metrics["funding_rate"] = funding_8h  # Raw % — detector thresholds match this unit
                     logger.info(f"Funding rate: {funding_8h:.4f}%")
 
                     # Save funding rate to database
@@ -275,6 +287,43 @@ class RegimeDetectionService:
                         metrics["dvol"] = dvol_value
                         logger.info(f"DVOL: {dvol_value:.2f}")
 
+                        # --- DVOL Percentile (30-day rolling hourly) ---
+                        try:
+                            all_dvol_closes = [row[4] for row in dvol_result["data"] if len(row) >= 5]
+                            if all_dvol_closes and dvol_value is not None:
+                                below_count = sum(1 for v in all_dvol_closes if v < dvol_value)
+                                metrics["dvol_percentile"] = (below_count / len(all_dvol_closes)) * 100
+                                logger.info(f"DVOL percentile: {metrics['dvol_percentile']:.1f}%")
+
+                            # --- DVOL Term Structure Ratio (current / 30d avg) ---
+                            if all_dvol_closes and dvol_value is not None and len(all_dvol_closes) > 1:
+                                dvol_avg = sum(all_dvol_closes) / len(all_dvol_closes)
+                                if dvol_avg > 0:
+                                    metrics["dvol_term_structure_ratio"] = dvol_value / dvol_avg
+                                    logger.info(f"DVOL term structure ratio: {metrics['dvol_term_structure_ratio']:.3f}")
+                        except Exception as e:
+                            logger.warning(f"Failed to compute DVOL metrics: {e}")
+
+                        # --- VRP Signal ---
+                        try:
+                            if dvol_value is not None and ohlcv_data:
+                                from coding.core.analytics.vrp_calculator import VRPCalculator
+                                vrp_calc = VRPCalculator(currency=currency, lookback_days=30)
+                                price_history = [
+                                    {"timestamp": row[0] / 1000, "close": row[4]}
+                                    for row in ohlcv_data if len(row) >= 5
+                                ]
+                                rv_30d = vrp_calc.calculate_realized_volatility(price_history, window_days=30)
+                                if rv_30d > 0:
+                                    vrp_result = vrp_calc.calculate_vrp(
+                                        implied_vol=dvol_value / 100,  # DVOL is in %, VRPCalculator expects decimal
+                                        realized_vol=rv_30d,
+                                    )
+                                    metrics["vrp_percentage"] = vrp_result.get("vrp_percentage", 0.0)
+                                    logger.info(f"VRP: {metrics['vrp_percentage']:.1f}%")
+                        except Exception as e:
+                            logger.warning(f"Failed to compute VRP: {e}")
+
                         # Save DVOL to database
                         try:
                             self.repository.save_dvol(
@@ -297,6 +346,133 @@ class RegimeDetectionService:
                 )
 
                 if book_summary:
+                    # --- Wings Skew (OTM put IV minus OTM call IV, nearest expiry DTE 7-45) ---
+                    try:
+                        from datetime import timezone
+
+                        def parse_deribit_expiry(instrument_name: str):
+                            """Extract expiry datetime from instrument name like BTC-28MAR25-80000-C."""
+                            parts = instrument_name.split("-")
+                            if len(parts) < 2:
+                                return None
+                            exp_str = parts[1]  # e.g. "28MAR25"
+                            try:
+                                return datetime.strptime(exp_str, "%d%b%y").replace(tzinfo=timezone.utc)
+                            except ValueError:
+                                return None
+
+                        now_utc = datetime.now(timezone.utc)
+                        spot = None
+                        for item in book_summary:
+                            if item.get("underlying_price"):
+                                spot = item["underlying_price"]
+                                break
+
+                        if spot and spot > 0:
+                            expiry_dte: dict = {}
+                            for item in book_summary:
+                                name = item.get("instrument_name", "")
+                                exp_dt = parse_deribit_expiry(name)
+                                if exp_dt:
+                                    dte = (exp_dt - now_utc).days
+                                    exp_key = name.split("-")[1]
+                                    if exp_key not in expiry_dte:
+                                        expiry_dte[exp_key] = dte
+
+                            valid_expiries = {k: v for k, v in expiry_dte.items() if 7 <= v <= 45}
+
+                            if valid_expiries:
+                                nearest_expiry = min(valid_expiries, key=lambda k: valid_expiries[k])
+
+                                otm_put_ivs = []
+                                otm_call_ivs = []
+                                lower_put = spot * 0.90
+                                upper_put = spot * 0.97
+                                lower_call = spot * 1.03
+                                upper_call = spot * 1.10
+
+                                for item in book_summary:
+                                    name = item.get("instrument_name", "")
+                                    parts = name.split("-")
+                                    if len(parts) < 4:
+                                        continue
+                                    if parts[1] != nearest_expiry:
+                                        continue
+                                    mark_iv = item.get("mark_iv")
+                                    if not mark_iv or mark_iv <= 0:
+                                        continue
+                                    try:
+                                        strike = float(parts[2])
+                                    except ValueError:
+                                        continue
+                                    opt_type = parts[3]
+
+                                    if opt_type == "P" and lower_put <= strike <= upper_put:
+                                        otm_put_ivs.append(mark_iv)
+                                    elif opt_type == "C" and lower_call <= strike <= upper_call:
+                                        otm_call_ivs.append(mark_iv)
+
+                                if otm_put_ivs and otm_call_ivs:
+                                    avg_put_iv = sum(otm_put_ivs) / len(otm_put_ivs)
+                                    avg_call_iv = sum(otm_call_ivs) / len(otm_call_ivs)
+                                    wings_skew = avg_put_iv - avg_call_iv
+                                    metrics["wings_skew"] = wings_skew
+                                    logger.info(
+                                        f"Wings skew: {wings_skew:.2f}pp "
+                                        f"(puts: {avg_put_iv:.1f}%, calls: {avg_call_iv:.1f}%)"
+                                    )
+                    except Exception as e:
+                        logger.warning(f"Failed to compute wings skew: {e}")
+
+                    # --- OI Direction (compare total OI to previous detection >= 4h ago) ---
+                    try:
+                        total_oi_current = sum(
+                            item.get("open_interest", 0) for item in book_summary
+                            if item.get("open_interest") is not None
+                        )
+                        metrics["total_oi"] = total_oi_current
+
+                        cutoff = datetime.now() - timedelta(hours=4)
+                        try:
+                            history = self.repository.get_regime_detections(
+                                currency=currency,
+                                start_time=datetime.now() - timedelta(days=7),
+                                end_time=cutoff,
+                            )
+                            if history:
+                                prev = history[-1]
+                                prev_data = prev.get("regime_data", {}) if isinstance(prev, dict) else {}
+                                prev_oi = prev_data.get("onchain_metrics", {}).get("total_oi")
+                                prev_price = prev_data.get("current_price")
+                                current_price_for_oi = metrics.get("index_price")
+
+                                if prev_oi and prev_oi > 0 and prev_price and current_price_for_oi:
+                                    oi_change_pct = (total_oi_current - prev_oi) / prev_oi * 100
+                                    price_up = current_price_for_oi > prev_price
+                                    oi_rising = oi_change_pct > 2
+                                    oi_falling = oi_change_pct < -2
+
+                                    if price_up and oi_rising:
+                                        metrics["oi_direction"] = 20
+                                    elif price_up and oi_falling:
+                                        metrics["oi_direction"] = 10
+                                    elif not price_up and oi_rising:
+                                        metrics["oi_direction"] = -20
+                                    elif not price_up and oi_falling:
+                                        metrics["oi_direction"] = -10
+                                    else:
+                                        metrics["oi_direction"] = 0
+
+                                    logger.info(
+                                        f"OI direction: {metrics['oi_direction']} "
+                                        f"(OI change: {oi_change_pct:.1f}%, price_up={price_up})"
+                                    )
+                        except Exception as db_error:
+                            logger.warning(f"Could not fetch previous OI from DB: {db_error}")
+                            metrics["oi_direction"] = 0
+                    except Exception as e:
+                        logger.warning(f"Failed to compute OI direction: {e}")
+
                     from coding.core.analytics.on_chain_analyzer import OnChainAnalyzer
 
                     analyzer = OnChainAnalyzer(book_summary, currency)
