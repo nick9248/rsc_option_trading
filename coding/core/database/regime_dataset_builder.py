@@ -1,6 +1,6 @@
 import logging
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -53,7 +53,7 @@ class RegimeDatasetBuilder:
         raw = self._repo.get_regime_detections(
             currency,
             start_time=DATASET_START_DATE,
-            end_time=datetime.now(),
+            end_time=datetime.now(timezone.utc).replace(tzinfo=None),  # naive UTC
         )
         if not raw:
             logger.warning(f"No regime detections found for {currency}")
