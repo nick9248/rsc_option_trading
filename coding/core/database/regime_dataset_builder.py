@@ -22,6 +22,7 @@ LONG_HORIZONS = {
 ALL_HORIZONS = {**SHORT_HORIZONS, **LONG_HORIZONS}
 COVERAGE_WARN_THRESHOLD = 20
 DATASET_MIN_ROWS = 30
+DATASET_START_DATE = datetime(2020, 1, 1)
 
 
 class RegimeDatasetBuilder:
@@ -30,7 +31,12 @@ class RegimeDatasetBuilder:
     All DB access is read-only. All datetimes are timezone-naive UTC.
     """
 
-    def __init__(self, repository):
+    def __init__(self, repository) -> None:
+        """
+        Args:
+            repository: Must provide get_regime_detections(currency, start_time, end_time)
+                        and get_ohlcv_by_date_range(currency, start, end).
+        """
         self._repo = repository
 
     def build(self, currency: str = "BTC") -> pd.DataFrame:
@@ -46,7 +52,7 @@ class RegimeDatasetBuilder:
         """
         raw = self._repo.get_regime_detections(
             currency,
-            start_time=datetime(2020, 1, 1),
+            start_time=DATASET_START_DATE,
             end_time=datetime.now(),
         )
         if not raw:
@@ -118,7 +124,7 @@ class RegimeDatasetBuilder:
 
         candidates = [
             r for r in sorted_records
-            if r["currency"] == currency
+            if r["currency"] == currency  # guard: only match same-currency rows
             and r["detected_at"] != T
             and window_start <= r["detected_at"] <= window_end
             and r.get("current_price")
