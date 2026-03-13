@@ -6,7 +6,7 @@ Combines multiple market metrics to classify the current market regime:
 """
 
 import logging
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -20,27 +20,28 @@ class MarketRegimeDetector:
     """
 
     # Component weights (must sum to 1.0)
-    # Adjusted based on analysis: increased sentiment, decreased volatility
+    # Order: trend, volatility, momentum, onchain, sentiment
     WEIGHTS = {
-        "trend": 0.30,
-        "volatility": 0.10,
-        "momentum": 0.25,
-        "onchain": 0.20,
-        "sentiment": 0.15,
+        "trend":      0.30,
+        "volatility": 0.15,
+        "momentum":   0.20,
+        "onchain":    0.25,
+        "sentiment":  0.10,
     }
+    # Ordered list matching detect_regime scoring order (used by _calculate_confidence)
+    WEIGHTS_LIST = [0.30, 0.15, 0.20, 0.25, 0.10]
 
-    # Regime thresholds (based on composite score -100 to +100)
-    # Narrowed "Sideways" range to prevent misclassification during strong trends
+    # Regime thresholds — symmetric around 0
+    # Half-open intervals: lower bound inclusive, upper bound exclusive
     REGIME_THRESHOLDS = {
-        "Strong Bullish": 60,
-        "Weak Bullish": 30,
-        "Sideways": -15,  # Narrowed from -30 to -15
-        "Weak Bearish": -60,
-        "Strong Bearish": -100,
+        "Strong Bullish": 55,   # composite >= 55
+        "Weak Bullish":   20,   # 20 <= composite < 55
+        "Sideways":      -20,   # -20 <= composite < 20
+        "Weak Bearish":  -55,   # -55 <= composite < -20
+        "Strong Bearish": -100, # composite < -55
     }
 
-    # ADX threshold for trend detection
-    # If ADX > this value, market is trending (never classify as sideways)
+    # ADX threshold for trend override in classifier
     ADX_TREND_THRESHOLD = 25
 
     def __init__(self):
@@ -52,44 +53,50 @@ class MarketRegimeDetector:
         technical_indicators: Dict,
         onchain_metrics: Dict,
         external_metrics: Dict,
-        current_price: float
+        current_price: float,
+        velocity_indicators: Optional[Dict] = None,
+        currency: str = "BTC",
     ) -> Dict:
         """
         Detect current market regime.
 
         Args:
             technical_indicators: Dict with SMA, EMA, ADX, ATR, RSI, MACD values.
-            onchain_metrics: Dict with funding_rate, put_call_ratio, oi_trend.
-            external_metrics: Dict with fear_greed, btc_dominance.
+            onchain_metrics: Dict with funding_rate, wings_skew, oi_direction, dvol metrics.
+            external_metrics: Dict with fear_greed, btc_dominance, market_cap_change_24h.
             current_price: Current underlying price.
+            velocity_indicators: Optional dict with ema_50_velocity, rsi_velocity, macd_histogram_velocity.
+            currency: Currency being analyzed (BTC or ETH) — affects sentiment scoring.
 
         Returns:
             Dict with regime classification, scores, confidence, and reasoning.
         """
         # Calculate component scores
-        trend_score = self._score_trend_component(technical_indicators, current_price)
-        volatility_score = self._score_volatility_component(technical_indicators, onchain_metrics)
-        momentum_score = self._score_momentum_component(technical_indicators)
+        trend_score = self._score_trend_component(
+            technical_indicators, current_price, velocity=velocity_indicators
+        )
+        volatility_score = self._score_volatility_component(
+            technical_indicators, onchain_metrics
+        )
+        momentum_score = self._score_momentum_component(
+            technical_indicators, velocity=velocity_indicators
+        )
         onchain_score = self._score_onchain_component(onchain_metrics)
 
-        # Context-aware sentiment scoring
-        # Pass trend strength (ADX) to avoid contrarian logic during strong trends
         sentiment_score = self._score_sentiment_component(
             external_metrics,
+            currency=currency,
             adx=technical_indicators.get("adx"),
-            composite_trend=trend_score
+            composite_trend=trend_score,
         )
 
         # Defensive check: Ensure all scores are valid numbers (not None)
-        # This should never happen since scoring functions return 0.0 by default,
-        # but guard against edge cases
         if any(score is None for score in [trend_score, volatility_score, momentum_score, onchain_score, sentiment_score]):
             logger.error(
                 f"One or more component scores is None: trend={trend_score}, "
                 f"vol={volatility_score}, mom={momentum_score}, "
                 f"onchain={onchain_score}, sentiment={sentiment_score}"
             )
-            # Use 0.0 for any None values
             trend_score = trend_score if trend_score is not None else 0.0
             volatility_score = volatility_score if volatility_score is not None else 0.0
             momentum_score = momentum_score if momentum_score is not None else 0.0
@@ -108,7 +115,9 @@ class MarketRegimeDetector:
         # Classify regime with ADX override
         regime = self._classify_regime(
             composite_score,
-            adx=technical_indicators.get("adx")
+            adx=technical_indicators.get("adx"),
+            plus_di=technical_indicators.get("plus_di"),
+            minus_di=technical_indicators.get("minus_di"),
         )
 
         # Calculate confidence (based on alignment of components)
@@ -135,7 +144,6 @@ class MarketRegimeDetector:
             "reasoning": reasoning,
         }
 
-        # Safe formatting for logging
         composite_str = f"{composite_score:.1f}" if composite_score is not None else "N/A"
         confidence_str = f"{confidence:.1f}" if confidence is not None else "N/A"
         logger.info(
@@ -145,301 +153,352 @@ class MarketRegimeDetector:
 
         return result
 
-    def _score_trend_component(self, indicators: Dict, current_price: float) -> float:
+    def _score_trend_component(
+        self,
+        indicators: Dict,
+        current_price: float,
+        velocity: Optional[Dict] = None,
+    ) -> float:
         """
         Score the trend component (-100 to +100).
 
-        Considers:
-        - Price position relative to moving averages
-        - MA slope/alignment (golden/death cross)
-        - ADX strength
+        Step 1: DI directional signal (uses plus_di / minus_di)
+        Step 2: MA structure (4 states: uptrend, pullback, downtrend, bounce)
+        Step 3: ADX strength multiplier (applied to Steps 1+2 sum)
+        Step 4: EMA velocity (added after multiplier, not ADX-scaled — intentional)
         """
         score = 0.0
         sma_50 = indicators.get("sma_50")
         sma_200 = indicators.get("sma_200")
         adx = indicators.get("adx")
+        plus_di = indicators.get("plus_di")
+        minus_di = indicators.get("minus_di")
 
-        # MA position (50% of trend score)
-        if sma_50 and sma_200:
-            # Price above both MAs = bullish
-            if current_price > sma_50 and current_price > sma_200:
-                score += 30
-            # Price below both MAs = bearish
-            elif current_price < sma_50 and current_price < sma_200:
-                score -= 30
-            # Mixed = neutral
-            else:
+        # Step 1: DI directional signal
+        if plus_di is not None and minus_di is not None:
+            di_spread = plus_di - minus_di
+            if di_spread > 15:
+                score += 35
+            elif di_spread > 5:
+                score += 20
+            elif di_spread > -5:
                 score += 0
+            elif di_spread > -15:
+                score -= 20
+            else:
+                score -= 35
 
-            # MA alignment (golden cross = bullish, death cross = bearish)
-            if sma_50 > sma_200:
-                score += 20  # Golden cross structure
-            elif sma_50 < sma_200:
-                score -= 20  # Death cross structure
+        # Step 2: MA structure (4 states)
+        if sma_50 is not None and sma_200 is not None:
+            if current_price > sma_50 and sma_50 > sma_200:
+                score += 20  # Clean uptrend
+            elif sma_50 > sma_200 and current_price < sma_50:
+                score += 10  # Pullback in uptrend
+            elif current_price < sma_50 and sma_50 < sma_200:
+                score -= 20  # Clean downtrend
+            elif sma_50 < sma_200 and current_price > sma_50:
+                score -= 10  # Bounce in downtrend
 
-        # ADX strength multiplier (50% of trend score)
-        # Strong trend amplifies the signal, weak trend dampens it
-        if adx:
+        # Step 3: ADX strength multiplier (FIXED — actually applied now)
+        if adx is not None:
             if adx > 40:
-                # Very strong trend - amplify score
-                multiplier = 1.5
+                multiplier = 1.4
             elif adx > 25:
-                # Strong trend
                 multiplier = 1.0
             elif adx > 20:
-                # Weak trend - dampen score
-                multiplier = 0.5
+                multiplier = 0.6
             else:
-                # No trend - heavily dampen
-                multiplier = 0.2
-                score = score * multiplier
+                multiplier = 0.3
+            score = score * multiplier
         else:
-            # No ADX data, use moderate multiplier
-            score = score * 0.7
+            score = score * 0.7  # Missing ADX — moderate dampening
 
-        # Cap at -100 to +100
-        return max(-100, min(100, score))
+        # Step 4: EMA velocity (added after multiplier, not ADX-scaled — intentional)
+        if velocity:
+            ema_vel = velocity.get("ema_50_velocity")
+            if ema_vel is not None:
+                if ema_vel > 0.2:
+                    score += 10
+                elif ema_vel < -0.2:
+                    score -= 10
+
+        return max(-100.0, min(100.0, score))
 
     def _score_volatility_component(self, indicators: Dict, onchain: Dict) -> float:
         """
         Score the volatility component (-100 to +100).
 
-        High volatility indicates fear/uncertainty (bearish).
-        Low/normal volatility is neutral (complacency or stable).
+        Uses DVOL-based signals instead of ATR percentile alone:
+        - DVOL 30-day rolling percentile (50% documentary weight)
+        - DVOL term structure ratio: current / 30d_avg (30% documentary weight)
+        - VRP signal: IV vs realized vol (20% documentary weight)
+
+        Low DVOL + cheap options = bullish regime precursor.
+        High DVOL + backwardation = fear/crisis = bearish.
         """
         score = 0.0
-        atr_percentile = indicators.get("atr_percentile")
 
-        if atr_percentile is not None:
-            # LOW volatility (< 25th percentile) = neutral (complacency, no conviction)
-            if atr_percentile < 25:
+        # Sub-signal 1: DVOL 30-day rolling percentile
+        dvol_percentile = onchain.get("dvol_percentile")
+        if dvol_percentile is not None:
+            if dvol_percentile < 20:
+                score += 40
+            elif dvol_percentile < 40:
+                score += 20
+            elif dvol_percentile < 60:
                 score += 0
-            # NORMAL volatility (25-75th) = neutral
-            elif atr_percentile < 75:
-                score += 0
-            # EXTREME volatility (> 75th) = bearish (fear/uncertainty)
+            elif dvol_percentile < 80:
+                score -= 20
             else:
-                score -= 30
+                score -= 40
 
-        # DVOL consideration (if available in onchain metrics)
-        dvol = onchain.get("dvol")
-        if dvol:
-            # High DVOL = uncertainty
-            if dvol > 80:
-                score -= 10
-            elif dvol < 40:
+        # Sub-signal 2: DVOL term structure ratio (current / 30d_avg)
+        dvol_term_ratio = onchain.get("dvol_term_structure_ratio")
+        if dvol_term_ratio is not None:
+            if dvol_term_ratio < 0.80:
+                score += 20   # Contango — near vol cheap, calm
+            elif dvol_term_ratio < 0.95:
                 score += 10
+            elif dvol_term_ratio < 1.10:
+                score += 0    # Flat
+            elif dvol_term_ratio < 1.25:
+                score -= 15   # Mild backwardation — near-term fear
+            else:
+                score -= 25   # Steep backwardation — crisis premium
 
-        return max(-100, min(100, score))
+        # Sub-signal 3: VRP signal (vrp_percentage = (IV - RV) / RV * 100)
+        vrp_percentage = onchain.get("vrp_percentage")
+        if vrp_percentage is not None:
+            if vrp_percentage > 20:
+                score -= 20   # Options very expensive — hedgers paying up
+            elif vrp_percentage > 5:
+                score -= 10
+            elif vrp_percentage > -5:
+                score += 0    # Fair pricing
+            elif vrp_percentage > -20:
+                score += 10   # Cheap options — complacency — bullish
+            else:
+                score += 20   # Extreme complacency — pre-run environment
 
-    def _score_momentum_component(self, indicators: Dict) -> float:
+        # Alignment bonus: all 3 DVOL signals firing in same direction amplifies conviction
+        # Low DVOL + contango + cheap options = strong regime precursor → +20 bonus
+        # High DVOL + backwardation + expensive options = crisis confirmation → -20 bonus
+        if dvol_percentile is not None and dvol_term_ratio is not None and vrp_percentage is not None:
+            all_bullish = dvol_percentile < 20 and dvol_term_ratio < 0.80 and vrp_percentage < -20
+            all_bearish = dvol_percentile > 80 and dvol_term_ratio > 1.25 and vrp_percentage > 20
+            if all_bullish:
+                score += 20
+            elif all_bearish:
+                score -= 20
+
+        return max(-100.0, min(100.0, score))
+
+    def _score_momentum_component(
+        self,
+        indicators: Dict,
+        velocity: Optional[Dict] = None,
+    ) -> float:
         """
         Score the momentum component (-100 to +100).
 
-        Considers RSI, MACD, and price momentum.
+        RSI (50% documentary): level + 5-day velocity.
+        MACD (50% documentary): crossover + histogram MAGNITUDE velocity.
+
+        Key fix: histogram magnitude velocity is independent of crossover direction.
+        Previously both were 100% correlated; now MACD can contribute +25/-15 = +10,
+        not just forced ±50.
         """
         score = 0.0
         rsi = indicators.get("rsi")
         macd = indicators.get("macd")
         macd_signal = indicators.get("macd_signal")
-        macd_histogram = indicators.get("macd_histogram")
 
-        # RSI scoring (50% of momentum score)
+        # Sub-signal 1: RSI level
         if rsi is not None:
             if rsi > 70:
-                # Overbought - weak bullish (potential reversal)
-                score += 20
+                score += 25   # Overbought — bullish but less than peak range
             elif rsi > 60:
-                # Strong bullish momentum
-                score += 40
+                score += 35   # Strongest bullish momentum range
             elif rsi > 50:
-                # Bullish
-                score += 20
+                score += 15
             elif rsi > 40:
-                # Neutral/slight bearish
                 score -= 10
             elif rsi > 30:
-                # Bearish
                 score -= 30
             else:
-                # Oversold - weak bearish (potential bounce)
-                score -= 20
+                score -= 15   # Oversold — contrarian bounce potential (less bearish than 30-40)
 
-        # MACD scoring (50% of momentum score)
+            # RSI velocity (5-day absolute change)
+            if velocity:
+                rsi_vel = velocity.get("rsi_velocity")
+                if rsi_vel is not None:
+                    if rsi_vel > 8:
+                        score += 10   # Accelerating bullish
+                    elif rsi_vel < -8:
+                        score -= 10   # Decelerating
+
+        # Sub-signal 2: MACD crossover
         if macd is not None and macd_signal is not None:
-            # MACD above signal = bullish
             if macd > macd_signal:
-                score += 30
+                score += 25
             else:
-                score -= 30
+                score -= 25
 
-            # MACD histogram direction (confirmation)
-            if macd_histogram is not None:
-                if macd_histogram > 0:
-                    score += 20
-                else:
-                    score -= 20
+            # Histogram magnitude velocity — genuinely independent of crossover direction
+            if velocity:
+                hist_vel = velocity.get("macd_histogram_velocity")
+                if hist_vel is not None:
+                    if hist_vel > 0:
+                        score += 15   # Momentum building
+                    elif hist_vel < 0:
+                        score -= 15   # Momentum fading
 
-        return max(-100, min(100, score))
+        return max(-100.0, min(100.0, score))
 
     def _score_onchain_component(self, onchain: Dict) -> float:
         """
         Score the on-chain component (-100 to +100).
 
-        Considers funding rate, put/call ratio, OI trends.
+        Wings skew (40%): put_iv - call_iv for OTM options.
+          Positive = fear/puts bid. Negative = calls bid/bullish.
+        Funding rate (40%): raw 8h percentage. UNIT FIXED — no /100.
+          Thresholds: ±0.02% neutral zone, ±0.05% strong signal.
+        OI direction (20%): pre-computed score in [-20, +20] from service.
         """
         score = 0.0
-        funding_rate = onchain.get("funding_rate")
-        put_call_ratio = onchain.get("put_call_ratio")
 
-        # Funding rate scoring (60% of on-chain score)
-        # Typical range: -0.03% to +0.03% daily
-        if funding_rate is not None:
-            # Positive funding = longs paying shorts = bullish
-            # Negative funding = shorts paying longs = bearish
-            # Widened neutral zone to reduce false signals
-            if funding_rate > 0.01:
-                # Very bullish (> 1%)
-                score += 40
-            elif funding_rate > 0.005:
-                # Bullish (> 0.5%)
+        # Sub-signal 1: Wings skew (put_iv - call_iv, percentage points)
+        wings_skew = onchain.get("wings_skew")
+        if wings_skew is not None:
+            if wings_skew > 10:
+                score -= 40   # Strong fear premium — puts very expensive
+            elif wings_skew > 5:
+                score -= 20
+            elif wings_skew > -5:
+                score += 0    # Balanced skew
+            elif wings_skew > -10:
                 score += 20
-            elif funding_rate > -0.005:
-                # Neutral zone (±0.5%) - normal market conditions
-                # Treat as truly neutral, not slightly bullish
-                score += 0
-            elif funding_rate > -0.01:
-                # Bearish (< -0.5%)
+            else:
+                score += 40   # Strong call premium — upside positioned
+
+        # Sub-signal 2: Funding rate (raw %, NOT divided by 100 — unit is fixed in service)
+        # Typical Deribit 8h range: -0.05% to +0.05%
+        funding_rate = onchain.get("funding_rate")
+        if funding_rate is not None:
+            if funding_rate > 0.05:
+                score += 30
+            elif funding_rate > 0.02:
+                score += 20
+            elif funding_rate > -0.02:
+                score += 0    # Neutral zone (typical market)
+            elif funding_rate > -0.05:
                 score -= 20
             else:
-                # Very bearish (< -1%)
-                score -= 40
-
-        # Put/Call ratio scoring (40% of on-chain score)
-        # More conservative interpretation
-        if put_call_ratio is not None:
-            # High P/C ratio = fear/bearish
-            # Low P/C ratio = greed/bullish
-            if put_call_ratio > 1.2:
-                # Heavy put bias (> 1.2 = fear)
                 score -= 30
-            elif put_call_ratio > 1.0:
-                # Slight put bias
-                score -= 10
-            elif put_call_ratio > 0.7:
-                # Balanced (0.7-1.0 is neutral)
-                # Widened neutral zone
-                score += 0
-            elif put_call_ratio > 0.5:
-                # Slight call bias (moderately bullish)
-                score += 10
-            else:
-                # Heavy call bias (< 0.5 = extreme greed)
-                score += 30
 
-        return max(-100, min(100, score))
+        # Sub-signal 3: OI direction (pre-computed in service, range [-20, +20])
+        oi_direction = onchain.get("oi_direction", 0)
+        if oi_direction:
+            score += oi_direction
+
+        return max(-100.0, min(100.0, score))
 
     def _score_sentiment_component(
         self,
         external: Dict,
+        currency: str = "BTC",
         adx: Optional[float] = None,
-        composite_trend: Optional[float] = None
+        composite_trend: Optional[float] = None,
     ) -> float:
         """
         Score the sentiment component (-100 to +100).
 
-        Considers Fear & Greed Index and BTC dominance.
-
-        Args:
-            external: External sentiment metrics.
-            adx: ADX value to detect strong trends.
-            composite_trend: Trend component score to detect trend direction.
-
-        Returns:
-            Sentiment score (-100 to +100).
+        F&G 7-day average (60%): smoothed index with context-aware scoring.
+        BTC dominance (25%): currency-aware — sign inverts for ETH.
+        Market cap 24h change (15%): broad risk-on/off signal.
         """
         score = 0.0
 
-        # Detect if we're in a strong trend
         in_strong_trend = adx is not None and adx > 25
         trend_is_bearish = composite_trend is not None and composite_trend < -30
 
-        # Fear & Greed Index (70% of sentiment score)
-        fear_greed_data = external.get("fear_greed")
-        if fear_greed_data and isinstance(fear_greed_data, dict):
-            value = fear_greed_data.get("value")
-            if value is not None:
-                # Context-aware scoring
-                if value < 25:
-                    # Extreme Fear
-                    if in_strong_trend and trend_is_bearish:
-                        # During strong bearish trend, extreme fear confirms bearishness
-                        # Not a contrarian signal
-                        score -= 20
-                    else:
-                        # In ranging/weak trend, extreme fear = contrarian buy signal
-                        score += 30
-                elif value < 45:
-                    # Fear
-                    score -= 20
-                elif value < 55:
-                    # Neutral
-                    score += 0
-                elif value < 75:
-                    # Greed
-                    score += 40
-                else:
-                    # Extreme Greed
-                    score += 20  # Potential top
+        # Sub-signal 1: F&G 7-day average
+        # Prefer fear_greed_7d_avg; fall back to spot fear_greed.value
+        fear_greed_avg = external.get("fear_greed_7d_avg")
+        if fear_greed_avg is None:
+            fear_greed_data = external.get("fear_greed")
+            if fear_greed_data and isinstance(fear_greed_data, dict):
+                fear_greed_avg = fear_greed_data.get("value")
 
-        # BTC Dominance (30% of sentiment score)
+        if fear_greed_avg is not None:
+            if fear_greed_avg < 25:
+                # Extreme fear — context-aware
+                if in_strong_trend and trend_is_bearish:
+                    score -= 15   # Confirms bearish — not contrarian
+                else:
+                    score += 25   # Contrarian buy signal in weak/ranging market
+            elif fear_greed_avg < 45:
+                score -= 20       # Fear
+            elif fear_greed_avg < 55:
+                score += 0        # Neutral
+            elif fear_greed_avg < 75:
+                score += 35       # Greed — bullish
+            else:
+                score += 15       # Extreme greed — potential top warning
+
+        # Sub-signal 2: BTC dominance (currency-aware — sign inverts for ETH)
         btc_dom = external.get("btc_dominance")
         if btc_dom is not None:
-            # Rising BTC dominance = flight to safety (bearish for alts)
-            # Falling BTC dominance = risk-on (bullish for alts)
-            # For BTC itself, rising dominance is bullish
-            # For now, treat neutrally or check trend
-            if btc_dom > 50:
-                score += 10  # BTC strong
+            if currency.upper() == "BTC":
+                if btc_dom > 55:
+                    score += 10   # BTC strength — flight to BTC
+                elif btc_dom < 45:
+                    score -= 10   # Alt season — capital leaving BTC
             else:
-                score -= 10  # Alt season potential
+                # ETH and other alts: dominance sign inverts
+                if btc_dom > 55:
+                    score -= 10   # Capital in BTC, not alts
+                elif btc_dom < 45:
+                    score += 10   # Alt season — bullish for ETH
 
-        return max(-100, min(100, score))
+        # Sub-signal 3: Broad market 24h change (already fetched, was unused)
+        mc_change = external.get("market_cap_change_24h")
+        if mc_change is not None:
+            if mc_change > 3:
+                score += 10   # Risk-on environment
+            elif mc_change < -3:
+                score -= 10   # Risk-off
+
+        return max(-100.0, min(100.0, score))
 
     def _classify_regime(
         self,
         composite_score: float,
-        adx: Optional[float] = None
+        adx: Optional[float] = None,
+        plus_di: Optional[float] = None,
+        minus_di: Optional[float] = None,
     ) -> str:
         """
-        Classify regime based on composite score with ADX override.
+        Classify regime from composite score with DI-based ADX override.
 
-        Args:
-            composite_score: Weighted average score (-100 to +100).
-            adx: Average Directional Index (ADX) value.
-
-        Returns:
-            Regime classification string.
+        Thresholds are symmetric around 0 (Sideways = -20 to +20).
+        ADX override: if ADX > 25 and composite is in Sideways range,
+        use raw DI+/DI- spread to force directional classification.
+        "DI spread" here refers to raw indicator values, not Step 1 buckets.
         """
-        # ADX override: If ADX indicates strong trend, never classify as sideways
-        # ADX > 25 = trending market
+        # ADX override — only when composite is in Sideways range
         if adx is not None and adx > self.ADX_TREND_THRESHOLD:
-            # Force trend classification based on score direction
-            if composite_score >= self.REGIME_THRESHOLDS["Strong Bullish"]:
-                return "Strong Bullish"
-            elif composite_score >= self.REGIME_THRESHOLDS["Weak Bullish"]:
-                return "Weak Bullish"
-            elif composite_score >= 0:
-                # Positive score but not bullish threshold = weak bullish
-                return "Weak Bullish"
-            elif composite_score >= self.REGIME_THRESHOLDS["Weak Bearish"]:
-                # Negative score = weak bearish
-                return "Weak Bearish"
-            else:
-                # Very negative score = strong bearish
-                return "Strong Bearish"
+            if self.REGIME_THRESHOLDS["Sideways"] <= composite_score < self.REGIME_THRESHOLDS["Weak Bullish"]:
+                if plus_di is not None and minus_di is not None:
+                    di_diff = abs(plus_di - minus_di)
+                    if di_diff > 5:
+                        if plus_di > minus_di:
+                            return "Weak Bullish"
+                        else:
+                            return "Weak Bearish"
+                    # DI spread ≤ 5 — trend direction uncertain, keep Sideways
 
-        # Normal classification without ADX override
+        # Standard threshold classification
         if composite_score >= self.REGIME_THRESHOLDS["Strong Bullish"]:
             return "Strong Bullish"
         elif composite_score >= self.REGIME_THRESHOLDS["Weak Bullish"]:
@@ -453,38 +512,31 @@ class MarketRegimeDetector:
 
     def _calculate_confidence(self, component_scores: list) -> float:
         """
-        Calculate confidence score based on alignment of components.
+        Calculate confidence as weighted net agreement between components.
 
-        High confidence when all components agree.
-        Low confidence when components are mixed.
+        Uses component weights (WEIGHTS_LIST) so a single fringe component
+        cannot inflate confidence. Divide by 1.0 (sum of all weights) ensures
+        correct scaling across all scenarios.
 
-        Args:
-            component_scores: List of component scores.
-
-        Returns:
-            Confidence percentage (0-100).
+        Examples:
+          All 5 bullish → (1.0 - 0.0) * 100 = 100%
+          Only sentiment bullish (0.10 weight) → (0.10 - 0.0) * 100 = 10%
+          Perfect split (0.50 vs 0.50) → (0.50 - 0.50) * 100 = 0%
         """
         if not component_scores:
             return 0.0
 
-        # Count how many components are bullish (> 0) vs bearish (< 0)
-        bullish_count = sum(1 for score in component_scores if score > 20)
-        bearish_count = sum(1 for score in component_scores if score < -20)
-        neutral_count = len(component_scores) - bullish_count - bearish_count
+        weights = self.WEIGHTS_LIST
+        bullish_weight = sum(w for s, w in zip(component_scores, weights) if s > 20)
+        bearish_weight = sum(w for s, w in zip(component_scores, weights) if s < -20)
 
-        # High confidence when most components agree
-        max_agreement = max(bullish_count, bearish_count)
-        total_components = len(component_scores)
+        dominant = max(bullish_weight, bearish_weight)
+        conflicting = min(bullish_weight, bearish_weight)
 
-        # Alignment percentage
-        alignment = (max_agreement / total_components) * 100
+        # Divide by 1.0 (= sum of all weights) — not total_active
+        confidence = (dominant - conflicting) * 100
 
-        # Penalize for neutral components (uncertainty)
-        neutral_penalty = (neutral_count / total_components) * 20
-
-        confidence = alignment - neutral_penalty
-
-        return max(0, min(100, confidence))
+        return max(0.0, min(100.0, confidence))
 
     def _generate_reasoning(
         self,
@@ -513,7 +565,6 @@ class MarketRegimeDetector:
         Returns:
             Reasoning text.
         """
-        # Safe formatting for composite_score (defensive check)
         composite_str = f"{composite_score:.1f}" if composite_score is not None else "N/A"
         reasons = [f"Market Regime: {regime} (Score: {composite_str})"]
 
@@ -535,8 +586,8 @@ class MarketRegimeDetector:
         # Momentum analysis
         rsi = indicators.get("rsi")
         macd_histogram = indicators.get("macd_histogram")
-        if rsi is not None:  # Explicit None check instead of truthy check
-            rsi_str = f"{rsi:.1f}"  # Safe to format now
+        if rsi is not None:
+            rsi_str = f"{rsi:.1f}"
             if rsi > 70:
                 reasons.append(f"Momentum: Overbought (RSI={rsi_str})")
             elif rsi < 30:
@@ -545,31 +596,36 @@ class MarketRegimeDetector:
                 reasons.append(f"Momentum: RSI={rsi_str}, MACD={'Bullish' if macd_histogram and macd_histogram > 0 else 'Bearish'}")
 
         # Volatility analysis
-        atr_percentile = indicators.get("atr_percentile")
-        if atr_percentile is not None:  # Explicit None check
-            atr_str = f"{atr_percentile:.1f}"  # Safe to format now
-            if atr_percentile < 25:
+        dvol_percentile = onchain.get("dvol_percentile")
+        if dvol_percentile is not None:
+            dvol_str = f"{dvol_percentile:.1f}"
+            if dvol_percentile < 20:
                 vol_regime = "LOW"
-            elif atr_percentile < 50:
+            elif dvol_percentile < 40:
+                vol_regime = "BELOW_AVERAGE"
+            elif dvol_percentile < 60:
                 vol_regime = "NORMAL"
-            elif atr_percentile < 75:
+            elif dvol_percentile < 80:
                 vol_regime = "HIGH"
             else:
                 vol_regime = "EXTREME"
-            reasons.append(f"Volatility: {vol_regime} regime (ATR Percentile={atr_str})")
+            reasons.append(f"Volatility: {vol_regime} regime (DVOL Percentile={dvol_str})")
 
         # On-chain analysis
         funding_rate = onchain.get("funding_rate")
-        put_call_ratio = onchain.get("put_call_ratio")
+        wings_skew = onchain.get("wings_skew")
         if funding_rate is not None:
             funding_pct = funding_rate * 100
-            funding_str = f"{funding_pct:.3f}"  # Safe to format
-            pc_ratio_str = f"{put_call_ratio:.2f}" if put_call_ratio is not None else "N/A"
-            reasons.append(f"On-Chain: Funding={funding_str}%, P/C Ratio={pc_ratio_str}")
+            funding_str = f"{funding_pct:.3f}"
+            wings_str = f"{wings_skew:.2f}" if wings_skew is not None else "N/A"
+            reasons.append(f"On-Chain: Funding={funding_str}%, Wings Skew={wings_str}")
 
         # Sentiment analysis
+        fear_greed_avg = external.get("fear_greed_7d_avg")
         fear_greed_data = external.get("fear_greed")
-        if fear_greed_data and isinstance(fear_greed_data, dict):
+        if fear_greed_avg is not None:
+            reasons.append(f"Sentiment: Fear & Greed 7d avg={fear_greed_avg:.1f}")
+        elif fear_greed_data and isinstance(fear_greed_data, dict):
             fg_value = fear_greed_data.get("value")
             fg_class = fear_greed_data.get("classification")
             reasons.append(f"Sentiment: Fear & Greed={fg_value} ({fg_class})")
