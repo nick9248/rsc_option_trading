@@ -1,6 +1,7 @@
 """
 Tests for TechnicalIndicatorCalculator.get_velocity_indicators()
 """
+import numpy as np
 import pandas as pd
 import pytest
 from coding.core.analytics.technical_indicator_calculator import TechnicalIndicatorCalculator
@@ -109,7 +110,7 @@ def test_histogram_independent_of_crossover_direction():
     # Both positive (MACD > signal), but shrinking
     df = _make_df([100.0, 100.0], [50.0, 50.0], [30.0, 10.0])
     result = calc.get_velocity_indicators(df)
-    assert result["macd_histogram_velocity"] < 0
+    assert result["macd_histogram_velocity"] == pytest.approx(-20.0, rel=0.01)
 
 
 # ── Edge cases ────────────────────────────────────────────────────────────────
@@ -129,13 +130,13 @@ def test_single_row_dataframe():
     df = _make_df([100.0], [50.0], [5.0])
     result = calc.get_velocity_indicators(df)
     assert result["ema_50_velocity"] is None
+    assert result["rsi_velocity"] is None
     assert result["macd_histogram_velocity"] is None
 
 
 def test_nan_values_handled():
     """NaN in EMA → ema_50_velocity is None, others still computed."""
     calc = TechnicalIndicatorCalculator()
-    import numpy as np
     df = _make_df([np.nan, 100.0], [50.0, 50.0], [10.0, 12.0])
     result = calc.get_velocity_indicators(df)
     assert result["ema_50_velocity"] is None
