@@ -150,6 +150,7 @@ class DirectionalScorer:
               ibit_pc_ratio: Optional[float], ibit_pc_30d_avg: Optional[float],
               ohlcv_daily: List[dict], spot_close: float,
               spot_making_new_30d_low: bool = False,
+              spot_making_higher_highs: bool = False,
               bearish_divergence: bool = False,
               dex_sign_flipped_positive: bool = False,
               dex_sign_flipped_negative: bool = False) -> Dict:
@@ -162,7 +163,9 @@ class DirectionalScorer:
         raw = {
             "D1_D7": self._score_d1_d7(gex_dex),
             "D2":    self._score_d2(current_funding_rate, funding_rate_history,
-                                    spot_making_new_30d_low, bearish_divergence),
+                                    spot_making_new_30d_low=spot_making_new_30d_low,
+                                    spot_making_higher_highs=spot_making_higher_highs,
+                                    bearish_divergence=bearish_divergence),
             "D3":    self._score_d3(rr25_current, rr25_history),
             "D4":    self._score_d4(pc_ratio, pc_ratio_history),
             "D6_D9": self._score_d6_d9(block_trades, dex_sign_flipped_positive,
