@@ -640,7 +640,110 @@ requests>=2.31.0      # already present, used for CryptoQuant/CBOE fetchers
 
 ---
 
-## 15. Future Extensions (out of scope for v1)
+## 15. GUI Design — Special Strategies Tab
+
+### New files
+```
+coding/gui/tabs/special_strategies_tab.py    # Main tab with tile grid
+coding/gui/tabs/otm_contracts_view.py        # OTM Contracts view (opened from tile)
+coding/gui/components/otm_signal_card.py     # Expandable signal result card
+coding/gui/components/gate_score_bar.py      # Reusable score bar widget (0–100 + color)
+```
+
+### Tab registration (main_window.py)
+Add `SpecialStrategiesTab` to `QTabWidget` after the existing `StrategyTab`.
+
+---
+
+### SpecialStrategiesTab layout
+- `QScrollArea` → `QWidget` → `QGridLayout` (2 columns)
+- Each strategy is a `StrategyTileWidget` (custom `QFrame`):
+  - Title (bold), status dot (🟢/🟡/🔴), Gate 2 score bar, regime badge, last scan time, active signal count
+  - `[OPEN ▶]` button → emits `tile_opened` signal → parent swaps to the strategy view
+- Status dot colors: Gate 2 ≥ 60 = `SUCCESS (#2ECC71)`, 40–59 = `WARNING (#F39C12)`, < 40 = `ERROR (#E74C3C)`
+- Tiles auto-refresh Gate 2 score and signal count every 30 minutes (background thread)
+- Future strategies: tiles show "coming soon" state with `TEXT_DISABLED` color and no button
+
+---
+
+### OTMContractsView layout (two-panel, QSplitter)
+
+**Left panel — Configuration (fixed 300px width)**
+
+Section 1: LIVE CONDITIONS (read-only, refreshed every 30 min)
+- Gate 2 score: `GateScoreBar` widget (color-coded progress bar + number)
+- Regime badge: `QLabel` styled as pill — BULL (green), BEAR (red), NEUTRAL (grey)
+- DVOL percentile: plain `QLabel`
+- Term structure: plain `QLabel` (CONTANGO / FLAT / BACKWARDATION)
+- Last updated: timestamp label
+
+Section 2: QUICK SETUP (user-configurable)
+- Asset: `QButtonGroup` toggle — [BTC] [ETH] [BOTH]; default = BOTH
+- Direction: `QButtonGroup` toggle — [CALLS] [PUTS] [AUTO]; default = AUTO
+- Expiry: `QButtonGroup` toggle — [SHORT] [MEDIUM] [LONG] [AUTO]; default = AUTO
+  - Tooltip on each: "1–7 days", "7–30 days", "30–90 days"
+- Risk Budget: `QDoubleSpinBox` — USD, min 100, max 1,000,000, step 500; default from `OTMConfig`
+
+Section 3: ADVANCED FILTERS (collapsible `QFrame`, hidden by default)
+- Min Conviction: `QSlider` (40–100) + live `QLabel` showing value; default 60
+- Min Delta: `QDoubleSpinBox` (0.05–0.45); default 0.20
+- Max Delta: `QDoubleSpinBox` (0.05–0.45); default 0.35
+- Kelly Multiplier: `QDoubleSpinBox` (0.05–0.50); default 0.25
+- Gate 2 Override checkbox: forces scan even if Gate 2 < 40 — label "(paper trading only)"
+- Show Suppressed checkbox: show signals below min conviction
+
+Find button:
+- `QPushButton` "FIND OTM CONTRACTS" — gold background (`BUTTON_PRIMARY`), full width
+- Disabled + shows spinner text while `OTMFinderWorker` is running
+- Below button: last scan summary label "3 signals | 14:32:01" or "No scan yet"
+
+**Right panel — Results**
+
+- Header bar: "N signals found | Gate 2: XX | Regime: BULL"
+- `QScrollArea` → `QVBoxLayout` containing `OTMSignalCard` widgets, sorted by conviction
+- Empty state: centered label "Press FIND OTM CONTRACTS to scan"
+- Suppressed state (Gate 2 < 40 and no override): warning banner in yellow
+
+**OTMSignalCard widget:**
+- Collapsed (default): rank badge, instrument name, direction pill (CALL green / PUT red),
+  delta, DTE, expiry category badge, conviction score bar, premium, position size USD,
+  take profit target, thesis stop price
+  Buttons: [▼ BREAKDOWN] [PAPER TRADE] [COPY]
+- Expanded (click ▼ BREAKDOWN): table of all 8 sub-signal scores with weight, value,
+  progress bar per signal; regime flag, vega/theta ratio, breakeven price
+- PAPER TRADE button: logs signal to `strategies/otm_contracts/forward_test_log/` as JSON,
+  shows confirmation toast; disabled if Gate 2 Override not checked and Gate 2 < 40
+- COPY button: copies instrument name + key params to clipboard
+
+---
+
+### Worker thread: OTMFinderWorker (QThread)
+
+```python
+class OTMFinderWorker(QThread):
+    finished = Signal(list)        # List[OTMSignal]
+    gate2_updated = Signal(float)  # Gate 2 score for live conditions panel
+    error = Signal(str)
+
+    def __init__(self, finder_service, config: OTMConfig, assets, direction, expiry_pref):
+        ...
+    def run(self):
+        # calls otm_finder_service.find_signals(assets, direction, expiry_pref, config)
+        # emits gate2_updated mid-run for live conditions refresh
+        ...
+```
+
+---
+
+### Architecture compliance
+- `SpecialStrategiesTab` and `OTMContractsView`: GUI only — no business logic, no API calls
+- `OTMFinderWorker`: calls service layer (`OTMFinderService`) only
+- `OTMFinderService`: orchestrates gates — lives in `coding/service/strategy/otm/`
+- All scoring/signal logic: `coding/core/strategy/otm/` — no GUI imports
+
+---
+
+## 16. Future Extensions (out of scope for v1)
 
 - Macro regime overlay (MAC) — deferred: Fed stance, DXY trend, BTC/Nasdaq correlation
 - ML signal ranker — phase 2: XGBoost trained on labeled backtest outcomes
