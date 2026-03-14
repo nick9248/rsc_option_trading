@@ -3,11 +3,9 @@ OTMConfig — all tunable thresholds for the OTM contract finder.
 
 Update this model (not code) to adjust strategy behavior after backtesting.
 """
-import logging
+from types import MappingProxyType
 from typing import Dict
 from pydantic import BaseModel, ConfigDict, field_validator
-
-logger = logging.getLogger(__name__)
 
 
 class OTMConfig(BaseModel):
@@ -117,3 +115,13 @@ class OTMConfig(BaseModel):
         if v <= 0:
             raise ValueError("kelly_divisor must be positive")
         return v
+
+    def model_post_init(self, __context) -> None:
+        """Freeze dict field interiors to enforce true immutability.
+
+        Although the model is frozen, dict fields can still be mutated (e.g.,
+        config.p_win_priors['new_key'] = 0.5). Wrap them in MappingProxyType
+        to make them fully read-only.
+        """
+        object.__setattr__(self, "p_win_priors", MappingProxyType(self.p_win_priors))
+        object.__setattr__(self, "avg_return_priors", MappingProxyType(self.avg_return_priors))

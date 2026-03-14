@@ -71,5 +71,5 @@ def test_custom_overrides_work():
 
 def test_config_is_immutable():
     config = OTMConfig(risk_budget_usd=10_000.0)
-    with pytest.raises(Exception):
+    with pytest.raises(Exception):  # pydantic v2 frozen raises ValidationError (subclass of Exception)
         config.risk_budget_usd = 999.0
