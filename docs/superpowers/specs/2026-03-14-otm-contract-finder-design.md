@@ -1,7 +1,7 @@
 # OTM Contract Finder — Design Spec
 **Date:** 2026-03-14
 **Branch:** strategies/otm_contracts
-**Status:** Draft v2 — post spec-review fixes
+**Status:** Draft v3 — all review issues resolved
 
 ---
 
@@ -65,7 +65,7 @@ coding/service/strategy/otm/
 - IBIT options P/C fetcher: CBOE delayed data at `https://cdn.cboe.com/api/global/delayed_quotes/options/_IBIT.json` — parse `put_call_ratio` field. BTC only. If unavailable, fallback = neutral score.
 - Max pain fetcher: CoinGlass `/api/public/option/max_pain` (free tier). Used only in Gate 4 (tiebreaker), not Gate 3.
 - Macro regime overlay (MAC): **deferred to phase 2** — requires Fed stance, DXY, and Nasdaq data pipelines not yet in system. Gate 2 weight redistributed among V1/V2+V4/V3.
-- DVOL history: fetch from Deribit `/public/get_index_price_history` for `btc_dvol` and `eth_dvol` indices. Store in new DB table `dvol_history (id, asset, timestamp, dvol_value)`. Minimum 36 months for BTC, use all available for ETH (< 36m = use available, log degraded mode).
+- DVOL history: fetch from Deribit `/public/get_index_price_history` for `btc_dvol` and `eth_dvol` indices. Store in new DB table — schema defined in §16. Minimum 36 months for BTC; use all available for ETH. Degraded mode: if available history < 36 months, use all available data and set `dvol_percentile_v1_score = 50` (neutral) if < 90 days available; otherwise compute on reduced window and log a `WARNING: DVOL history degraded ({n} days available, 36m preferred)`.
 
 ---
 
@@ -125,10 +125,17 @@ Every 30 minutes (or on-demand trigger):
          Backwardation (slope < −5 pts): full score; suggests buying front-month OTM
          Flat (|slope| ≤ 5 pts): score = 50
 
-   Gate 2 output: 0–100 score
-   ├── Score < 40 → no new entries (suppress); existing positions unaffected
-   ├── Score 30–40 → no new entries; no exit action on existing positions
-   └── Score < 30 → mandatory 50% partial exit on ALL open positions for this asset
+   Gate 2 output: 0–100 score (integer boundaries are inclusive)
+   ├── Score ≥ 40  → new entries allowed; no exit action
+   ├── Score 30–39 → no new entries; no exit action on existing positions
+   └── Score ≤ 29  → no new entries; mandatory 50% partial exit on ALL open positions for this asset
+
+   GARCH fallback (V2+V4 sub-signal B):
+   ├── If ≥ 180 daily candles available: fit GJR-GARCH normally
+   ├── If 90–179 candles available: fit GJR-GARCH on available data; log WARNING
+   ├── If < 90 candles available: GARCH sub-signal B score = 50 (neutral); log WARNING
+   └── V2+V4 still uses 50/50 blend — a neutral GARCH score of 50 leaves VRP sub-signal
+       as the sole contributor at full weight for that asset until history accumulates
 
    ─────────────────────────────────────────────────────
    GATE 3 — Directional Conviction (Call Score + Put Score, each 0–100)
@@ -167,10 +174,18 @@ Every 30 minutes (or on-demand trigger):
       D3+D4 contribution by 0.70 (reduce combined weight 30%)
    2. ETH call penalty: if asset=ETH AND direction=call AND delta in [0.25, 0.35]
       → multiply call_score by 0.85 (structural covered-call sell pressure)
-   3. Regime adjustment: compute bull_flag = (sma_50d > sma_200d) on daily closes
-      If bull_flag: call signal weights ×1.30, put signal weights ×0.70; renormalize to 100%
-      If not bull_flag: put signal weights ×1.30, call signal weights ×0.70; renormalize to 100%
-      Note: sma_50d and sma_200d computed on daily OHLCV from existing DB
+   3. Regime adjustment:
+      bull_flag = (sma_50d > sma_200d) on daily closes from OHLCV DB
+      Directional signal mapping for regime scaling:
+        CALL-directional signals (scaled ×1.30 in bull, ×0.70 in bear):
+          D1+D7 (Dealer Positioning), D2 (Funding), D3 (RR Z-Score), D4 (P/C OI),
+          D6+D9 (Institutional Flow), D10 (IBIT), RIS (Realized vs Implied Skew)
+        NEUTRAL signals (not scaled — provide same value regardless of regime):
+          D8 (Stablecoin Inflow) — macro liquidity signal, direction-agnostic
+      In bull regime: scale call-directional weights ×1.30 for call_score computation;
+                      scale call-directional weights ×0.70 for put_score computation
+      In bear regime: reverse (×0.70 call, ×1.30 put)
+      After scaling: renormalize all weights to sum to 100% before scoring
 
    ─────────────────────────────────────────────────────
    GATE 4 — Strike & Expiry Optimizer (applied to survivors of Gates 1–3)
@@ -218,10 +233,12 @@ Every 30 minutes (or on-demand trigger):
    fractional_kelly = kelly_fraction × 0.25        # 1/4 Kelly — prevents ruin on binary outcomes
    position_usd = min(fractional_kelly × risk_budget_usd, risk_budget_usd × 0.10)
 
-   Portfolio correlation cap:
-     If open BTC position and ETH position exist in the SAME direction:
-       treat combined position as one allocation:
-       combined_position_usd ≤ risk_budget_usd × 0.10 (not 0.10 each)
+   Portfolio correlation cap (enforced PRE-TRADE, before order placement):
+     If any open position already exists in the same direction:
+       combined_allocated = sum(position_usd for all open same-direction positions)
+       remaining_cap = (risk_budget_usd × 0.10) − combined_allocated
+       new_position_usd = min(new_position_usd, max(remaining_cap, 0))
+       If remaining_cap ≤ 0: skip this trade; log "portfolio correlation cap reached"
 
 4. Output: list of OTMSignal (see §10), sorted descending by conviction_score
 ```
@@ -562,3 +579,53 @@ requests>=2.31.0      # already present, used for CryptoQuant/CBOE fetchers
 - Additional assets: SOL, XRP (after BTC/ETH calibration proven)
 - GUI tab: OTM finder integrated into strategy tab
 - Spread strategies: OTM call + spread combinations
+
+---
+
+## 16. New DB Schema
+
+### Table: `dvol_history`
+
+```sql
+CREATE TABLE dvol_history (
+    id          SERIAL PRIMARY KEY,
+    asset       VARCHAR(10)   NOT NULL,          -- 'BTC' | 'ETH'
+    timestamp   TIMESTAMPTZ   NOT NULL,
+    dvol_value  DECIMAL(8,4)  NOT NULL,           -- e.g., 52.3400
+    UNIQUE (asset, timestamp)
+);
+CREATE INDEX idx_dvol_history_asset_ts ON dvol_history (asset, timestamp DESC);
+```
+
+Populated by a new backfill script (`scripts/backfill_dvol_history.py`) and then by ProspectiveCollector on each cycle.
+
+### Table: `otm_signals`
+
+```sql
+CREATE TABLE otm_signals (
+    id                      SERIAL PRIMARY KEY,
+    signal_id               UUID          NOT NULL UNIQUE,
+    generated_at            TIMESTAMPTZ   NOT NULL,
+    asset                   VARCHAR(10)   NOT NULL,
+    instrument_name         VARCHAR(50)   NOT NULL,
+    direction               VARCHAR(4)    NOT NULL,   -- 'call' | 'put'
+    strike                  DECIMAL(14,2) NOT NULL,
+    expiry                  VARCHAR(10)   NOT NULL,
+    dte                     INTEGER       NOT NULL,
+    delta                   DECIMAL(8,6)  NOT NULL,
+    mark_iv                 DECIMAL(8,4),
+    entry_premium           DECIMAL(12,4),
+    underlying_price        DECIMAL(14,2),
+    gate2_score             DECIMAL(6,2),
+    gate3_call_score        DECIMAL(6,2),
+    gate3_put_score         DECIMAL(6,2),
+    conviction_score        DECIMAL(6,2),
+    position_usd            DECIMAL(12,2),
+    take_profit_multiple    DECIMAL(6,2),
+    expiry_category         VARCHAR(10),            -- 'short'|'medium'|'long'
+    regime_flag             VARCHAR(10),            -- 'bull'|'bear'|'neutral'
+    signal_breakdown        JSONB,                   -- all sub-signal scores
+    exit_params             JSONB                    -- all exit thresholds at entry
+);
+CREATE INDEX idx_otm_signals_asset_ts ON otm_signals (asset, generated_at DESC);
+```
