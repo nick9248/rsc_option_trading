@@ -114,6 +114,41 @@ class OTMFinderService:
 
         return all_signals
 
+    def score_gate2(self, asset: str) -> dict:
+        """
+        Run only Gate 2 (DVOL fetch + VolatilityRegimeGate) and return the gate2 dict.
+
+        Used by the GUI to refresh the live-conditions panel mid-run and by the
+        tile auto-refresh timer without triggering the full 4-gate pipeline.
+
+        Returns gate2 dict with keys: total_score, action, v1_score, v2v4_score,
+        v3_score, garch_fcast_annualized. Returns {} on any error.
+        """
+        try:
+            latest_dvol = self._dvol_fetcher.fetch_latest(asset)
+            dvol_history = self._repository.get_dvol_history(asset)
+            ohlcv_daily = self._repository.get_ohlcv_daily(asset)
+
+            on_chain = self._on_chain_service.fetch_and_analyze(asset, "ALL")
+            mw = getattr(on_chain, "market_wide_structured", {}) or {}
+            vs = getattr(on_chain, "volatility_surface_structured", {}) or {}
+            vrp_data = mw.get("vrp", {})
+            atm_iv = vs.get("atm_iv", 0.60)
+            rv_30d = vrp_data.get("rv_30d", atm_iv * 0.9)
+            term_data = mw.get("iv_term_structure", None)
+
+            return self._gate2.score(
+                dvol_history=[v for _, v in dvol_history] if dvol_history and isinstance(dvol_history[0], tuple) else dvol_history,
+                current_dvol=latest_dvol or (max(dvol_history) if dvol_history else 70.0),
+                atm_iv_30d=atm_iv,
+                rv_30d_parkinson=rv_30d,
+                ohlcv_daily=ohlcv_daily,
+                term_structure_data=term_data,
+            )
+        except Exception as exc:
+            logger.warning("score_gate2 failed for %s: %s", asset, exc)
+            return {}
+
     def _process_asset(
         self,
         asset: str,
