@@ -571,6 +571,82 @@ class DeribitApiService:
 
         return result
 
+    def get_book_summary_by_currency(self, asset: str) -> List[Dict[str, Any]]:
+        """
+        Get the full options chain for an asset, normalized for OTMFinderService.
+
+        Wraps get_book_summary() and enriches each entry with:
+          - strike, expiry, dte, option_type (parsed from instrument_name)
+          - delta, gamma, vega, theta (from nested 'greeks' dict if present)
+          - bid_iv, ask_iv (approximated from mark_iv and price spread)
+          - volume_24h (mapped from 'volume')
+
+        Returns list of normalized contract dicts. Malformed entries are skipped.
+        """
+        from datetime import datetime, timezone
+        raw = self.get_book_summary(currency=asset, kind="option")
+        result = []
+        now = datetime.now(timezone.utc)
+
+        for item in raw:
+            name = item.get("instrument_name", "")
+            parts = name.split("-")
+            if len(parts) < 4:
+                continue
+            try:
+                strike = float(parts[2])
+                option_type = parts[3]   # "C" or "P"
+                expiry_str = parts[1]    # e.g. "28MAR25"
+                expiry_date = datetime.strptime(expiry_str, "%d%b%y").replace(tzinfo=timezone.utc)
+                dte = max(0, (expiry_date - now).days)
+            except (ValueError, IndexError):
+                continue
+
+            greeks = item.get("greeks") or {}
+            delta = greeks.get("delta", 0.0)
+            gamma = greeks.get("gamma", 0.0)
+            vega = greeks.get("vega", 0.0)
+            theta = greeks.get("theta", 0.0)
+
+            # mark_iv: Deribit returns IV in percent (e.g. 65.0 = 65%)
+            raw_iv = item.get("mark_iv") or 0.0
+            mark_iv = raw_iv / 100.0 if raw_iv > 2.0 else raw_iv
+
+            # Approximate bid_iv / ask_iv from price spread
+            mark_price = item.get("mark_price") or 0.0
+            bid_price = item.get("bid_price") or 0.0
+            ask_price = item.get("ask_price") or 0.0
+            if mark_price > 0 and mark_iv > 0:
+                spread_ratio = (ask_price - bid_price) / mark_price
+                iv_half_spread = spread_ratio * mark_iv / 2
+                bid_iv = max(0.0, mark_iv - iv_half_spread)
+                ask_iv = mark_iv + iv_half_spread
+            else:
+                bid_iv = mark_iv
+                ask_iv = mark_iv
+
+            result.append({
+                "instrument_name": name,
+                "asset": asset,
+                "strike": strike,
+                "expiry": expiry_str,
+                "dte": dte,
+                "option_type": option_type,
+                "delta": delta,
+                "gamma": gamma,
+                "vega": vega,
+                "theta": theta,
+                "bid_iv": bid_iv,
+                "ask_iv": ask_iv,
+                "mark_iv": mark_iv,
+                "open_interest": item.get("open_interest", 0),
+                "volume_24h": item.get("volume", 0),
+                "mark_price": mark_price,
+                "underlying_price": item.get("underlying_price", 0.0),
+            })
+
+        return result
+
     def close(self) -> None:
         """Close the API connection."""
         self.connection.close()

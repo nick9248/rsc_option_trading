@@ -1859,3 +1859,157 @@ class DatabaseRepository:
             results = [dict(zip(columns, row)) for row in cursor.fetchall()]
 
             return list(reversed(results))
+
+    # ── OTM Contract Finder ───────────────────────────────────────────────────
+
+    def get_connection(self):
+        """Return a raw database connection from the pool (caller must return it)."""
+        return self._get_connection()
+
+    def get_dvol_history(self, asset: str, limit: int = 400) -> List[float]:
+        """
+        Return recent DVOL values for the given asset, oldest-first.
+
+        Queries the dvol_history table written by DVOLFetcher.save_to_db.
+        Returns a plain list of floats (dvol_value), empty list on error.
+        """
+        try:
+            with self._db_cursor() as cursor:
+                cursor.execute(
+                    "SELECT dvol_value FROM dvol_history "
+                    "WHERE asset = %s ORDER BY timestamp DESC LIMIT %s",
+                    (asset, limit),
+                )
+                rows = cursor.fetchall()
+                return [float(r[0]) for r in reversed(rows)]
+        except Exception as exc:
+            logger.warning("get_dvol_history failed for %s: %s", asset, exc)
+            return []
+
+    def get_funding_rate_history(self, asset: str, limit: int = 1000) -> List[float]:
+        """
+        Return recent perpetual funding rates for the given asset, oldest-first.
+
+        Queries funding_rate_history for the PERPETUAL instrument.
+        Returns plain list of floats, empty list on error.
+        """
+        try:
+            instrument = f"{asset}-PERPETUAL"
+            with self._db_cursor() as cursor:
+                cursor.execute(
+                    "SELECT funding_rate FROM funding_rate_history "
+                    "WHERE instrument_name = %s ORDER BY date DESC LIMIT %s",
+                    (instrument, limit),
+                )
+                rows = cursor.fetchall()
+                return [float(r[0]) for r in reversed(rows)]
+        except Exception as exc:
+            logger.warning("get_funding_rate_history failed for %s: %s", asset, exc)
+            return []
+
+    def get_pc_ratio_history(self, asset: str, limit: int = 200) -> List[float]:
+        """
+        Return recent put/call ratio history.
+
+        No dedicated table exists yet — returns empty list until data is collected.
+        """
+        return []
+
+    def get_rr25_history(self, asset: str, limit: int = 30) -> List[float]:
+        """
+        Return recent 25-delta risk-reversal history.
+
+        No dedicated table exists yet — returns empty list until data is collected.
+        """
+        return []
+
+    def get_ohlcv_daily(self, asset: str, limit: int = 60) -> List[Dict[str, Any]]:
+        """
+        Return recent daily OHLCV candles for the given asset's perpetual, oldest-first.
+
+        Queries ohlcv_history for {asset}-PERPETUAL.
+        Returns list of dicts with at least a 'close' key.
+        """
+        try:
+            instrument = f"{asset}-PERPETUAL"
+            with self._db_cursor() as cursor:
+                cursor.execute(
+                    "SELECT date, open, high, low, close, volume "
+                    "FROM ohlcv_history "
+                    "WHERE instrument_name = %s ORDER BY date DESC LIMIT %s",
+                    (instrument, limit),
+                )
+                rows = cursor.fetchall()
+                return [
+                    {"date": r[0], "open": float(r[1]), "high": float(r[2]),
+                     "low": float(r[3]), "close": float(r[4]),
+                     "volume": float(r[5]) if r[5] is not None else 0.0}
+                    for r in reversed(rows)
+                ]
+        except Exception as exc:
+            logger.warning("get_ohlcv_daily failed for %s: %s", asset, exc)
+            return []
+
+    def save_otm_signals(self, signals: list) -> int:
+        """
+        Upsert OTMSignal objects into the otm_signals table.
+
+        Args:
+            signals: List of OTMSignal Pydantic model instances.
+
+        Returns:
+            Number of rows inserted/updated.
+        """
+        import json as _json
+        saved = 0
+        try:
+            with self._db_cursor() as cursor:
+                for s in signals:
+                    breakdown = {
+                        "d1_d7": s.d1_d7_score, "d2": s.d2_score,
+                        "d3": s.d3_score, "d4": s.d4_score,
+                        "d6_d9": s.d6_d9_score, "d8": s.d8_score,
+                        "d10": s.d10_score, "ris": s.ris_score,
+                    }
+                    exit_params = {
+                        "stop_loss_pct": s.stop_loss_pct,
+                        "time_stop_dte": s.time_stop_dte,
+                        "take_profit_multiple": s.take_profit_multiple,
+                    }
+                    cursor.execute(
+                        """
+                        INSERT INTO otm_signals (
+                            signal_id, generated_at, asset, instrument_name,
+                            direction, strike, expiry, dte, delta, mark_iv,
+                            entry_premium, underlying_price,
+                            gate2_score, gate3_call_score, gate3_put_score,
+                            conviction_score, position_usd, take_profit_multiple,
+                            expiry_category, regime_flag,
+                            signal_breakdown, exit_params
+                        ) VALUES (
+                            %s, %s, %s, %s,
+                            %s, %s, %s, %s, %s, %s,
+                            %s, %s,
+                            %s, %s, %s,
+                            %s, %s, %s,
+                            %s, %s,
+                            %s, %s
+                        )
+                        ON CONFLICT (signal_id) DO UPDATE SET
+                            conviction_score = EXCLUDED.conviction_score,
+                            position_usd = EXCLUDED.position_usd
+                        """,
+                        (
+                            s.signal_id, s.generated_at, s.asset, s.instrument_name,
+                            s.direction, s.strike, s.expiry, s.dte, s.delta, s.mark_iv,
+                            s.entry_premium, s.underlying_price,
+                            s.gate2_score, s.gate3_call_score, s.gate3_put_score,
+                            s.conviction_score, s.position_usd, s.take_profit_multiple,
+                            s.expiry_category, s.regime_flag,
+                            _json.dumps(breakdown), _json.dumps(exit_params),
+                        ),
+                    )
+                    saved += 1
+        except Exception as exc:
+            logger.error("save_otm_signals failed: %s", exc)
+        return saved

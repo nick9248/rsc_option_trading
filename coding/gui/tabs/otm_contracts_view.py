@@ -19,7 +19,7 @@ from typing import List, Optional
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QSplitter, QScrollArea,
     QLabel, QPushButton, QDoubleSpinBox, QSlider, QFrame,
-    QButtonGroup, QCheckBox, QSizePolicy,
+    QButtonGroup, QCheckBox,
 )
 from PySide6.QtCore import Qt, QThread, Signal
 from coding.gui.theme.colors import Colors
@@ -132,12 +132,24 @@ class OTMContractsView(QWidget):
     # ── Left panel ─────────────────────────────────────────────────────────────
 
     def _build_left_panel(self) -> QWidget:
-        panel = QWidget()
-        panel.setFixedWidth(300)
-        panel.setStyleSheet(f"background-color: {Colors.SURFACE};")
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(12)
+        # Outer fixed-width container
+        outer = QWidget()
+        outer.setFixedWidth(300)
+        outer.setStyleSheet(f"background-color: {Colors.SURFACE};")
+        outer_layout = QVBoxLayout(outer)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
+
+        # Scrollable content area (holds everything above the FIND button)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setStyleSheet("border: none; background-color: transparent;")
+
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(12, 12, 12, 4)
+        layout.setSpacing(10)
 
         # Section 1: Live conditions
         layout.addWidget(self._section_label("LIVE CONDITIONS"))
@@ -158,7 +170,7 @@ class OTMContractsView(QWidget):
         layout.addWidget(self._section_label("QUICK SETUP"))
 
         layout.addWidget(QLabel("Asset", styleSheet=f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;"))
-        self._asset_group = self._toggle_group(["BTC", "ETH", "BOTH"], default=2)
+        self._asset_group = self._toggle_group(["BTC", "ETH", "BOTH"], default=0)
         layout.addLayout(self._asset_group[0])
 
         layout.addWidget(QLabel("Direction", styleSheet=f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;"))
@@ -169,19 +181,11 @@ class OTMContractsView(QWidget):
         self._expiry_group = self._toggle_group(["SHORT", "MEDIUM", "LONG", "AUTO"], default=3)
         layout.addLayout(self._expiry_group[0])
 
-        layout.addWidget(QLabel("Risk Budget (USD)", styleSheet=f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;"))
-        self._budget_spin = QDoubleSpinBox()
-        self._budget_spin.setRange(100, 1_000_000)
-        self._budget_spin.setSingleStep(500)
-        budget = getattr(self._config, "risk_budget_usd", 10_000.0) if self._config else 10_000.0
-        self._budget_spin.setValue(budget)
-        self._budget_spin.setStyleSheet(self._input_style())
-        layout.addWidget(self._budget_spin)
-
         # Section 3: Advanced filters (collapsible)
-        self._adv_toggle = QPushButton("ADVANCED FILTERS +")
+        self._adv_toggle = QPushButton("▶ ADVANCED FILTERS")
         self._adv_toggle.setStyleSheet(
-            f"color: {Colors.TEXT_SECONDARY}; border: none; font-size: 11px; text-align: left;"
+            f"color: {Colors.TEXT_SECONDARY}; border: none; font-size: 11px;"
+            " text-align: left; padding: 0px;"
         )
         self._adv_toggle.clicked.connect(self._toggle_advanced)
         layout.addWidget(self._adv_toggle)
@@ -191,8 +195,15 @@ class OTMContractsView(QWidget):
         layout.addWidget(self._adv_panel)
 
         layout.addStretch()
+        scroll.setWidget(content)
+        outer_layout.addWidget(scroll)
 
-        # Find button
+        # Footer: FIND button + scan summary (always visible, outside scroll)
+        footer = QWidget()
+        footer_layout = QVBoxLayout(footer)
+        footer_layout.setContentsMargins(12, 4, 12, 12)
+        footer_layout.setSpacing(4)
+
         self._find_btn = QPushButton("FIND OTM CONTRACTS")
         self._find_btn.setStyleSheet(f"""
             QPushButton {{
@@ -204,13 +215,14 @@ class OTMContractsView(QWidget):
             QPushButton:disabled {{ background-color: {Colors.ACCENT_MUTED}; color: {Colors.TEXT_MUTED}; }}
         """)
         self._find_btn.clicked.connect(self._on_find)
-        layout.addWidget(self._find_btn)
+        footer_layout.addWidget(self._find_btn)
 
         self._scan_summary = QLabel("No scan yet")
         self._scan_summary.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 10px;")
-        layout.addWidget(self._scan_summary)
+        footer_layout.addWidget(self._scan_summary)
 
-        return panel
+        outer_layout.addWidget(footer)
+        return outer
 
     def _build_advanced_panel(self) -> QFrame:
         """Build all 6 advanced filter controls per spec §15."""
@@ -280,7 +292,7 @@ class OTMContractsView(QWidget):
         visible = not self._adv_panel.isVisible()
         self._adv_panel.setVisible(visible)
         self._adv_toggle.setText(
-            "ADVANCED FILTERS -" if visible else "ADVANCED FILTERS +"
+            "▼ ADVANCED FILTERS" if visible else "▶ ADVANCED FILTERS"
         )
 
     # ── Right panel ────────────────────────────────────────────────────────────
@@ -349,12 +361,12 @@ class OTMContractsView(QWidget):
             show_suppressed=self._show_suppressed_cb.isChecked(),
         )
         self._worker.finished.connect(self._on_results)
-        self._worker.finished.connect(self._worker.deleteLater)  # safe cleanup
         self._worker.gate2_updated.connect(self._on_gate2_update)
         self._worker.error.connect(self._on_error)
         self._worker.start()
 
     def _on_results(self, signals: list) -> None:
+        self._worker = None
         self._find_btn.setEnabled(True)
         self._find_btn.setText("FIND OTM CONTRACTS")
         self._clear_results()
@@ -399,6 +411,7 @@ class OTMContractsView(QWidget):
         self._gate2_bar.set_score(score)
 
     def _on_error(self, message: str) -> None:
+        self._worker = None
         self._find_btn.setEnabled(True)
         self._find_btn.setText("FIND OTM CONTRACTS")
         self._header_label.setText(f"Error: {message}")
