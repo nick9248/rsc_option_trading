@@ -4,11 +4,8 @@ Gate 1 — Liquidity Filter.
 Hard pass/fail. All conditions must pass. Cheap to compute; run first.
 Returns (passed: bool, reason: str).
 """
-import logging
 from typing import Tuple
 from coding.core.strategy.otm.models.otm_config import OTMConfig
-
-logger = logging.getLogger(__name__)
 
 _FEE_RATE = 0.0003   # Deribit taker fee per leg
 

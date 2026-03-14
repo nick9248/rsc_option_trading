@@ -155,3 +155,17 @@ def test_btc_absolute_spread_threshold_in_vol_pts(gate):
     passed, reason = gate.check(_make_contract(bid_iv=0.60, ask_iv=0.641))
     assert not passed
     assert "absolute" in reason.lower()
+
+
+def test_fails_zero_mid_iv(gate):
+    # Both IVs equal to zero gives mid_iv = 0 → invalid
+    passed, reason = gate.check(_make_contract(bid_iv=0.0, ask_iv=0.0))
+    assert not passed
+    assert "0" in reason or "invalid" in reason.lower()
+
+
+def test_fails_zero_volume_24h(gate):
+    passed, reason = gate.check(_make_contract(volume_24h=0, open_interest=200))
+    # ratio = 0/200 = 0.0 <= 0.05 → fails
+    assert not passed
+    assert "volume" in reason.lower() or "oi" in reason.lower()
