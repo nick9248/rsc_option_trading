@@ -28,10 +28,12 @@
 
 **Problem Solved**: The existing rule-based regime detection system uses fixed weights and linear relationships. ML can capture complex non-linear patterns, temporal dependencies, and adapt to changing market conditions.
 
-**Current Status**:
-- ✅ **Phase 1 Complete**: Data collection infrastructure operational (Feb 3-13, 2026)
-- ✅ **Database**: 96,250 trades, 20,191 hourly snapshots, 100% data quality
-- ⏳ **Phase 2 Pending**: ML model training (waiting for 30 days of data, ~20 days remaining)
+**Current Status** *(updated March 2026)*:
+- ✅ **Phase 1 Complete**: Data collection infrastructure operational (Feb 3, 2026 onward)
+- ✅ **Database**: 234,793 BTC trades, 89,483 ETH trades | 418 BTC hourly snapshot hours | 414 ETH hourly snapshot hours
+- ✅ **OHLCV History**: 731 daily candles per currency (2024-03-14 → 2026-03-14) — ML realized vol/return/drawdown features now populated
+- ⚠️ **Data Coverage**: ~55% effective coverage due to PC sleep gaps (418h usable of 934h elapsed). Need ~302 more hours for ML training minimum (720h)
+- ⏳ **Phase 2 Pending**: ML model training (need 720h continuous hourly snapshots per currency)
 - ❌ **Phase 3 Not Started**: Production deployment, inference service
 
 **Key Achievement**: Built a **production-grade 24/7 data collection system** that gathers all required features for ML training with 100% data quality and zero errors.

@@ -54,13 +54,14 @@ class SystemValidator:
         self._check_database_connection()
         self._check_required_tables()
         self._check_collection_daemon()
-        self._check_trade_collector()  # NEW: Check trade collector daemon
+        self._check_trade_collector()
         self._check_data_freshness()
         self._check_historical_trades()
         self._check_hourly_snapshots()
         self._check_backfill_status()
         self._check_data_quality()
         self._check_prospective_collection()
+        self._check_ohlcv_history()
         self._check_ml_pipeline()
 
         # Print summary
@@ -70,7 +71,7 @@ class SystemValidator:
 
     def _check_api_connectivity(self):
         """Check Deribit API connectivity."""
-        logger.info("\n[1/12] Checking API Connectivity...")
+        logger.info("\n[1/13] Checking API Connectivity...")
         logger.info("-" * 80)
 
         try:
@@ -94,7 +95,7 @@ class SystemValidator:
 
     def _check_database_connection(self):
         """Check database connection."""
-        logger.info("\n[2/12] Checking Database Connection...")
+        logger.info("\n[2/13] Checking Database Connection...")
         logger.info("-" * 80)
 
         try:
@@ -118,7 +119,7 @@ class SystemValidator:
 
     def _check_required_tables(self):
         """Check all required tables exist."""
-        logger.info("\n[3/12] Checking Required Tables...")
+        logger.info("\n[3/13] Checking Required Tables...")
         logger.info("-" * 80)
 
         required_tables = [
@@ -166,7 +167,7 @@ class SystemValidator:
 
     def _check_collection_daemon(self):
         """Check if unified scheduler is running."""
-        logger.info("\n[4/12] Checking Unified Scheduler...")
+        logger.info("\n[4/13] Checking Unified Scheduler...")
         logger.info("-" * 80)
 
         import os
@@ -210,7 +211,7 @@ class SystemValidator:
 
     def _check_trade_collector(self):
         """Check if trade collector is running and collecting data."""
-        logger.info("\n[5/12] Checking Trade Collector...")
+        logger.info("\n[5/13] Checking Trade Collector...")
         logger.info("-" * 80)
 
         try:
@@ -301,7 +302,7 @@ class SystemValidator:
 
     def _check_data_freshness(self):
         """Check if data is fresh (recently collected)."""
-        logger.info("\n[6/12] Checking Data Freshness...")
+        logger.info("\n[6/13] Checking Data Freshness...")
         logger.info("-" * 80)
 
         tables_to_check = {
@@ -344,7 +345,7 @@ class SystemValidator:
 
     def _check_historical_trades(self):
         """Check historical trades collection."""
-        logger.info("\n[7/12] Checking Historical Trades...")
+        logger.info("\n[7/13] Checking Historical Trades...")
         logger.info("-" * 80)
 
         conn = self.repo._get_connection()
@@ -378,7 +379,7 @@ class SystemValidator:
 
     def _check_hourly_snapshots(self):
         """Check hourly snapshots."""
-        logger.info("\n[8/12] Checking Hourly Snapshots...")
+        logger.info("\n[8/13] Checking Hourly Snapshots...")
         logger.info("-" * 80)
 
         conn = self.repo._get_connection()
@@ -412,7 +413,7 @@ class SystemValidator:
 
     def _check_backfill_status(self):
         """Check backfill coverage."""
-        logger.info("\n[9/12] Checking Backfill Status...")
+        logger.info("\n[9/13] Checking Backfill Status...")
         logger.info("-" * 80)
 
         conn = self.repo._get_connection()
@@ -451,7 +452,7 @@ class SystemValidator:
 
     def _check_data_quality(self):
         """Check data quality metrics."""
-        logger.info("\n[10/12] Checking Data Quality...")
+        logger.info("\n[10/13] Checking Data Quality...")
         logger.info("-" * 80)
 
         conn = self.repo._get_connection()
@@ -485,7 +486,7 @@ class SystemValidator:
 
     def _check_prospective_collection(self):
         """Check prospective collection (real-time)."""
-        logger.info("\n[11/12] Checking Prospective Collection...")
+        logger.info("\n[11/13] Checking Prospective Collection...")
         logger.info("-" * 80)
 
         conn = self.repo._get_connection()
@@ -515,9 +516,57 @@ class SystemValidator:
             cursor.close()
             self.repo._return_connection(conn)
 
+    def _check_ohlcv_history(self):
+        """Check OHLCV history table has data for ML feature engineering."""
+        logger.info("\n[12/13] Checking OHLCV History...")
+        logger.info("-" * 80)
+
+        conn = self.repo._get_connection()
+        cursor = conn.cursor()
+
+        try:
+            cursor.execute("""
+                SELECT currency, COUNT(*), MIN(date)::date, MAX(date)::date
+                FROM ohlcv_history
+                GROUP BY currency
+                ORDER BY currency
+            """)
+            rows = cursor.fetchall()
+
+            if not rows:
+                logger.error("  ohlcv_history: EMPTY")
+                logger.error("  Run: python -m scripts.backfill_ohlcv")
+                self.results["failed"].append(
+                    "ohlcv_history is empty — ML features (realized vol, returns, drawdown) will be zero. "
+                    "Run: python -m scripts.backfill_ohlcv"
+                )
+                return
+
+            all_ok = True
+            for currency, count, earliest, latest in rows:
+                days = (latest - earliest).days if latest and earliest else 0
+                logger.info(f"  {currency}: {count} candles | {earliest} to {latest} ({days} days)")
+
+                if count < 30:
+                    logger.error(f"    {currency}: INSUFFICIENT (<30 candles)")
+                    self.results["failed"].append(f"ohlcv_history {currency}: only {count} candles")
+                    all_ok = False
+                elif count < 180:
+                    logger.warning(f"    {currency}: LIMITED (<180 candles, some ML features degraded)")
+                    self.results["warnings"].append(f"ohlcv_history {currency}: only {count} candles (<6 months)")
+                    all_ok = False
+
+            if all_ok:
+                total = sum(r[1] for r in rows)
+                self.results["passed"].append(f"OHLCV History ({total} candles across {len(rows)} currencies)")
+
+        finally:
+            cursor.close()
+            self.repo._return_connection(conn)
+
     def _check_ml_pipeline(self):
         """Check ML models and data pipeline readiness."""
-        logger.info("\n[12/12] Checking ML Pipeline...")
+        logger.info("\n[13/13] Checking ML Pipeline...")
         logger.info("-" * 80)
 
         import os

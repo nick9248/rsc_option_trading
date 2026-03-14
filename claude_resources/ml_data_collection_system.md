@@ -10,18 +10,20 @@ Core Layer (coding/core/)
 │   └── repository.py              # Added execute_query() for parameterized queries
 
 Service Layer (coding/service/data_collection/)
-├── prospective_collector.py       # Hourly snapshots with greeks (30 min intervals)
+├── prospective_collector.py       # Hourly snapshots with greeks (30 min intervals) + OHLCV daily candle
 ├── trade_collector.py             # Individual trades with direction (60 sec intervals)
 ├── unified_scheduler.py           # Orchestrates both collectors (auto-starts on boot)
 └── collection_daemon.py           # Legacy daemon (deprecated, use unified_scheduler)
 
 Scripts Layer (scripts/)
-└── validate_system.py             # Updated with trade collector health check
+├── validate_system.py             # System health check (13 checks including OHLCV)
+└── backfill_ohlcv.py              # One-time backfill: 2 years of daily OHLCV candles
 
 Database Tables
 ├── snapshots                      # Raw prospective snapshots
 ├── hourly_snapshots              # Aggregated hourly data (for ML training)
-└── historical_trades             # Individual trades with direction field
+├── historical_trades             # Individual trades with direction field
+└── ohlcv_history                 # Daily OHLCV candles for BTC-PERPETUAL / ETH-PERPETUAL
 ```
 
 ## Components
@@ -85,19 +87,44 @@ collector.start(currencies=["BTC", "ETH"], duration_hours=24)
 
 ### 2. Prospective Collector (`prospective_collector.py`)
 
-**Purpose**: Collects hourly snapshots with greeks for options data.
+**Purpose**: Collects hourly snapshots with greeks for options data, plus daily OHLCV candles.
 
 **Key Features**:
 - Runs every 30 minutes
 - Collects book summary with open interest
 - Runs on-chain analysis (max pain, GEX/DEX, levels)
 - Aggregates data into hourly snapshots
+- Fetches latest 2 daily OHLCV candles (idempotent, ON CONFLICT DO NOTHING)
 
 **Data Collected**:
 - Instrument snapshots (prices, volume, OI, greeks)
 - On-chain metrics (max pain, GEX/DEX)
 - DVOL and funding rates
 - Hourly aggregations
+- Daily OHLCV candles for BTC-PERPETUAL and ETH-PERPETUAL → `ohlcv_history`
+
+### OHLCV History (`ohlcv_history` table)
+
+**Purpose**: Daily OHLCV candles needed by ML feature engineering for realized volatility, price returns, and drawdown features.
+
+**Initial backfill**: Run once to populate 2 years of history:
+```bash
+python -m scripts.backfill_ohlcv           # BTC + ETH, 2 years back
+python -m scripts.backfill_ohlcv --years 3 # 3 years
+python -m scripts.backfill_ohlcv --currency BTC  # single currency
+```
+
+**Ongoing**: `ProspectiveCollector` keeps it current automatically every 30 min.
+
+**ML features powered by this table**:
+- `realized_vol_24h`, `realized_vol_7d`, `realized_vol_30d`
+- `return_1d`, `return_7d`, `return_30d`
+- `drawdown_from_ath`, `drawdown_7d`
+- `volume_24h`, `volume_change_pct`
+- `trend_consistency`
+
+**Schema**: `id, currency, instrument_name, timestamp (ms), date, open, high, low, close, volume, created_at`
+**Unique constraint**: `(instrument_name, timestamp)`
 
 ### 3. Unified Scheduler (`unified_scheduler.py`)
 
