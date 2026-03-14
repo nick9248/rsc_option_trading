@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QGridLayout, QScrollArea,
     QFrame, QLabel, QPushButton, QStackedWidget, QHBoxLayout,
 )
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from coding.gui.theme.colors import Colors
 from coding.gui.components.gate_score_bar import GateScoreBar
 from coding.gui.tabs.otm_contracts_view import OTMContractsView
@@ -33,6 +33,8 @@ class StrategyTileWidget(QFrame):
     Shows title, status dot, Gate 2 score bar, regime badge,
     last scan time, active signal count, and OPEN button.
     """
+
+    open_clicked = Signal()
 
     def __init__(self, title: str, description: str,
                  gate2_score: float = 0.0,
@@ -73,9 +75,9 @@ class StrategyTileWidget(QFrame):
         title_row.addStretch()
 
         if self._enabled:
-            dot = QLabel("●")
-            dot.setStyleSheet(f"color: {self._status_color(gate2_score)}; font-size: 14px;")
-            title_row.addWidget(dot)
+            self._dot = QLabel("●")
+            self._dot.setStyleSheet(f"color: {self._status_color(gate2_score)}; font-size: 14px;")
+            title_row.addWidget(self._dot)
         layout.addLayout(title_row)
 
         if self._enabled:
@@ -120,6 +122,7 @@ class StrategyTileWidget(QFrame):
                 }}
                 QPushButton:hover {{ background-color: {Colors.BUTTON_PRIMARY_HOVER}; }}
             """)
+            self._open_btn.clicked.connect(self.open_clicked)
             layout.addWidget(self._open_btn)
 
     def update_status(self, gate2_score: float, regime: str,
@@ -128,6 +131,7 @@ class StrategyTileWidget(QFrame):
         if not self._enabled:
             return
         self._score_bar.set_score(gate2_score)
+        self._dot.setStyleSheet(f"color: {self._status_color(gate2_score)}; font-size: 14px;")
         self._regime_badge.setText(regime)
         self._last_scan_lbl.setText(f"Last: {last_scan}")
         self._signals_lbl.setText(f"{active_signals} active signals")
@@ -185,8 +189,7 @@ class SpecialStrategiesTab(QWidget):
             active_signals=0,
             enabled=True,
         )
-        if hasattr(otm_tile, "_open_btn"):
-            otm_tile._open_btn.clicked.connect(self._open_otm_view)
+        otm_tile.open_clicked.connect(self._open_otm_view)
         grid.addWidget(otm_tile, 0, 0)
         self._otm_tile = otm_tile  # hold reference for refresh updates
 
@@ -230,6 +233,7 @@ class SpecialStrategiesTab(QWidget):
         if self._service is None or self._otm_tile is None:
             return
         try:
+            # BTC is the primary asset for OTM Contracts; extend when ETH tile is added
             result = self._service.score_gate2("BTC")
             if result:
                 score = float(result.get("total_score", 0.0))

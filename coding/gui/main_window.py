@@ -25,6 +25,7 @@ from coding.gui.tabs.database_tab import DatabaseTab
 from coding.gui.tabs.strategy_tab import StrategyTab
 from coding.gui.tabs.regime_tab import RegimeTab
 from coding.gui.tabs.system_validation_tab import SystemValidationTab
+from coding.gui.tabs.special_strategies_tab import SpecialStrategiesTab
 from coding.core.database.repository import DatabaseRepository
 from coding.service.deribit.deribit_api_service import DeribitApiService
 
@@ -154,16 +155,13 @@ class MainWindow(QMainWindow):
             strategy_tab = StrategyTab(api_service, repository)
             self.tab_widget.addTab(strategy_tab, "Strategies")
         except Exception as e:
-            logger.error(f"Failed to initialize Strategies tab: {e}")
+            logger.error("Failed to initialize Strategies tab: %s", e)
             self._add_placeholder_tab("Strategies", "Strategy evaluation tab failed to initialize")
 
         # Special Strategies tab
         try:
             from coding.core.strategy.otm.models.otm_config import OTMConfig
             from coding.service.strategy.otm.otm_finder_service import OTMFinderService
-            from coding.service.deribit.deribit_api_service import DeribitApiService
-            from coding.core.database.repository import DatabaseRepository
-            from coding.gui.tabs.special_strategies_tab import SpecialStrategiesTab
             _otm_api = DeribitApiService()
             _otm_repo = DatabaseRepository()
             otm_config = OTMConfig(risk_budget_usd=10_000.0)
@@ -178,7 +176,7 @@ class MainWindow(QMainWindow):
             )
             self.tab_widget.addTab(special_tab, "Special Strategies")
         except Exception as e:
-            logger.error(f"Failed to initialize Special Strategies tab: {e}")
+            logger.error("Failed to initialize Special Strategies tab: %s", e)
             self._add_placeholder_tab("Special Strategies", "Special strategies tab failed to initialize")
 
         # Market Regime Detection tab
