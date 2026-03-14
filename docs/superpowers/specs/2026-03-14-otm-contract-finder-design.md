@@ -1,7 +1,7 @@
 # OTM Contract Finder — Design Spec
 **Date:** 2026-03-14
 **Branch:** strategies/otm_contracts
-**Status:** Draft v3 — all review issues resolved
+**Status:** Draft v4 — multi-persona audit fixes applied
 
 ---
 
@@ -84,10 +84,15 @@ Every 30 minutes (or on-demand trigger):
    ─────────────────────────────────────────────────────
    GATE 1 — Liquidity (hard pass/fail — cheap to compute, run first)
    ─────────────────────────────────────────────────────
-   ├── Bid-ask spread:   (ask_iv − bid_iv) in pct points
-   │     < 1.5 vol pts if abs(delta) in [0.10, 0.20]
-   │     < 2.0 vol pts if abs(delta) in (0.20, 0.45]
+   ├── Bid-ask spread:   DUAL threshold — BOTH conditions must pass:
+   │     Condition A (relative): (ask_iv − bid_iv) / mid_iv < 0.08
+   │       mid_iv = (ask_iv + bid_iv) / 2
+   │       Catches wide spreads in high-vol regimes where absolute spreads naturally widen
+   │     Condition B (absolute cap): (ask_iv − bid_iv) < 4.0 vol pts
+   │       Hard ceiling; prevents entry on illiquid far-wing strikes in any regime
    │     If ask_iv or bid_iv is null → FAIL
+   │     Rationale: absolute-only threshold boxes out valid OTM trades in vol expansion;
+   │       relative-only threshold allows too-wide spreads on low-IV options
    ├── Volume/OI ratio:  volume_24h / open_interest > 0.05
    ├── Min OI:           open_interest > 50 contracts (BTC) | > 200 contracts (ETH)
    ├── Tx cost floor:    round_trip_fee = 2 × 0.0003 × underlying_price × contract_qty
@@ -103,9 +108,16 @@ Every 30 minutes (or on-demand trigger):
    ─────────────────────────────────────────────────────
    ├── V1 (30%):  DVOL Percentile
    │     Formula: percentile_rank(current_dvol, dvol_history_36m)
-   │     BTC: full score if < 30th pctile AND dvol_value < 60
-   │     ETH: full score if < 30th pctile AND dvol_value < 70
-   │     Degraded mode (< 36m history): use available history; log warning
+   │     Primary signal: full score if < 30th percentile of 36m history
+   │     Dynamic absolute floor (replaces hardcoded 60/70):
+   │       dvol_floor = dvol_36m_median + dvol_36m_std
+   │       Full score only if current_dvol < dvol_floor AND < 30th percentile
+   │       Rationale: hardcoded floors break across macro vol regimes; dynamic floor
+   │         self-calibrates to each regime's level
+   │       Fallback if < 36m history available:
+   │         ≥ 12m: use available history for percentile; set dvol_floor = dvol_available_median + 1σ
+   │         < 12m but ≥ 90d: compute on available data; log WARNING
+   │         < 90d: V1 score = 50 (neutral); log WARNING "DVOL history insufficient"
    │
    ├── V2+V4 (40%): Vol Fair Value (merged signal)
    │     Sub-signal A (50%): VRP component
@@ -121,9 +133,23 @@ Every 30 minutes (or on-demand trigger):
          Use existing calculate_iv_term_structure() on available expirations
          Slope = back_iv − front_iv (shortest vs. longest available within 90d DTE)
          If only one expiration available: V3 score = 50 (neutral)
-         Contango (slope > +5 pts): full score; suggests buying back-month OTM
-         Backwardation (slope < −5 pts): full score; suggests buying front-month OTM
-         Flat (|slope| ≤ 5 pts): score = 50
+
+         SCORING (for outright naked OTM buying only — this is NOT a spread system):
+         Contango (slope > +5 pts): FULL SCORE (100)
+           → Back-month vol is cheap relative to front; buy back-month OTM
+         Flat (|slope| ≤ 5 pts): score = 50 (neutral)
+         Shallow backwardation (slope −5 to −15 pts): score = 25 (suppressed)
+           → Front-month vol elevated; entry discouraged but not blocked
+         Deep backwardation (slope < −15 pts): score = 0 (block)
+           → Front-month vol is extremely expensive; market pricing imminent tail event
+           → Buying naked OTM here is negative EV — premium too high to break even
+           → Gate 2 total score is materially suppressed; new entries will be blocked
+
+         CRITICAL RATIONALE: Deep backwardation ≠ buy signal for naked OTM.
+         It means the market is already pricing a large move — you are buying
+         after the premium has spiked. This is the opposite of cheap vol.
+         Phase 2 (spreads): backwardation becomes a BUY signal for debit spreads
+         (IV elevation on short leg reduces net debit), but that is out of scope for v1.
 
    Gate 2 output: 0–100 score (integer boundaries are inclusive)
    ├── Score ≥ 40  → new entries allowed; no exit action
@@ -175,7 +201,10 @@ Every 30 minutes (or on-demand trigger):
    2. ETH call penalty: if asset=ETH AND direction=call AND delta in [0.25, 0.35]
       → multiply call_score by 0.85 (structural covered-call sell pressure)
    3. Regime adjustment:
-      bull_flag = (sma_50d > sma_200d) on daily closes from OHLCV DB
+      bull_flag = (ema_10d > ema_20d) AND (spot_close > sma_50d) on daily closes from OHLCV DB
+      Rationale: 50/200 SMA crossover is too lagging for options with 1–90 DTE —
+        by the time it signals, a 50%+ move has happened and vol is expensive.
+        Dual filter: fast EMA cross (10/20) for momentum + spot > 50 SMA for trend support.
       Directional signal mapping for regime scaling:
         CALL-directional signals (scaled ×1.30 in bull, ×0.70 in bear):
           D1+D7 (Dealer Positioning), D2 (Funding), D3 (RR Z-Score), D4 (P/C OI),
@@ -206,7 +235,10 @@ Every 30 minutes (or on-demand trigger):
    │     Multiple expiry candidates: score by Vega/Theta ratio, select highest
    │
    ├── Vega/Theta ratio: abs(vega) / abs(theta) using raw Deribit greek values ($/1% vol / $/day)
-   │     prefer > 0.5; ideal > 1.0
+   │     Targets are DTE-dependent (ratio collapses near expiry — flat threshold is wrong):
+   │       Short  (DTE 1–7):   prefer > 0.05  (theta dominates; vega/theta naturally low)
+   │       Medium (DTE 7–30):  prefer > 0.30  (balanced decay vs. vol sensitivity)
+   │       Long   (DTE 30–90): prefer > 0.80  (vega should dominate; cheap carry cost)
    │
    ├── Gamma/Premium ratio: gamma / entry_premium (per contract)
    │     For short-dated (DTE ≤ 7): select highest Gamma/Premium among delta-filtered candidates
@@ -224,10 +256,16 @@ Every 30 minutes (or on-demand trigger):
    gate3_directional_score = call_score if buying calls; put_score if buying puts
 
    P_win lookup (pre-calibration priors; replaced post-backtesting via OTMConfig):
-     conviction 40–60 → P_win = 0.35, avg_return_multiple = 2.0
-     conviction 60–75 → P_win = 0.45, avg_return_multiple = 3.0
-     conviction 75–90 → P_win = 0.55, avg_return_multiple = 5.0
-     conviction > 90  → P_win = 0.65, avg_return_multiple = 8.0
+     conviction 40–60 → P_win = 0.35, avg_return_multiple = 1.5
+     conviction 60–75 → P_win = 0.40, avg_return_multiple = 2.0
+     conviction 75–90 → P_win = 0.45, avg_return_multiple = 2.5
+     conviction > 90  → P_win = 0.50, avg_return_multiple = 3.0
+
+   CRITICAL: avg_return_multiple capped at 3.0× pre-calibration.
+   The previous 8× prior would catastrophically oversize positions — options rarely
+   sustain 8× average returns; assuming it causes Kelly to allocate as if you have
+   a near-certain 8:1 bet. Cap at 3.0× until backtesting proves actual return distribution.
+   These conservative priors will undersize positions — that is intentional.
 
    kelly_fraction = (P_win × avg_return_multiple − (1 − P_win)) / avg_return_multiple
    fractional_kelly = kelly_fraction × 0.25        # 1/4 Kelly — prevents ruin on binary outcomes
@@ -249,9 +287,9 @@ Every 30 minutes (or on-demand trigger):
 
 | # | Parameter | Formula | Source | Buy Signal | Weight | Confidence |
 |---|---|---|---|---|---|---|
-| V1 | DVOL Percentile | `percentile_rank(dvol_now, dvol_36m_history)` | New: Deribit `/public/get_index_price_history`, stored in `dvol_history` table | < 30th pctile AND abs val < 60 (BTC) / 70 (ETH) | 30% | High |
-| V2+V4 | Vol Fair Value | 50% × VRP_score + 50% × GARCH_score | VRP: `vrp_calculator.py`; GARCH: new GJR-GARCH on daily OHLCV | VRP < +5 pts AND GARCH/IV > 1.10 | 40% | High |
-| V3 | Term Structure | `calculate_iv_term_structure()` back_iv − front_iv | `market_wide_calculator.py` | Contango > +5 OR Backwardation < −5 | 30% | High |
+| V1 | DVOL Percentile | `percentile_rank(dvol_now, dvol_36m_history)` + dynamic floor = (36m median + 1σ) | New: Deribit `/public/get_index_price_history`, `dvol_history` table | < 30th pctile AND dvol < dynamic floor | 30% | High |
+| V2+V4 | Vol Fair Value | 50% × VRP_score + 50% × GARCH_score | VRP: `vrp_calculator.py`; GARCH: GJR-GARCH on daily OHLCV | VRP < +5 pts AND GARCH/IV > 1.10 | 40% | High |
+| V3 | Term Structure | `calculate_iv_term_structure()` back_iv − front_iv | `market_wide_calculator.py` | **Contango > +5 pts ONLY** (full score). Flat = 50. Shallow backwardation = 25. **Deep backwardation < −15 pts = 0 (block)** — front-month vol too expensive for naked OTM | 30% | High |
 | MAC | Macro Overlay | Fed + DXY + BTC/Nasdaq | External — not yet available | — | **Deferred to phase 2** | Medium-High |
 
 *Gate 2 total: 100% (V1 + V2+V4 + V3)*
@@ -263,7 +301,7 @@ Every 30 minutes (or on-demand trigger):
 | # | Parameter | Formula | Source | Bullish (+1) | Bearish (−1) | BTC Wt | ETH Wt | Conf |
 |---|---|---|---|---|---|---|---|---|
 | D1+D7 | Dealer Positioning | GEX sign near spot + vanna sign post-IV change | `gex_dex_calculator.py` + `_calculate_second_order_greeks()` | Net GEX negative below spot + vanna unwind → up | Net GEX positive above spot | 22% | 24% | High |
-| D2 | Funding Rate Pctile | `percentile_rank(funding_now, funding_12m_history)` + trend direction | `market_wide_calculator.calculate_perpetual_funding_trend()` | < 10th pctile AND spot not at new 30d low | > 90th pctile AND spot not at new 30d high | 15% | 17% | High |
+| D2 | Funding Rate Pctile | `percentile_rank(funding_now, funding_12m_history)` + trend direction | `market_wide_calculator.calculate_perpetual_funding_trend()` | **Bullish (calls):** < 10th pctile AND spot not making new 30d low (peak short crowding = squeeze setup). **Also bullish:** > 90th pctile AND spot making higher highs AND no bearish divergence (trend continuation in bull run — do NOT fade high funding in momentum regime). **Bearish (puts):** > 90th pctile AND spot making lower highs on same timeframe (bearish divergence only). | 15% | 17% | High |
 | D3 | 25Δ RR Z-Score | z = (rr25_now − rr25_30d_mean) / rr25_30d_std | `volatility_surface_calculator._calculate_25_delta_skew()` | z < −1.5 = calls cheap vs. puts | z > +1.5 = puts cheap | 14% | 15% | High |
 | D4 | P/C OI Ratio Pctile | `percentile_rank(pc_ratio_now, pc_ratio_12m_history)` — computed per asset | `volatility_surface_calculator._calculate_pc_by_moneyness()` | > 70th pctile (12m, asset-specific) | < 30th pctile | 11% | 12% | High |
 | D6+D9 | Institutional Flow | Block trades (≥ $500K OTM premium) + DEX sign change (sign flip between current and prior run) | `detect_block_trades(notional_threshold=500_000)` + `gex_dex_calculator.py` | OTM call blocks + positive DEX flip | OTM put blocks + negative DEX flip | 14% | 15% | Med-High |
@@ -279,14 +317,15 @@ Every 30 minutes (or on-demand trigger):
 
 Pre-calibration priors (replaced after backtesting by updating `OTMConfig`):
 
-| Conviction Score | P_win | Avg Return Target | Max Position (% of budget) |
+| Conviction Score | P_win | Avg Return Multiple (capped 3×) | Max Position (% of budget) |
 |---|---|---|---|
-| 40–60 | 0.35 | 2× premium | 2.5% |
-| 60–75 | 0.45 | 3× premium | 5.0% |
-| 75–90 | 0.55 | 5× premium | 7.5% |
-| > 90  | 0.65 | 8× premium | 10.0% |
+| 40–60 | 0.35 | 1.5× | ~1.0% |
+| 60–75 | 0.40 | 2.0× | ~2.5% |
+| 75–90 | 0.45 | 2.5× | ~3.5% |
+| > 90  | 0.50 | 3.0× | ~4.5% |
 
-*All thresholds stored in `OTMConfig` — updated without code changes post-backtesting.*
+**All priors deliberately conservative pre-backtesting. Capped at 3.0× to prevent Kelly oversizing.**
+Replaced with empirical values from backtesting. All thresholds in `OTMConfig`.
 
 ---
 
@@ -311,10 +350,20 @@ SIGNAL REVERSAL STOP (real-time only — D2, D3, D6+D9 recalculated each 30-min 
   If (entry_real_time_subscore − current_real_time_subscore) > 30 → full exit
   Note: D4, D8, D10 are daily signals — excluded from intraday reversal computation
 
-TIME / LOSS STOP:
-  At any point:              unrealized_loss > 50% of entry_premium → full exit
-  At 50% of DTE elapsed:    unrealized_loss > 30% of entry_premium → reduce to 50% size
-                              unrealized_loss > 50% of entry_premium → full exit
+TIME / LOSS STOP (theta-adjusted — rigid % stops fire from normal decay):
+  At entry: compute expected_theta_loss_at_50pct_dte = sum of daily theta × (DTE / 2)
+  At any point:
+    thesis_stop_price = min(entry_spot × 0.85 for calls, entry_spot × 1.15 for puts)
+    If spot breaches thesis_stop_price → full exit (thesis invalidated, not just decay)
+    If real_time_gate3_subscore flips fully negative → full exit (signal reversal)
+  At 50% of DTE elapsed:
+    excess_loss = unrealized_loss − expected_theta_loss_at_50pct_dte
+    If excess_loss > 20% of entry_premium → reduce to 50% size (loss beyond theta = thesis failing)
+    If excess_loss > 40% of entry_premium → full exit
+  Hard floor (prevent total bleed):
+    If unrealized_loss > 70% of entry_premium at any point → full exit regardless of DTE
+  Rationale: A rigid 50% premium stop fires routinely from normal theta decay on 14-DTE
+    options; theta-adjusted stop only triggers when losses exceed the expected decay path.
 
 EXPIRY RULE (checked every 30-min cycle):
   Never hold through expiry unless ALL of:
@@ -322,11 +371,19 @@ EXPIRY RULE (checked every 30-min cycle):
     - DTE ≤ 5 days
     - real_time_gate3_subscore > 0
 
-LIQUIDITY EXIT:
+LIQUIDITY EXIT (limit-chase — NEVER use market orders on OTM crypto options):
   If (exit_spread > 3 × entry_spread):
-    Split exit into 4 tranches × 15-minute intervals
-    If a tranche receives no fill within 15 min: re-queue as next tranche
-    Maximum retries: 3. After 3 failures: place market order and log as liquidity event
+    Activate limit-chase algorithm:
+      Step 1: Place limit sell at bid_iv (current best bid)
+      Step 2: If no fill within 10 seconds: reprice to (bid_iv − 0.5 vol pts); re-submit
+      Step 3: Repeat every 10 seconds, conceding 0.5 vol pts per cycle
+      Step 4: After 8 repricing cycles (80 seconds): hold position and trigger admin alert
+        → Log "LIQUIDITY_ALERT: unable to exit {instrument_name} after 8 reprice attempts"
+        → Do NOT send market order under any circumstances
+        → Position remains open; alert operator for manual decision
+  Rationale: OTM crypto option order books can have near-zero bids. A market order
+    sweeps the book and market makers fill you at 90% discount to fair value.
+    Holding the position with an alert is always preferable to a catastrophic market fill.
 
 GATE 2 POSITION MONITOR (checked every 30-min cycle, for all open positions):
   Gate 2 score 40+:  no action
@@ -464,9 +521,9 @@ class OTMConfig(BaseModel):
     max_single_trade_pct: float = 0.10  # Max 10% of budget per trade
     max_correlated_pct: float = 0.10  # BTC + ETH same direction = treated as one; max 10%
 
-    # Gate 1 thresholds
-    max_bid_ask_spread_wing: float = 1.5    # vol pts for 0.10–0.20Δ
-    max_bid_ask_spread_otm: float = 2.0     # vol pts for 0.20–0.35Δ
+    # Gate 1 thresholds (dual spread: relative AND absolute)
+    max_bid_ask_spread_relative: float = 0.08   # (ask_iv - bid_iv) / mid_iv < 8%
+    max_bid_ask_spread_absolute: float = 4.0    # hard cap in vol pts regardless of regime
     min_volume_oi_ratio: float = 0.05
     min_oi_btc: int = 50
     min_oi_eth: int = 200
@@ -475,13 +532,15 @@ class OTMConfig(BaseModel):
     # Gate 2 thresholds
     gate2_suppress_threshold: float = 40.0
     gate2_position_exit_threshold: float = 30.0
-    dvol_btc_absolute_floor: float = 60.0
-    dvol_eth_absolute_floor: float = 70.0
     dvol_percentile_threshold: float = 30.0
     dvol_lookback_months: int = 36
-    vrp_cheap_threshold: float = 5.0        # VRP < this = cheap vol
-    garch_iv_ratio_threshold: float = 1.10  # GARCH/IV > this = model says more vol
-    term_structure_threshold: float = 5.0   # vol pts; contango/backwardation threshold
+    # Dynamic floor: dvol_floor = rolling_median + rolling_std (no hardcoded absolute)
+    dvol_floor_std_multiplier: float = 1.0       # floor = median + (1 × std)
+    vrp_cheap_threshold: float = 5.0             # VRP < this = cheap vol
+    garch_iv_ratio_threshold: float = 1.10       # GARCH/IV > this = model says more vol
+    term_structure_contango_threshold: float = 5.0    # slope > this = contango (buy back-month)
+    term_structure_shallow_back_threshold: float = -5.0   # slope -5 to -15 = suppressed
+    term_structure_deep_back_threshold: float = -15.0     # slope < this = block (deep backwardation)
 
     # Gate 3 thresholds
     rr_z_score_threshold: float = 1.5
@@ -491,11 +550,12 @@ class OTMConfig(BaseModel):
     funding_percentile_bear: float = 90.0
     block_trade_min_premium: float = 500_000.0
     stablecoin_inflow_threshold_pct: float = 0.5
-    ris_divergence_threshold: float = 2.0   # vol pts
+    ris_divergence_threshold: float = 2.0        # vol pts
 
-    # Gate 3 regime
-    sma_short: int = 50
-    sma_long: int = 200
+    # Gate 3 regime (fast EMA dual filter — replaces slow 50/200 SMA)
+    ema_fast: int = 10
+    ema_slow: int = 20
+    trend_sma: int = 50                           # spot > this = trend support
     regime_call_multiplier: float = 1.30
     regime_put_multiplier: float = 0.70
 
@@ -504,34 +564,42 @@ class OTMConfig(BaseModel):
     max_delta_directional: float = 0.35
     min_delta_event: float = 0.10
     max_delta_event: float = 0.20
-    min_vega_theta_ratio: float = 0.5
+    # Vega/Theta targets per DTE category (ratio collapses near expiry)
+    vega_theta_short: float = 0.05               # DTE 1–7
+    vega_theta_medium: float = 0.30              # DTE 7–30
+    vega_theta_long: float = 0.80                # DTE 30–90
     max_breakeven_move_multiplier: float = 2.0
 
-    # Kelly / sizing
-    kelly_divisor: float = 4.0              # 1/4 Kelly
-    p_win_priors: Dict[str, float] = {      # overwritten post-backtesting
+    # Kelly / sizing (conservative priors — capped at 3.0× until backtesting)
+    kelly_divisor: float = 4.0                   # 1/4 Kelly
+    p_win_priors: Dict[str, float] = {
         "40_60": 0.35,
-        "60_75": 0.45,
-        "75_90": 0.55,
-        "90_100": 0.65,
+        "60_75": 0.40,
+        "75_90": 0.45,
+        "90_100": 0.50,
     }
-    avg_return_priors: Dict[str, float] = {
-        "40_60": 2.0,
-        "60_75": 3.0,
-        "75_90": 5.0,
-        "90_100": 8.0,
+    avg_return_priors: Dict[str, float] = {      # CAPPED at 3.0× pre-calibration
+        "40_60": 1.5,
+        "60_75": 2.0,
+        "75_90": 2.5,
+        "90_100": 3.0,
     }
 
-    # Exit thresholds
-    stop_loss_pct: float = 0.50
-    time_stop_loss_pct: float = 0.30        # at 50% DTE elapsed
+    # Exit thresholds (theta-adjusted stop)
+    stop_loss_hard_floor_pct: float = 0.70       # never let loss exceed 70% of premium
+    theta_excess_loss_reduce_pct: float = 0.20   # at 50% DTE: reduce if excess > 20%
+    theta_excess_loss_full_exit_pct: float = 0.40 # at 50% DTE: full exit if excess > 40%
+    thesis_stop_call_pct: float = 0.85           # full exit if spot drops to 85% of entry
+    thesis_stop_put_pct: float = 1.15            # full exit if spot rises to 115% of entry
     vega_windfall_iv_spike_threshold: float = 15.0
     vega_windfall_spot_move_max: float = 0.01
     vega_windfall_profit_threshold: float = 2.0
+    # Liquidity exit — limit-chase only (no market orders)
     liquidity_exit_spread_multiplier: float = 3.0
-    liquidity_exit_tranche_count: int = 4
-    liquidity_exit_max_retries: int = 3
-    itm_threshold_for_hold: float = 0.10   # > 10% ITM required to hold through expiry
+    liquidity_exit_reprice_interval_sec: int = 10
+    liquidity_exit_reprice_concession_vol_pts: float = 0.5
+    liquidity_exit_max_reprice_cycles: int = 8   # 80 seconds then alert; NO market order
+    itm_threshold_for_hold: float = 0.10
     hold_through_expiry_max_dte: int = 5
 ```
 
