@@ -567,45 +567,50 @@ class ProspectiveCollector:
         Args:
             currency: Currency symbol (e.g., "BTC", "ETH").
         """
-        instrument = f"{currency}-PERPETUAL"
-        now_ms = int(time.time() * 1000)
-        start_ms = now_ms - (2 * 24 * 60 * 60 * 1000)  # 2 days back
+        try:
+            instrument = f"{currency}-PERPETUAL"
+            now_ms = int(time.time() * 1000)
+            start_ms = now_ms - (2 * 24 * 60 * 60 * 1000)  # 2 days back
 
-        result = self.api.get_tradingview_chart_data(
-            instrument_name=instrument,
-            resolution="1D",
-            start_timestamp=start_ms,
-            end_timestamp=now_ms
-        )
+            result = self.api.get_tradingview_chart_data(
+                instrument_name=instrument,
+                resolution="1D",
+                start_timestamp=start_ms,
+                end_timestamp=now_ms
+            )
 
-        if not result or "ticks" not in result:
-            logger.warning(f"No OHLCV data returned for {instrument}")
-            return
+            if not result or "ticks" not in result:
+                logger.warning(f"No OHLCV data returned for {instrument}")
+                return
 
-        ticks = result["ticks"]
-        opens = result.get("open", [])
-        highs = result.get("high", [])
-        lows = result.get("low", [])
-        closes = result.get("close", [])
-        volumes = result.get("volume", [])
+            ticks = result["ticks"]
+            opens = result.get("open", [])
+            highs = result.get("high", [])
+            lows = result.get("low", [])
+            closes = result.get("close", [])
+            volumes = result.get("volume", [])
 
-        saved = 0
-        for i, ts_ms in enumerate(ticks):
-            try:
-                dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).replace(tzinfo=None)
-                self.repo.save_ohlcv(
-                    currency=currency,
-                    instrument_name=instrument,
-                    timestamp=ts_ms,
-                    date=dt,
-                    open_price=float(opens[i]) if i < len(opens) else 0.0,
-                    high=float(highs[i]) if i < len(highs) else 0.0,
-                    low=float(lows[i]) if i < len(lows) else 0.0,
-                    close=float(closes[i]) if i < len(closes) else 0.0,
-                    volume=float(volumes[i]) if i < len(volumes) else 0.0
-                )
-                saved += 1
-            except Exception as e:
-                logger.warning(f"Failed to save OHLCV candle for {instrument} at {ts_ms}: {e}")
+            processed = 0
+            for i, ts_ms in enumerate(ticks):
+                try:
+                    dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).replace(tzinfo=None)
+                    self.repo.save_ohlcv(
+                        currency=currency,
+                        instrument_name=instrument,
+                        timestamp=ts_ms,
+                        date=dt,
+                        open_price=float(opens[i]) if i < len(opens) else 0.0,
+                        high=float(highs[i]) if i < len(highs) else 0.0,
+                        low=float(lows[i]) if i < len(lows) else 0.0,
+                        close=float(closes[i]) if i < len(closes) else 0.0,
+                        volume=float(volumes[i]) if i < len(volumes) else 0.0
+                    )
+                    processed += 1
+                except Exception as e:
+                    logger.warning(f"Failed to save OHLCV candle for {instrument} at {ts_ms}: {e}")
 
-        logger.info(f"OHLCV: {saved}/{len(ticks)} candles saved for {instrument}")
+            logger.info(f"OHLCV: {processed}/{len(ticks)} candles processed for {instrument}")
+
+        except Exception as e:
+            logger.error(f"    Failed to fetch/save OHLCV: {e}")
+            raise
