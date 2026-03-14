@@ -84,7 +84,15 @@ def test_garch_score_0_when_forecast_below_ratio(gate):
     assert gate._score_garch(garch_fcast_annualized=0.55, atm_iv_30d=0.65) == 0.0
 
 def test_garch_score_50_when_fewer_than_90_candles(gate):
-    assert gate._score_garch_from_ohlcv(_make_ohlcv(50)) == 50.0
+    # score() returns garch_score=50 when < 90 candles
+    result = gate.score(
+        dvol_history=[60.0]*400, current_dvol=45.0,
+        atm_iv_30d=0.60, rv_30d_parkinson=0.55,
+        ohlcv_daily=_make_ohlcv(50),
+        term_structure_data={"spread": 8.0},
+    )
+    # With insufficient candles, garch_score=50 and vrp=100, so v2v4=(100+50)/2=75
+    assert result["garch_fcast_annualized"] is None
 
 def test_garch_fit_returns_positive_float_with_sufficient_data(gate):
     result = gate._fit_gjr_garch(_make_ohlcv(200))

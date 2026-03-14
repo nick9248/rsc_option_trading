@@ -55,16 +55,6 @@ class VolatilityRegimeGate:
             logger.warning("GJR-GARCH fit failed: %s", exc)
             return None
 
-    def _score_garch_from_ohlcv(self, ohlcv_daily: List[dict]) -> float:
-        n = len(ohlcv_daily)
-        if n < 90:
-            logger.warning("GARCH: < 90 candles (%d) — sub-signal B = 50 (neutral)", n)
-            return 50.0
-        if n < 180:
-            logger.warning("GARCH: %d candles (< 180), fitting on available data", n)
-        fcast = self._fit_gjr_garch(ohlcv_daily)
-        return 50.0 if fcast is None else self._score_garch(fcast, None)
-
     def _score_garch(self, garch_fcast_annualized: float,
                      atm_iv_30d: Optional[float]) -> float:
         if atm_iv_30d is None or atm_iv_30d <= 0:
@@ -101,8 +91,13 @@ class VolatilityRegimeGate:
               ohlcv_daily: List[dict], term_structure_data: Optional[dict]) -> Dict:
         v1 = self._score_v1(current_dvol, dvol_history)
         vrp_score = self._score_vrp(atm_iv_30d, rv_30d_parkinson)
-        garch_fcast = self._fit_gjr_garch(ohlcv_daily) if len(ohlcv_daily) >= 90 else None
-        garch_score = self._score_garch(garch_fcast, atm_iv_30d) if garch_fcast is not None else 50.0
+        if len(ohlcv_daily) < 90:
+            logger.warning("GARCH: < 90 candles (%d) — sub-signal B = 50 (neutral)", len(ohlcv_daily))
+            garch_fcast = None
+            garch_score = 50.0
+        else:
+            garch_fcast = self._fit_gjr_garch(ohlcv_daily)
+            garch_score = self._score_garch(garch_fcast, atm_iv_30d) if garch_fcast is not None else 50.0
         v2v4 = (vrp_score + garch_score) / 2.0
         v3 = self._score_v3(term_structure_data)
         total = self._combine_scores(v1, v2v4, v3)
