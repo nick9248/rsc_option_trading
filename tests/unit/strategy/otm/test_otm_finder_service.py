@@ -103,10 +103,15 @@ def test_find_signals_returns_otm_signal_objects(config):
 def test_gate2_suppressed_blocks_new_entries(config):
     svc = _make_service(config)
     _setup_mock_data(svc)
-    svc._dvol_fetcher.fetch_latest.return_value = 95.0   # high DVOL
-    svc._repository.get_dvol_history.return_value = [60.0] * 400
+    # Mock Gate 2 to return action != "new_entries_allowed" to trigger gate2_suppressed=True
+    svc._gate2.score = MagicMock(return_value={
+        "total_score": 35.0,
+        "action": "wait_for_vol_expansion",
+        "garch_fcast_annualized": 0.05,
+    })
+    # Use gate2_override=True to allow signals through so we can check gate2_suppressed flag
     result = svc.find_signals(assets=["BTC"], direction="auto", expiry_pref="auto",
-                               gate2_override=False)
+                               gate2_override=True)
     for signal in result:
         assert signal.gate2_suppressed is True
 

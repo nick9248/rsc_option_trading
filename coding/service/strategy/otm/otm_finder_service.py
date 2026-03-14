@@ -17,8 +17,6 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 from uuid import uuid4
 
-import numpy as np
-
 from coding.core.strategy.otm.models.otm_config import OTMConfig
 from coding.core.strategy.otm.models.otm_signal import OTMSignal
 from coding.core.strategy.otm.signals.liquidity_gate import LiquidityGate
@@ -210,20 +208,6 @@ class OTMFinderService:
         # Scale to 30-day move for Gate 4 breakeven filter
         garch_fcast = garch_fcast_annualized * math.sqrt(30.0 / 252.0)
 
-        # Compute DVOL percentile: high percentile means options are expensive
-        dvol_percentile = 0.0
-        if dvol_history_values:
-            arr = np.array(dvol_history_values, dtype=float)
-            dvol_percentile = float(np.mean(arr <= current_dvol) * 100.0)
-
-        # gate2_suppressed reflects unfavorable regime: gate2 action blocked entries,
-        # OR DVOL is at an elevated percentile (options expensive, regime against buying)
-        _DVOL_HIGH_PERCENTILE_THRESHOLD = 70.0
-        gate2_suppressed_flag = (
-            gate2_action != "new_entries_allowed"
-            or dvol_percentile >= _DVOL_HIGH_PERCENTILE_THRESHOLD
-        )
-
         if gate2_action != "new_entries_allowed" and not gate2_override:
             logger.info("%s Gate 2 action=%s -- no new entries", asset, gate2_action)
             return []
@@ -329,7 +313,7 @@ class OTMFinderService:
                 gamma_premium_ratio=c.get("gamma_premium_ratio", 0.0),
                 breakeven_price=c.get("breakeven_price", 0.0),
                 regime_flag=regime,
-                gate2_suppressed=gate2_suppressed_flag,
+                gate2_suppressed=(gate2_action != "new_entries_allowed"),
             )
             signals.append(signal)
             existing_same_direction_usd += sizing["position_usd"]
