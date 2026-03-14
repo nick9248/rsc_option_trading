@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from PySide6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QGridLayout, QWidget,
+    QWidget,
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QGuiApplication

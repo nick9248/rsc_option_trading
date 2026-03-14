@@ -138,7 +138,7 @@ class OTMFinderService:
             term_data = mw.get("iv_term_structure", None)
 
             return self._gate2.score(
-                dvol_history=[v for _, v in dvol_history] if dvol_history and isinstance(dvol_history[0], tuple) else dvol_history,
+                dvol_history=self._normalize_dvol_history(dvol_history),
                 current_dvol=latest_dvol or (max(dvol_history) if dvol_history else 70.0),
                 atm_iv_30d=atm_iv,
                 rv_30d_parkinson=rv_30d,
@@ -148,6 +148,16 @@ class OTMFinderService:
         except Exception as exc:
             logger.warning("score_gate2 failed for %s: %s", asset, exc)
             return {}
+
+    @staticmethod
+    def _normalize_dvol_history(dvol_history) -> list:
+        """Normalize dvol_history to a plain list of floats.
+
+        Repository may return list of floats or list of (datetime, float) tuples.
+        """
+        if dvol_history and isinstance(dvol_history[0], tuple):
+            return [v for _, v in dvol_history]
+        return list(dvol_history)
 
     def _process_asset(
         self,
@@ -220,10 +230,7 @@ class OTMFinderService:
 
         # Gate 2
         # dvol_history may be a list of floats or list of tuples — normalise to floats
-        if dvol_history and isinstance(dvol_history[0], tuple):
-            dvol_history_values = [v for _, v in dvol_history]
-        else:
-            dvol_history_values = list(dvol_history)
+        dvol_history_values = self._normalize_dvol_history(dvol_history)
 
         current_dvol = latest_dvol if latest_dvol is not None else (
             max(dvol_history_values) if dvol_history_values else 70.0
