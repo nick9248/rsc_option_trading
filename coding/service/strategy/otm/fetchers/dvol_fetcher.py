@@ -92,7 +92,7 @@ class DVOLFetcher:
         Args:
             rows: list of (datetime, dvol_value) tuples.
             asset: "BTC" or "ETH".
-            conn: open psycopg2 connection (caller manages lifecycle).
+            conn: open psycopg2 connection (caller manages lifecycle and MUST call conn.commit() after).
 
         Returns:
             Number of new rows inserted (existing rows skipped via ON CONFLICT DO NOTHING).
