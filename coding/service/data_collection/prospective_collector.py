@@ -9,7 +9,7 @@ Collects hourly market data for ML training:
 
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from coding.core.analytics.on_chain_analyzer import OnChainAnalyzer
@@ -203,6 +203,13 @@ class ProspectiveCollector:
             self._fetch_funding_rate(currency)
         except Exception as e:
             logger.error(f"    Error fetching funding rate: {e}")
+
+        # 6. Fetch and store latest OHLCV daily candle
+        logger.info(f"  Fetching {currency} OHLCV daily candle...")
+        try:
+            self._fetch_ohlcv(currency)
+        except Exception as e:
+            logger.error(f"    Error fetching OHLCV: {e}")
 
         return {
             "trades": trades,
@@ -549,3 +556,56 @@ class ProspectiveCollector:
         except Exception as e:
             logger.error(f"    Failed to fetch/save funding rate: {e}")
             raise
+
+    def _fetch_ohlcv(self, currency: str) -> None:
+        """
+        Fetch and save the last 2 days of daily OHLCV candles.
+
+        Runs on every 30-min cycle. ON CONFLICT DO NOTHING in save_ohlcv
+        makes this idempotent — duplicate candles are silently skipped.
+
+        Args:
+            currency: Currency symbol (e.g., "BTC", "ETH").
+        """
+        instrument = f"{currency}-PERPETUAL"
+        now_ms = int(time.time() * 1000)
+        start_ms = now_ms - (2 * 24 * 60 * 60 * 1000)  # 2 days back
+
+        result = self.api.get_tradingview_chart_data(
+            instrument_name=instrument,
+            resolution="1D",
+            start_timestamp=start_ms,
+            end_timestamp=now_ms
+        )
+
+        if not result or "ticks" not in result:
+            logger.warning(f"No OHLCV data returned for {instrument}")
+            return
+
+        ticks = result["ticks"]
+        opens = result.get("open", [])
+        highs = result.get("high", [])
+        lows = result.get("low", [])
+        closes = result.get("close", [])
+        volumes = result.get("volume", [])
+
+        saved = 0
+        for i, ts_ms in enumerate(ticks):
+            try:
+                dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).replace(tzinfo=None)
+                self.repo.save_ohlcv(
+                    currency=currency,
+                    instrument_name=instrument,
+                    timestamp=ts_ms,
+                    date=dt,
+                    open_price=float(opens[i]) if i < len(opens) else 0.0,
+                    high=float(highs[i]) if i < len(highs) else 0.0,
+                    low=float(lows[i]) if i < len(lows) else 0.0,
+                    close=float(closes[i]) if i < len(closes) else 0.0,
+                    volume=float(volumes[i]) if i < len(volumes) else 0.0
+                )
+                saved += 1
+            except Exception as e:
+                logger.warning(f"Failed to save OHLCV candle for {instrument} at {ts_ms}: {e}")
+
+        logger.info(f"OHLCV: {saved}/{len(ticks)} candles saved for {instrument}")
