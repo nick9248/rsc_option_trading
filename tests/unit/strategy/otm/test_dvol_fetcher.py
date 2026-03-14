@@ -10,10 +10,14 @@ def fetcher():
 
 
 def _mock_deribit_response(values: list) -> dict:
-    """Build a Deribit-style index_price_history response."""
+    """Build a Deribit-style get_volatility_index_data response.
+    API returns OHLC rows: [timestamp_ms, open, high, low, close].
+    We use close (index 4) as the DVOL value.
+    """
     return {
         "result": {
-            "data": [[int(datetime(2025, 1, d+1, tzinfo=timezone.utc).timestamp() * 1000), v]
+            "data": [[int(datetime(2025, 1, d+1, tzinfo=timezone.utc).timestamp() * 1000),
+                      v, v, v, v]  # open=high=low=close=v for simplicity
                      for d, v in enumerate(values)]
         }
     }
@@ -39,14 +43,14 @@ def test_parse_dvol_response_invalid_structure(fetcher):
 
 def test_build_url_btc(fetcher):
     url = fetcher._build_url("BTC", 1_000_000, 2_000_000)
-    assert "btc_dvol" in url
+    assert "currency=BTC" in url
     assert "1000000" in url
     assert "2000000" in url
 
 
 def test_build_url_eth(fetcher):
     url = fetcher._build_url("ETH", 1_000_000, 2_000_000)
-    assert "eth_dvol" in url
+    assert "currency=ETH" in url
 
 
 def test_build_url_invalid_asset(fetcher):
@@ -74,9 +78,12 @@ def test_fetch_latest_returns_none_on_http_error(mock_get, fetcher):
 
 @patch("coding.service.strategy.otm.fetchers.dvol_fetcher.requests.get")
 def test_fetch_history_returns_list(mock_get, fetcher):
+    # Response with no continuation token — single batch, no pagination loop
+    response_data = _mock_deribit_response([50.0, 55.0, 60.0])
+    # No "continuation" key in result → loop terminates after first batch
     mock_get.return_value = MagicMock(
         status_code=200,
-        json=lambda: _mock_deribit_response([50.0, 55.0, 60.0])
+        json=lambda: response_data,
     )
     result = fetcher.fetch_history("BTC", months=3)
     assert len(result) == 3
