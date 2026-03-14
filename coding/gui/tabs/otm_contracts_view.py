@@ -14,6 +14,7 @@ Advanced Filters (spec §15):
   - Show Suppressed checkbox
 """
 import logging
+from datetime import datetime, timezone
 from typing import List, Optional
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QSplitter, QScrollArea,
@@ -71,6 +72,7 @@ class OTMFinderWorker(QThread):
                 if gate2_result:
                     self.gate2_updated.emit(float(gate2_result.get("total_score", 0.0)))
 
+            # TODO: pass kelly_multiplier to find_signals() once OTMFinderService supports it
             signals = self._service.find_signals(
                 assets=self._assets,
                 direction=self._direction,
@@ -83,6 +85,9 @@ class OTMFinderWorker(QThread):
                 signals = [s for s in signals if s.conviction_score >= self._min_conviction]
             if not self._show_suppressed:
                 signals = [s for s in signals if not s.gate2_suppressed]
+            if self._min_delta > 0.0 or self._max_delta < 1.0:
+                signals = [s for s in signals
+                           if self._min_delta <= abs(s.delta) <= self._max_delta]
 
             self.finished.emit(signals)
         except Exception as exc:
@@ -317,6 +322,10 @@ class OTMContractsView(QWidget):
         if self._worker and self._worker.isRunning():
             return
 
+        if self._service is None:
+            self._header_label.setText("Error: no service configured — check initialization")
+            return
+
         self._find_btn.setEnabled(False)
         self._find_btn.setText("SCANNING...")
         self._clear_results()
@@ -346,28 +355,27 @@ class OTMContractsView(QWidget):
         self._worker.start()
 
     def _on_results(self, signals: list) -> None:
-        from datetime import datetime, timezone as tz
         self._find_btn.setEnabled(True)
         self._find_btn.setText("FIND OTM CONTRACTS")
         self._clear_results()
 
-        now = datetime.now(tz.utc).strftime("%H:%M:%S")
+        now = datetime.now(timezone.utc).strftime("%H:%M:%S")
         self._scan_summary.setText(f"{len(signals)} signals | {now}")
         self._last_updated.setText(f"Scanned {now}")
 
-        # Header: "N signals found | Gate 2: XX | Regime: BULL" (spec §15)
-        regime = signals[0].regime_flag.upper() if signals else "—"
-        gate2 = signals[0].gate2_score if signals else 0.0
-        self._header_label.setText(
-            f"{len(signals)} signals found | Gate 2: {gate2:.0f} | Regime: {regime}"
-        )
-
         if not signals:
+            self._header_label.setText("0 signals found")
             self._results_layout.insertWidget(
                 0, QLabel("No signals found — try adjusting filters or enabling Gate 2 Override",
                           styleSheet=f"color: {Colors.TEXT_MUTED}; font-size: 12px;")
             )
             return
+
+        regime = signals[0].regime_flag.upper()
+        gate2 = signals[0].gate2_score
+        self._header_label.setText(
+            f"{len(signals)} signals found | Gate 2: {gate2:.0f} | Regime: {regime}"
+        )
 
         suppressed = signals[0].gate2_suppressed
         if suppressed:
