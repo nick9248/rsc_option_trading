@@ -1562,6 +1562,43 @@ class DatabaseRepository:
             """, (currency, index_name, timestamp, date, dvol))
             logger.info(f"Saved DVOL for {index_name}: {dvol:.2f}")
 
+    def save_ohlcv(
+        self,
+        currency: str,
+        instrument_name: str,
+        timestamp: int,
+        date,
+        open_price: float,
+        high: float,
+        low: float,
+        close: float,
+        volume: float
+    ) -> None:
+        """
+        Save one OHLCV daily candle to ohlcv_history.
+
+        Args:
+            currency: Currency symbol (e.g., "BTC", "ETH").
+            instrument_name: Perpetual instrument (e.g., "BTC-PERPETUAL").
+            timestamp: Unix timestamp in milliseconds.
+            date: Datetime object for this candle.
+            open_price: Opening price.
+            high: High price.
+            low: Low price.
+            close: Closing price.
+            volume: Trading volume.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO ohlcv_history (
+                    currency, instrument_name, timestamp, date,
+                    open, high, low, close, volume
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (instrument_name, timestamp) DO NOTHING
+            """, (currency, instrument_name, timestamp, date,
+                  open_price, high, low, close, volume))
+            logger.debug(f"Saved OHLCV candle for {instrument_name} at {date}: close={close:.2f}")
+
     def save_external_metrics(
         self,
         date,

@@ -58,3 +58,47 @@ def test_get_ohlcv_by_date_range_empty_result():
         result = repo.get_ohlcv_by_date_range("BTC", datetime(2026, 1, 1), datetime(2026, 1, 8))
 
     assert result == []
+
+
+def test_save_ohlcv_inserts_row():
+    """save_ohlcv executes INSERT with correct columns."""
+    from unittest.mock import MagicMock, patch, call
+    from datetime import datetime
+    from coding.core.database.repository import DatabaseRepository
+
+    repo = DatabaseRepository.__new__(DatabaseRepository)
+    mock_cursor = MagicMock()
+    mock_cm = MagicMock()
+    mock_cm.__enter__ = MagicMock(return_value=mock_cursor)
+    mock_cm.__exit__ = MagicMock(return_value=False)
+    repo._db_cursor = MagicMock(return_value=mock_cm)
+
+    ts = 1700000000000
+    dt = datetime(2023, 11, 15)
+    repo.save_ohlcv("BTC", "BTC-PERPETUAL", ts, dt, 37000.0, 38000.0, 36500.0, 37500.0, 1234.5)
+
+    sql = mock_cursor.execute.call_args[0][0]
+    assert "ohlcv_history" in sql
+    assert "ON CONFLICT" in sql
+    args = mock_cursor.execute.call_args[0][1]
+    assert args == ("BTC", "BTC-PERPETUAL", ts, dt, 37000.0, 38000.0, 36500.0, 37500.0, 1234.5)
+
+
+def test_save_ohlcv_conflict_do_nothing():
+    """save_ohlcv uses DO NOTHING on conflict (idempotent)."""
+    from unittest.mock import MagicMock
+    from datetime import datetime
+    from coding.core.database.repository import DatabaseRepository
+
+    repo = DatabaseRepository.__new__(DatabaseRepository)
+    mock_cursor = MagicMock()
+    mock_cm = MagicMock()
+    mock_cm.__enter__ = MagicMock(return_value=mock_cursor)
+    mock_cm.__exit__ = MagicMock(return_value=False)
+    repo._db_cursor = MagicMock(return_value=mock_cm)
+
+    dt = datetime(2023, 11, 15)
+    repo.save_ohlcv("BTC", "BTC-PERPETUAL", 1700000000000, dt, 37000.0, 38000.0, 36500.0, 37500.0, 1234.5)
+
+    sql = mock_cursor.execute.call_args[0][0]
+    assert "DO NOTHING" in sql
