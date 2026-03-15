@@ -29,9 +29,9 @@ import psycopg2
 MAX_TRADE_AGE_MIN       = 35   # Daemon runs every 30min, allow 5min slack
 MAX_SNAPSHOT_AGE_MIN    = 35
 MAX_HOURLY_AGE_MIN      = 70   # Hourly aggregation happens after each collect
-MAX_ONCHAIN_AGE_MIN     = 35
+MAX_ONCHAIN_AGE_MIN     = 70   # Onchain runs per cycle, allow full cycle buffer
 MAX_FUNDING_AGE_MIN     = 35
-MAX_DVOL_AGE_MIN        = 35
+MAX_DVOL_AGE_MIN        = 70   # DVOL runs per cycle, allow full cycle buffer
 MAX_OHLCV_AGE_HOURS     = 25   # Daily candle, refreshed once per day
 MIN_ROWS_PER_CURRENCY   = 1    # At least 1 row per currency per check
 
