@@ -56,6 +56,9 @@ MODULE_DEFS: list[dict] = [
 # Last active module index (used for wrap-around navigation)
 _LAST_ACTIVE = 8
 
+# Stack indices that are permanent placeholders (never active modules)
+_PLACEHOLDER_INDICES = {9, 10, 11}
+
 
 class MainWindow(QMainWindow):
     """
@@ -217,7 +220,7 @@ class MainWindow(QMainWindow):
         # Index 0: NavigationPage — replaces the temporary slot
         # Deferred import to avoid circular import at module level
         from coding.gui.tabs.navigation_page import NavigationPage
-        nav_page = NavigationPage(module_defs=MODULE_DEFS, failed_indices=failed_indices)
+        nav_page = NavigationPage(module_defs=MODULE_DEFS, failed_indices=failed_indices | _PLACEHOLDER_INDICES)
         nav_page.module_selected.connect(self._go_to)
         self.stack.removeWidget(self.stack.widget(0))
         self.stack.insertWidget(0, nav_page)

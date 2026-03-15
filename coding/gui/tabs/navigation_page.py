@@ -93,7 +93,7 @@ class ModuleTile(QFrame):
     def leaveEvent(self, event) -> None:
         """Restore default styling on mouse leave."""
         if self._enabled:
-            self.name_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY};")
+            self.name_label.setStyleSheet("")  # clear inline style; QSS #tileName rule takes over
             self.setStyleSheet("")  # revert to QSS #moduleTile default
         super().leaveEvent(event)
 
@@ -113,9 +113,6 @@ class NavigationPage(QWidget):
 
     module_selected = Signal(int)
 
-    # Stack indices that are always placeholder (never active)
-    _PLACEHOLDER_INDICES = {9, 10, 11}
-
     def __init__(
         self,
         module_defs: list[dict],
@@ -126,8 +123,9 @@ class NavigationPage(QWidget):
         Args:
             module_defs: List of dicts with keys: index, icon, name, subtitle.
                          Covers stack indices 1–11 (all active + placeholder modules).
-            failed_indices: Stack indices that failed to initialize (service errors).
-                            These tiles are shown as disabled.
+            failed_indices: Stack indices that should be shown as disabled.
+                            Caller is responsible for including both service-failed indices
+                            and any permanent placeholder indices.
         """
         super().__init__(parent)
         self.setObjectName("navigationPage")
@@ -154,10 +152,7 @@ class NavigationPage(QWidget):
                 subtitle=defn["subtitle"],
             )
 
-            is_disabled = (
-                defn["index"] in self._PLACEHOLDER_INDICES
-                or defn["index"] in failed_indices
-            )
+            is_disabled = defn["index"] in failed_indices
             if is_disabled:
                 tile.set_disabled_style()
             else:
