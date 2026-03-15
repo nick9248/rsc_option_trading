@@ -1,20 +1,24 @@
 """
 Main application window.
 
-Contains the primary window with tab bar and content area.
+Navigation home page + QStackedWidget replaces the old QTabWidget.
+A slim top bar provides Prev / Home / Next navigation between modules.
 """
 
 import logging
-from typing import Optional
 
 from PySide6.QtWidgets import (
     QMainWindow,
     QWidget,
     QVBoxLayout,
-    QTabWidget,
+    QHBoxLayout,
+    QStackedWidget,
+    QPushButton,
+    QLabel,
+    QSizePolicy,
+    QSpacerItem,
 )
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QIcon
 
 from coding.gui.theme.styles import Styles
 from coding.gui.theme.colors import Colors
@@ -33,199 +37,253 @@ from coding.service.on_chain.on_chain_analysis_service import OnChainAnalysisSer
 
 logger = logging.getLogger(__name__)
 
+# Stack indices 1–8 are active modules. 9–11 are placeholder modules.
+# NavigationPage is index 0 (not counted in position indicator).
+MODULE_DEFS: list[dict] = [
+    {"index": 1,  "icon": "🔗", "name": "API Connection",    "subtitle": "Test endpoints"},
+    {"index": 2,  "icon": "📸", "name": "Snapshot",          "subtitle": "Option chain capture"},
+    {"index": 3,  "icon": "⛓",  "name": "On Chain Analysis", "subtitle": "GEX · DEX · Max Pain"},
+    {"index": 4,  "icon": "🗄",  "name": "Database",          "subtitle": "Capture & sync"},
+    {"index": 5,  "icon": "♟",  "name": "Strategies",        "subtitle": "Evaluate & rank"},
+    {"index": 6,  "icon": "🎯", "name": "Special Strategies", "subtitle": "OTM finder"},
+    {"index": 7,  "icon": "📊", "name": "Market Regime",     "subtitle": "Bull · Bear · Neutral"},
+    {"index": 8,  "icon": "✅", "name": "System Health",     "subtitle": "Diagnostics"},
+    {"index": 9,  "icon": "📈", "name": "Market Data",       "subtitle": "Coming soon"},
+    {"index": 10, "icon": "💹", "name": "Trading",           "subtitle": "Coming soon"},
+    {"index": 11, "icon": "🧮", "name": "Analytics",         "subtitle": "Coming soon"},
+]
+
+# Last active module index (used for wrap-around navigation)
+_LAST_ACTIVE = 8
+
 
 class MainWindow(QMainWindow):
     """
-    Main application window with tabbed interface.
+    Main application window.
 
-    Features:
-    - Modern minimal design with luxury aesthetics
-    - Rounded tab bar at the top
-    - Dynamic content area based on selected tab
+    Layout:
+        top_bar (fixed 36px)  —  logo | position_label | [← Prev][⌂ Home][Next →]
+        stack (QStackedWidget) — index 0: NavigationPage, 1–11: module tabs
     """
 
     def __init__(self):
-        """Initialize the main window."""
         super().__init__()
-
         self._setup_window()
         self._setup_ui()
-
         logger.info("Main window initialized")
 
+    # ──────────────────────────────────────────────────────────────
+    # Setup
+    # ──────────────────────────────────────────────────────────────
+
     def _setup_window(self) -> None:
-        """Configure window properties."""
         self.setWindowTitle("Options Trading Platform")
         self.setMinimumSize(600, 400)
         self.resize(1200, 800)
-
-        # Apply stylesheet
         self.setStyleSheet(Styles.get_main_stylesheet())
 
-        # Center on screen
         screen = self.screen().availableGeometry()
-        x = (screen.width() - self.width()) // 2
-        y = (screen.height() - self.height()) // 2
-        self.move(x, y)
+        self.move(
+            (screen.width() - self.width()) // 2,
+            (screen.height() - self.height()) // 2,
+        )
 
     def _setup_ui(self) -> None:
-        """Set up the user interface."""
-        # Central widget
-        central_widget = QWidget()
-        central_widget.setObjectName("centralWidget")
-        self.setCentralWidget(central_widget)
+        central = QWidget()
+        central.setObjectName("centralWidget")
+        self.setCentralWidget(central)
 
-        # Main layout
-        main_layout = QVBoxLayout(central_widget)
-        main_layout.setContentsMargins(16, 16, 16, 16)
+        main_layout = QVBoxLayout(central)
+        main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # Tab widget
-        self.tab_widget = QTabWidget()
-        self.tab_widget.setDocumentMode(True)
-        self.tab_widget.setTabPosition(QTabWidget.TabPosition.North)
+        main_layout.addWidget(self._build_top_bar())
+        main_layout.addWidget(self._build_stack())
 
-        # Custom styling for rounded tabs
-        self.tab_widget.setStyleSheet(f"""
-            QTabWidget::pane {{
-                background-color: {Colors.BACKGROUND_SECONDARY};
-                border: 1px solid {Colors.BORDER};
-                border-radius: 12px;
-                padding: 8px;
-            }}
+    def _build_top_bar(self) -> QWidget:
+        """Build the slim navigation bar (logo · position · prev/home/next)."""
+        bar = QWidget()
+        bar.setObjectName("topBar")
+        bar.setFixedHeight(36)
 
-            QTabBar {{
-                background-color: {Colors.BACKGROUND_PRIMARY};
-            }}
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(16, 0, 12, 0)
+        layout.setSpacing(4)
 
-            QTabBar::tab {{
-                background-color: {Colors.TAB_INACTIVE};
-                color: {Colors.TEXT_SECONDARY};
-                border: 1px solid {Colors.BORDER};
-                border-bottom: none;
-                border-top-left-radius: 8px;
-                border-top-right-radius: 8px;
-                padding: 8px 16px;
-                margin-right: 2px;
-                font-weight: 500;
-            }}
+        # Logo (left)
+        self.logo_label = QLabel("Options Trading Platform")
+        self.logo_label.setObjectName("logoLabel")
+        layout.addWidget(self.logo_label)
 
-            QTabBar::tab:selected {{
-                background-color: {Colors.BACKGROUND_SECONDARY};
-                color: {Colors.TEXT_PRIMARY};
-                border-bottom: 1px solid {Colors.BACKGROUND_SECONDARY};
-            }}
+        # Centre spacers + position indicator
+        layout.addItem(QSpacerItem(0, 0, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum))
 
-            QTabBar::tab:hover:!selected {{
-                background-color: {Colors.TAB_HOVER};
-                color: {Colors.TEXT_PRIMARY};
-            }}
+        self.position_label = QLabel("")
+        self.position_label.setObjectName("positionLabel")
+        self.position_label.setVisible(False)
+        layout.addWidget(self.position_label)
 
-            QTabBar::tab:first {{
-                margin-left: 4px;
-            }}
-        """)
+        layout.addItem(QSpacerItem(0, 0, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum))
 
-        # Add tabs
-        self._add_tabs()
+        # Nav buttons (right)
+        self.btn_prev = QPushButton("← Prev")
+        self.btn_prev.setObjectName("navBtn")
+        self.btn_prev.setFixedSize(70, 26)
+        self.btn_prev.setProperty("dimmed", True)  # start dimmed on home page
+        self.btn_prev.clicked.connect(self._go_prev)
 
-        main_layout.addWidget(self.tab_widget)
+        self.btn_home = QPushButton("⌂ Home")
+        self.btn_home.setObjectName("navBtn")
+        self.btn_home.setFixedSize(70, 26)
+        self.btn_home.clicked.connect(self._go_home)
 
-    def _add_tabs(self) -> None:
-        """Add all application tabs."""
-        # API Connection tab
-        api_tab = ApiConnectionTab()
-        self.tab_widget.addTab(api_tab, "API Connection")
+        self.btn_next = QPushButton("Next →")
+        self.btn_next.setObjectName("navBtn")
+        self.btn_next.setFixedSize(70, 26)
+        self.btn_next.setProperty("dimmed", True)  # start dimmed on home page
+        self.btn_next.clicked.connect(self._go_next)
 
-        # Snapshot tab
-        snapshot_tab = SnapshotTab()
-        self.tab_widget.addTab(snapshot_tab, "Snapshot")
+        layout.addWidget(self.btn_prev)
+        layout.addWidget(self.btn_home)
+        layout.addWidget(self.btn_next)
 
-        # On Chain Analysis tab
-        on_chain_tab = OnChainAnalysisTab()
-        self.tab_widget.addTab(on_chain_tab, "On Chain Analysis")
+        return bar
 
-        # Database tab
-        database_tab = DatabaseTab()
-        self.tab_widget.addTab(database_tab, "Database")
+    def _build_stack(self) -> QStackedWidget:
+        """Build the stacked widget and populate all pages."""
+        self.stack = QStackedWidget()
+        self.stack.currentChanged.connect(self._sync_nav_state)
 
-        # Strategy tab - requires API service and repository
+        failed_indices: set[int] = set()
+
+        # Index 0: temporary placeholder — replaced by NavigationPage below
+        self.stack.addWidget(QWidget())
+
+        # Index 1: API Connection
+        self.stack.addWidget(ApiConnectionTab())
+
+        # Index 2: Snapshot
+        self.stack.addWidget(SnapshotTab())
+
+        # Index 3: On Chain Analysis
+        self.stack.addWidget(OnChainAnalysisTab())
+
+        # Index 4: Database
+        self.stack.addWidget(DatabaseTab())
+
+        # Index 5: Strategies
         try:
             api_service = DeribitApiService()
             repository = DatabaseRepository()
-            strategy_tab = StrategyTab(api_service, repository)
-            self.tab_widget.addTab(strategy_tab, "Strategies")
-        except Exception as e:
-            logger.error("Failed to initialize Strategies tab: %s", e)
-            self._add_placeholder_tab("Strategies", "Strategy evaluation tab failed to initialize")
+            self.stack.addWidget(StrategyTab(api_service, repository))
+        except Exception as exc:
+            logger.error("Failed to initialize Strategies tab: %s", exc)
+            self.stack.addWidget(self._placeholder_widget("Strategy evaluation unavailable"))
+            failed_indices.add(5)
 
-        # Special Strategies tab
+        # Index 6: Special Strategies
         try:
             from coding.core.strategy.otm.models.otm_config import OTMConfig
             from coding.service.strategy.otm.otm_finder_service import OTMFinderService
-            _otm_api = DeribitApiService()
-            _otm_repo = DatabaseRepository()
-            _otm_on_chain = OnChainAnalysisService(_otm_api, _otm_repo)
-            otm_config = OTMConfig(risk_budget_usd=10_000.0)
-            otm_service = OTMFinderService(
-                config=otm_config,
-                deribit_service=_otm_api,
-                on_chain_service=_otm_on_chain,
-                repository=_otm_repo,
+            _api = DeribitApiService()
+            _repo = DatabaseRepository()
+            _on_chain = OnChainAnalysisService(_api, _repo)
+            _config = OTMConfig(risk_budget_usd=10_000.0)
+            _otm = OTMFinderService(
+                config=_config,
+                deribit_service=_api,
+                on_chain_service=_on_chain,
+                repository=_repo,
             )
-            special_tab = SpecialStrategiesTab(
-                finder_service=otm_service,
-                otm_config=otm_config,
-            )
-            self.tab_widget.addTab(special_tab, "Special Strategies")
-        except Exception as e:
-            logger.error("Failed to initialize Special Strategies tab: %s", e)
-            self._add_placeholder_tab("Special Strategies", "Special strategies tab failed to initialize")
+            self.stack.addWidget(SpecialStrategiesTab(finder_service=_otm, otm_config=_config))
+        except Exception as exc:
+            logger.error("Failed to initialize Special Strategies tab: %s", exc)
+            self.stack.addWidget(self._placeholder_widget("Special strategies unavailable"))
+            failed_indices.add(6)
 
-        # Market Regime Detection tab
-        regime_tab = RegimeTab()
-        self.tab_widget.addTab(regime_tab, "Market Regime")
+        # Index 7: Market Regime
+        self.stack.addWidget(RegimeTab())
 
-        # System Validation tab
-        validation_tab = SystemValidationTab()
-        self.tab_widget.addTab(validation_tab, "System Health")
+        # Index 8: System Health
+        self.stack.addWidget(SystemValidationTab())
 
-        # Placeholder tabs for future features
-        self._add_placeholder_tab("Market Data", "Market data visualization coming soon...")
-        self._add_placeholder_tab("Trading", "Trading interface coming soon...")
-        self._add_placeholder_tab("Analytics", "Analytics dashboard coming soon...")
+        # Indices 9–11: Future placeholders
+        self.stack.addWidget(self._placeholder_widget("Market data visualization coming soon…"))
+        self.stack.addWidget(self._placeholder_widget("Trading interface coming soon…"))
+        self.stack.addWidget(self._placeholder_widget("Analytics dashboard coming soon…"))
 
-    def _add_placeholder_tab(self, title: str, message: str) -> None:
+        # Index 0: NavigationPage — replaces the temporary slot
+        # Deferred import to avoid circular import at module level
+        from coding.gui.tabs.navigation_page import NavigationPage
+        nav_page = NavigationPage(module_defs=MODULE_DEFS, failed_indices=failed_indices)
+        nav_page.module_selected.connect(self._go_to)
+        self.stack.removeWidget(self.stack.widget(0))
+        self.stack.insertWidget(0, nav_page)
+        self.stack.setCurrentIndex(0)
+
+        return self.stack
+
+    # ──────────────────────────────────────────────────────────────
+    # Navigation
+    # ──────────────────────────────────────────────────────────────
+
+    def _go_home(self) -> None:
+        self.stack.setCurrentIndex(0)
+
+    def _go_to(self, index: int) -> None:
+        self.stack.setCurrentIndex(index)
+
+    def _go_prev(self) -> None:
+        current = self.stack.currentIndex()
+        if current <= 1:
+            self._go_to(_LAST_ACTIVE)
+        else:
+            self._go_to(current - 1)
+
+    def _go_next(self) -> None:
+        current = self.stack.currentIndex()
+        if current == 0 or current >= _LAST_ACTIVE:
+            self._go_to(1)
+        else:
+            self._go_to(current + 1)
+
+    def _sync_nav_state(self, index: int) -> None:
         """
-        Add a placeholder tab for future features.
+        Keep top bar in sync with the current stack page.
 
-        Args:
-            title: Tab title.
-            message: Placeholder message to display.
+        Position label shows "{index} / 8". This is valid because active modules
+        occupy contiguous stack indices 1–8, so the raw stack index equals the
+        1-based display position.
+
+        Uses setProperty("dimmed", ...) + unpolish/polish so that QSS :hover
+        and :pressed rules remain active — inline setStyleSheet would shadow them.
         """
-        from PySide6.QtWidgets import QLabel
+        on_home = (index == 0)
+        self.position_label.setVisible(not on_home)
+        if not on_home:
+            self.position_label.setText(f"{index} / {_LAST_ACTIVE}")
 
-        placeholder = QWidget()
-        layout = QVBoxLayout(placeholder)
+        for btn in (self.btn_prev, self.btn_next):
+            btn.setProperty("dimmed", on_home)
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+
+    # ──────────────────────────────────────────────────────────────
+    # Helpers
+    # ──────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _placeholder_widget(message: str) -> QWidget:
+        """Return a simple centred label widget for unavailable / future modules."""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
         label = QLabel(message)
-        label.setStyleSheet(f"""
-            color: {Colors.TEXT_MUTED};
-            font-size: 16px;
-            font-style: italic;
-        """)
+        label.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 14px; font-style: italic;")
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(label)
-
-        self.tab_widget.addTab(placeholder, title)
+        return widget
 
     def closeEvent(self, event) -> None:
-        """
-        Handle window close event.
-
-        Args:
-            event: Close event.
-        """
         logger.info("Application closing")
         event.accept()
