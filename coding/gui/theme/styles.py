@@ -31,7 +31,7 @@ class Styles:
             QWidget {{
                 background-color: {Colors.BACKGROUND_PRIMARY};
                 color: {Colors.TEXT_PRIMARY};
-                font-family: "Segoe UI", "Inter", sans-serif;
+                font-family: "Playfair Display", "Georgia", serif;
                 font-size: 13px;
             }}
 
@@ -63,18 +63,11 @@ class Styles:
                 background-color: {Colors.SURFACE_ACTIVE};
             }}
 
-            /* Dimmed state — on home page, Prev/Next use TEXT_MUTED color.
-               Uses dynamic property so :hover rules remain active. */
-            QPushButton#navBtn[dimmed="true"] {{
-                color: {Colors.TEXT_MUTED};
-                border-color: {Colors.BORDER_SUBTLE};
-            }}
-
             /* Position label (e.g. "3 / 8") */
             QLabel#positionLabel {{
                 background-color: transparent;
                 color: {Colors.TEXT_SECONDARY};
-                font-family: "Segoe UI", "Inter", sans-serif;
+                font-family: "Playfair Display", "Georgia", serif;
                 font-size: 11px;
                 letter-spacing: 1px;
             }}
@@ -112,22 +105,22 @@ class Styles:
 
             QLabel#tileIcon {{
                 background-color: transparent;
-                font-size: 22px;
+                font-size: 28px;
             }}
 
             QLabel#tileName {{
                 background-color: transparent;
                 color: {Colors.TEXT_SECONDARY};
                 font-family: "Playfair Display", "Georgia", serif;
-                font-size: 11px;
+                font-size: 14px;
                 letter-spacing: 0.5px;
             }}
 
             QLabel#tileSub {{
                 background-color: transparent;
                 color: {Colors.TEXT_MUTED};
-                font-family: "Segoe UI", "Inter", sans-serif;
-                font-size: 10px;
+                font-family: "Playfair Display", "Georgia", serif;
+                font-size: 11px;
             }}
 
             /* Labels */

@@ -130,22 +130,23 @@ class MainWindow(QMainWindow):
 
         layout.addItem(QSpacerItem(0, 0, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum))
 
-        # Nav buttons (right)
+        # Nav buttons (right) — hidden on home page, visible inside modules
         self.btn_prev = QPushButton("← Prev")
         self.btn_prev.setObjectName("navBtn")
         self.btn_prev.setFixedSize(70, 26)
-        self.btn_prev.setProperty("dimmed", True)  # start dimmed on home page
+        self.btn_prev.setVisible(False)
         self.btn_prev.clicked.connect(self._go_prev)
 
         self.btn_home = QPushButton("⌂ Home")
         self.btn_home.setObjectName("navBtn")
         self.btn_home.setFixedSize(70, 26)
+        self.btn_home.setVisible(False)
         self.btn_home.clicked.connect(self._go_home)
 
         self.btn_next = QPushButton("Next →")
         self.btn_next.setObjectName("navBtn")
         self.btn_next.setFixedSize(70, 26)
-        self.btn_next.setProperty("dimmed", True)  # start dimmed on home page
+        self.btn_next.setVisible(False)
         self.btn_next.clicked.connect(self._go_next)
 
         layout.addWidget(self.btn_prev)
@@ -256,22 +257,17 @@ class MainWindow(QMainWindow):
         """
         Keep top bar in sync with the current stack page.
 
-        Position label shows "{index} / 8". This is valid because active modules
-        occupy contiguous stack indices 1–8, so the raw stack index equals the
-        1-based display position.
-
-        Uses setProperty("dimmed", ...) + unpolish/polish so that QSS :hover
-        and :pressed rules remain active — inline setStyleSheet would shadow them.
+        Nav buttons (Prev / Home / Next) are hidden on the home page and
+        shown inside any module. Position label shows "{index} / 8" and is
+        hidden on home.
         """
         on_home = (index == 0)
         self.position_label.setVisible(not on_home)
         if not on_home:
             self.position_label.setText(f"{index} / {_LAST_ACTIVE}")
 
-        for btn in (self.btn_prev, self.btn_next):
-            btn.setProperty("dimmed", on_home)
-            btn.style().unpolish(btn)
-            btn.style().polish(btn)
+        for btn in (self.btn_prev, self.btn_home, self.btn_next):
+            btn.setVisible(not on_home)
 
     # ──────────────────────────────────────────────────────────────
     # Helpers

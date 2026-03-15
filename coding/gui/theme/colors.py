@@ -26,7 +26,7 @@ class Colors:
     # Border colors
     BORDER = "#141E30"
     BORDER_SUBTLE = "#0F1828"
-    BORDER_FOCUS = "#D4B896"  # Use rgba(212,184,150,0.4) in QSS for alpha variant
+    BORDER_FOCUS = "#C9A84C"  # Use rgba(201,168,76,0.4) in QSS for alpha variant
 
     # Text colors
     TEXT_PRIMARY = "#E8EAF0"
@@ -34,10 +34,10 @@ class Colors:
     TEXT_MUTED = "#2A3848"
     TEXT_DISABLED = "#1A2638"
 
-    # Accent colors (warm platinum gold)
-    ACCENT = "#D4B896"
-    ACCENT_HOVER = "#E8CEAD"
-    ACCENT_MUTED = "#A8956A"
+    # Accent colors (luxury metallic gold)
+    ACCENT = "#C9A84C"
+    ACCENT_HOVER = "#DBBF5A"
+    ACCENT_MUTED = "#9A7A2E"
 
     # Status colors (unchanged)
     SUCCESS = "#2ECC71"
@@ -52,11 +52,11 @@ class Colors:
     # Input colors
     INPUT_BACKGROUND = "#0A1020"
     INPUT_BORDER = "#141E30"
-    INPUT_FOCUS = "#D4B896"
+    INPUT_FOCUS = "#C9A84C"
 
     # Button colors
-    BUTTON_PRIMARY = "#D4B896"
-    BUTTON_PRIMARY_HOVER = "#E8CEAD"
+    BUTTON_PRIMARY = "#C9A84C"
+    BUTTON_PRIMARY_HOVER = "#DBBF5A"
     BUTTON_SECONDARY = "#111E35"
     BUTTON_SECONDARY_HOVER = "#192840"
 

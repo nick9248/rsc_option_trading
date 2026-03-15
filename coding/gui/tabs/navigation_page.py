@@ -39,7 +39,7 @@ class ModuleTile(QFrame):
         self._enabled = True
 
         self.setObjectName("moduleTile")
-        self.setFixedHeight(90)
+        self.setFixedHeight(130)
         self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
 
         layout = QVBoxLayout(self)
