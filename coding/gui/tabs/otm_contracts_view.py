@@ -135,60 +135,74 @@ class OTMContractsView(QWidget):
     # ── Left panel ─────────────────────────────────────────────────────────────
 
     def _build_left_panel(self) -> QWidget:
-        # Outer fixed-width container
-        outer = QWidget()
-        outer.setFixedWidth(300)
-        outer.setStyleSheet(f"background-color: {Colors.SURFACE};")
-        outer_layout = QVBoxLayout(outer)
-        outer_layout.setContentsMargins(0, 0, 0, 0)
-        outer_layout.setSpacing(0)
+        panel = QWidget()
+        panel.setFixedWidth(300)
+        panel.setStyleSheet(f"background-color: {Colors.SURFACE};")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(0)
 
-        # Scrollable content area (holds everything above the FIND button)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setStyleSheet("border: none; background-color: transparent;")
-
-        content = QWidget()
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(12, 12, 12, 4)
-        layout.setSpacing(10)
-
-        # Section 1: Live conditions
+        # ── Live Conditions ───────────────────────────────────────────────────
         layout.addWidget(self._section_label("LIVE CONDITIONS"))
+        layout.addSpacing(6)
         self._gate2_bar = GateScoreBar(label="Gate 2")
         layout.addWidget(self._gate2_bar)
+        layout.addSpacing(4)
         self._regime_badge = QLabel("—")
         self._regime_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._regime_badge.setFixedHeight(22)
         self._regime_badge.setStyleSheet(
             f"color: {Colors.TEXT_MUTED}; border: 1px solid {Colors.BORDER};"
-            " border-radius: 10px; padding: 2px 10px; font-size: 11px;"
+            " border-radius: 10px; padding: 1px 10px; font-size: 11px;"
         )
         layout.addWidget(self._regime_badge)
+        layout.addSpacing(4)
         self._last_updated = QLabel("Not yet scanned")
         self._last_updated.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 10px;")
         layout.addWidget(self._last_updated)
 
-        # Section 2: Quick Setup
+        # Separator
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f"color: {Colors.BORDER};")
+        layout.addSpacing(8)
+        layout.addWidget(sep)
+        layout.addSpacing(8)
+
+        # ── Quick Setup ───────────────────────────────────────────────────────
         layout.addWidget(self._section_label("QUICK SETUP"))
+        layout.addSpacing(6)
 
         layout.addWidget(QLabel("Asset", styleSheet=f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;"))
+        layout.addSpacing(3)
         self._asset_group = self._toggle_group(["BTC", "ETH", "BOTH"], default=0)
         layout.addLayout(self._asset_group[0])
+        layout.addSpacing(8)
 
         layout.addWidget(QLabel("Direction", styleSheet=f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;"))
+        layout.addSpacing(3)
         self._dir_group = self._toggle_group(["CALLS", "PUTS", "AUTO"], default=2)
         layout.addLayout(self._dir_group[0])
+        layout.addSpacing(8)
 
         layout.addWidget(QLabel("Expiry", styleSheet=f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;"))
+        layout.addSpacing(3)
         self._expiry_group = self._toggle_group(["SHORT", "MEDIUM", "LONG", "AUTO"], default=3)
         layout.addLayout(self._expiry_group[0])
 
-        # Section 3: Advanced filters (collapsible)
+        # Separator
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.Shape.HLine)
+        sep2.setStyleSheet(f"color: {Colors.BORDER};")
+        layout.addSpacing(8)
+        layout.addWidget(sep2)
+        layout.addSpacing(4)
+
+        # ── Advanced Filters (collapsible) ────────────────────────────────────
         self._adv_toggle = QPushButton("▶ ADVANCED FILTERS")
         self._adv_toggle.setStyleSheet(
-            f"color: {Colors.TEXT_SECONDARY}; border: none; font-size: 11px;"
-            " text-align: left; padding: 0px;"
+            f"background-color: transparent; color: {Colors.TEXT_SECONDARY}; "
+            "border: none; font-size: 11px; text-align: left; padding: 2px 0px;"
         )
         self._adv_toggle.clicked.connect(self._toggle_advanced)
         layout.addWidget(self._adv_toggle)
@@ -198,15 +212,8 @@ class OTMContractsView(QWidget):
         layout.addWidget(self._adv_panel)
 
         layout.addStretch()
-        scroll.setWidget(content)
-        outer_layout.addWidget(scroll)
 
-        # Footer: FIND button + scan summary (always visible, outside scroll)
-        footer = QWidget()
-        footer_layout = QVBoxLayout(footer)
-        footer_layout.setContentsMargins(12, 4, 12, 12)
-        footer_layout.setSpacing(4)
-
+        # ── Find button ───────────────────────────────────────────────────────
         self._find_btn = QPushButton("FIND OTM CONTRACTS")
         self._find_btn.setStyleSheet(f"""
             QPushButton {{
@@ -218,14 +225,15 @@ class OTMContractsView(QWidget):
             QPushButton:disabled {{ background-color: {Colors.ACCENT_MUTED}; color: {Colors.TEXT_MUTED}; }}
         """)
         self._find_btn.clicked.connect(self._on_find)
-        footer_layout.addWidget(self._find_btn)
+        layout.addSpacing(4)
+        layout.addWidget(self._find_btn)
 
         self._scan_summary = QLabel("No scan yet")
         self._scan_summary.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 10px;")
-        footer_layout.addWidget(self._scan_summary)
+        layout.addSpacing(2)
+        layout.addWidget(self._scan_summary)
 
-        outer_layout.addWidget(footer)
-        return outer
+        return panel
 
     def _build_advanced_panel(self) -> QFrame:
         """Build all 6 advanced filter controls per spec §15."""
