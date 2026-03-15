@@ -5,6 +5,7 @@ Usage:
     python scripts/run_migration.py migrations/003_add_regime_detection_tables.sql
 """
 
+import os
 import psycopg2
 import sys
 import logging
@@ -18,12 +19,16 @@ def apply_migration(migration_file: str):
     """Apply a specific migration file."""
 
     # Database connection parameters
+    from dotenv import load_dotenv
+    from pathlib import Path as _Path
+    load_dotenv(dotenv_path=_Path(__file__).parents[1] / ".env")
+
     conn_params = {
-        "host": "localhost",
-        "port": 5433,
-        "database": "option_trading",
-        "user": "postgres",
-        "password": "DB_PASSWORD_REDACTED"
+        "host": os.getenv("DB_HOST", "localhost"),
+        "port": int(os.getenv("DB_PORT", "5433")),
+        "database": os.getenv("DB_NAME", "option_trading"),
+        "user": os.getenv("DB_USER", "postgres"),
+        "password": os.getenv("DB_PASSWORD", ""),
     }
 
     migration_path = Path(migration_file)

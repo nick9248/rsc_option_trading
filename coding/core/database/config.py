@@ -32,10 +32,10 @@ class DatabaseConfig:
         password: Database password.
     """
 
-    host: str = "localhost"
-    port: int = 5433
-    database: str = "option_trading"
-    user: str = "postgres"
+    host: str = os.getenv("DB_HOST", "localhost")
+    port: int = int(os.getenv("DB_PORT", "5433"))
+    database: str = os.getenv("DB_NAME", "option_trading")
+    user: str = os.getenv("DB_USER", "postgres")
     password: str = os.getenv("DB_PASSWORD", "")
 
     def get_connection_dict(self) -> dict:
