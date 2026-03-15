@@ -13,7 +13,7 @@ import subprocess
 import sys
 import logging
 from datetime import datetime
-from pathlib import Path, timedelta
+from pathlib import Path
 
 from coding.core.database.config import DatabaseConfig
 from coding.core.logging.logging_setup import init_logging
