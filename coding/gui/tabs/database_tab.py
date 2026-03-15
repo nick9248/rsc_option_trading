@@ -35,6 +35,60 @@ from coding.service.database import DatabaseCaptureService
 logger = logging.getLogger(__name__)
 
 
+class SyncWorker(QThread):
+    """Worker thread for syncing data from VPS."""
+
+    progress = Signal(str)
+    finished = Signal(bool, str)  # (success, summary_message)
+
+    def run(self) -> None:
+        """Run VPS sync."""
+        try:
+            from scripts.sync_from_vps import (
+                open_ssh_tunnel, sync_table, SYNC_TABLES,
+                VPS_TUNNEL_CONN, LOCAL_CONN, _pull_health_json
+            )
+            import psycopg2
+            from datetime import datetime
+
+            start = datetime.now()
+            self.progress.emit("Opening SSH tunnel to VPS...")
+
+            tunnel = open_ssh_tunnel()
+            self.progress.emit("Tunnel established. Connecting to databases...")
+
+            vps_conn = psycopg2.connect(**VPS_TUNNEL_CONN)
+            vps_conn.autocommit = True
+            local_conn = psycopg2.connect(**LOCAL_CONN)
+
+            total_rows = 0
+            errors = []
+
+            for table in SYNC_TABLES:
+                count, msg = sync_table(vps_conn, local_conn, table)
+                status = "OK " if count >= 0 else "ERR"
+                self.progress.emit(f"  [{status}] {table['name']}: {msg}")
+                if count > 0:
+                    total_rows += count
+                if count < 0:
+                    errors.append(table["name"])
+
+            _pull_health_json()
+
+            vps_conn.close()
+            local_conn.close()
+            tunnel.terminate()
+
+            duration = (datetime.now() - start).total_seconds()
+            summary = f"Synced {total_rows:,} rows in {duration:.1f}s"
+            if errors:
+                summary += f" — {len(errors)} error(s): {', '.join(errors)}"
+            self.finished.emit(len(errors) == 0, summary)
+
+        except Exception as e:
+            self.finished.emit(False, f"Sync failed: {e}")
+
+
 class CaptureWorker(QThread):
     """
     Worker thread for capturing data.
@@ -414,6 +468,27 @@ class DatabaseTab(QWidget):
         self.cancel_btn.hide()
         controls_layout.addWidget(self.cancel_btn)
 
+        # Sync from VPS button
+        self.sync_vps_btn = QPushButton("Sync from VPS")
+        self.sync_vps_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {Colors.BUTTON_SECONDARY};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                padding: 6px 12px;
+                border-radius: 6px;
+            }}
+            QPushButton:hover {{
+                background-color: {Colors.BUTTON_SECONDARY_HOVER};
+            }}
+            QPushButton:disabled {{
+                background-color: {Colors.BUTTON_SECONDARY};
+                color: {Colors.TEXT_MUTED};
+            }}
+        """)
+        self.sync_vps_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        controls_layout.addWidget(self.sync_vps_btn)
+
         content_layout.addWidget(controls_frame)
 
         # Tiles grid
@@ -472,6 +547,7 @@ class DatabaseTab(QWidget):
         self.cancel_btn.clicked.connect(self._on_cancel)
         self.open_charts_btn.clicked.connect(self._on_open_charts_folder)
         self.currency_combo.currentTextChanged.connect(self._on_currency_changed)
+        self.sync_vps_btn.clicked.connect(self._on_sync_vps)
 
     def showEvent(self, event) -> None:
         """Load timestamps on first show."""
@@ -667,3 +743,24 @@ class DatabaseTab(QWidget):
         elif self._active_capture_all_btn is not None:
             # Was in Capture All mode but cancel was clicked — finish cleanup now
             self._finish_capture_all()
+
+    def _on_sync_vps(self) -> None:
+        """Start VPS sync in background."""
+        if hasattr(self, "_sync_worker") and self._sync_worker.isRunning():
+            return
+        self.sync_vps_btn.setEnabled(False)
+        self.sync_vps_btn.setText("Syncing...")
+        self.log_viewer.log_info("Starting sync from VPS...")
+        self._sync_worker = SyncWorker()
+        self._sync_worker.progress.connect(self.log_viewer.log_info)
+        self._sync_worker.finished.connect(self._on_sync_finished)
+        self._sync_worker.start()
+
+    def _on_sync_finished(self, success: bool, summary: str) -> None:
+        """Handle sync completion."""
+        self.sync_vps_btn.setEnabled(True)
+        self.sync_vps_btn.setText("Sync from VPS")
+        if success:
+            self.log_viewer.log_info(f"Sync complete: {summary}")
+        else:
+            self.log_viewer.log_error(f"Sync failed: {summary}")

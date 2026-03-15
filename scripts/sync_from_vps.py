@@ -228,6 +228,24 @@ def sync_table(vps_conn, local_conn, table: dict) -> tuple[int, str]:
         return -1, f"ERROR: {e}"
 
 
+def _pull_health_json():
+    """Copy vps_health.json from VPS to local logs/ directory."""
+    try:
+        local_logs = Path(__file__).parents[1] / "logs"
+        local_logs.mkdir(exist_ok=True)
+        result = subprocess.run(
+            ["ssh", SSH_HOST, "cat /home/nick/option_trading/logs/vps_health.json"],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            (local_logs / "vps_health.json").write_text(result.stdout)
+            logger.info("  [OK ] vps_health.json                      pulled")
+        else:
+            logger.warning("  [WARN] vps_health.json not found on VPS yet")
+    except Exception as e:
+        logger.warning(f"  [WARN] Could not pull vps_health.json: {e}")
+
+
 def open_ssh_tunnel() -> subprocess.Popen:
     """Open SSH tunnel: local 5434 → VPS 5432."""
     logger.info(f"Opening SSH tunnel: localhost:{VPS_TUNNEL_PORT} → {SSH_HOST}:5432 ...")
@@ -286,7 +304,10 @@ def run():
             if count < 0:
                 errors.append(f"{table['name']}: {msg}")
 
-        # 5. Summary
+        # 5. Pull VPS health JSON
+        _pull_health_json()
+
+        # 6. Summary
         duration = (datetime.now() - start).total_seconds()
         logger.info("-" * 60)
         logger.info(f"\nSYNC COMPLETE in {duration:.1f}s")

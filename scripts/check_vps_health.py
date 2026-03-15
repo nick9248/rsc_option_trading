@@ -8,10 +8,12 @@ Usage:
     python scripts/check_vps_health.py
 """
 
+import json
 import subprocess
 import sys
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
+from pathlib import Path, timedelta
 
 from coding.core.database.config import DatabaseConfig
 from coding.core.logging.logging_setup import init_logging
@@ -354,6 +356,7 @@ def run():
     results.append((ok, "Database", msg))
 
     if not ok:
+        _write_json(results, now)
         _print_results(results)
         return
 
@@ -385,7 +388,31 @@ def run():
     except Exception as e:
         results.append((False, "Data Checks", f"Failed to connect for table checks: {e}"))
 
+    _write_json(results, now)
     _print_results(results)
+
+
+def _write_json(results, timestamp: str):
+    """Write health check results to logs/vps_health.json."""
+    total = len(results)
+    passed = sum(1 for ok, _, _ in results if ok)
+    problems = [msg for ok, label, msg in results if not ok]
+
+    data = {
+        "timestamp": timestamp,
+        "total": total,
+        "passed": passed,
+        "results": [
+            {"ok": ok, "label": label, "message": msg}
+            for ok, label, msg in results
+        ],
+        "problems": problems,
+    }
+
+    log_dir = Path(__file__).parents[1] / "logs"
+    log_dir.mkdir(exist_ok=True)
+    out_path = log_dir / "vps_health.json"
+    out_path.write_text(json.dumps(data, indent=2))
 
 
 def _print_results(results):

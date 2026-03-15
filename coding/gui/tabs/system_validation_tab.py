@@ -9,8 +9,10 @@ Provides GUI interface to run comprehensive system health checks including:
 - Collection quality
 """
 
+import json
 import logging
 from datetime import datetime
+from pathlib import Path
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QTextEdit, QLabel, QGroupBox
@@ -138,6 +140,32 @@ class SystemValidationTab(QWidget):
         status_group.setLayout(status_layout)
         layout.addWidget(status_group)
 
+        # VPS Health section
+        vps_group = QGroupBox("VPS Health (last sync)")
+        vps_layout = QVBoxLayout()
+
+        vps_controls = QHBoxLayout()
+        self.vps_refresh_btn = QPushButton("Check VPS Health")
+        self.vps_refresh_btn.setMinimumHeight(36)
+        self.vps_refresh_btn.clicked.connect(self._load_vps_health)
+        vps_controls.addWidget(self.vps_refresh_btn)
+        vps_controls.addStretch()
+        vps_layout.addLayout(vps_controls)
+
+        self.vps_status_label = QLabel("Run sync first to get latest VPS health data.")
+        self.vps_status_label.setWordWrap(True)
+        vps_layout.addWidget(self.vps_status_label)
+
+        self.vps_detail_text = QTextEdit()
+        self.vps_detail_text.setReadOnly(True)
+        self.vps_detail_text.setFontFamily("Consolas")
+        self.vps_detail_text.setFontPointSize(9)
+        self.vps_detail_text.setMaximumHeight(200)
+        vps_layout.addWidget(self.vps_detail_text)
+
+        vps_group.setLayout(vps_layout)
+        layout.addWidget(vps_group)
+
         self.setLayout(layout)
 
     def run_validation(self):
@@ -208,3 +236,60 @@ class SystemValidationTab(QWidget):
         """Clear output text."""
         self.output_text.clear()
         self.status_label.setText("Output cleared")
+
+    def _load_vps_health(self):
+        """Load and display VPS health from local vps_health.json."""
+        health_path = Path(__file__).parents[3] / "logs" / "vps_health.json"
+
+        if not health_path.exists():
+            self.vps_status_label.setText(
+                "<b style='color:orange'>No VPS health data found.</b> "
+                "Run 'Sync from VPS' in the Database tab first."
+            )
+            self.vps_detail_text.clear()
+            return
+
+        try:
+            data = json.loads(health_path.read_text())
+            timestamp = data.get("timestamp", "unknown")
+            passed = data.get("passed", 0)
+            total = data.get("total", 0)
+            problems = data.get("problems", [])
+            results = data.get("results", [])
+
+            # Minutes since last check
+            try:
+                checked_at = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
+                mins_ago = int((datetime.now() - checked_at).total_seconds() / 60)
+                age_str = f"{mins_ago}min ago" if mins_ago < 120 else f"{mins_ago//60}h ago"
+            except Exception:
+                age_str = "unknown time"
+
+            if problems:
+                color = "red"
+                summary = f"❌ {len(problems)} problem(s) — {passed}/{total} checks OK"
+            else:
+                color = "green"
+                summary = f"✅ {passed}/{total} checks OK"
+
+            self.vps_status_label.setText(
+                f"<b style='color:{color}'>{summary}</b><br>"
+                f"Last checked: {timestamp} ({age_str})"
+            )
+
+            # Detail lines
+            lines = []
+            for r in results:
+                icon = "OK " if r["ok"] else "ERR"
+                lines.append(f"[{icon}] {r['message']}")
+            if problems:
+                lines.append("")
+                lines.append("PROBLEMS:")
+                for p in problems:
+                    lines.append(f"  - {p}")
+
+            self.vps_detail_text.setPlainText("\n".join(lines))
+
+        except Exception as e:
+            self.vps_status_label.setText(f"<b style='color:red'>Failed to read health data: {e}</b>")
+            logger.error(f"VPS health load failed: {e}")
