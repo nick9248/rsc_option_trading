@@ -67,7 +67,7 @@ class OnChainAnalysisWorker(QThread):
         try:
             repository = DatabaseRepository()
 
-            with DeribitApiService() as api_service:
+            with DeribitApiService(timeout=90) as api_service:
                 service = OnChainAnalysisService(api_service, repository=repository)
                 report, analyzer = service.fetch_and_analyze(
                     currency=self.currency,

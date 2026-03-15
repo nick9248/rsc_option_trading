@@ -7,39 +7,39 @@ Defines all colors used throughout the application.
 
 class Colors:
     """
-    Luxury dark theme color palette.
+    Midnight navy luxury theme — Theme B.
 
-    A sophisticated dark color scheme with subtle gold accents.
+    Deep navy backgrounds, warm platinum gold accents, Inter + Playfair Display fonts.
     """
 
     # Background colors
-    BACKGROUND_PRIMARY = "#0D0D0F"
-    BACKGROUND_SECONDARY = "#141418"
-    BACKGROUND_TERTIARY = "#1A1A1F"
-    BACKGROUND_ELEVATED = "#1F1F26"
+    BACKGROUND_PRIMARY = "#080D18"
+    BACKGROUND_SECONDARY = "#0A1020"
+    BACKGROUND_TERTIARY = "#0D1428"
+    BACKGROUND_ELEVATED = "#111E35"
 
     # Surface colors (for cards, panels)
-    SURFACE = "#1A1A1F"
-    SURFACE_HOVER = "#222228"
-    SURFACE_ACTIVE = "#2A2A32"
+    SURFACE = "#0D1428"
+    SURFACE_HOVER = "#111E35"
+    SURFACE_ACTIVE = "#192840"
 
     # Border colors
-    BORDER = "#2A2A32"
-    BORDER_SUBTLE = "#222228"
-    BORDER_FOCUS = "#B8860B"
+    BORDER = "#141E30"
+    BORDER_SUBTLE = "#0F1828"
+    BORDER_FOCUS = "#C9A84C"  # Use rgba(201,168,76,0.4) in QSS for alpha variant
 
     # Text colors
-    TEXT_PRIMARY = "#F5F5F7"
-    TEXT_SECONDARY = "#A0A0A8"
-    TEXT_MUTED = "#6B6B73"
-    TEXT_DISABLED = "#4A4A52"
+    TEXT_PRIMARY = "#E8EAF0"
+    TEXT_SECONDARY = "#5A6A7C"
+    TEXT_MUTED = "#2A3848"
+    TEXT_DISABLED = "#1A2638"
 
-    # Accent colors (gold for luxury)
-    ACCENT = "#B8860B"
-    ACCENT_HOVER = "#D4A017"
-    ACCENT_MUTED = "#8B6914"
+    # Accent colors (luxury metallic gold)
+    ACCENT = "#C9A84C"
+    ACCENT_HOVER = "#DBBF5A"
+    ACCENT_MUTED = "#9A7A2E"
 
-    # Status colors
+    # Status colors (unchanged)
     SUCCESS = "#2ECC71"
     SUCCESS_MUTED = "#1E8449"
     WARNING = "#F39C12"
@@ -49,27 +49,22 @@ class Colors:
     INFO = "#3498DB"
     INFO_MUTED = "#2171A9"
 
-    # Tab colors
-    TAB_INACTIVE = "#141418"
-    TAB_ACTIVE = "#1F1F26"
-    TAB_HOVER = "#1A1A1F"
-
     # Input colors
-    INPUT_BACKGROUND = "#141418"
-    INPUT_BORDER = "#2A2A32"
-    INPUT_FOCUS = "#B8860B"
+    INPUT_BACKGROUND = "#0A1020"
+    INPUT_BORDER = "#141E30"
+    INPUT_FOCUS = "#C9A84C"
 
     # Button colors
-    BUTTON_PRIMARY = "#B8860B"
-    BUTTON_PRIMARY_HOVER = "#D4A017"
-    BUTTON_SECONDARY = "#2A2A32"
-    BUTTON_SECONDARY_HOVER = "#3A3A44"
+    BUTTON_PRIMARY = "#C9A84C"
+    BUTTON_PRIMARY_HOVER = "#DBBF5A"
+    BUTTON_SECONDARY = "#111E35"
+    BUTTON_SECONDARY_HOVER = "#192840"
 
     # Scrollbar colors
-    SCROLLBAR_TRACK = "#141418"
-    SCROLLBAR_HANDLE = "#2A2A32"
-    SCROLLBAR_HANDLE_HOVER = "#3A3A44"
+    SCROLLBAR_TRACK = "#0A1020"
+    SCROLLBAR_HANDLE = "#141E30"
+    SCROLLBAR_HANDLE_HOVER = "#1E2D45"
 
-    # Financial colors
-    PROFIT = "#2ECC71"  # Green for profits
-    LOSS = "#E74C3C"    # Red for losses
+    # Financial colors (unchanged)
+    PROFIT = "#2ECC71"
+    LOSS = "#E74C3C"
