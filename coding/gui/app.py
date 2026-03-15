@@ -18,8 +18,8 @@ from coding.gui.main_window import MainWindow
 
 _FONTS_DIR = Path(__file__).parent / "assets" / "fonts"
 _FONT_FILES = [
-    "PlayfairDisplay-Regular.ttf",
-    "PlayfairDisplay-Italic.ttf",
+    "Raleway-Light.ttf",
+    "Raleway-Regular.ttf",
 ]
 
 
@@ -55,8 +55,8 @@ def main():
     # Load bundled fonts before any widgets are created
     _load_fonts(logger)
 
-    # Default body font — Segoe UI / Inter for data readability
-    font = QFont("Segoe UI", 10)
+    # Default body font — Raleway for consistent luxury minimal look
+    font = QFont("Raleway", 10)
     font.setStyleHint(QFont.StyleHint.SansSerif)
     app.setFont(font)
 

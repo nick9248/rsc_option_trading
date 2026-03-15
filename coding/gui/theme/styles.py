@@ -31,8 +31,9 @@ class Styles:
             QWidget {{
                 background-color: {Colors.BACKGROUND_PRIMARY};
                 color: {Colors.TEXT_PRIMARY};
-                font-family: "Playfair Display", "Georgia", serif;
+                font-family: "Raleway", "Segoe UI", sans-serif;
                 font-size: 13px;
+                font-weight: 300;
             }}
 
             /* Top Navigation Bar */
@@ -48,7 +49,7 @@ class Styles:
                 border: 1px solid {Colors.BORDER};
                 border-radius: 4px;
                 padding: 4px 14px;
-                font-family: "Playfair Display", "Georgia", serif;
+                font-family: "Raleway", "Segoe UI", sans-serif;
                 font-size: 11px;
                 min-width: 60px;
             }}
@@ -67,7 +68,7 @@ class Styles:
             QLabel#positionLabel {{
                 background-color: transparent;
                 color: {Colors.TEXT_SECONDARY};
-                font-family: "Playfair Display", "Georgia", serif;
+                font-family: "Raleway", "Segoe UI", sans-serif;
                 font-size: 11px;
                 letter-spacing: 1px;
             }}
@@ -76,8 +77,9 @@ class Styles:
             QLabel#logoLabel {{
                 background-color: transparent;
                 color: {Colors.ACCENT};
-                font-family: "Playfair Display", "Georgia", serif;
+                font-family: "Raleway", "Segoe UI", sans-serif;
                 font-size: 13px;
+                font-weight: 300;
                 font-style: italic;
                 letter-spacing: 2px;
             }}
@@ -90,7 +92,7 @@ class Styles:
             QLabel#navPageHeader {{
                 background-color: transparent;
                 color: {Colors.TEXT_MUTED};
-                font-family: "Playfair Display", "Georgia", serif;
+                font-family: "Raleway", "Segoe UI", sans-serif;
                 font-size: 12px;
                 font-style: italic;
                 letter-spacing: 3px;
@@ -111,7 +113,7 @@ class Styles:
             QLabel#tileName {{
                 background-color: transparent;
                 color: {Colors.TEXT_SECONDARY};
-                font-family: "Playfair Display", "Georgia", serif;
+                font-family: "Raleway", "Segoe UI", sans-serif;
                 font-size: 14px;
                 letter-spacing: 0.5px;
             }}
@@ -119,7 +121,7 @@ class Styles:
             QLabel#tileSub {{
                 background-color: transparent;
                 color: {Colors.TEXT_MUTED};
-                font-family: "Playfair Display", "Georgia", serif;
+                font-family: "Raleway", "Segoe UI", sans-serif;
                 font-size: 11px;
             }}
 
