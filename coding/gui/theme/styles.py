@@ -31,44 +31,103 @@ class Styles:
             QWidget {{
                 background-color: {Colors.BACKGROUND_PRIMARY};
                 color: {Colors.TEXT_PRIMARY};
-                font-family: "Segoe UI", "SF Pro Display", sans-serif;
+                font-family: "Segoe UI", "Inter", sans-serif;
                 font-size: 13px;
             }}
 
-            /* Tab Widget */
-            QTabWidget::pane {{
-                background-color: {Colors.BACKGROUND_SECONDARY};
-                border: 1px solid {Colors.BORDER};
-                border-radius: 12px;
-                margin-top: -1px;
+            /* Top Navigation Bar */
+            QWidget#topBar {{
+                background-color: {Colors.BACKGROUND_PRIMARY};
+                border-bottom: 1px solid {Colors.BORDER};
             }}
 
-            QTabBar {{
+            /* Navigation Buttons (Prev / Home / Next) */
+            QPushButton#navBtn {{
                 background-color: transparent;
-            }}
-
-            QTabBar::tab {{
-                background-color: {Colors.TAB_INACTIVE};
-                color: {Colors.TEXT_SECONDARY};
+                color: {Colors.ACCENT};
                 border: 1px solid {Colors.BORDER};
-                border-bottom: none;
-                border-top-left-radius: 10px;
-                border-top-right-radius: 10px;
-                padding: 10px 24px;
-                margin-right: 4px;
-                min-width: 120px;
+                border-radius: 4px;
+                padding: 4px 14px;
+                font-family: "Playfair Display", "Georgia", serif;
+                font-size: 11px;
+                min-width: 60px;
             }}
 
-            QTabBar::tab:selected {{
-                background-color: {Colors.TAB_ACTIVE};
-                color: {Colors.TEXT_PRIMARY};
-                border-color: {Colors.BORDER};
-                border-bottom: 1px solid {Colors.TAB_ACTIVE};
+            QPushButton#navBtn:hover {{
+                background-color: {Colors.SURFACE};
+                border-color: {Colors.ACCENT};
+                color: {Colors.ACCENT_HOVER};
             }}
 
-            QTabBar::tab:hover:!selected {{
-                background-color: {Colors.TAB_HOVER};
-                color: {Colors.TEXT_PRIMARY};
+            QPushButton#navBtn:pressed {{
+                background-color: {Colors.SURFACE_ACTIVE};
+            }}
+
+            /* Dimmed state — on home page, Prev/Next use TEXT_MUTED color.
+               Uses dynamic property so :hover rules remain active. */
+            QPushButton#navBtn[dimmed="true"] {{
+                color: {Colors.TEXT_MUTED};
+                border-color: {Colors.BORDER_SUBTLE};
+            }}
+
+            /* Position label (e.g. "3 / 8") */
+            QLabel#positionLabel {{
+                background-color: transparent;
+                color: {Colors.TEXT_SECONDARY};
+                font-family: "Segoe UI", "Inter", sans-serif;
+                font-size: 11px;
+                letter-spacing: 1px;
+            }}
+
+            /* Logo label */
+            QLabel#logoLabel {{
+                background-color: transparent;
+                color: {Colors.ACCENT};
+                font-family: "Playfair Display", "Georgia", serif;
+                font-size: 13px;
+                font-style: italic;
+                letter-spacing: 2px;
+            }}
+
+            /* Navigation Home Page */
+            QWidget#navigationPage {{
+                background-color: {Colors.BACKGROUND_PRIMARY};
+            }}
+
+            QLabel#navPageHeader {{
+                background-color: transparent;
+                color: {Colors.TEXT_MUTED};
+                font-family: "Playfair Display", "Georgia", serif;
+                font-size: 12px;
+                font-style: italic;
+                letter-spacing: 3px;
+            }}
+
+            /* Module Tile */
+            QFrame#moduleTile {{
+                background-color: {Colors.SURFACE};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+            }}
+
+            QLabel#tileIcon {{
+                background-color: transparent;
+                font-size: 22px;
+            }}
+
+            QLabel#tileName {{
+                background-color: transparent;
+                color: {Colors.TEXT_SECONDARY};
+                font-family: "Playfair Display", "Georgia", serif;
+                font-size: 11px;
+                letter-spacing: 0.5px;
+            }}
+
+            QLabel#tileSub {{
+                background-color: transparent;
+                color: {Colors.TEXT_MUTED};
+                font-family: "Segoe UI", "Inter", sans-serif;
+                font-size: 10px;
             }}
 
             /* Labels */
