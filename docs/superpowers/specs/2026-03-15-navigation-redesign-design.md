@@ -77,7 +77,7 @@ Stack index 11 →  Analytics        (placeholder)
 ### 3.1 Font
 - **Playfair Display** — logo, module tile names, page section headings, nav button labels
 - **Inter** — body text, data labels, values, log output, subtitles (unchanged, readability priority)
-- **Loading**: bundle `PlayfairDisplay-Regular.ttf` and `PlayfairDisplay-Italic.ttf` in `coding/gui/assets/fonts/`. Load via `QFontDatabase.addApplicationFont()` in `app.py` before `MainWindow` is created. If loading fails (missing file), log a warning and fall back to system serif — success criterion 7 is met by best-effort render.
+- **Loading**: bundle `PlayfairDisplay-Regular.ttf` and `PlayfairDisplay-Italic.ttf` in `coding/gui/assets/fonts/`. Load via `QFontDatabase.addApplicationFont()` in `app.py` before `MainWindow` is created. If loading fails (missing file), log a warning and fall back to system serif — success criterion 8 is met by best-effort render.
 - **New directory**: `coding/gui/assets/fonts/` — add to git
 
 ### 3.2 Color Palette (Theme B — Midnight)
