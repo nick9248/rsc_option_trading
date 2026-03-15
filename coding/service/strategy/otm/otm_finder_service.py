@@ -129,13 +129,16 @@ class OTMFinderService:
             dvol_history = self._repository.get_dvol_history(asset)
             ohlcv_daily = self._repository.get_ohlcv_daily(asset)
 
-            on_chain = self._on_chain_service.fetch_and_analyze(asset, "ALL")
-            mw = getattr(on_chain, "market_wide_structured", {}) or {}
-            vs = getattr(on_chain, "volatility_surface_structured", {}) or {}
-            vrp_data = mw.get("vrp", {})
-            atm_iv = vs.get("atm_iv", 0.60)
-            rv_30d = vrp_data.get("rv_30d", atm_iv * 0.9)
-            term_data = mw.get("iv_term_structure", None)
+            if self._on_chain_service is not None:
+                on_chain = self._on_chain_service.fetch_and_analyze(asset)
+                mw = getattr(on_chain, "market_wide_structured", {}) or {}
+                vs = getattr(on_chain, "volatility_surface_structured", {}) or {}
+                vrp_data = mw.get("vrp", {})
+                atm_iv = vs.get("atm_iv", 0.60)
+                rv_30d = vrp_data.get("rv_30d", atm_iv * 0.9)
+                term_data = mw.get("iv_term_structure", None)
+            else:
+                atm_iv, rv_30d, term_data = 0.60, 0.54, None
 
             return self._gate2.score(
                 dvol_history=self._normalize_dvol_history(dvol_history),
@@ -217,10 +220,13 @@ class OTMFinderService:
         ibit_avg = None  # TODO: compute 30d avg from stored history
 
         # Fetch on-chain analytics
-        analyzer = self._on_chain_service.fetch_and_analyze(asset, "ALL")
-        mw = getattr(analyzer, "market_wide_structured", {}) or {}
-        vs = getattr(analyzer, "volatility_surface_structured", {}) or {}
-        gex_dex = getattr(analyzer, "gex_dex_structured", {}) or {}
+        if self._on_chain_service is not None:
+            analyzer = self._on_chain_service.fetch_and_analyze(asset)
+            mw = getattr(analyzer, "market_wide_structured", {}) or {}
+            vs = getattr(analyzer, "volatility_surface_structured", {}) or {}
+            gex_dex = getattr(analyzer, "gex_dex_structured", {}) or {}
+        else:
+            mw, vs, gex_dex = {}, {}, {}
 
         funding_data = mw.get("perpetual_funding", {})
         term_data = mw.get("iv_term_structure", None)

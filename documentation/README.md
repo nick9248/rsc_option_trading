@@ -72,6 +72,7 @@ Detailed feature implementation guides:
 
 - **`feature_market_regime_detection.md`** - Regime detection methodology
 - **`feature_strategy_system.md`** - Strategy evaluation framework
+- **`feature_otm_contract_finder.md`** - OTM contract finder (4-gate pipeline, Kelly sizing, GUI)
 
 ### 📊 Top-Level
 

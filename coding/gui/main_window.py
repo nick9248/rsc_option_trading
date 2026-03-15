@@ -28,6 +28,7 @@ from coding.gui.tabs.system_validation_tab import SystemValidationTab
 from coding.gui.tabs.special_strategies_tab import SpecialStrategiesTab
 from coding.core.database.repository import DatabaseRepository
 from coding.service.deribit.deribit_api_service import DeribitApiService
+from coding.service.on_chain.on_chain_analysis_service import OnChainAnalysisService
 
 
 logger = logging.getLogger(__name__)
@@ -164,10 +165,12 @@ class MainWindow(QMainWindow):
             from coding.service.strategy.otm.otm_finder_service import OTMFinderService
             _otm_api = DeribitApiService()
             _otm_repo = DatabaseRepository()
+            _otm_on_chain = OnChainAnalysisService(_otm_api, _otm_repo)
             otm_config = OTMConfig(risk_budget_usd=10_000.0)
             otm_service = OTMFinderService(
                 config=otm_config,
                 deribit_service=_otm_api,
+                on_chain_service=_otm_on_chain,
                 repository=_otm_repo,
             )
             special_tab = SpecialStrategiesTab(

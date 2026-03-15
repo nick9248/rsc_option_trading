@@ -571,6 +571,23 @@ class DeribitApiService:
 
         return result
 
+    @staticmethod
+    def _bs_delta(spot: float, strike: float, dte_days: int,
+                  iv_decimal: float, option_type: str) -> float:
+        """Black-Scholes delta via logistic N(d1) approximation. No external deps."""
+        import math
+        if dte_days <= 0 or iv_decimal <= 0 or spot <= 0 or strike <= 0:
+            return 0.0
+        T = dte_days / 365.0
+        try:
+            d1 = (math.log(spot / strike) + 0.5 * iv_decimal ** 2 * T) / (
+                iv_decimal * math.sqrt(T)
+            )
+        except (ValueError, ZeroDivisionError):
+            return 0.0
+        nd1 = 1.0 / (1.0 + math.exp(-1.7 * d1))  # logistic approx of N(d1)
+        return nd1 if option_type == "C" else nd1 - 1.0
+
     def get_book_summary_by_currency(self, asset: str) -> List[Dict[str, Any]]:
         """
         Get the full options chain for an asset, normalized for OTMFinderService.
@@ -611,6 +628,11 @@ class DeribitApiService:
             # mark_iv: Deribit returns IV in percent (e.g. 65.0 = 65%)
             raw_iv = item.get("mark_iv") or 0.0
             mark_iv = raw_iv / 100.0 if raw_iv > 2.0 else raw_iv
+
+            # Fallback: compute BS delta when API doesn't return greeks
+            underlying_price = item.get("underlying_price") or 0.0
+            if abs(delta) < 0.001 and mark_iv > 0 and dte > 0 and underlying_price > 0:
+                delta = self._bs_delta(underlying_price, strike, dte, mark_iv, option_type)
 
             # Approximate bid_iv / ask_iv from price spread
             mark_price = item.get("mark_price") or 0.0
