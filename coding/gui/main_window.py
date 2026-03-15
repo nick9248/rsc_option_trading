@@ -97,6 +97,8 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
+        # Order is load-bearing: _build_top_bar sets self.btn_prev/btn_next/position_label
+        # which _sync_nav_state (called from _build_stack via currentChanged) depends on.
         main_layout.addWidget(self._build_top_bar())
         main_layout.addWidget(self._build_stack())
 
