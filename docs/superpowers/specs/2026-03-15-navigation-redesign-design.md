@@ -144,7 +144,7 @@ Token names are **kept identical** to the existing `colors.py` to avoid cascadin
 | `coding/gui/tabs/navigation_page.py` | Create | NavigationPage widget with ModuleTile grid |
 | `coding/gui/assets/fonts/PlayfairDisplay-Regular.ttf` | Create | Bundle font file |
 | `coding/gui/assets/fonts/PlayfairDisplay-Italic.ttf` | Create | Bundle font file |
-| `coding/gui/assets/fonts/__init__.py` | Create | Empty, marks as package resource dir |
+| `coding/gui/assets/fonts/.gitkeep` | Create | Ensures git tracks the otherwise-empty directory (conventional, not `__init__.py`) |
 
 ### 4.2 NavigationPage Widget
 
@@ -167,6 +167,7 @@ NavigationPage(QWidget)
 - Constructor: `__init__(self, module_defs: list[dict], failed_indices: set[int])`
   - `module_defs`: `[{"index": 1, "icon": "🔗", "name": "API Connection", "subtitle": "Test endpoints"}, ...]`
   - `failed_indices`: set of stack indices that failed to initialize
+- **`module_defs` ownership**: `MainWindow` owns a module-level constant `MODULE_DEFS: list[dict]` (hardcoded, 11 entries covering indices 1–11). `MainWindow` builds the `NavigationPage` after `_add_tabs()` completes and passes `MODULE_DEFS` plus the collected `failed_indices` set.
 
 ### 4.3 MainWindow Structure
 
@@ -214,14 +215,21 @@ def _go_next(self):
         self._go_to(current + 1)
 
 def _sync_nav_state(self, index: int):
-    """Connected to stack.currentChanged — keeps top bar in sync."""
+    """Connected to stack.currentChanged — keeps top bar in sync.
+
+    Position label shows "{index} / 8". This is valid because active modules
+    occupy contiguous stack indices 1–8, so the raw stack index equals the
+    1-based display position. If active indices ever become non-contiguous,
+    this must be replaced with a computed position.
+    """
     on_home = (index == 0)
     self.position_label.setVisible(not on_home)
     if not on_home:
         self.position_label.setText(f"{index} / 8")
-    dim = Colors.TEXT_MUTED if on_home else Colors.TEXT_SECONDARY
-    self.btn_prev.setStyleSheet(f"color: {dim};")
-    self.btn_next.setStyleSheet(f"color: {dim};")
+    # Active state: ACCENT gold; dimmed on home: TEXT_MUTED
+    active_color = Colors.ACCENT if not on_home else Colors.TEXT_MUTED
+    self.btn_prev.setStyleSheet(f"color: {active_color};")
+    self.btn_next.setStyleSheet(f"color: {active_color};")
 ```
 
 ---
