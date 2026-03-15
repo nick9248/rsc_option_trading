@@ -116,8 +116,11 @@ class OTMContractsView(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
 
         # Back button
-        back_btn = QPushButton("< Back to Special Strategies")
-        back_btn.setStyleSheet(f"color: {Colors.ACCENT}; border: none; font-size: 12px;")
+        back_btn = QPushButton("← Back to Special Strategies")
+        back_btn.setStyleSheet(
+            f"background-color: transparent; color: {Colors.ACCENT}; "
+            "border: none; font-size: 12px; padding: 6px 8px; text-align: left;"
+        )
         back_btn.clicked.connect(self.back_requested)
         layout.addWidget(back_btn)
 
@@ -448,20 +451,24 @@ class OTMContractsView(QWidget):
 
     @staticmethod
     def _toggle_group(labels: List[str], default: int = 0):
+        from PySide6.QtWidgets import QSizePolicy
         layout = QHBoxLayout()
-        layout.setSpacing(4)
+        layout.setSpacing(3)
+        layout.setContentsMargins(0, 0, 0, 0)
         group = QButtonGroup()
         group.setExclusive(True)
         for i, text in enumerate(labels):
             btn = QPushButton(text)
             btn.setCheckable(True)
             btn.setChecked(i == default)
+            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            btn.setFixedHeight(26)
             btn.setStyleSheet(f"""
                 QPushButton {{
                     background-color: {Colors.BUTTON_SECONDARY};
                     color: {Colors.TEXT_SECONDARY};
                     border: none; border-radius: 4px;
-                    padding: 3px 8px; font-size: 11px;
+                    padding: 2px 4px; font-size: 11px;
                 }}
                 QPushButton:checked {{
                     background-color: {Colors.ACCENT};
