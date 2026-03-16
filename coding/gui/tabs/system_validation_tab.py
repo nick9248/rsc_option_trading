@@ -259,8 +259,9 @@ class SystemValidationTab(QWidget):
 
             # Minutes since last check
             try:
-                checked_at = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
-                mins_ago = int((datetime.now() - checked_at).total_seconds() / 60)
+                from datetime import timezone
+                checked_at = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                mins_ago = int((datetime.now(timezone.utc) - checked_at).total_seconds() / 60)
                 age_str = f"{mins_ago}min ago" if mins_ago < 120 else f"{mins_ago//60}h ago"
             except Exception:
                 age_str = "unknown time"
