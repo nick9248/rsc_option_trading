@@ -24,22 +24,22 @@ def train_models():
     print("ML Model Training - Full 70-Feature Set")
     print("=" * 60)
 
-    # Create walk-forward config optimized for available data (~100 samples)
-    # With limited hourly data, use minimal windows for initial testing
+    # Walk-forward config for ~800h of available data (55 days)
+    # Fold structure: 480h train → 96h test → step 96h → repeat
+    # 3 folds need: 480 + 96*3 = 768h < ~795h available ✓
     walk_forward_config = WalkForwardConfig(
-        min_train_hours=36,   # 1.5 days initial training
-        test_hours=20,        # ~1 day test period
-        step_hours=10,        # Advance 10 hours between folds
+        min_train_hours=480,  # 20 days initial training window
+        test_hours=96,        # 4 days out-of-sample test
+        step_hours=96,        # Advance 4 days between folds
         expanding=True,       # Growing window (more realistic)
         min_folds=3           # Minimum 3 folds for validation
     )
 
     # Create training configuration
     config = MLTrainingConfig(
-        # Prediction target
-        classification_target="market_regime",  # Predict market regime
-        regression_targets=["realized_vol_24h"],  # Predict volatility
-        min_samples=100,  # Minimum required by config
+        classification_target="market_regime",
+        regression_targets=["realized_vol_24h"],
+        min_samples=400,
 
         # Walk-forward validation
         walk_forward=walk_forward_config
@@ -49,10 +49,9 @@ def train_models():
     print("\nInitializing ML training service...")
     service = MLTrainingService(config=config)
 
-    # Define training period (use all available backfilled data)
-    # We backfilled 90 days for most tables, so use that
+    # Use all available hourly snapshot data (~55 days)
     end_time = datetime.now()
-    start_time = end_time - timedelta(days=90)
+    start_time = end_time - timedelta(days=55)
 
     print(f"\nTraining period: {start_time.date()} to {end_time.date()}")
     print("=" * 60)

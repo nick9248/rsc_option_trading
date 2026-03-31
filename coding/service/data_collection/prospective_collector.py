@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from coding.core.analytics.on_chain_analyzer import OnChainAnalyzer
 from coding.core.analytics.gex_dex_calculator import GexDexCalculator
+from coding.core.analytics.technical_indicator_calculator import TechnicalIndicatorCalculator
 from coding.core.config import SUPPORTED_CURRENCIES
 from coding.core.database.repository import DatabaseRepository
 from coding.service.data_collection.hourly_aggregation_service import HourlyAggregationService
@@ -49,6 +50,7 @@ class ProspectiveCollector:
         self.api = api_service or DeribitApiService()
         self.repo = repository or DatabaseRepository()
         self.aggregation_service = HourlyAggregationService(repository=self.repo)
+        self.indicator_calculator = TechnicalIndicatorCalculator()
 
         logger.info("ProspectiveCollector initialized")
 
@@ -210,6 +212,13 @@ class ProspectiveCollector:
             self._fetch_ohlcv(currency)
         except Exception as e:
             logger.error(f"    Error fetching OHLCV: {e}")
+
+        # 7. Update today's technical indicators from ohlcv_history
+        logger.info(f"  Updating {currency} technical indicators...")
+        try:
+            self._update_technical_indicators(currency)
+        except Exception as e:
+            logger.error(f"    Error updating technical indicators: {e}")
 
         return {
             "trades": trades,
@@ -614,3 +623,72 @@ class ProspectiveCollector:
         except Exception as e:
             logger.error(f"    Failed to fetch/save OHLCV: {e}")
             raise
+
+    def _update_technical_indicators(self, currency: str) -> None:
+        """
+        Recompute and save today's technical indicators from ohlcv_history.
+
+        Loads the full OHLCV series from DB (no API call), recalculates all
+        indicators over the complete history, then upserts today's row.
+        Runs after every OHLCV fetch so indicators stay current automatically.
+
+        Args:
+            currency: Currency symbol (e.g., "BTC", "ETH").
+        """
+        import math
+        import pandas as pd
+
+        conn = self.repo._get_connection()
+        try:
+            df = pd.read_sql_query(
+                "SELECT timestamp, open, high, low, close, volume FROM ohlcv_history WHERE currency = %s ORDER BY timestamp ASC",
+                conn,
+                params=(currency,)
+            )
+        finally:
+            self.repo._return_connection(conn)
+
+        if df.empty or len(df) < 14:  # Need at least 14 candles for RSI
+            logger.warning(f"Insufficient OHLCV history for {currency} technical indicators ({len(df)} candles)")
+            return
+
+        ohlcv_list = df[["timestamp", "open", "high", "low", "close", "volume"]].values.tolist()
+        indicators_df = self.indicator_calculator.calculate_all_indicators(ohlcv_list)
+
+        if indicators_df.empty:
+            logger.warning(f"Technical indicator calculation returned empty result for {currency}")
+            return
+
+        # Only save the latest row (today)
+        latest = indicators_df.iloc[-1]
+        date = datetime.utcfromtimestamp(latest["timestamp"] / 1000)
+
+        def _safe(val):
+            if val is None:
+                return None
+            try:
+                f = float(val)
+                return None if math.isnan(f) else f
+            except (TypeError, ValueError):
+                return None
+
+        indicators = {
+            "sma_50":         _safe(latest.get("sma_50")),
+            "sma_200":        _safe(latest.get("sma_200")),
+            "ema_50":         _safe(latest.get("ema_50")),
+            "ema_200":        _safe(latest.get("ema_200")),
+            "adx":            _safe(latest.get("adx")),
+            "plus_di":        _safe(latest.get("plus_di")),
+            "minus_di":       _safe(latest.get("minus_di")),
+            "atr":            _safe(latest.get("atr")),
+            "atr_percentile": _safe(latest.get("atr_percentile")),
+            "rsi":            _safe(latest.get("rsi")),
+            "macd":           _safe(latest.get("macd")),
+            "macd_signal":    _safe(latest.get("macd_signal")),
+            "macd_histogram": _safe(latest.get("macd_histogram")),
+        }
+
+        self.repo.save_technical_indicators(currency=currency, date=date, indicators=indicators)
+        logger.info(f"Technical indicators updated for {currency} ({date.date()}: RSI={indicators.get('rsi', 'N/A'):.1f}, ADX={indicators.get('adx', 'N/A'):.1f})"
+                    if indicators.get("rsi") and indicators.get("adx") else
+                    f"Technical indicators updated for {currency} ({date.date()})")
