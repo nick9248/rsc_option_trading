@@ -30,6 +30,7 @@ from coding.gui.tabs.strategy_tab import StrategyTab
 from coding.gui.tabs.regime_tab import RegimeTab
 from coding.gui.tabs.system_validation_tab import SystemValidationTab
 from coding.gui.tabs.special_strategies_tab import SpecialStrategiesTab
+from coding.gui.forward_testing.forward_testing_tab import ForwardTestingTab
 from coding.core.database.repository import DatabaseRepository
 from coding.service.deribit.deribit_api_service import DeribitApiService
 from coding.service.on_chain.on_chain_analysis_service import OnChainAnalysisService
@@ -48,16 +49,16 @@ MODULE_DEFS: list[dict] = [
     {"index": 6,  "icon": "🎯", "name": "Special Strategies", "subtitle": "OTM finder"},
     {"index": 7,  "icon": "📊", "name": "Market Regime",     "subtitle": "Bull · Bear · Neutral"},
     {"index": 8,  "icon": "✅", "name": "System Health",     "subtitle": "Diagnostics"},
-    {"index": 9,  "icon": "📈", "name": "Market Data",       "subtitle": "Coming soon"},
+    {"index": 9,  "icon": "🧪", "name": "Forward Testing",   "subtitle": "Vol · Regime · Strategy"},
     {"index": 10, "icon": "💹", "name": "Trading",           "subtitle": "Coming soon"},
     {"index": 11, "icon": "🧮", "name": "Analytics",         "subtitle": "Coming soon"},
 ]
 
 # Last active module index (used for wrap-around navigation)
-_LAST_ACTIVE = 8
+_LAST_ACTIVE = 9
 
 # Stack indices that are permanent placeholders (never active modules)
-_PLACEHOLDER_INDICES = {9, 10, 11}
+_PLACEHOLDER_INDICES = {10, 11}
 
 
 class MainWindow(QMainWindow):
@@ -213,8 +214,15 @@ class MainWindow(QMainWindow):
         # Index 8: System Health
         self.stack.addWidget(SystemValidationTab())
 
-        # Indices 9–11: Future placeholders
-        self.stack.addWidget(self._placeholder_widget("Market data visualization coming soon…"))
+        # Index 9: Forward Testing
+        try:
+            self.stack.addWidget(ForwardTestingTab())
+        except Exception as exc:
+            logger.error("Failed to initialize Forward Testing tab: %s", exc)
+            self.stack.addWidget(self._placeholder_widget("Forward testing unavailable"))
+            failed_indices.add(9)
+
+        # Indices 10–11: Future placeholders
         self.stack.addWidget(self._placeholder_widget("Trading interface coming soon…"))
         self.stack.addWidget(self._placeholder_widget("Analytics dashboard coming soon…"))
 
