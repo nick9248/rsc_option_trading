@@ -2013,3 +2013,186 @@ class DatabaseRepository:
         except Exception as exc:
             logger.error("save_otm_signals failed: %s", exc)
         return saved
+
+    # ── Forward Testing ───────────────────────────────────────────────────────
+
+    def get_hourly_prices(
+        self,
+        currency: str,
+        start_time: datetime,
+        end_time: datetime
+    ) -> List[Dict]:
+        """
+        Get hourly average index prices from historical_trades.
+
+        Args:
+            currency: Currency (BTC, ETH)
+            start_time: Start of window (inclusive)
+            end_time: End of window (inclusive)
+
+        Returns:
+            List of {'hour': datetime, 'price': float} sorted by hour ascending.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    DATE_TRUNC('hour', TO_TIMESTAMP(trade_timestamp / 1000.0)) AS hour,
+                    AVG(index_price) AS avg_price
+                FROM historical_trades
+                WHERE currency = %s
+                  AND TO_TIMESTAMP(trade_timestamp / 1000.0) >= %s
+                  AND TO_TIMESTAMP(trade_timestamp / 1000.0) <= %s
+                  AND index_price IS NOT NULL
+                GROUP BY hour
+                ORDER BY hour
+                """,
+                (currency, start_time, end_time)
+            )
+            rows = cursor.fetchall()
+
+        return [{"hour": row[0], "price": float(row[1])} for row in rows]
+
+    def save_vol_prediction(
+        self,
+        predicted_at: datetime,
+        currency: str,
+        model_id: str,
+        predicted_vol_24h: float,
+        predicted_daily_move: float
+    ) -> int:
+        """
+        Insert or overwrite a vol prediction row.
+
+        ON CONFLICT on (predicted_at, currency) resets verification columns
+        so re-predicting the same hour starts fresh.
+
+        Returns:
+            The inserted/updated row id.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO vol_predictions
+                    (predicted_at, currency, model_id, predicted_vol_24h, predicted_daily_move)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (predicted_at, currency) DO UPDATE SET
+                    model_id             = EXCLUDED.model_id,
+                    predicted_vol_24h    = EXCLUDED.predicted_vol_24h,
+                    predicted_daily_move = EXCLUDED.predicted_daily_move,
+                    verified_at          = NULL,
+                    actual_vol_24h       = NULL,
+                    actual_price_change  = NULL,
+                    within_1sigma        = NULL,
+                    error_pct            = NULL
+                RETURNING id
+                """,
+                (predicted_at, currency, model_id, predicted_vol_24h, predicted_daily_move)
+            )
+            row = cursor.fetchone()
+
+        return row[0]
+
+    def get_latest_unverified_prediction(self, currency: str) -> Optional[Dict]:
+        """
+        Return the most recent unverified prediction for a currency, or None.
+
+        Returns dict with keys: id, predicted_at, currency, model_id,
+        predicted_vol_24h, predicted_daily_move.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT id, predicted_at, currency, model_id,
+                       predicted_vol_24h, predicted_daily_move
+                FROM vol_predictions
+                WHERE currency = %s AND verified_at IS NULL
+                ORDER BY predicted_at DESC
+                LIMIT 1
+                """,
+                (currency,)
+            )
+            row = cursor.fetchone()
+
+        if row is None:
+            return None
+
+        return {
+            "id": row[0],
+            "predicted_at": row[1],
+            "currency": row[2],
+            "model_id": row[3],
+            "predicted_vol_24h": float(row[4]),
+            "predicted_daily_move": float(row[5]),
+        }
+
+    def update_vol_prediction_verified(
+        self,
+        prediction_id: int,
+        actual_vol_24h: float,
+        actual_price_change: float,
+        within_1sigma: bool,
+        error_pct: float
+    ) -> None:
+        """
+        Write verification results into an existing prediction row.
+
+        Args:
+            prediction_id: Row id to update.
+            actual_vol_24h: Actual annualized realized vol (%).
+            actual_price_change: Absolute price change over the 24h window (%).
+            within_1sigma: Whether actual_price_change <= predicted_daily_move.
+            error_pct: predicted_vol_24h - actual_vol_24h (signed).
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE vol_predictions
+                SET verified_at         = NOW(),
+                    actual_vol_24h      = %s,
+                    actual_price_change = %s,
+                    within_1sigma       = %s,
+                    error_pct           = %s
+                WHERE id = %s
+                """,
+                (actual_vol_24h, actual_price_change, within_1sigma, error_pct, prediction_id)
+            )
+
+    def get_vol_prediction_history(self, limit: int = 14) -> List[Dict]:
+        """
+        Return recent vol predictions (all currencies), newest first.
+
+        Returns list of dicts with all columns. Unverified rows have
+        actual_vol_24h, actual_price_change, within_1sigma, error_pct as None.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT id, predicted_at, currency, model_id,
+                       predicted_vol_24h, predicted_daily_move,
+                       verified_at, actual_vol_24h, actual_price_change,
+                       within_1sigma, error_pct
+                FROM vol_predictions
+                ORDER BY predicted_at DESC
+                LIMIT %s
+                """,
+                (limit,)
+            )
+            rows = cursor.fetchall()
+
+        return [
+            {
+                "id": r[0],
+                "predicted_at": r[1],
+                "currency": r[2],
+                "model_id": r[3],
+                "predicted_vol_24h": float(r[4]),
+                "predicted_daily_move": float(r[5]),
+                "verified_at": r[6],
+                "actual_vol_24h": float(r[7]) if r[7] is not None else None,
+                "actual_price_change": float(r[8]) if r[8] is not None else None,
+                "within_1sigma": r[9],
+                "error_pct": float(r[10]) if r[10] is not None else None,
+            }
+            for r in rows
+        ]
