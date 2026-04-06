@@ -42,7 +42,10 @@ class ModelStore:
         Args:
             model_dir: Directory to store models (relative to project root).
         """
-        self.model_dir = Path(model_dir)
+        # Resolve relative paths against the project root (4 levels up from this file)
+        # so the store works regardless of the working directory when launched from an IDE.
+        _project_root = Path(__file__).resolve().parents[4]
+        self.model_dir = (_project_root / model_dir) if not Path(model_dir).is_absolute() else Path(model_dir)
         self.model_dir.mkdir(parents=True, exist_ok=True)
 
         self.registry_path = self.model_dir / "model_registry.json"
