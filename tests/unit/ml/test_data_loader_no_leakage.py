@@ -74,3 +74,42 @@ class TestAlignDataNoLeakage:
 
         for col in ["realized_vol_24h_label", "market_regime_label"]:
             assert col not in aligned_features.columns, f"{col} must not be in features"
+
+    def test_label_only_column_not_in_features(self):
+        """A column that exists only in labels must not appear in features."""
+        loader = _make_loader()
+        idx = pd.date_range("2026-04-01", periods=5, freq="h")
+        # market_regime deliberately absent from features — it is label-only in production
+        features = pd.DataFrame({
+            "avg_iv": [40.0] * 5,
+            "realized_vol_24h": [20.0] * 5,
+        }, index=idx)
+        labels = pd.DataFrame({
+            "realized_vol_24h": [35.0] * 5,
+            "market_regime": ["sideways"] * 5,
+        }, index=idx)
+
+        aligned_features, aligned_labels = loader._align_data(features, labels)
+
+        assert "market_regime" not in aligned_features.columns, (
+            "market_regime is a label-only column; it must not appear in features"
+        )
+
+    def test_aligned_labels_contain_label_values_not_feature_values(self):
+        """aligned_labels must contain the label-side values, not the feature-side values."""
+        loader = _make_loader()
+        idx = pd.date_range("2026-04-01", periods=5, freq="h")
+        features = pd.DataFrame({
+            "avg_iv": [40.0] * 5,
+            "realized_vol_24h": [10.0] * 5,   # past vol — deliberately different from label
+        }, index=idx)
+        labels = pd.DataFrame({
+            "realized_vol_24h": [99.0] * 5,   # forward vol — the actual target
+            "market_regime": ["sideways"] * 5,
+        }, index=idx)
+
+        _, aligned_labels = loader._align_data(features, labels)
+
+        assert list(aligned_labels["realized_vol_24h"]) == [99.0] * 5, (
+            "aligned_labels must return forward vol (label values), not past vol (feature values)"
+        )
