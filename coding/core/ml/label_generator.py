@@ -111,7 +111,9 @@ class LabelGenerator:
                 return None
 
             # Calculate realized volatility
-            rv_24h = self._calculate_realized_vol(prices, window_hours=24)
+            # rv_24h is FORWARD-looking: vol from [timestamp, timestamp+24h]
+            forward_prices = self._get_forward_prices(currency, timestamp, forward_hours=24)
+            rv_24h = self._calculate_realized_vol(forward_prices, window_hours=24)
             rv_7d = self._calculate_realized_vol(prices, window_hours=168)  # 7*24
 
             # Calculate trend strength
@@ -205,6 +207,48 @@ class LabelGenerator:
             logger.debug(f"Retrieved {len(prices)} price points for {currency}")
             return prices
 
+        finally:
+            self.repo._return_connection(connection)
+
+    def _get_forward_prices(
+        self,
+        currency: str,
+        timestamp: datetime,
+        forward_hours: int = 24
+    ) -> list:
+        """
+        Fetch hourly average prices AFTER timestamp for forward vol calculation.
+
+        Args:
+            currency: Currency symbol.
+            timestamp: Start of the forward window (inclusive).
+            forward_hours: Number of hours to look forward.
+
+        Returns:
+            List of {'timestamp': datetime, 'price': float} sorted ascending.
+        """
+        connection = self.repo._get_connection()
+        try:
+            cursor = connection.cursor()
+            end_time = timestamp + timedelta(hours=forward_hours)
+            cursor.execute(
+                """
+                SELECT
+                    DATE_TRUNC('hour', TO_TIMESTAMP(trade_timestamp / 1000.0)) AS hour,
+                    AVG(index_price) AS avg_price
+                FROM historical_trades
+                WHERE currency = %s
+                  AND TO_TIMESTAMP(trade_timestamp / 1000.0) >= %s
+                  AND TO_TIMESTAMP(trade_timestamp / 1000.0) <= %s
+                  AND index_price IS NOT NULL
+                GROUP BY hour
+                ORDER BY hour
+                """,
+                (currency, timestamp, end_time)
+            )
+            rows = cursor.fetchall()
+            cursor.close()
+            return [{"timestamp": row[0], "price": float(row[1])} for row in rows]
         finally:
             self.repo._return_connection(connection)
 
