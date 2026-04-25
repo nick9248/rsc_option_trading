@@ -215,7 +215,7 @@ class LabelGenerator:
         currency: str,
         timestamp: datetime,
         forward_hours: int = 24
-    ) -> list:
+    ) -> List[Dict]:
         """
         Fetch hourly average prices AFTER timestamp for forward vol calculation.
 
