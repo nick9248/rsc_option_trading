@@ -147,7 +147,9 @@ class LabelGenerator:
                 market_regime=market_regime
             )
 
-            logger.info(f"Labels generated: regime={market_regime}, vol={rv_24h:.1f}%, trend={trend_strength:.1f}")
+            vol_str = f"{rv_24h:.1f}%" if rv_24h is not None else "None"
+            trend_str = f"{trend_strength:.1f}" if trend_strength is not None else "None"
+            logger.info(f"Labels generated: regime={market_regime}, vol={vol_str}, trend={trend_str}")
             return labels
 
         except Exception as e:
