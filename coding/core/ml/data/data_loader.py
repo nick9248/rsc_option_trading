@@ -568,12 +568,30 @@ class MLDataLoader:
             logger.error("No overlapping timestamps between features and labels!")
             return pd.DataFrame(), pd.DataFrame()
 
-        # Split back into features and labels
+        # Split back into features and labels.
+        #
+        # After the inner join with rsuffix='_label', the aligned frame contains:
+        #   - feature-only columns: kept with their original name
+        #   - shared columns (appear in both frames):
+        #       * feature copy → original name (e.g. 'realized_vol_24h')
+        #       * label copy  → suffixed name  (e.g. 'realized_vol_24h_label')
+        #   - label-only columns: kept with their original name (no suffix needed)
+        #
+        # To build feature_columns we must exclude:
+        #   1. *_label-suffixed shadow columns — always leaked label copies
+        #   2. label-only columns — columns in labels that were NOT in features
+        #      (these appear under their original name in the joined frame)
         label_columns = labels.columns.tolist()
-        feature_columns = [col for col in aligned.columns if col not in label_columns]
+        feature_columns_original = features.columns.tolist()
+        label_suffixed = {f"{col}_label" for col in label_columns}
+        label_only = {col for col in label_columns if col not in feature_columns_original}
+        all_excluded = label_suffixed | label_only
+        feature_columns = [col for col in aligned.columns if col not in all_excluded]
 
         aligned_features = aligned[feature_columns]
-        aligned_labels = aligned[label_columns]
+        # Re-index the original labels DataFrame to the aligned timestamps so that
+        # shared column names always yield label values (not feature values).
+        aligned_labels = labels.loc[aligned.index]
 
         logger.info(f"    Aligned to {len(aligned_features)} samples")
 
