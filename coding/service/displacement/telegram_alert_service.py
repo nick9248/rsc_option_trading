@@ -75,9 +75,10 @@ class TelegramAlertService:
                 f"  200% → {signal.asset} at ${signal.target_200pct_price:,.0f}"
             )
 
+        sep = "━" * 24
         return (
             f"{label_emoji} <b>DISPLACEMENT ALERT — {signal.asset}</b>\n"
-            f"━" * 24 + "\n\n"
+            f"{sep}\n\n"
             f"Drop: -{abs(signal.drop_24h_pct) * 100:.1f}% in 24h"
             f" | -{abs(signal.drop_1h_pct) * 100:.1f}% in 1h\n"
             f"Conviction: {signal.conviction_pct:.0f}% ({signal.conviction_label})\n\n"

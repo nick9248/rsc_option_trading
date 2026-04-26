@@ -46,7 +46,10 @@ class TestTelegramAlertService:
         assert result is False
 
     def test_send_returns_false_when_not_configured(self):
-        svc = TelegramAlertService(token="", chat_id="")
+        # Patch env to prevent real .env values from leaking into this test
+        with patch.dict("os.environ", {}, clear=True):
+            with patch("coding.service.displacement.telegram_alert_service.load_dotenv"):
+                svc = TelegramAlertService(token="", chat_id="")
         result = svc.send(_make_signal())
         assert result is False
 
@@ -58,6 +61,7 @@ class TestTelegramAlertService:
         assert "75" in msg                     # conviction
         assert "BTC-25SEP26-70000-C" in msg
         assert "HIGH" in msg
+        assert msg.count("DISPLACEMENT ALERT") == 1  # header must not repeat
 
     def test_posts_to_correct_url(self):
         svc = TelegramAlertService(token="abc123", chat_id="99")
