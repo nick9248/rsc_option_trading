@@ -59,25 +59,26 @@ class TestDisplacementScannerService:
         assert result == []
 
     def test_scan_returns_signal_when_displacement_detected(self):
+        # BTC_DROP_PRICES produces 22% 24h drop → above 20% threshold
+        # Force threshold to 0 so any conviction score triggers a signal
         api = _make_mock_api(btc_prices=BTC_DROP_PRICES)
-        svc = self._make_svc(api, _make_mock_repo())
+        repo = _make_mock_repo()
+        svc = self._make_svc(api, repo)
+        svc._config = DisplacementConfig(alert_medium_threshold=0.0, alert_high_threshold=0.01)
         with patch.object(svc._telegram, "send", return_value=True):
             result = svc.scan(["BTC"])
-        # May or may not produce a signal depending on conviction threshold
-        assert isinstance(result, list)
+        assert len(result) >= 1
+        assert isinstance(result[0], DisplacementSignal)
 
     def test_scan_saves_signal_when_event_and_conviction_met(self):
         api = _make_mock_api(btc_prices=BTC_DROP_PRICES, funding=-0.01)
         repo = _make_mock_repo()
         svc = self._make_svc(api, repo)
-        # Override conviction threshold to 0 so signal always saves
-        from coding.core.displacement.models.displacement_config import DisplacementConfig
+        # Zero threshold ensures any displacement event triggers a save
         svc._config = DisplacementConfig(alert_medium_threshold=0.0, alert_high_threshold=0.01)
         with patch.object(svc._telegram, "send", return_value=True):
             svc.scan(["BTC"])
-        # If a displacement was detected, repo.save should be called
-        # (may be 0 if displacement not triggered due to cooldown/threshold)
-        assert repo.save_displacement_signal.call_count >= 0
+        assert repo.save_displacement_signal.call_count == 1
 
     def test_scan_handles_multiple_assets(self):
         api = _make_mock_api(
