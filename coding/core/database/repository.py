@@ -1960,7 +1960,6 @@ class DatabaseRepository:
         Returns:
             Number of rows inserted/updated.
         """
-        import json as _json
         saved = 0
         try:
             with self._db_cursor() as cursor:
