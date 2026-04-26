@@ -110,11 +110,13 @@ class LabelGenerator:
                 logger.warning(f"Insufficient price data for {currency} at {timestamp} (need at least 3 hours)")
                 return None
 
-            # Calculate realized volatility
-            # rv_24h is FORWARD-looking: vol from [timestamp, timestamp+24h]
+            # Backward-looking vol: describes current state, used for regime classification
+            rv_24h_current = self._calculate_realized_vol(prices, window_hours=24)
+            rv_7d = self._calculate_realized_vol(prices, window_hours=168)  # 7*24
+
+            # Forward-looking vol: what will the next 24h look like, used as regressor target
             forward_prices = self._get_forward_prices(currency, timestamp, forward_hours=24)
             rv_24h = self._calculate_realized_vol(forward_prices, window_hours=24)
-            rv_7d = self._calculate_realized_vol(prices, window_hours=168)  # 7*24
 
             # Calculate trend strength
             trend_strength, trend_direction = self._calculate_trend_strength(prices)
@@ -127,9 +129,9 @@ class LabelGenerator:
                 currency, timestamp, lookback_days
             )
 
-            # Derive overall market regime
+            # Regime uses backward vol (current state), not forward vol (future state)
             market_regime = self._derive_market_regime(
-                rv_24h, trend_strength, trend_direction, iv_percentile
+                rv_24h_current, trend_strength, trend_direction, iv_percentile
             )
 
             # Create validated labels
