@@ -29,7 +29,6 @@ from coding.gui.tabs.database_tab import DatabaseTab
 from coding.gui.tabs.strategy_tab import StrategyTab
 from coding.gui.tabs.regime_tab import RegimeTab
 from coding.gui.tabs.system_validation_tab import SystemValidationTab
-from coding.gui.tabs.special_strategies_tab import SpecialStrategiesTab
 from coding.gui.forward_testing.forward_testing_tab import ForwardTestingTab
 from coding.core.database.repository import DatabaseRepository
 from coding.service.deribit.deribit_api_service import DeribitApiService
@@ -46,7 +45,7 @@ MODULE_DEFS: list[dict] = [
     {"index": 3,  "icon": "⛓",  "name": "On Chain Analysis", "subtitle": "GEX · DEX · Max Pain"},
     {"index": 4,  "icon": "🗄",  "name": "Database",          "subtitle": "Capture & sync"},
     {"index": 5,  "icon": "♟",  "name": "Strategies",        "subtitle": "Evaluate & rank"},
-    {"index": 6,  "icon": "🎯", "name": "Special Strategies", "subtitle": "OTM finder"},
+    {"index": 6,  "icon": "🎯", "name": "Special Strategies", "subtitle": "Displacement Scanner"},
     {"index": 7,  "icon": "📊", "name": "Market Regime",     "subtitle": "Bull · Bear · Neutral"},
     {"index": 8,  "icon": "✅", "name": "System Health",     "subtitle": "Diagnostics"},
     {"index": 9,  "icon": "🧪", "name": "Forward Testing",   "subtitle": "Vol · Regime · Strategy"},
@@ -188,25 +187,8 @@ class MainWindow(QMainWindow):
             self.stack.addWidget(self._placeholder_widget("Strategy evaluation unavailable"))
             failed_indices.add(5)
 
-        # Index 6: Special Strategies
-        try:
-            from coding.core.strategy.otm.models.otm_config import OTMConfig
-            from coding.service.strategy.otm.otm_finder_service import OTMFinderService
-            _api = DeribitApiService()
-            _repo = DatabaseRepository()
-            _on_chain = OnChainAnalysisService(_api, _repo)
-            _config = OTMConfig(risk_budget_usd=10_000.0)
-            _otm = OTMFinderService(
-                config=_config,
-                deribit_service=_api,
-                on_chain_service=_on_chain,
-                repository=_repo,
-            )
-            self.stack.addWidget(SpecialStrategiesTab(finder_service=_otm, otm_config=_config))
-        except Exception as exc:
-            logger.error("Failed to initialize Special Strategies tab: %s", exc)
-            self.stack.addWidget(self._placeholder_widget("Special strategies unavailable"))
-            failed_indices.add(6)
+        # Index 6: Special Strategies — Displacement Scanner (built in later task)
+        self.stack.addWidget(self._placeholder_widget("Displacement Scanner loading…"))
 
         # Index 7: Market Regime
         self.stack.addWidget(RegimeTab())
