@@ -1,15 +1,16 @@
 from datetime import datetime
-from pydantic import BaseModel, ConfigDict
+from typing import Literal
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class DisplacementEvent(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    asset: str                     # "BTC" or "ETH"
+    asset: Literal["BTC", "ETH"]
     detected_at: datetime
-    current_price: float
-    drop_1h_pct: float             # positive decimal = drop (e.g. 0.09 = 9% drop)
-    drop_4h_pct: float
-    drop_24h_pct: float
-    drop_7d_pct: float
-    triggering_timeframe: str      # "1h", "4h", "24h", or "7d"
+    current_price: float = Field(..., gt=0)
+    drop_1h_pct: float = Field(..., ge=0)   # positive decimal = drop (e.g. 0.22 = 22% drop)
+    drop_4h_pct: float = Field(..., ge=0)   # positive decimal = drop (e.g. 0.22 = 22% drop)
+    drop_24h_pct: float = Field(..., ge=0)  # positive decimal = drop (e.g. 0.22 = 22% drop)
+    drop_7d_pct: float = Field(..., ge=0)   # positive decimal = drop (e.g. 0.22 = 22% drop)
+    triggering_timeframe: Literal["1h", "4h", "24h", "7d"]

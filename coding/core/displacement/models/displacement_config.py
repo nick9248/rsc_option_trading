@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 
 class DisplacementConfig(BaseModel):
@@ -52,3 +52,23 @@ class DisplacementConfig(BaseModel):
         if v <= 0:
             raise ValueError("risk_budget_usd must be positive")
         return v
+
+    @model_validator(mode="after")
+    def validate_field_relationships(self) -> "DisplacementConfig":
+        if self.cooldown_hours < 0:
+            raise ValueError("cooldown_hours must be non-negative")
+        if not 0.0 < self.position_size_pct <= 1.0:
+            raise ValueError("position_size_pct must be between 0 and 1")
+        if self.min_delta >= self.max_delta:
+            raise ValueError("min_delta must be less than max_delta")
+        if not (self.min_delta <= self.preferred_delta <= self.max_delta):
+            raise ValueError("preferred_delta must be within [min_delta, max_delta]")
+        if self.min_dte >= self.max_dte:
+            raise ValueError("min_dte must be less than max_dte")
+        if self.preferred_dte_min >= self.preferred_dte_max:
+            raise ValueError("preferred_dte_min must be less than preferred_dte_max")
+        if self.alert_medium_threshold >= self.alert_high_threshold:
+            raise ValueError("alert_medium_threshold must be less than alert_high_threshold")
+        if self.dvol_sweet_spot_low >= self.dvol_sweet_spot_high:
+            raise ValueError("dvol_sweet_spot_low must be less than dvol_sweet_spot_high")
+        return self

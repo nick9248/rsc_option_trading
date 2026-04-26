@@ -1,4 +1,4 @@
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 import pytest
 from pydantic import ValidationError
 
@@ -52,7 +52,7 @@ class TestDisplacementEvent:
 
     def test_frozen(self):
         event = DisplacementEvent(
-            asset="ETH", detected_at=datetime.utcnow(), current_price=1500.0,
+            asset="ETH", detected_at=datetime.now(timezone.utc), current_price=1500.0,
             drop_1h_pct=0.05, drop_4h_pct=0.08, drop_24h_pct=0.20,
             drop_7d_pct=0.25, triggering_timeframe="24h",
         )
@@ -63,7 +63,7 @@ class TestDisplacementEvent:
 class TestDisplacementSignal:
     def _make_signal(self, **kwargs):
         defaults = dict(
-            asset="BTC", detected_at=datetime.utcnow(),
+            asset="BTC", detected_at=datetime.now(timezone.utc),
             drop_24h_pct=0.22, drop_1h_pct=0.09,
             conviction_pct=75.0, conviction_label="HIGH",
             score_drop_magnitude=82.0, score_drop_speed=55.0,
@@ -103,3 +103,86 @@ class TestDisplacementSignal:
     def test_score_below_zero_raises(self):
         with pytest.raises(ValidationError):
             self._make_signal(score_dvol_spike=-1.0)
+
+
+class TestDisplacementConfigValidation:
+    def test_inverted_delta_range_raises(self):
+        with pytest.raises(ValidationError):
+            DisplacementConfig(min_delta=0.30, max_delta=0.10)
+
+    def test_preferred_delta_outside_range_raises(self):
+        with pytest.raises(ValidationError):
+            DisplacementConfig(min_delta=0.10, max_delta=0.20, preferred_delta=0.50)
+
+    def test_inverted_dte_range_raises(self):
+        with pytest.raises(ValidationError):
+            DisplacementConfig(min_dte=200, max_dte=90)
+
+    def test_inverted_alert_thresholds_raises(self):
+        with pytest.raises(ValidationError):
+            DisplacementConfig(alert_medium_threshold=0.80, alert_high_threshold=0.40)
+
+    def test_negative_cooldown_raises(self):
+        with pytest.raises(ValidationError):
+            DisplacementConfig(cooldown_hours=-1)
+
+
+class TestDisplacementEventValidation:
+    def test_negative_price_raises(self):
+        with pytest.raises(ValidationError):
+            DisplacementEvent(
+                asset="BTC", detected_at=datetime.now(timezone.utc),
+                current_price=-100.0,
+                drop_1h_pct=0.09, drop_4h_pct=0.13,
+                drop_24h_pct=0.22, drop_7d_pct=0.28,
+                triggering_timeframe="24h",
+            )
+
+    def test_invalid_asset_raises(self):
+        with pytest.raises(ValidationError):
+            DisplacementEvent(
+                asset="DOGE", detected_at=datetime.now(timezone.utc),
+                current_price=1.0,
+                drop_1h_pct=0.09, drop_4h_pct=0.13,
+                drop_24h_pct=0.22, drop_7d_pct=0.28,
+                triggering_timeframe="24h",
+            )
+
+    def test_invalid_timeframe_raises(self):
+        with pytest.raises(ValidationError):
+            DisplacementEvent(
+                asset="BTC", detected_at=datetime.now(timezone.utc),
+                current_price=80000.0,
+                drop_1h_pct=0.09, drop_4h_pct=0.13,
+                drop_24h_pct=0.22, drop_7d_pct=0.28,
+                triggering_timeframe="12h",
+            )
+
+
+class TestDisplacementSignalValidation:
+    def test_invalid_conviction_label_raises(self):
+        with pytest.raises(ValidationError):
+            DisplacementSignal(
+                asset="BTC", detected_at=datetime.now(timezone.utc),
+                drop_24h_pct=0.22, drop_1h_pct=0.09,
+                conviction_pct=75.0, conviction_label="YOLO",
+                score_drop_magnitude=80.0, score_drop_speed=55.0,
+                score_funding_rate=90.0, score_dvol_spike=70.0,
+                score_max_pain=60.0, score_term_structure=80.0,
+                funding_rate_value=-0.008, dvol_sigma=2.1,
+                max_pain_distance_pct=0.09, term_structure_inversion_pct=0.06,
+            )
+
+    def test_partial_contract_fields_raises(self):
+        with pytest.raises(ValidationError):
+            DisplacementSignal(
+                asset="BTC", detected_at=datetime.now(timezone.utc),
+                drop_24h_pct=0.22, drop_1h_pct=0.09,
+                conviction_pct=75.0, conviction_label="HIGH",
+                score_drop_magnitude=80.0, score_drop_speed=55.0,
+                score_funding_rate=90.0, score_dvol_spike=70.0,
+                score_max_pain=60.0, score_term_structure=80.0,
+                funding_rate_value=-0.008, dvol_sigma=2.1,
+                max_pain_distance_pct=0.09, term_structure_inversion_pct=0.06,
+                instrument_name="BTC-25SEP26-70000-C",  # set but strike/dte/delta etc are None
+            )

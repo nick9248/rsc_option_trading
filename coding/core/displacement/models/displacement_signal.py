@@ -1,20 +1,20 @@
 from datetime import datetime, date
-from typing import Optional
-from pydantic import BaseModel, ConfigDict, field_validator
+from typing import Literal, Optional
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 
 class DisplacementSignal(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     # Event
-    asset: str
+    asset: Literal["BTC", "ETH"]
     detected_at: datetime
     drop_24h_pct: float
     drop_1h_pct: float
 
     # Conviction
     conviction_pct: float       # 0–100
-    conviction_label: str       # "HIGH" or "MEDIUM"
+    conviction_label: Literal["HIGH", "MEDIUM"]
 
     # Signal scores (each 0–100)
     score_drop_magnitude: float
@@ -56,3 +56,17 @@ class DisplacementSignal(BaseModel):
         if not 0.0 <= v <= 100.0:
             raise ValueError(f"Score must be between 0 and 100, got {v}")
         return v
+
+    @model_validator(mode="after")
+    def validate_contract_coherence(self) -> "DisplacementSignal":
+        contract_fields = [self.instrument_name, self.strike, self.expiry_date, self.dte, self.delta, self.mark_iv, self.premium_usd]
+        target_fields = [self.target_50pct_price, self.target_100pct_price, self.target_200pct_price]
+
+        contract_set = [f for f in contract_fields if f is not None]
+        contract_none = [f for f in contract_fields if f is None]
+
+        if contract_set and contract_none:
+            raise ValueError("Contract fields must all be set or all be None")
+        if any(t is not None for t in target_fields) and self.instrument_name is None:
+            raise ValueError("Profit targets require instrument_name to be set")
+        return self
