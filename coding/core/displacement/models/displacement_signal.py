@@ -59,7 +59,9 @@ class DisplacementSignal(BaseModel):
 
     @model_validator(mode="after")
     def validate_contract_coherence(self) -> "DisplacementSignal":
-        contract_fields = [self.instrument_name, self.strike, self.expiry_date, self.dte, self.delta, self.mark_iv, self.premium_usd]
+        # expiry_date is excluded — Deribit API doesn't return a parsed date object,
+        # so it may legitimately be None even when a contract is selected.
+        contract_fields = [self.instrument_name, self.strike, self.dte, self.delta, self.mark_iv, self.premium_usd]
         target_fields = [self.target_50pct_price, self.target_100pct_price, self.target_200pct_price]
 
         contract_set = [f for f in contract_fields if f is not None]
