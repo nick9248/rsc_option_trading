@@ -2132,3 +2132,66 @@ class DatabaseRepository:
             }
             for r in rows
         ]
+
+    def save_displacement_signal(self, signal: "DisplacementSignal") -> None:
+        import json
+        breakdown = {
+            "drop_magnitude": signal.score_drop_magnitude,
+            "drop_speed": signal.score_drop_speed,
+            "funding_rate": signal.score_funding_rate,
+            "dvol_spike": signal.score_dvol_spike,
+            "max_pain": signal.score_max_pain,
+            "term_structure": signal.score_term_structure,
+            "funding_rate_value": signal.funding_rate_value,
+            "dvol_sigma": signal.dvol_sigma,
+            "max_pain_distance_pct": signal.max_pain_distance_pct,
+            "term_structure_inversion_pct": signal.term_structure_inversion_pct,
+        }
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO displacement_signals (
+                    asset, detected_at, drop_24h_pct, drop_1h_pct,
+                    conviction_pct, conviction_label,
+                    instrument_name, strike, expiry_date, dte,
+                    delta, mark_iv, premium_usd,
+                    signal_breakdown, telegram_sent
+                ) VALUES (
+                    %s, %s, %s, %s,
+                    %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s
+                )
+                """,
+                (
+                    signal.asset, signal.detected_at,
+                    signal.drop_24h_pct, signal.drop_1h_pct,
+                    signal.conviction_pct, signal.conviction_label,
+                    signal.instrument_name, signal.strike, signal.expiry_date, signal.dte,
+                    signal.delta, signal.mark_iv, signal.premium_usd,
+                    json.dumps(breakdown), signal.telegram_sent,
+                ),
+            )
+
+    def get_last_displacement_signal(self, asset: str) -> Optional[dict]:
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT id, asset, detected_at, drop_24h_pct, drop_1h_pct,
+                       conviction_pct, conviction_label,
+                       instrument_name, strike, expiry_date, dte,
+                       delta, mark_iv, premium_usd,
+                       signal_breakdown, telegram_sent
+                FROM displacement_signals
+                WHERE asset = %s
+                ORDER BY detected_at DESC
+                LIMIT 1
+                """,
+                (asset,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            cols = [desc[0] for desc in cursor.description]
+            return dict(zip(cols, row))
