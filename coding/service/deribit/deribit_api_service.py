@@ -669,6 +669,64 @@ class DeribitApiService:
 
         return result
 
+    def get_price_ohlcv(
+        self,
+        asset: str,
+        resolution_hours: int = 1,
+        lookback_hours: int = 168,
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch hourly OHLCV for the asset's perpetual contract.
+
+        Args:
+            asset: "BTC" or "ETH"
+            resolution_hours: Candle width in hours (1 = hourly)
+            lookback_hours: How many hours of history to fetch
+
+        Returns:
+            List of {"timestamp", "open", "high", "low", "close", "volume"} dicts.
+            Sorted newest-first. Empty list if API fails.
+        """
+        end_ts = int(time.time() * 1000)
+        start_ts = end_ts - lookback_hours * 3600 * 1000
+        resolution = str(resolution_hours * 60)  # Deribit uses minutes
+
+        try:
+            response = self.connection.fetch(
+                DeribitEndpoints.GET_TRADINGVIEW_CHART_DATA,
+                parameters={
+                    "instrument_name": f"{asset}-PERPETUAL",
+                    "start_timestamp": start_ts,
+                    "end_timestamp": end_ts,
+                    "resolution": resolution,
+                },
+            )
+            data = response.get("result", {})
+            ticks = data.get("ticks", [])
+            closes = data.get("close", [])
+            opens = data.get("open", [])
+            highs = data.get("high", [])
+            lows = data.get("low", [])
+            volumes = data.get("volume", [])
+
+            candles = [
+                {
+                    "timestamp": ticks[i],
+                    "open": opens[i],
+                    "high": highs[i],
+                    "low": lows[i],
+                    "close": closes[i],
+                    "volume": volumes[i],
+                }
+                for i in range(len(ticks))
+            ]
+            candles.sort(key=lambda c: c["timestamp"], reverse=True)
+            return candles
+
+        except Exception as e:
+            logger.error(f"get_price_ohlcv failed for {asset}: {e}")
+            return []
+
     def close(self) -> None:
         """Close the API connection."""
         self.connection.close()
