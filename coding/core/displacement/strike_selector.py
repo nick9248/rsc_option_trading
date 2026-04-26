@@ -83,11 +83,12 @@ class StrikeSelector:
 
         bid_iv = opt.get("bid_iv", 0.0) or 0.0
         ask_iv = opt.get("ask_iv", 0.0) or 0.0
-        if bid_iv > 0 and ask_iv > 0:
-            mid_iv = (bid_iv + ask_iv) / 2.0
-            spread_relative = (ask_iv - bid_iv) / mid_iv
-            if spread_relative > self._config.max_bid_ask_spread_relative:
-                return False
+        if bid_iv <= 0 or ask_iv <= 0:
+            return False  # no two-sided quote = illiquid
+        mid_iv = (bid_iv + ask_iv) / 2.0
+        spread_relative = (ask_iv - bid_iv) / mid_iv
+        if spread_relative > self._config.max_bid_ask_spread_relative:
+            return False
 
         return True
 

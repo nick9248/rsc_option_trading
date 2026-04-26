@@ -98,6 +98,16 @@ class TestStrikeSelector:
         # delta 0.14 is closer to preferred 0.15 than delta 0.13
         assert result["instrument_name"] == "BTC-25SEP26-70000-C"
 
+    def test_filters_missing_bid_iv(self):
+        # Contract with no bid quote (bid_iv=0) should be rejected as illiquid
+        illiquid_chain = [
+            _make_option("BTC-25SEP26-70000-C", 70000.0, 153, 0.14, 0.0, 0.92, 0.87, 500, 0.0135, 78000.0),  # bid_iv=0
+            _make_option("BTC-25SEP26-75000-C", 75000.0, 153, 0.12, 0.86, 0.93, 0.89, 200, 0.0095, 78000.0),  # good
+        ]
+        result = self.selector.select("BTC", illiquid_chain, 78000.0)
+        assert result is not None
+        assert result["instrument_name"] == "BTC-25SEP26-75000-C"
+
     def test_eth_uses_eth_oi_threshold(self):
         # ETH min OI = 200; option with OI=150 should be filtered
         eth_chain = [
