@@ -162,8 +162,9 @@ class DisplacementTab(QWidget):
         self._threshold_spin.setRange(5, 50)
         self._threshold_spin.setValue(20)
         self._threshold_spin.setSuffix(" %")
-        self._threshold_spin.setFixedWidth(90)
+        self._threshold_spin.setFixedWidth(100)
         self._threshold_spin.setFixedHeight(30)
+        self._threshold_spin.setStyleSheet(self._spinbox_style())
         t_col.addWidget(self._threshold_spin)
         cfg.addLayout(t_col)
 
@@ -175,8 +176,9 @@ class DisplacementTab(QWidget):
         self._conviction_spin.setRange(30, 95)
         self._conviction_spin.setValue(50)
         self._conviction_spin.setSuffix(" %")
-        self._conviction_spin.setFixedWidth(90)
+        self._conviction_spin.setFixedWidth(100)
         self._conviction_spin.setFixedHeight(30)
+        self._conviction_spin.setStyleSheet(self._spinbox_style())
         c_col.addWidget(self._conviction_spin)
         cfg.addLayout(c_col)
 
@@ -247,6 +249,21 @@ class DisplacementTab(QWidget):
         lbl = QLabel(text)
         lbl.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-size: 12px;")
         return lbl
+
+    def _spinbox_style(self) -> str:
+        return (
+            f"QSpinBox {{"
+            f"  color: {Colors.TEXT_PRIMARY};"
+            f"  background-color: {Colors.BACKGROUND_ELEVATED};"
+            f"  border: 1px solid {Colors.TEXT_SECONDARY};"
+            f"  border-radius: 4px;"
+            f"  padding: 2px 6px;"
+            f"  font-size: 13px;"
+            f"}}"
+            f"QSpinBox::up-button, QSpinBox::down-button {{"
+            f"  width: 18px;"
+            f"}}"
+        )
 
     def _toggle(self, text: str, checked: bool) -> QPushButton:
         btn = QPushButton(text)
