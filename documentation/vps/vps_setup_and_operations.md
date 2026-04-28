@@ -5,6 +5,22 @@
 
 ---
 
+## 0. How to Connect Easily
+
+### US VPS — Option Trading Data Collection (Hetzner, Ashburn VA)
+
+```bash
+ssh option-server
+```
+
+### Spain VPS — WireGuard VPN Exit Node (Vultr, Madrid)
+
+```bash
+ssh spain-vpn
+```
+
+---
+
 ## 1. Why a VPS?
 
 The local PC was running the data collection daemon but sleeping every night (~23:00–16:00), creating 16–24 hour gaps in data. The result was only **55% data coverage** — 65 gaps totalling 516 missing hours out of ~934 possible.
@@ -367,3 +383,117 @@ FROM hourly_snapshots
 GROUP BY currency;"
 ```
 Target: 720h per currency.
+
+---
+
+## 13. WireGuard VPN — Spain Exit Node (Polymarket Trading)
+
+### Overview
+
+A second VPS in Spain (Vultr, Madrid) acts as a WireGuard VPN exit node. Its sole purpose is to route local PC traffic through a Spanish IP for accessing Polymarket, which blocks US, UK, Germany, Netherlands, France, Italy and many other countries.
+
+This server has **nothing to do with option trading data collection** — it runs no daemons, no database, nothing except WireGuard.
+
+### Spain VPS Details
+
+| Field | Value |
+|-------|-------|
+| **Provider** | Vultr |
+| **Plan** | Cloud Compute Shared CPU — 1 vCPU, 1GB RAM, 25GB SSD |
+| **Cost** | ~$6/month |
+| **Location** | Madrid, Spain |
+| **OS** | Ubuntu 24.04 LTS |
+| **IPv4** | VPS_SPAIN_IP_REDACTED |
+| **SSH User** | root |
+| **SSH Key** | `option_trading` (same as Hetzner VPS) |
+
+### SSH Access
+
+```
+ssh -o IdentitiesOnly=yes -i "C:\Users\Nick\.ssh\option_trading" root@VPS_SPAIN_IP_REDACTED
+```
+
+Or add to `C:\Users\Nick\.ssh\config`:
+```
+Host spain-vpn
+    HostName VPS_SPAIN_IP_REDACTED
+    User root
+    IdentityFile C:\Users\Nick\.ssh\option_trading
+    IdentitiesOnly yes
+```
+
+Then connect with: `ssh spain-vpn`
+
+### WireGuard Server Config (on VPS)
+
+Location: `/etc/wireguard/wg0.conf`
+
+```ini
+[Interface]
+Address = 10.0.0.1/24
+ListenPort = 51820
+PrivateKey = <stored on server>
+PostUp = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o enp1s0 -j MASQUERADE
+PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o enp1s0 -j MASQUERADE
+
+[Peer]
+# Windows PC
+PublicKey = zU/acLpmXXFZDUr2D2Pcd+4nyQ2bGgzlG04v3Y4qFDs=
+AllowedIPs = 10.0.0.2/32
+```
+
+- **Network interface**: `enp1s0` (Vultr default)
+- **WireGuard port**: `51820/UDP` (open in UFW)
+- **IP forwarding**: enabled (`net.ipv4.ip_forward=1`)
+- **Service**: `wg-quick@wg0` — enabled and starts on boot
+
+### Windows Client Config (WireGuard App)
+
+```ini
+[Interface]
+PrivateKey = QABG/slw/AvK1D+ZexzPeZMwL05Vqn3T7ny5d5xQvVI=
+Address = 10.0.0.2/24
+DNS = 1.1.1.1
+
+[Peer]
+PublicKey = JqU52zOZg9J/oyAHQ8/nTzdXNP6j6PsdAiCwpV1/gQM=
+Endpoint = VPS_SPAIN_IP_REDACTED:51820
+AllowedIPs = 0.0.0.0/0
+PersistentKeepalive = 25
+```
+
+`AllowedIPs = 0.0.0.0/0` routes **all traffic** through the VPN (full tunnel).
+
+### Daily Usage
+
+1. Open **WireGuard** on Windows
+2. Select the Spain tunnel → click **Activate**
+3. Your IP becomes `VPS_SPAIN_IP_REDACTED` (Madrid, Spain)
+4. Access Polymarket normally
+5. **Deactivate** when done if you want your normal connection back
+
+### Verify Connection
+
+Check active handshake from VPS:
+```bash
+ssh spain-vpn "wg show"
+```
+
+Expected output shows `latest handshake: X seconds ago` and transfer bytes — confirms tunnel is active.
+
+### Polymarket Blocked Countries (as of 2026-03-20)
+
+The following are **fully blocked**: Australia, Belgium, Belarus, Burundi, Central African Republic, Congo, Cuba, Germany, Ethiopia, France, United Kingdom, Iran, Iraq, Italy, North Korea, Lebanon, Libya, Myanmar, Nicaragua, **Netherlands**, Russia, Somalia, South Sudan, Sudan, Syria, **United States**, Venezuela, Yemen, Zimbabwe.
+
+**Close-only** (no new positions): Poland, Singapore, Thailand, Taiwan.
+
+**Note**: Hetzner Helsinki was tried but rejected — its IP geolocates to Amsterdam (Netherlands), which is blocked. Vultr Madrid geolocates cleanly to Spain (not blocked).
+
+### Troubleshooting
+
+| Problem | Fix |
+|---------|-----|
+| Tunnel activates but no internet | Check `wg show` on VPS — handshake must exist |
+| Polymarket still blocked | Run `whatismyipaddress.com` — must show `VPS_SPAIN_IP_REDACTED` |
+| VPS unreachable | SSH into Vultr console → `systemctl restart wg-quick@wg0` |
+| Handshake never established | Check Windows firewall isn't blocking UDP 51820 |

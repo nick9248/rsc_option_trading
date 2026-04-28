@@ -48,12 +48,12 @@ class SystemValidator:
         logger.info("COMPREHENSIVE SYSTEM VALIDATION")
         logger.info("=" * 80)
         logger.info(f"Started: {datetime.now()}\n")
+        logger.info("NOTE: Unified scheduler runs on VPS — collection health verified via data checks.\n")
 
         # Run all checks
         self._check_api_connectivity()
         self._check_database_connection()
         self._check_required_tables()
-        self._check_collection_daemon()
         self._check_trade_collector()
         self._check_data_freshness()
         self._check_historical_trades()
@@ -71,7 +71,7 @@ class SystemValidator:
 
     def _check_api_connectivity(self):
         """Check Deribit API connectivity."""
-        logger.info("\n[1/13] Checking API Connectivity...")
+        logger.info("\n[1/12] Checking API Connectivity...")
         logger.info("-" * 80)
 
         try:
@@ -95,7 +95,7 @@ class SystemValidator:
 
     def _check_database_connection(self):
         """Check database connection."""
-        logger.info("\n[2/13] Checking Database Connection...")
+        logger.info("\n[2/12] Checking Database Connection...")
         logger.info("-" * 80)
 
         try:
@@ -119,7 +119,7 @@ class SystemValidator:
 
     def _check_required_tables(self):
         """Check all required tables exist."""
-        logger.info("\n[3/13] Checking Required Tables...")
+        logger.info("\n[3/12] Checking Required Tables...")
         logger.info("-" * 80)
 
         required_tables = [
@@ -165,53 +165,9 @@ class SystemValidator:
             cursor.close()
             self.repo._return_connection(conn)
 
-    def _check_collection_daemon(self):
-        """Check if unified scheduler is running."""
-        logger.info("\n[4/13] Checking Unified Scheduler...")
-        logger.info("-" * 80)
-
-        import os
-        from pathlib import Path
-
-        try:
-            # Check for recent log file
-            import glob
-
-            # Use absolute path relative to script location
-            project_root = Path(__file__).parent.parent
-            log_pattern = str(project_root / "output" / "log" / "unified_scheduler_????????_??????.log")
-            log_files = glob.glob(log_pattern)
-
-            if not log_files:
-                logger.warning("  Scheduler Logs: NOT FOUND")
-                self.results["warnings"].append("No unified scheduler logs found")
-                return
-
-            # Read most recent log
-            latest_log = max(log_files, key=os.path.getmtime)
-            mod_time = datetime.fromtimestamp(os.path.getmtime(latest_log))
-            hours_ago = (datetime.now() - mod_time).total_seconds() / 3600
-
-            if hours_ago < 0.25:  # Modified in last 15 minutes
-                logger.info(f"  Scheduler Status: ACTIVE")
-                logger.info(f"  Last Activity: {mod_time} ({hours_ago*60:.0f} min ago)")
-                self.results["passed"].append("Unified Scheduler Running")
-            elif hours_ago < 2:
-                logger.warning(f"  Scheduler Status: POSSIBLY INACTIVE")
-                logger.warning(f"  Last Activity: {hours_ago:.1f} hours ago")
-                self.results["warnings"].append(f"Unified scheduler may be inactive ({hours_ago:.1f}h since last log)")
-            else:
-                logger.error(f"  Scheduler Status: STOPPED")
-                logger.error(f"  Last Activity: {hours_ago:.1f} hours ago")
-                self.results["failed"].append(f"Unified scheduler stopped ({hours_ago:.1f}h ago)")
-
-        except Exception as e:
-            logger.error(f"  Error checking scheduler: {e}")
-            self.results["failed"].append(f"Scheduler check failed: {e}")
-
     def _check_trade_collector(self):
         """Check if trade collector is running and collecting data."""
-        logger.info("\n[5/13] Checking Trade Collector...")
+        logger.info("\n[4/12] Checking Trade Collector...")
         logger.info("-" * 80)
 
         try:
@@ -302,22 +258,30 @@ class SystemValidator:
 
     def _check_data_freshness(self):
         """Check if data is fresh (recently collected)."""
-        logger.info("\n[6/13] Checking Data Freshness...")
+        logger.info("\n[5/12] Checking Data Freshness...")
         logger.info("-" * 80)
 
+        # snapshots is on-demand (GUI/manual capture), not a real-time feed — excluded
+        # hourly_snapshots is VPS-collected; 2h threshold since it's an hourly job
         tables_to_check = {
             "historical_trades": "trade_timestamp",
-            "snapshots": "captured_at",
             "hourly_snapshots": "captured_at"
         }
 
         conn = self.repo._get_connection()
         cursor = conn.cursor()
 
+        # Fresh thresholds per table (hours)
+        fresh_thresholds = {
+            "historical_trades": 1,    # Real-time feed — should be very fresh
+            "hourly_snapshots": 2,     # VPS hourly job — allow up to 2h lag
+        }
+
         try:
             for table, time_col in tables_to_check.items():
                 cursor.execute(f"SELECT MAX({time_col}) FROM {table}")
                 latest = cursor.fetchone()[0]
+                threshold = fresh_thresholds.get(table, 1)
 
                 if latest:
                     # Handle unix timestamp (milliseconds)
@@ -326,7 +290,7 @@ class SystemValidator:
 
                     hours_ago = (datetime.now() - latest).total_seconds() / 3600
 
-                    if hours_ago < 1:
+                    if hours_ago < threshold:
                         logger.info(f"  {table}: FRESH ({hours_ago*60:.0f} min ago)")
                         self.results["passed"].append(f"{table} is fresh")
                     elif hours_ago < 24:
@@ -345,7 +309,7 @@ class SystemValidator:
 
     def _check_historical_trades(self):
         """Check historical trades collection."""
-        logger.info("\n[7/13] Checking Historical Trades...")
+        logger.info("\n[6/12] Checking Historical Trades...")
         logger.info("-" * 80)
 
         conn = self.repo._get_connection()
@@ -379,7 +343,7 @@ class SystemValidator:
 
     def _check_hourly_snapshots(self):
         """Check hourly snapshots."""
-        logger.info("\n[8/13] Checking Hourly Snapshots...")
+        logger.info("\n[7/12] Checking Hourly Snapshots...")
         logger.info("-" * 80)
 
         conn = self.repo._get_connection()
@@ -413,7 +377,7 @@ class SystemValidator:
 
     def _check_backfill_status(self):
         """Check backfill coverage."""
-        logger.info("\n[9/13] Checking Backfill Status...")
+        logger.info("\n[8/12] Checking Backfill Status...")
         logger.info("-" * 80)
 
         conn = self.repo._get_connection()
@@ -452,7 +416,7 @@ class SystemValidator:
 
     def _check_data_quality(self):
         """Check data quality metrics."""
-        logger.info("\n[10/13] Checking Data Quality...")
+        logger.info("\n[9/12] Checking Data Quality...")
         logger.info("-" * 80)
 
         conn = self.repo._get_connection()
@@ -486,7 +450,7 @@ class SystemValidator:
 
     def _check_prospective_collection(self):
         """Check prospective collection (real-time)."""
-        logger.info("\n[11/13] Checking Prospective Collection...")
+        logger.info("\n[10/12] Checking Prospective Collection...")
         logger.info("-" * 80)
 
         conn = self.repo._get_connection()
@@ -518,7 +482,7 @@ class SystemValidator:
 
     def _check_ohlcv_history(self):
         """Check OHLCV history table has data for ML feature engineering."""
-        logger.info("\n[12/13] Checking OHLCV History...")
+        logger.info("\n[11/12] Checking OHLCV History...")
         logger.info("-" * 80)
 
         conn = self.repo._get_connection()
@@ -566,7 +530,7 @@ class SystemValidator:
 
     def _check_ml_pipeline(self):
         """Check ML models and data pipeline readiness."""
-        logger.info("\n[13/13] Checking ML Pipeline...")
+        logger.info("\n[12/12] Checking ML Pipeline...")
         logger.info("-" * 80)
 
         import os

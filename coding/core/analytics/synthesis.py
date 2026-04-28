@@ -892,7 +892,9 @@ class NarrativeGenerator:
             max_pain: float,
             gex_total: float,
             conflict_detail: str = "",
-            transition_window: str = "7-14 days"
+            transition_window: str = "7-14 days",
+            vrp_score: float = 0.0,
+            iv_pctile: float = 50.0,
     ) -> str:
         """Generate regime description with filled parameters."""
 
@@ -901,6 +903,44 @@ class NarrativeGenerator:
             gex_detail = f"Positive gamma (+{gex_millions:.1f}M GEX) is dampening volatility — dealers buy dips and sell rallies."
         else:
             gex_detail = f"Negative gamma ({gex_millions:.1f}M GEX) is amplifying moves — dealers chase momentum both directions."
+
+        # Fix 3: VOLATILE_BULLISH — "buy vol on dips" is only valid when IV is cheap (VRP < 0).
+        # When VRP is neutral/positive, vol is fairly priced or expensive — buying it is not the edge.
+        if regime == MarketRegime.VOLATILE_BULLISH:
+            if vrp_score < 0:
+                buy_vol_directive = "Buy vol on dips."
+            else:
+                buy_vol_directive = (
+                    "Vol is fairly priced — favor directional call spreads over outright long vol. "
+                    "Avoid paying premium for straddles/strangles until VRP turns negative."
+                )
+            return (
+                "VOLATILE-BULLISH regime. Bullish direction but negative gamma will amplify moves. "
+                "Expect outsized moves to the upside with violent pullbacks. "
+                f"Priority: long calls/call spreads with defined risk. {buy_vol_directive}"
+            )
+
+        # Fix 4: TRENDING_UP — include vol-as-trend-confirmation signal.
+        # Low DVOL during a trend = orderly, structurally supported move (not fear-driven).
+        if regime == MarketRegime.TRENDING_UP:
+            if iv_pctile < 35:
+                vol_note = (
+                    f"DVOL at {iv_pctile:.0f}th pctile — low vol confirms the trend is orderly and "
+                    "structurally supported, not fear-driven. Momentum strategies favored. "
+                )
+            elif iv_pctile > 60:
+                vol_note = (
+                    f"Note: IV at {iv_pctile:.0f}th pctile — elevated vol during a trend signals "
+                    "potential mean-reversion risk. Watch for vol spike + price reversal. "
+                )
+            else:
+                vol_note = ""
+            return (
+                "TRENDING-UP regime. Bullish structural positioning with normal volatility. "
+                f"Max pain gravity pulling price toward ${max_pain:,.0f}. "
+                f"{vol_note}"
+                "Priority: long call spreads, short put spreads. Avoid naked short calls."
+            )
 
         template = cls.REGIME_TEMPLATES.get(regime, cls.REGIME_TEMPLATES[MarketRegime.RANGE_BOUND_NEUTRAL])
 
@@ -972,6 +1012,7 @@ class NarrativeGenerator:
             spot: float = 100000.0,
             fragility_multiplier: float = 1.0,
             fragility_level: str = "NONE",
+            iv_pctile: float = 50.0,
     ) -> str:
         """Generate risk factor list based on thresholds."""
 
@@ -1005,6 +1046,14 @@ class NarrativeGenerator:
 
         if skew > 12:
             risks.append(f"Extreme skew ({skew:+.1f}%) — tail hedging elevated, crash risk priced in")
+
+        # Fix 2: IV percentile environment flag — binary thresholds miss elevated-IV context entirely.
+        # Flag when premium is expensive even if no extreme event is occurring.
+        if iv_pctile > 75:
+            risks.append(
+                f"Elevated IV environment ({iv_pctile:.0f}th pctile) — "
+                f"premium is expensive; defined-risk structures preferred over naked long premium"
+            )
 
         # Fragility flag
         if fragility_multiplier < 1.0:
@@ -1295,6 +1344,13 @@ class SynthesisEngine:
         )
         dir_confidence *= fragility_multiplier
 
+        # Fix 1: Signal overlap discount — DEX, P/C, and Flow all derive from the same OI data.
+        # When they all agree, the weighted average overstates true independent confidence by ~1.5-2x.
+        # Apply 0.75x discount to offset the correlation.
+        overlap_discount_applied = self._detect_signal_overlap(all_direction_scores)
+        if overlap_discount_applied:
+            dir_confidence *= 0.75
+
         # Vol regime — prefer market-wide aggregate GEX; fall back to largest expiry
         gex_for_regime = (
             market.aggregate_total_gex
@@ -1364,6 +1420,8 @@ class SynthesisEngine:
             gex_total=largest_expiry.total_gex,
             conflict_detail=regime_reason if market_regime == MarketRegime.TRANSITION else "",
             transition_window=self._estimate_transition_window(expiries_sorted),
+            vrp_score=vrp_score[0],
+            iv_pctile=market.iv_percentile_365d,
         )
 
         near_term_narrative = self._generate_timeframe_section(
@@ -1402,6 +1460,7 @@ class SynthesisEngine:
             spot=spot,
             fragility_multiplier=fragility_multiplier,
             fragility_level=fragility_level,
+            iv_pctile=market.iv_percentile_365d,
         )
 
         # Trade recommendations
@@ -1418,6 +1477,12 @@ class SynthesisEngine:
 
         # Block trade summary
         block_narrative = self._generate_block_summary(market.block_trades)
+
+        # Overlap note for scoring detail
+        overlap_str = (
+            " [overlap discount: DEX/P/C/Flow correlated — one signal, three measurements]"
+            if overlap_discount_applied else ""
+        )
 
         # =====================================================================
         # STEP 6: Assemble final output
@@ -1443,7 +1508,7 @@ TRADE RECOMMENDATIONS:
 {trade_narrative}
 
 SCORING DETAIL:
-  Direction: {overall_direction.name} (confidence: {dir_confidence:.0%})
+  Direction: {overall_direction.name} (confidence: {dir_confidence:.0%}){overlap_str}
   Fragility: {fragility_level}
   Near-term: {near_direction.name} | Far-term: {far_direction.name}
   Vol Regime: {vol_regime.value}
@@ -1548,6 +1613,29 @@ Perp Funding: {market.funding_rate:.4f}%  | 8h: {market.funding_8h:.4f}%
                 )
 
         return "unclear — monitor GEX evolution"
+
+    def _detect_signal_overlap(self, scores: List[Tuple[float, float, str]]) -> bool:
+        """
+        Detect when DEX, P/C ratio, and Flow all point in the same direction.
+
+        These three scorers are derived from the same underlying OI data:
+        - A wave of call buying → raises call OI (P/C bullish) +
+          raises positive DEX (DEX bullish) + recorded as buy flow (Flow bullish).
+        That is ONE signal measured three ways, not three independent signals.
+        When all agree, the weighted average overstates confidence.
+
+        Returns True if a 0.75x overlap discount should be applied.
+        """
+        overlap_scorers = [
+            (s, r) for s, w, r in scores
+            if any(k in r for k in ["P/C ", "DEX/spot", "Flow:"])
+        ]
+        if len(overlap_scorers) < 3:
+            return False
+        directions = [1 if s > 0 else -1 for s, r in overlap_scorers if s != 0]
+        if not directions:
+            return False
+        return len(set(directions)) == 1  # all same direction = correlated consensus
 
     def _generate_block_summary(self, block_trades: List[dict]) -> str:
         """Summarize block trade activity."""
