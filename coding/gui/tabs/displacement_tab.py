@@ -98,7 +98,7 @@ class DisplacementTab(QWidget):
 
         for col, lbl in enumerate(["Asset", "Price", "24h Change", "Status"]):
             h = QLabel(lbl)
-            h.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 11px;")
+            h.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 11px;")
             cond.addWidget(h, 0, col)
 
         btc_name = QLabel("BTC")
@@ -119,7 +119,7 @@ class DisplacementTab(QWidget):
         for lbl in (self._btc_change, self._eth_change):
             lbl.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 13px; font-family: monospace;")
         for lbl in (self._btc_status, self._eth_status):
-            lbl.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 12px;")
+            lbl.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 12px;")
 
         root.addLayout(cond)
         root.addSpacing(20)
@@ -131,7 +131,7 @@ class DisplacementTab(QWidget):
         root.addSpacing(8)
 
         self._alert_label = QLabel("No alerts yet.")
-        self._alert_label.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 13px;")
+        self._alert_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 13px;")
         self._alert_label.setWordWrap(True)
         root.addWidget(self._alert_label)
 
@@ -220,7 +220,7 @@ class DisplacementTab(QWidget):
         btn_row.addSpacing(16)
 
         self._status_label = QLabel("Ready")
-        self._status_label.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 12px;")
+        self._status_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 12px;")
         btn_row.addWidget(self._status_label)
         btn_row.addStretch()
         root.addLayout(btn_row)
@@ -232,7 +232,7 @@ class DisplacementTab(QWidget):
     def _section(self, text: str) -> QLabel:
         lbl = QLabel(text)
         lbl.setStyleSheet(
-            f"color: {Colors.TEXT_MUTED}; font-size: 10px; font-weight: bold; letter-spacing: 1px;"
+            f"color: {Colors.TEXT_SECONDARY}; font-size: 10px; font-weight: bold; letter-spacing: 1px;"
         )
         return lbl
 
@@ -245,27 +245,28 @@ class DisplacementTab(QWidget):
 
     def _cfg_label(self, text: str) -> QLabel:
         lbl = QLabel(text)
-        lbl.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 11px;")
+        lbl.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-size: 12px;")
         return lbl
 
     def _toggle(self, text: str, checked: bool) -> QPushButton:
         btn = QPushButton(text)
         btn.setCheckable(True)
         btn.setChecked(checked)
-        btn.setFixedWidth(64)
-        btn.setFixedHeight(28)
         btn.setStyleSheet(
             f"QPushButton {{"
+            f"  min-width: 56px; max-width: 56px;"
+            f"  min-height: 26px; max-height: 26px;"
             f"  background-color: transparent;"
-            f"  color: {Colors.TEXT_MUTED};"
-            f"  border: 1px solid {Colors.TEXT_MUTED};"
+            f"  color: {Colors.TEXT_SECONDARY};"
+            f"  border: 1px solid {Colors.TEXT_SECONDARY};"
             f"  border-radius: 4px;"
-            f"  font-size: 12px;"
+            f"  font-size: 11px;"
             f"  font-weight: bold;"
+            f"  padding: 0px;"
             f"}}"
             f"QPushButton:checked {{"
             f"  background-color: {Colors.ACCENT};"
-            f"  color: #000000;"
+            f"  color: #1a1a2e;"
             f"  border: 1px solid {Colors.ACCENT};"
             f"}}"
         )
