@@ -187,20 +187,11 @@ class MainWindow(QMainWindow):
             self.stack.addWidget(self._placeholder_widget("Strategy evaluation unavailable"))
             failed_indices.add(5)
 
-        # Index 6: Special Strategies — Displacement Scanner
-        try:
-            from coding.core.displacement.models.displacement_config import DisplacementConfig
-            from coding.service.displacement.displacement_scanner_service import DisplacementScannerService
-            from coding.gui.tabs.displacement_tab import DisplacementTab
-            _api = DeribitApiService()
-            _repo = DatabaseRepository()
-            _cfg = DisplacementConfig()
-            _scanner = DisplacementScannerService(config=_cfg, api_service=_api, repository=_repo)
-            self.stack.addWidget(DisplacementTab(scanner_service=_scanner))
-        except Exception as exc:
-            logger.error("Failed to initialize Displacement Scanner tab: %s", exc)
-            self.stack.addWidget(self._placeholder_widget("Displacement Scanner unavailable"))
-            failed_indices.add(6)
+        # Index 6: Special Strategies — Displacement Scanner (runs headless on VPS)
+        self.stack.addWidget(self._placeholder_widget(
+            "Displacement Scanner — running on VPS\n"
+            "Alerts delivered via Telegram (@my_option_trading_bot)"
+        ))
 
         # Index 7: Market Regime
         self.stack.addWidget(RegimeTab())

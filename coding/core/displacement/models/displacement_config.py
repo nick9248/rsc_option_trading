@@ -4,12 +4,13 @@ from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 class DisplacementConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    # Trigger thresholds (as decimals, e.g. 0.08 = 8%)
-    drop_1h_threshold: float = 0.08
-    drop_4h_threshold: float = 0.12
-    drop_24h_threshold: float = 0.20
-    drop_7d_threshold: float = 0.30
-    cooldown_hours: int = 24
+    # Trigger thresholds — TESTING values (lower for initial VPS test)
+    # Production values: 1h=0.08, 4h=0.12, 24h=0.20, 7d=0.30
+    drop_1h_threshold: float = 0.003    # 0.3%  — any small hourly move
+    drop_4h_threshold: float = 0.008    # 0.8%
+    drop_24h_threshold: float = 0.015   # 1.5%  — as requested
+    drop_7d_threshold: float = 0.025    # 2.5%
+    cooldown_hours: int = 1             # 1h cooldown during testing (was 24h)
 
     # Strike selection
     min_delta: float = 0.10
@@ -23,9 +24,10 @@ class DisplacementConfig(BaseModel):
     min_oi_eth: int = 200
     max_bid_ask_spread_relative: float = 0.08
 
-    # Alert thresholds (as decimals, e.g. 0.70 = 70%)
-    alert_high_threshold: float = 0.70
-    alert_medium_threshold: float = 0.50
+    # Alert thresholds — TESTING values
+    # Production values: high=0.70, medium=0.50
+    alert_high_threshold: float = 0.60   # 60%
+    alert_medium_threshold: float = 0.10  # 10% — nearly always fires during testing
 
     # Sizing
     risk_budget_usd: float = 10_000.0
