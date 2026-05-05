@@ -69,3 +69,13 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+
+# Generated output files
+output/strategies/
+
+# Internal documentation
+documentation/archive/
+claude_resources/
+
+# Backup files
+*.backup
