@@ -2,6 +2,16 @@
 antigravity.md
 nul
 
+# AI assistant context files (local only)
+CLAUDE.md
+ANTIGRAVITY.md
+.claude/
+docs/superpowers/
+.superpowers/
+
+# Trained ML models (binary artifacts)
+models/
+
 # Virtual environment
 .venv/
 venv/
