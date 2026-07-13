@@ -10,9 +10,13 @@ Computes per-expiry volatility metrics:
 """
 
 import logging
+import math
 from typing import Any, Dict, List, Optional, Tuple
 
+from coding.core.analytics.black_scholes_calculator import BlackScholesCalculator
+
 logger = logging.getLogger(__name__)
+_bs = BlackScholesCalculator()
 
 
 class VolatilitySurfaceCalculator:
@@ -236,11 +240,16 @@ class VolatilitySurfaceCalculator:
         """
         Calculate aggregated second-order Greeks (Vanna, Charm).
 
-        Approximations:
-        - Vanna ≈ vega / spot (sensitivity of delta to vol)
-        - Charm ≈ -theta / delta (time decay of delta)
+        Closed-form Black-Scholes formulas (r=q=0, standard for crypto):
+        - Vanna = −φ(d1) × d2 / σ  (∂Δ/∂σ, sensitivity of delta to vol)
+        - Charm = φ(d1) × d2 / (2τ) (∂Δ/∂τ, time decay of delta)
 
-        These are aggregated across all instruments, weighted by OI.
+        d1 is recovered from stored delta via inverse normal CDF.
+        τ is derived from stored gamma and vega without needing expiry date:
+          gamma = φ(d1)/(S·σ·√τ),  vega = S·φ(d1)·√τ/100
+          → τ = (vega × 100) / (S² × gamma × sigma)
+
+        Results are aggregated across all instruments, weighted by OI.
 
         Returns:
             Dict with net_vanna, net_charm, vanna_signal, charm_signal.
@@ -249,23 +258,39 @@ class VolatilitySurfaceCalculator:
         net_charm = 0.0
 
         for inst in self.instruments:
+            delta = inst.get("delta")
             gamma = inst.get("gamma")
             vega = inst.get("vega")
-            theta = inst.get("theta")
+            mark_iv = inst.get("mark_iv")
+            option_type = inst.get("option_type")
             oi = inst.get("open_interest", 0)
 
             if oi <= 0:
                 continue
+            if None in (delta, gamma, vega, mark_iv, option_type):
+                continue
 
-            # Vanna approximation: gamma × vega / spot
-            if gamma is not None and vega is not None and self.spot_price > 0:
-                vanna = gamma * vega / self.spot_price
-                net_vanna += vanna * oi
+            try:
+                sigma = float(mark_iv) / 100.0
+                gamma_f = float(gamma)
+                vega_f = float(vega)
+                if sigma <= 0 or gamma_f <= 0 or vega_f <= 0 or self.spot_price <= 0:
+                    continue
 
-            # Charm approximation: -gamma × theta
-            if gamma is not None and theta is not None:
-                charm = -gamma * theta
-                net_charm += charm * oi
+                # Derive time-to-expiry from stored greeks (no expiry date needed)
+                raw_vega = vega_f * 100.0  # S·φ(d1)·√τ (undo /100 convention)
+                tau = raw_vega / (self.spot_price ** 2 * gamma_f * sigma)
+                if not (0 < tau <= 2.0):
+                    continue
+
+                d1 = _bs.d1_from_delta(float(delta), option_type)
+                d2 = d1 - sigma * math.sqrt(tau)
+
+                net_vanna += _bs.calculate_vanna(d1, d2, sigma) * float(oi)
+                net_charm += _bs.calculate_charm(d1, d2, tau) * float(oi)
+
+            except Exception:
+                continue
 
         # Interpret signals
         if net_vanna > 0:

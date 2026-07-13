@@ -46,7 +46,8 @@ class VRPCalculator:
     def calculate_realized_volatility(
         self,
         price_history: List[Dict[str, float]],
-        window_days: Optional[int] = None
+        window_days: Optional[int] = None,
+        reference_time: Optional[datetime] = None
     ) -> float:
         """
         Calculate realized volatility from price history.
@@ -56,6 +57,10 @@ class VRPCalculator:
         Args:
             price_history: List of dicts with 'timestamp' and 'close' keys.
             window_days: Optional window in days (uses lookback_days if not specified).
+            reference_time: Anchor for the lookback window (defaults to datetime.now()
+                for live use). Pass the historical snapshot time when reconstructing
+                RV for a past hour — otherwise the window is filtered relative to
+                "now" and historical price_history gets filtered out entirely.
 
         Returns:
             Annualized realized volatility as percentage (e.g., 0.80 for 80%).
@@ -65,9 +70,10 @@ class VRPCalculator:
             return 0.0
 
         window_days = window_days or self.lookback_days
+        reference_time = reference_time or datetime.now()
 
         # Filter to window
-        cutoff_time = datetime.now() - timedelta(days=window_days)
+        cutoff_time = reference_time - timedelta(days=window_days)
         filtered_prices = [
             p for p in price_history
             if datetime.fromtimestamp(p.get("timestamp", 0)) >= cutoff_time

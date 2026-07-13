@@ -79,3 +79,13 @@ claude_resources/
 
 # Backup files
 *.backup
+
+# Graphify knowledge-graph output (local analysis artifact)
+graphify-out/
+
+# Local MCP server config (machine-specific)
+.mcp.json
+
+# Ad-hoc session reports
+report_*.txt
+

@@ -12,12 +12,14 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from coding.core.analytics.on_chain_analyzer import OnChainAnalyzer
+from coding.core.analytics.black_scholes_calculator import BlackScholesCalculator
 from coding.core.analytics.gex_dex_calculator import GexDexCalculator
+from coding.core.analytics.on_chain_analyzer import OnChainAnalyzer
 from coding.core.config import SUPPORTED_CURRENCIES
 from coding.core.database.repository import DatabaseRepository
 from coding.service.data_collection.hourly_aggregation_service import HourlyAggregationService
 from coding.service.deribit.deribit_api_service import DeribitApiService
+from coding.service.on_chain.forward_testing_harness import ForwardTestingHarness
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +51,7 @@ class ProspectiveCollector:
         self.api = api_service or DeribitApiService()
         self.repo = repository or DatabaseRepository()
         self.aggregation_service = HourlyAggregationService(repository=self.repo)
+        self._forward_harness = ForwardTestingHarness(repository=self.repo)
 
         logger.info("ProspectiveCollector initialized")
 
@@ -446,15 +449,26 @@ class ProspectiveCollector:
 
             snapshots_saved = 0
 
+            # Build raw-instrument lookup keyed by name for GEX/DEX greek enrichment.
+            # parse_instruments() strips greeks to keep the parsed dicts lean; we
+            # re-attach them here from the original book-summary items before feeding
+            # GexDexCalculator (which needs delta/gamma at the top level).
+            raw_by_name = {inst.get("instrument_name", ""): inst for inst in instruments}
+
             # Process each expiration
             for expiration, instruments_for_exp in grouped.items():
                 try:
                     # Run on-chain analysis for this expiration
                     analysis_data = analyzer.analyze_expiration(expiration)
 
+                    # Enrich with greeks for GEX/DEX (nested → top-level, with BS fallback)
+                    gex_instruments = self._enrich_with_greeks(
+                        instruments_for_exp, raw_by_name, underlying_price
+                    )
+
                     # Run GEX/DEX calculation
                     gex_calc = GexDexCalculator(
-                        instruments=instruments_for_exp,
+                        instruments=gex_instruments,
                         spot_price=underlying_price
                     )
                     gex_dex_data = gex_calc.calculate()
@@ -477,9 +491,104 @@ class ProspectiveCollector:
 
             logger.info(f"    Saved {snapshots_saved} on-chain snapshots")
 
+            # Phase 3: resolve previous hour's predictions, then record a new one
+            # using the front-month (nearest expiry) snapshot metrics.
+            try:
+                self._forward_harness.resolve_pending_predictions(currency)
+            except Exception as e:
+                logger.warning(f"    Forward harness resolve failed for {currency}: {e}")
+
+            if snapshots_saved > 0 and grouped:
+                try:
+                    front_exp = sorted(grouped.keys())[0]
+                    front_data = analyzer.analyze_expiration(front_exp)
+                    moneyness = front_data.get("moneyness", {})
+                    max_pain = front_data.get("max_pain", {})
+                    max_pain_strike = max_pain.get("max_pain_strike")
+                    max_pain_dist = (
+                        (max_pain_strike - underlying_price) / underlying_price * 100
+                        if max_pain_strike and underlying_price else None
+                    )
+                    metrics = {
+                        "itm_call_oi_pct": moneyness.get("calls", {}).get("itm_pct"),
+                        "otm_call_oi_pct": moneyness.get("calls", {}).get("otm_pct"),
+                        "itm_put_oi_pct": moneyness.get("puts", {}).get("itm_pct"),
+                        "otm_put_oi_pct": moneyness.get("puts", {}).get("otm_pct"),
+                        "max_pain_distance_pct": max_pain_dist,
+                        # pc_far_otm_ratio: live vol-surface computation deferred;
+                        # harness will use None and fall back to the 5 common metrics.
+                        "pc_far_otm_ratio": None,
+                    }
+                    self._forward_harness.record_prediction(
+                        currency=currency,
+                        snapshot_hour=hour,
+                        metrics=metrics,
+                        spot_price=underlying_price,
+                    )
+                except Exception as e:
+                    logger.warning(f"    Forward harness record failed for {currency}: {e}")
+
         except Exception as e:
             logger.error(f"    On-chain analysis failed: {e}", exc_info=True)
             raise
+
+    def _enrich_with_greeks(
+        self,
+        instruments: List[Dict],
+        raw_by_name: Dict[str, Dict],
+        underlying_price: float,
+    ) -> List[Dict]:
+        """
+        Promote greeks from the nested 'greeks' dict in the raw book-summary items
+        to the top level of each instrument dict.
+
+        Falls back to Black-Scholes when the API omits greeks (delta/gamma are 0
+        or absent). This is required before feeding GexDexCalculator, which reads
+        delta and gamma at the top level.
+        """
+        bs = BlackScholesCalculator()
+        enriched = []
+
+        for inst in instruments:
+            raw = raw_by_name.get(inst.get("instrument_name", ""), {})
+            nested = raw.get("greeks") or {}
+            delta = nested.get("delta") or inst.get("delta")
+            gamma = nested.get("gamma") or inst.get("gamma")
+            vega = nested.get("vega") or inst.get("vega")
+            theta = nested.get("theta") or inst.get("theta")
+
+            # BS fallback when exchange didn't return greeks
+            if (not delta or not gamma) and underlying_price > 0:
+                mark_iv = inst.get("mark_iv")
+                strike = inst.get("strike")
+                name = inst.get("instrument_name", "")
+                if mark_iv and strike and name:
+                    parsed = bs.parse_instrument_name(name)
+                    if parsed:
+                        tte = bs.calculate_time_to_expiry(datetime.now(), parsed["expiry_time"])
+                        if tte > 0:
+                            iv_decimal = float(mark_iv) / 100.0
+                            calc = bs.calculate_greeks(
+                                spot_price=underlying_price,
+                                strike_price=float(strike),
+                                time_to_expiry=tte,
+                                implied_volatility=iv_decimal,
+                                option_type=parsed["option_type"],
+                            )
+                            delta = delta or calc["delta"]
+                            gamma = gamma or calc["gamma"]
+                            vega = vega or calc["vega"]
+                            theta = theta or calc["theta"]
+
+            enriched.append({
+                **inst,
+                "delta": delta or 0,
+                "gamma": gamma or 0,
+                "vega": vega or 0,
+                "theta": theta or 0,
+            })
+
+        return enriched
 
     def _fetch_dvol(self, currency: str) -> None:
         """

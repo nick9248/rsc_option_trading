@@ -214,6 +214,50 @@ class BlackScholesCalculator:
         """
         return math.exp(-0.5 * x ** 2) / math.sqrt(2.0 * math.pi)
 
+    @staticmethod
+    def _erfinv(x: float) -> float:
+        """Approximate inverse error function (Winitzki 2003). Accuracy < 5e-4."""
+        x = max(-1.0 + 1e-9, min(1.0 - 1e-9, x))
+        a = 0.147
+        ln_term = math.log(1.0 - x * x)
+        b = 2.0 / (math.pi * a) + ln_term / 2.0
+        return math.copysign(math.sqrt(math.sqrt(b * b - ln_term / a) - b), x)
+
+    def d1_from_delta(self, delta: float, option_type: str) -> float:
+        """
+        Recover d1 from delta using inverse normal CDF.
+
+        Call: Δ = N(d1) → d1 = √2 · erfinv(2Δ − 1)
+        Put:  Δ = N(d1) − 1 → d1 = √2 · erfinv(2(Δ+1) − 1)
+        """
+        if option_type.upper() in ("C", "CALL"):
+            p = max(1e-9, min(1.0 - 1e-9, float(delta)))
+        else:
+            p = max(1e-9, min(1.0 - 1e-9, float(delta) + 1.0))
+        return math.sqrt(2.0) * self._erfinv(2.0 * p - 1.0)
+
+    def calculate_vanna(self, d1: float, d2: float, implied_volatility: float) -> float:
+        """
+        Vanna = ∂²V/∂S∂σ = ∂Δ/∂σ
+
+        Closed-form BS (r=q=0): −φ(d1) × d2 / σ
+        Same for calls and puts.
+        """
+        if implied_volatility <= 0:
+            return 0.0
+        return -self._norm_pdf(d1) * d2 / implied_volatility
+
+    def calculate_charm(self, d1: float, d2: float, time_to_expiry: float) -> float:
+        """
+        Charm = ∂Δ/∂τ (rate of change of delta with respect to time-to-expiry).
+
+        Closed-form BS (r=q=0): φ(d1) × d2 / (2τ)
+        Same for calls and puts.
+        """
+        if time_to_expiry <= 0:
+            return 0.0
+        return self._norm_pdf(d1) * d2 / (2.0 * time_to_expiry)
+
     def _expired_option_greeks(
         self,
         spot: float,

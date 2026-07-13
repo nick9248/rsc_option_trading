@@ -7,7 +7,7 @@ Provides methods to save and retrieve data from PostgreSQL tables.
 import json
 import logging
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from coding.core.database.config import ConnectionPool, DatabaseConfig
@@ -973,6 +973,46 @@ class DatabaseRepository:
 
             return cursor.fetchall()
 
+    def get_trades_for_hour_and_expiration(
+        self,
+        currency: str,
+        hour_start: datetime,
+        hour_end: datetime,
+        expiration: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch trades for a specific hour bucket and expiration (for VWAP IV reconstruction).
+
+        Mirrors the {iv, amount} shape OnChainAnalysisService._calculate_vwap_iv
+        (on_chain_analysis_service.py:446) consumes for its VWAP leg.
+
+        Args:
+            currency: Currency symbol.
+            hour_start: Start of hour bucket.
+            hour_end: End of hour bucket.
+            expiration: Expiration date string (e.g., "27DEC24").
+
+        Returns:
+            List of dicts with {"iv": float, "amount": float}.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                SELECT iv, amount
+                FROM historical_trades
+                WHERE currency = %s
+                  AND expiration = %s
+                  AND to_timestamp(trade_timestamp / 1000.0) >= %s
+                  AND to_timestamp(trade_timestamp / 1000.0) < %s
+            """, (currency, expiration, hour_start, hour_end))
+
+            return [
+                {
+                    "iv": float(row[0]) if row[0] is not None else None,
+                    "amount": float(row[1]) if row[1] is not None else None,
+                }
+                for row in cursor.fetchall()
+            ]
+
     def get_latest_snapshot_oi(
         self,
         currency: str,
@@ -1860,6 +1900,237 @@ class DatabaseRepository:
 
             return list(reversed(results))
 
+    # ── Volatility Reconstruction (backfill) ─────────────────────────────────
+
+    def get_distinct_snapshot_hours_with_expirations(
+        self,
+        currency: str,
+        start: datetime,
+        end: datetime
+    ) -> List[tuple]:
+        """
+        Find (snapshot_hour, expiration) pairs that have option data in hourly_snapshots.
+
+        Drives the iteration loop for the volatility-metric backfill: each pair
+        identifies one (hour, expiration) slice to reconstruct.
+
+        Args:
+            currency: Currency symbol (e.g., "BTC", "ETH").
+            start: Start of date range (inclusive, timezone-naive UTC).
+            end: End of date range (inclusive, timezone-naive UTC).
+
+        Returns:
+            List of (snapshot_hour, expiration) tuples ordered by hour then expiration.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                SELECT DISTINCT snapshot_hour, expiration
+                FROM hourly_snapshots
+                WHERE currency = %s
+                  AND option_type IN ('C', 'P')
+                  AND snapshot_hour >= %s
+                  AND snapshot_hour <= %s
+                ORDER BY snapshot_hour, expiration
+            """, (currency, start, end))
+
+            return [(row[0], row[1]) for row in cursor.fetchall()]
+
+    def get_hourly_snapshots_for_hour(
+        self,
+        currency: str,
+        hour: datetime,
+        expiration: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch option instruments from hourly_snapshots for one (hour, expiration) slice,
+        mapped into the instrument-dict shape VolatilitySurfaceCalculator expects.
+
+        Field renames: avg_delta->delta, avg_gamma->gamma, avg_theta->theta,
+        avg_vega->vega (matching the live on-chain analysis input contract).
+
+        Args:
+            currency: Currency symbol (e.g., "BTC", "ETH").
+            hour: Snapshot hour (timezone-naive UTC).
+            expiration: Expiration date string (e.g., "27DEC24").
+
+        Returns:
+            List of instrument dicts with strike, option_type, mark_iv, delta,
+            gamma, theta, vega, open_interest, index_price.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                SELECT
+                    instrument_name, strike, option_type, mark_iv,
+                    avg_delta, avg_gamma, avg_theta, avg_vega,
+                    open_interest, index_price
+                FROM hourly_snapshots
+                WHERE currency = %s
+                  AND snapshot_hour = %s
+                  AND expiration = %s
+                  AND option_type IN ('C', 'P')
+                ORDER BY strike, option_type
+            """, (currency, hour, expiration))
+
+            columns = [
+                "instrument_name", "strike", "option_type", "mark_iv",
+                "delta", "gamma", "theta", "vega",
+                "open_interest", "index_price",
+            ]
+            numeric_fields = {
+                "strike", "mark_iv", "delta", "gamma", "theta", "vega",
+                "open_interest", "index_price",
+            }
+            instruments = []
+            for row in cursor.fetchall():
+                inst = dict(zip(columns, row))
+                for field in numeric_fields:
+                    if inst[field] is not None:
+                        inst[field] = float(inst[field])
+                # Matches the live normalization at on_chain_analyzer.py:145
+                # (`item.get("open_interest", 0) or 0`) — NULL OI must become 0,
+                # not None, or VolatilitySurfaceCalculator._calculate_pc_by_moneyness
+                # crashes on `buckets[bucket]["call_oi"] += oi`.
+                inst["open_interest"] = inst["open_interest"] or 0
+                instruments.append(inst)
+            return instruments
+
+    def save_volatility_snapshot(
+        self,
+        snapshot_hour,
+        currency: str,
+        expiration: str,
+        metrics: Dict[str, Any],
+        underlying_price: float
+    ) -> None:
+        """
+        Save a reconstructed on-chain volatility snapshot to the database.
+
+        Args:
+            snapshot_hour: Timestamp of the snapshot hour.
+            currency: Currency symbol (e.g., "BTC", "ETH").
+            expiration: Expiration date string (e.g., "27DEC24").
+            metrics: Dict with the ~22 reconstructed metric fields (keys match
+                onchain_volatility_snapshots columns; missing keys default to None).
+            underlying_price: Underlying asset price for this snapshot.
+        """
+        fields = [
+            "atm_iv", "skew_25d", "put_25d_iv", "call_25d_iv",
+            "net_vanna", "net_charm",
+            "vwap_iv", "mark_iv_avg",
+            "vrp_absolute", "vrp_percentage", "realized_vol",
+            "iv_percentile_expiry", "iv_percentile_365d", "iv_rank_365d",
+            "expected_daily_move", "expected_weekly_move", "expected_monthly_move",
+            "pc_atm_ratio", "pc_near_otm_ratio", "pc_far_otm_ratio",
+        ]
+        values = {field: metrics.get(field) for field in fields}
+
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO onchain_volatility_snapshots (
+                    snapshot_hour, currency, expiration,
+                    atm_iv, skew_25d, put_25d_iv, call_25d_iv,
+                    net_vanna, net_charm,
+                    vwap_iv, mark_iv_avg,
+                    vrp_absolute, vrp_percentage, realized_vol,
+                    iv_percentile_expiry, iv_percentile_365d, iv_rank_365d,
+                    expected_daily_move, expected_weekly_move, expected_monthly_move,
+                    pc_atm_ratio, pc_near_otm_ratio, pc_far_otm_ratio,
+                    underlying_price
+                ) VALUES (
+                    %(snapshot_hour)s, %(currency)s, %(expiration)s,
+                    %(atm_iv)s, %(skew_25d)s, %(put_25d_iv)s, %(call_25d_iv)s,
+                    %(net_vanna)s, %(net_charm)s,
+                    %(vwap_iv)s, %(mark_iv_avg)s,
+                    %(vrp_absolute)s, %(vrp_percentage)s, %(realized_vol)s,
+                    %(iv_percentile_expiry)s, %(iv_percentile_365d)s, %(iv_rank_365d)s,
+                    %(expected_daily_move)s, %(expected_weekly_move)s, %(expected_monthly_move)s,
+                    %(pc_atm_ratio)s, %(pc_near_otm_ratio)s, %(pc_far_otm_ratio)s,
+                    %(underlying_price)s
+                )
+                ON CONFLICT (snapshot_hour, currency, expiration) DO UPDATE SET
+                    atm_iv = EXCLUDED.atm_iv,
+                    skew_25d = EXCLUDED.skew_25d,
+                    put_25d_iv = EXCLUDED.put_25d_iv,
+                    call_25d_iv = EXCLUDED.call_25d_iv,
+                    net_vanna = EXCLUDED.net_vanna,
+                    net_charm = EXCLUDED.net_charm,
+                    vwap_iv = EXCLUDED.vwap_iv,
+                    mark_iv_avg = EXCLUDED.mark_iv_avg,
+                    vrp_absolute = EXCLUDED.vrp_absolute,
+                    vrp_percentage = EXCLUDED.vrp_percentage,
+                    realized_vol = EXCLUDED.realized_vol,
+                    iv_percentile_expiry = EXCLUDED.iv_percentile_expiry,
+                    iv_percentile_365d = EXCLUDED.iv_percentile_365d,
+                    iv_rank_365d = EXCLUDED.iv_rank_365d,
+                    expected_daily_move = EXCLUDED.expected_daily_move,
+                    expected_weekly_move = EXCLUDED.expected_weekly_move,
+                    expected_monthly_move = EXCLUDED.expected_monthly_move,
+                    pc_atm_ratio = EXCLUDED.pc_atm_ratio,
+                    pc_near_otm_ratio = EXCLUDED.pc_near_otm_ratio,
+                    pc_far_otm_ratio = EXCLUDED.pc_far_otm_ratio,
+                    underlying_price = EXCLUDED.underlying_price
+            """, {
+                "snapshot_hour": snapshot_hour,
+                "currency": currency,
+                "expiration": expiration,
+                "underlying_price": underlying_price,
+                **values,
+            })
+            logger.info(f"Saved volatility snapshot for {currency} {expiration} at {snapshot_hour}")
+
+    def get_volatility_snapshots_for_percentile_backfill(
+        self,
+        currency: str,
+        start: datetime,
+        end: datetime
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch the (snapshot_hour, expiration, atm_iv) series for the per-expiry
+        IV-percentile backfill pass (pass 2 of volatility reconstruction — needs
+        the ATM-IV series from pass 1 to exist before percentiles can be computed).
+
+        Args:
+            currency: Currency symbol (e.g., "BTC", "ETH").
+            start: Start of date range (inclusive, timezone-naive UTC).
+            end: End of date range (inclusive, timezone-naive UTC).
+
+        Returns:
+            List of dicts with {"snapshot_hour", "expiration", "atm_iv"}.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                SELECT snapshot_hour, expiration, atm_iv
+                FROM onchain_volatility_snapshots
+                WHERE currency = %s
+                  AND snapshot_hour >= %s
+                  AND snapshot_hour <= %s
+                ORDER BY expiration, snapshot_hour
+            """, (currency, start, end))
+
+            columns = ["snapshot_hour", "expiration", "atm_iv"]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+    def update_iv_percentile_expiry(
+        self,
+        snapshot_hour,
+        currency: str,
+        expiration: str,
+        iv_percentile_expiry: float
+    ) -> None:
+        """
+        Update the per-expiry IV percentile for an existing volatility snapshot row.
+
+        Pass 2 of volatility reconstruction — called once the trailing-window
+        percentile has been computed against the row's own (currency, expiration)
+        ATM-IV series.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                UPDATE onchain_volatility_snapshots
+                SET iv_percentile_expiry = %s
+                WHERE snapshot_hour = %s AND currency = %s AND expiration = %s
+            """, (iv_percentile_expiry, snapshot_hour, currency, expiration))
+
     # ── OTM Contract Finder ───────────────────────────────────────────────────
 
     def get_connection(self):
@@ -1882,6 +2153,43 @@ class DatabaseRepository:
                 )
                 rows = cursor.fetchall()
                 return [float(r[0]) for r in reversed(rows)]
+        except Exception as exc:
+            logger.warning("get_dvol_history failed for %s: %s", asset, exc)
+            return []
+
+    def get_dvol_history_before(
+        self,
+        asset: str,
+        before_time: datetime,
+        days: int = 365
+    ) -> List[float]:
+        """
+        Return DVOL close values for the trailing window ending at a historical time.
+
+        Used for reconstructing 365d IV percentile against a past snapshot_hour
+        (the live system anchors this window on "now" — see
+        OnChainAnalysisService._fetch_market_metrics, on_chain_analysis_service.py:896).
+        Returns oldest-first, plain floats (dvol_value), empty list on error.
+
+        Note: dvol_history only stores daily close-equivalent dvol_value, not
+        daily high/low — so this can reconstruct iv_percentile_365d (close-based)
+        but NOT iv_rank_365d (true-range based, needs high/low that was never persisted).
+
+        Args:
+            asset: Currency symbol (e.g., "BTC", "ETH").
+            before_time: Anchor — only rows with timestamp <= this are included.
+            days: Trailing window size in days (default 365, matches live lookback).
+        """
+        try:
+            window_start = before_time - timedelta(days=days)
+            with self._db_cursor() as cursor:
+                cursor.execute(
+                    "SELECT dvol_value FROM dvol_history "
+                    "WHERE asset = %s AND timestamp >= %s AND timestamp <= %s "
+                    "ORDER BY timestamp ASC",
+                    (asset, window_start, before_time),
+                )
+                return [float(r[0]) for r in cursor.fetchall()]
         except Exception as exc:
             logger.warning("get_dvol_history failed for %s: %s", asset, exc)
             return []
@@ -2013,3 +2321,311 @@ class DatabaseRepository:
         except Exception as exc:
             logger.error("save_otm_signals failed: %s", exc)
         return saved
+
+    # ------------------------------------------------------------------
+    # Phase 3 — Forward-test predictions
+    # ------------------------------------------------------------------
+
+    def save_forward_prediction(self, prediction: Dict[str, Any]) -> None:
+        """
+        Insert a forward-test prediction row.
+
+        Args:
+            prediction: Dict with keys matching forward_test_predictions columns.
+                Required: currency, snapshot_hour, spot_price_at_prediction,
+                          signal_direction, signal_score, signal_confidence.
+                Optional metric/z-score fields default to None.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO forward_test_predictions (
+                    currency, snapshot_hour,
+                    itm_put_oi_pct, otm_put_oi_pct,
+                    itm_call_oi_pct, otm_call_oi_pct,
+                    max_pain_distance_pct, pc_far_otm_ratio,
+                    spot_price_at_prediction,
+                    signal_direction, signal_score, signal_confidence,
+                    z_itm_put_oi_pct, z_otm_put_oi_pct,
+                    z_itm_call_oi_pct, z_otm_call_oi_pct,
+                    z_max_pain_distance_pct, z_pc_far_otm_ratio
+                ) VALUES (
+                    %(currency)s, %(snapshot_hour)s,
+                    %(itm_put_oi_pct)s, %(otm_put_oi_pct)s,
+                    %(itm_call_oi_pct)s, %(otm_call_oi_pct)s,
+                    %(max_pain_distance_pct)s, %(pc_far_otm_ratio)s,
+                    %(spot_price_at_prediction)s,
+                    %(signal_direction)s, %(signal_score)s, %(signal_confidence)s,
+                    %(z_itm_put_oi_pct)s, %(z_otm_put_oi_pct)s,
+                    %(z_itm_call_oi_pct)s, %(z_otm_call_oi_pct)s,
+                    %(z_max_pain_distance_pct)s, %(z_pc_far_otm_ratio)s
+                )
+                ON CONFLICT (currency, snapshot_hour) DO NOTHING
+            """, {
+                "currency": prediction["currency"],
+                "snapshot_hour": prediction["snapshot_hour"],
+                "itm_put_oi_pct": prediction.get("itm_put_oi_pct"),
+                "otm_put_oi_pct": prediction.get("otm_put_oi_pct"),
+                "itm_call_oi_pct": prediction.get("itm_call_oi_pct"),
+                "otm_call_oi_pct": prediction.get("otm_call_oi_pct"),
+                "max_pain_distance_pct": prediction.get("max_pain_distance_pct"),
+                "pc_far_otm_ratio": prediction.get("pc_far_otm_ratio"),
+                "spot_price_at_prediction": prediction["spot_price_at_prediction"],
+                "signal_direction": prediction["signal_direction"],
+                "signal_score": prediction["signal_score"],
+                "signal_confidence": prediction["signal_confidence"],
+                "z_itm_put_oi_pct": prediction.get("z_itm_put_oi_pct"),
+                "z_otm_put_oi_pct": prediction.get("z_otm_put_oi_pct"),
+                "z_itm_call_oi_pct": prediction.get("z_itm_call_oi_pct"),
+                "z_otm_call_oi_pct": prediction.get("z_otm_call_oi_pct"),
+                "z_max_pain_distance_pct": prediction.get("z_max_pain_distance_pct"),
+                "z_pc_far_otm_ratio": prediction.get("z_pc_far_otm_ratio"),
+            })
+
+    def get_unresolved_predictions(
+        self,
+        currency: str,
+        older_than_hours: float = 1.0
+    ) -> List[Dict[str, Any]]:
+        """
+        Return predictions that have no resolution and are at least `older_than_hours` old.
+
+        Args:
+            currency: Currency filter.
+            older_than_hours: How many hours must have passed since snapshot_hour.
+
+        Returns:
+            List of dicts with id, snapshot_hour, spot_price_at_prediction,
+            signal_direction.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                SELECT id, snapshot_hour, spot_price_at_prediction, signal_direction
+                FROM forward_test_predictions
+                WHERE currency = %s
+                  AND resolved_at IS NULL
+                  AND snapshot_hour <= NOW() - INTERVAL '1 hour' * %s
+                ORDER BY snapshot_hour ASC
+            """, (currency, older_than_hours))
+            rows = cursor.fetchall()
+            return [
+                {
+                    "id": r[0],
+                    "snapshot_hour": r[1],
+                    "spot_price_at_prediction": float(r[2]),
+                    "signal_direction": r[3],
+                }
+                for r in rows
+            ]
+
+    def resolve_prediction(
+        self,
+        prediction_id: int,
+        spot_price_at_resolution: float,
+        resolved_at,
+    ) -> None:
+        """
+        Fill in the resolution fields for a prediction row.
+
+        Args:
+            prediction_id: Primary key of the prediction.
+            spot_price_at_resolution: Spot price ~1h after prediction.
+            resolved_at: Timestamp of resolution.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                UPDATE forward_test_predictions
+                SET spot_price_at_resolution = %s,
+                    resolved_at = %s,
+                    actual_1h_return_pct = ((%s - spot_price_at_prediction)
+                                            / spot_price_at_prediction * 100),
+                    signal_correct = CASE
+                        WHEN signal_direction = 'neutral' THEN NULL
+                        WHEN signal_direction = 'bullish'
+                             AND (%s - spot_price_at_prediction) > 0 THEN TRUE
+                        WHEN signal_direction = 'bearish'
+                             AND (%s - spot_price_at_prediction) < 0 THEN TRUE
+                        ELSE FALSE
+                    END
+                WHERE id = %s
+            """, (
+                spot_price_at_resolution,
+                resolved_at,
+                spot_price_at_resolution,
+                spot_price_at_resolution,
+                spot_price_at_resolution,
+                prediction_id,
+            ))
+
+    def get_latest_spot_price(self, currency: str) -> Optional[float]:
+        """
+        Return the most recent underlying_price for `currency` from
+        onchain_analysis_snapshots.
+
+        Args:
+            currency: Currency symbol (e.g., "BTC", "ETH").
+
+        Returns:
+            Latest spot price, or None if no data.
+        """
+        try:
+            with self._db_cursor() as cursor:
+                cursor.execute("""
+                    SELECT underlying_price
+                    FROM onchain_analysis_snapshots
+                    WHERE currency = %s
+                    ORDER BY snapshot_hour DESC
+                    LIMIT 1
+                """, (currency,))
+                row = cursor.fetchone()
+                return float(row[0]) if row else None
+        except Exception as exc:
+            logger.warning("get_latest_spot_price failed for %s: %s", currency, exc)
+            return None
+
+    def get_forward_test_stats(self, currency: str) -> Dict[str, Any]:
+        """
+        Compute track-record statistics for resolved forward-test predictions.
+
+        Returns a dict with: n_total, n_resolved, n_signals, hit_rate,
+        mean_return_on_signal, std_return_on_signal, information_ratio.
+        Neutral predictions are excluded from hit_rate and IR calculations.
+
+        Args:
+            currency: Currency to query.
+
+        Returns:
+            Statistics dict. Returns zeroed dict if no resolved data.
+        """
+        empty = {
+            "n_total": 0, "n_resolved": 0, "n_signals": 0,
+            "hit_rate": None, "mean_return_on_signal": None,
+            "std_return_on_signal": None, "information_ratio": None,
+        }
+        try:
+            with self._db_cursor() as cursor:
+                cursor.execute("""
+                    SELECT
+                        COUNT(*) AS n_total,
+                        COUNT(resolved_at) AS n_resolved,
+                        COUNT(CASE WHEN signal_direction != 'neutral' AND resolved_at IS NOT NULL
+                                   THEN 1 END) AS n_signals,
+                        AVG(CASE WHEN signal_direction != 'neutral' AND signal_correct IS NOT NULL
+                                 THEN signal_correct::int END) AS hit_rate,
+                        AVG(CASE WHEN signal_direction != 'neutral' AND resolved_at IS NOT NULL
+                                 THEN actual_1h_return_pct END) AS mean_return,
+                        STDDEV(CASE WHEN signal_direction != 'neutral' AND resolved_at IS NOT NULL
+                                    THEN actual_1h_return_pct END) AS std_return
+                    FROM forward_test_predictions
+                    WHERE currency = %s
+                """, (currency,))
+                row = cursor.fetchone()
+                if not row or row[2] == 0:
+                    return empty
+                n_total, n_resolved, n_signals, hit_rate, mean_ret, std_ret = row
+                ir = (float(mean_ret) / float(std_ret)) if std_ret and float(std_ret) > 0 else None
+                return {
+                    "n_total": int(n_total),
+                    "n_resolved": int(n_resolved),
+                    "n_signals": int(n_signals),
+                    "hit_rate": float(hit_rate) if hit_rate is not None else None,
+                    "mean_return_on_signal": float(mean_ret) if mean_ret is not None else None,
+                    "std_return_on_signal": float(std_ret) if std_ret is not None else None,
+                    "information_ratio": ir,
+                }
+        except Exception as exc:
+            logger.error("get_forward_test_stats failed for %s: %s", currency, exc)
+            return empty
+
+    def get_recent_onchain_history(
+        self,
+        currency: str,
+        metric_columns: List[str],
+        lookback_hours: int = 720,
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch recent front-month (nearest expiry) on-chain metric values
+        for z-score normalization in the forward-test harness.
+
+        Args:
+            currency: Currency symbol.
+            metric_columns: List of column names to fetch from
+                onchain_analysis_snapshots.
+            lookback_hours: How many hours of history to include (default 30d).
+
+        Returns:
+            List of dicts keyed by metric name, ordered oldest-first.
+        """
+        safe_cols = [
+            c for c in metric_columns
+            if c in {
+                "itm_put_oi_pct", "otm_put_oi_pct",
+                "itm_call_oi_pct", "otm_call_oi_pct",
+                "max_pain_distance_pct",
+            }
+        ]
+        vol_cols = [
+            c for c in metric_columns if c == "pc_far_otm_ratio"
+        ]
+
+        results = {}
+
+        if safe_cols:
+            col_list = ", ".join(safe_cols)
+            try:
+                with self._db_cursor() as cursor:
+                    cursor.execute(f"""
+                        SELECT snapshot_hour, {col_list}
+                        FROM onchain_analysis_snapshots
+                        WHERE currency = %s
+                          AND snapshot_hour >= NOW() - INTERVAL '1 hour' * %s
+                          AND expiration = (
+                              SELECT expiration
+                              FROM onchain_analysis_snapshots AS sub
+                              WHERE sub.currency = %s
+                                AND sub.snapshot_hour = onchain_analysis_snapshots.snapshot_hour
+                              ORDER BY sub.expiration ASC
+                              LIMIT 1
+                          )
+                        ORDER BY snapshot_hour ASC
+                    """, (currency, lookback_hours, currency))
+                    rows = cursor.fetchall()
+                    colnames = ["snapshot_hour"] + safe_cols
+                    for row in rows:
+                        d = dict(zip(colnames, row))
+                        h = d["snapshot_hour"]
+                        if h not in results:
+                            results[h] = {"snapshot_hour": h}
+                        results[h].update({k: float(v) if v is not None else None
+                                           for k, v in d.items() if k != "snapshot_hour"})
+            except Exception as exc:
+                logger.warning("get_recent_onchain_history (analysis) failed: %s", exc)
+
+        if vol_cols:
+            try:
+                with self._db_cursor() as cursor:
+                    cursor.execute("""
+                        SELECT snapshot_hour, pc_far_otm_ratio
+                        FROM onchain_volatility_snapshots
+                        WHERE currency = %s
+                          AND snapshot_hour >= NOW() - INTERVAL '1 hour' * %s
+                          AND expiration = (
+                              SELECT expiration
+                              FROM onchain_volatility_snapshots AS sub
+                              WHERE sub.currency = %s
+                                AND sub.snapshot_hour = onchain_volatility_snapshots.snapshot_hour
+                              ORDER BY sub.expiration ASC
+                              LIMIT 1
+                          )
+                        ORDER BY snapshot_hour ASC
+                    """, (currency, lookback_hours, currency))
+                    rows = cursor.fetchall()
+                    for row in rows:
+                        h = row[0]
+                        val = float(row[1]) if row[1] is not None else None
+                        if h not in results:
+                            results[h] = {"snapshot_hour": h}
+                        results[h]["pc_far_otm_ratio"] = val
+            except Exception as exc:
+                logger.warning("get_recent_onchain_history (vol) failed: %s", exc)
+
+        return sorted(results.values(), key=lambda x: x["snapshot_hour"])

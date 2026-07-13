@@ -1,0 +1,127 @@
+========================================================================
+PHASE 2 BLUEPRINT — ON-CHAIN METRIC EVALUATION
+Generated from 2026-03-16 00:00:00 to 2026-05-24 00:00:00 (search window)
+OOS holdout: 2026-05-24 00:00:00 to 2026-06-06 23:59:59
+FDR threshold: q=0.1  |  Non-overlapping subsample per horizon
+========================================================================
+
+------------------------------------------------------------------------
+  BTC
+------------------------------------------------------------------------
+
+  FDR-SIGNIFICANT SINGLE-METRIC SIGNALS (q=0.10):
+  Metric                       H        N       r         p WF_stab WF_val_r
+  ---------------------------- ---- ----- ------- --------- ------- --------
+  itm_put_oi_pct               1h    1656  -0.119  1.12e-06    0.75  -0.0752
+  otm_put_oi_pct               1h    1656  +0.119  1.12e-06    0.75  +0.0752
+  max_pain_distance_pct        1h    1656  -0.099  5.07e-05    0.75  -0.0698
+  otm_call_oi_pct              1h    1656  -0.095  1.10e-04    1.00  -0.0536
+  itm_call_oi_pct              1h    1656  +0.095  1.10e-04    1.00  +0.0536
+
+  NOTE — 1w horizon with NON-overlapping windows (N~12):
+    atm_iv                       n= 10  r=+nan  
+    skew_25d                     n= 10  r=+nan  
+    put_25d_iv                   n= 10  r=+nan  
+    call_25d_iv                  n= 10  r=+nan  
+    vwap_iv                      n= 10  r=+nan  
+    mark_iv_avg                  n= 10  r=+nan  
+    vrp_percentage               n= 10  r=+nan  
+    realized_vol                 n= 10  r=+nan  
+    iv_percentile_expiry         n=  9  r=+nan  
+    iv_percentile_365d           n= 10  r=+nan  
+    expected_daily_move          n= 10  r=+nan  
+    pc_atm_ratio                 n= 10  r=+nan  
+    pc_near_otm_ratio            n= 10  r=+nan  
+    pc_far_otm_ratio             n= 10  r=+nan  
+    max_pain_distance_pct        n= 10  r=+nan  
+    put_call_ratio_oi            n= 10  r=+nan  
+    put_call_ratio_volume        n= 10  r=+nan  
+    itm_call_oi_pct              n= 10  r=+nan  
+    otm_call_oi_pct              n= 10  r=+nan  
+    itm_put_oi_pct               n= 10  r=+nan  
+    otm_put_oi_pct               n= 10  r=+nan  
+  Compare against C2's overlapping '1w signal' — see if the
+  FDR survivors differ.  1w n<30 -&gt; treat as suggestive only.
+
+  PAIRWISE COMBINATIONS (OLS, non-overlapping):
+  Pair                                                 H      R2_is  R2_oos
+  ---------------------------------------------------- ---- ------- -------
+  itm_call_oi_pct+itm_put_oi_pct                       4h    0.0059  0.0243
+  otm_call_oi_pct+itm_put_oi_pct                       4h    0.0059  0.0243
+  otm_call_oi_pct+otm_put_oi_pct                       4h    0.0059  0.0243
+  itm_call_oi_pct+otm_put_oi_pct                       4h    0.0059  0.0243
+  itm_call_oi_pct+max_pain_distance_pct                4h    0.0032  0.0240
+  otm_call_oi_pct+max_pain_distance_pct                4h    0.0032  0.0240
+  itm_call_oi_pct+otm_call_oi_pct                      4h    0.0001  0.0240
+  itm_call_oi_pct+max_pain_distance_pct                1h    0.0110  0.0105
+  otm_call_oi_pct+max_pain_distance_pct                1h    0.0110  0.0105
+  max_pain_distance_pct+itm_put_oi_pct                 1h    0.0147  0.0154
+  itm_call_oi_pct+itm_put_oi_pct                       1h    0.0151  0.0123
+  itm_call_oi_pct+otm_put_oi_pct                       1h    0.0151  0.0123
+  otm_call_oi_pct+itm_put_oi_pct                       1h    0.0151  0.0123
+
+------------------------------------------------------------------------
+  ETH
+------------------------------------------------------------------------
+
+  FDR-SIGNIFICANT SINGLE-METRIC SIGNALS (q=0.10):
+  Metric                       H        N       r         p WF_stab WF_val_r
+  ---------------------------- ---- ----- ------- --------- ------- --------
+  pc_far_otm_ratio             1h    1649  -0.126  2.82e-07    1.00  -0.0671
+  max_pain_distance_pct        1h    1650  -0.121  7.73e-07    0.75  -0.0769
+  otm_call_oi_pct              1h    1650  -0.121  8.16e-07    1.00  -0.0778
+  itm_call_oi_pct              1h    1650  +0.121  8.16e-07    1.00  +0.0778
+  otm_put_oi_pct               1h    1650  +0.105  1.86e-05    1.00  +0.0823
+  itm_put_oi_pct               1h    1650  -0.105  1.86e-05    1.00  -0.0823
+
+  NOTE — 1w horizon with NON-overlapping windows (N~12):
+    atm_iv                       n= 10  r=+nan  
+    skew_25d                     n= 10  r=+nan  
+    put_25d_iv                   n= 10  r=+nan  
+    call_25d_iv                  n= 10  r=+nan  
+    vwap_iv                      n= 10  r=+nan  
+    mark_iv_avg                  n= 10  r=+nan  
+    vrp_percentage               n= 10  r=+nan  
+    realized_vol                 n= 10  r=+nan  
+    iv_percentile_expiry         n=  9  r=+nan  
+    iv_percentile_365d           n= 10  r=+nan  
+    expected_daily_move          n= 10  r=+nan  
+    pc_atm_ratio                 n= 10  r=+nan  
+    pc_near_otm_ratio            n= 10  r=+nan  
+    pc_far_otm_ratio             n= 10  r=+nan  
+    max_pain_distance_pct        n= 10  r=+nan  
+    put_call_ratio_oi            n= 10  r=+nan  
+    put_call_ratio_volume        n= 10  r=+nan  
+    itm_call_oi_pct              n= 10  r=+nan  
+    otm_call_oi_pct              n= 10  r=+nan  
+    itm_put_oi_pct               n= 10  r=+nan  
+    otm_put_oi_pct               n= 10  r=+nan  
+  Compare against C2's overlapping '1w signal' — see if the
+  FDR survivors differ.  1w n<30 -&gt; treat as suggestive only.
+
+  PAIRWISE COMBINATIONS (OLS, non-overlapping):
+  Pair                                                 H      R2_is  R2_oos
+  ---------------------------------------------------- ---- ------- -------
+  itm_call_oi_pct+max_pain_distance_pct                1h    0.0170  0.0132
+  itm_call_oi_pct+max_pain_distance_pct                4h    0.0044  0.0126
+  itm_call_oi_pct+pc_far_otm_ratio                     1h    0.0312  0.0329
+  otm_call_oi_pct+max_pain_distance_pct                1h    0.0170  0.0132
+  itm_call_oi_pct+otm_put_oi_pct                       1h    0.0164  0.0116
+  otm_call_oi_pct+itm_put_oi_pct                       4h    0.0022  0.0109
+  otm_call_oi_pct+pc_far_otm_ratio                     1h    0.0312  0.0329
+  max_pain_distance_pct+itm_put_oi_pct                 4h    0.0028  0.0132
+  max_pain_distance_pct+pc_far_otm_ratio               1h    0.0309  0.0362
+  max_pain_distance_pct+otm_put_oi_pct                 4h    0.0028  0.0132
+
+========================================================================
+RECOMMENDED PHASE 3 FEATURE SET:
+
+  Metrics that survive FDR correction AND walk-forward sign-stability
+  >= 0.60 are recommended for the Phase 3 forward-testing harness.
+
+  Exclude per C4 verdict (DO NOT include in Phase 3 until fixed):
+  - net_vanna, net_charm: formula corrected 2026-06-09 but DB values
+    are stale (pre-fix backfill). Re-backfill then re-evaluate.
+  - total_net_gex, total_net_dex: live collection bug fixed 2026-06-09;
+    historical data is hard-zero. Use going forward once data accumulates.
+========================================================================
