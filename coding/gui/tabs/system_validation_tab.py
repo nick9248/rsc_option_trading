@@ -1,12 +1,13 @@
 """
 System Validation Tab
 
-Provides GUI interface to run comprehensive system health checks including:
+Provides GUI interface to run system health checks reflecting the current
+data-collection + on-chain-analysis system:
 - API connectivity
-- Database health
-- Daemon status
-- Data freshness
-- Collection quality
+- Database health and required tables
+- Collection freshness and gaps (local DB, post-sync)
+- Forward-testing harness (Phase 3) track record
+- Historical data quality and coverage
 """
 
 import json
@@ -90,12 +91,11 @@ class SystemValidationTab(QWidget):
 
         # Description
         desc = QLabel(
-            "Run comprehensive checks on all system components:\n"
-            "• API connectivity and authentication\n"
-            "• Database tables and connections\n"
-            "• Data collection daemon status\n"
-            "• Data freshness and quality\n"
-            "• Historical data coverage"
+            "Run health checks on the data-collection + on-chain-analysis system:\n"
+            "• API connectivity and database tables\n"
+            "• Collection freshness and gaps (local DB, post-sync)\n"
+            "• Forward-testing harness (Phase 3) track record\n"
+            "• Historical trades quality and OHLCV/backfill coverage"
         )
         layout.addWidget(desc)
 
