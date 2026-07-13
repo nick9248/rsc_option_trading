@@ -18,7 +18,12 @@ _TIMEOUT_SEC = 15
 
 
 class DVOLFetcher:
-    """Fetches DVOL index values from Deribit for Gate 2 percentile calculation."""
+    """Fetches DVOL index values from Deribit and persists them to dvol_history.
+
+    Used by scripts/backfill_dvol_history.py (backfill) and indirectly by
+    IV percentile / expected-move calculations that read dvol_history via
+    DatabaseRepository.get_dvol_history / get_dvol_history_before.
+    """
 
     def _build_url(self, asset: str, start_ms: int, end_ms: int) -> str:
         if asset not in ("BTC", "ETH"):

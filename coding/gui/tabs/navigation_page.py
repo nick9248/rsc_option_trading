@@ -122,7 +122,7 @@ class NavigationPage(QWidget):
         """
         Args:
             module_defs: List of dicts with keys: index, icon, name, subtitle.
-                         Covers stack indices 1–11 (all active + placeholder modules).
+                         Covers stack indices 1–9 (all active + placeholder modules).
             failed_indices: Stack indices that should be shown as disabled.
                             Caller is responsible for including both service-failed indices
                             and any permanent placeholder indices.

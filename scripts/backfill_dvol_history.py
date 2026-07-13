@@ -24,7 +24,7 @@ from coding.core.logging.logging_setup import init_logging
 init_logging(level="INFO")
 
 import psycopg2
-from coding.service.strategy.otm.fetchers.dvol_fetcher import DVOLFetcher
+from coding.service.deribit.dvol_fetcher import DVOLFetcher
 
 logger = logging.getLogger(__name__)
 

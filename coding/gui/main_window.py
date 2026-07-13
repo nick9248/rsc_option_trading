@@ -26,38 +26,31 @@ from coding.gui.tabs.api_connection_tab import ApiConnectionTab
 from coding.gui.tabs.snapshot_tab import SnapshotTab
 from coding.gui.tabs.on_chain_analysis_tab import OnChainAnalysisTab
 from coding.gui.tabs.database_tab import DatabaseTab
-from coding.gui.tabs.strategy_tab import StrategyTab
 from coding.gui.tabs.regime_tab import RegimeTab
 from coding.gui.tabs.system_validation_tab import SystemValidationTab
-from coding.gui.tabs.special_strategies_tab import SpecialStrategiesTab
-from coding.core.database.repository import DatabaseRepository
-from coding.service.deribit.deribit_api_service import DeribitApiService
-from coding.service.on_chain.on_chain_analysis_service import OnChainAnalysisService
 
 
 logger = logging.getLogger(__name__)
 
-# Stack indices 1–8 are active modules. 9–11 are placeholder modules.
+# Stack indices 1–6 are active modules. 7–9 are placeholder modules.
 # NavigationPage is index 0 (not counted in position indicator).
 MODULE_DEFS: list[dict] = [
     {"index": 1,  "icon": "🔗", "name": "API Connection",    "subtitle": "Test endpoints"},
     {"index": 2,  "icon": "📸", "name": "Snapshot",          "subtitle": "Option chain capture"},
     {"index": 3,  "icon": "⛓",  "name": "On Chain Analysis", "subtitle": "GEX · DEX · Max Pain"},
     {"index": 4,  "icon": "🗄",  "name": "Database",          "subtitle": "Capture & sync"},
-    {"index": 5,  "icon": "♟",  "name": "Strategies",        "subtitle": "Evaluate & rank"},
-    {"index": 6,  "icon": "🎯", "name": "Special Strategies", "subtitle": "OTM finder"},
-    {"index": 7,  "icon": "📊", "name": "Market Regime",     "subtitle": "Bull · Bear · Neutral"},
-    {"index": 8,  "icon": "✅", "name": "System Health",     "subtitle": "Diagnostics"},
-    {"index": 9,  "icon": "📈", "name": "Market Data",       "subtitle": "Coming soon"},
-    {"index": 10, "icon": "💹", "name": "Trading",           "subtitle": "Coming soon"},
-    {"index": 11, "icon": "🧮", "name": "Analytics",         "subtitle": "Coming soon"},
+    {"index": 5,  "icon": "📊", "name": "Market Regime",     "subtitle": "Bull · Bear · Neutral"},
+    {"index": 6,  "icon": "✅", "name": "System Health",     "subtitle": "Diagnostics"},
+    {"index": 7,  "icon": "📈", "name": "Market Data",       "subtitle": "Coming soon"},
+    {"index": 8,  "icon": "💹", "name": "Trading",           "subtitle": "Coming soon"},
+    {"index": 9,  "icon": "🧮", "name": "Analytics",         "subtitle": "Coming soon"},
 ]
 
 # Last active module index (used for wrap-around navigation)
-_LAST_ACTIVE = 8
+_LAST_ACTIVE = 6
 
 # Stack indices that are permanent placeholders (never active modules)
-_PLACEHOLDER_INDICES = {9, 10, 11}
+_PLACEHOLDER_INDICES = {7, 8, 9}
 
 
 class MainWindow(QMainWindow):
@@ -66,7 +59,7 @@ class MainWindow(QMainWindow):
 
     Layout:
         top_bar (fixed 36px)  —  logo | position_label | [← Prev][⌂ Home][Next →]
-        stack (QStackedWidget) — index 0: NavigationPage, 1–11: module tabs
+        stack (QStackedWidget) — index 0: NavigationPage, 1–9: module tabs
     """
 
     def __init__(self):
@@ -177,43 +170,13 @@ class MainWindow(QMainWindow):
         # Index 4: Database
         self.stack.addWidget(DatabaseTab())
 
-        # Index 5: Strategies
-        try:
-            api_service = DeribitApiService()
-            repository = DatabaseRepository()
-            self.stack.addWidget(StrategyTab(api_service, repository))
-        except Exception as exc:
-            logger.error("Failed to initialize Strategies tab: %s", exc)
-            self.stack.addWidget(self._placeholder_widget("Strategy evaluation unavailable"))
-            failed_indices.add(5)
-
-        # Index 6: Special Strategies
-        try:
-            from coding.core.strategy.otm.models.otm_config import OTMConfig
-            from coding.service.strategy.otm.otm_finder_service import OTMFinderService
-            _api = DeribitApiService()
-            _repo = DatabaseRepository()
-            _on_chain = OnChainAnalysisService(_api, _repo)
-            _config = OTMConfig(risk_budget_usd=10_000.0)
-            _otm = OTMFinderService(
-                config=_config,
-                deribit_service=_api,
-                on_chain_service=_on_chain,
-                repository=_repo,
-            )
-            self.stack.addWidget(SpecialStrategiesTab(finder_service=_otm, otm_config=_config))
-        except Exception as exc:
-            logger.error("Failed to initialize Special Strategies tab: %s", exc)
-            self.stack.addWidget(self._placeholder_widget("Special strategies unavailable"))
-            failed_indices.add(6)
-
-        # Index 7: Market Regime
+        # Index 5: Market Regime
         self.stack.addWidget(RegimeTab())
 
-        # Index 8: System Health
+        # Index 6: System Health
         self.stack.addWidget(SystemValidationTab())
 
-        # Indices 9–11: Future placeholders
+        # Indices 7–9: Future placeholders
         self.stack.addWidget(self._placeholder_widget("Market data visualization coming soon…"))
         self.stack.addWidget(self._placeholder_widget("Trading interface coming soon…"))
         self.stack.addWidget(self._placeholder_widget("Analytics dashboard coming soon…"))
@@ -258,8 +221,8 @@ class MainWindow(QMainWindow):
         Keep top bar in sync with the current stack page.
 
         Nav buttons (Prev / Home / Next) are hidden on the home page and
-        shown inside any module. Position label shows "{index} / 8" and is
-        hidden on home.
+        shown inside any module. Position label shows "{index} / {_LAST_ACTIVE}"
+        and is hidden on home.
         """
         on_home = (index == 0)
         self.position_label.setVisible(not on_home)

@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import patch, MagicMock
 from datetime import datetime, timezone
-from coding.service.strategy.otm.fetchers.dvol_fetcher import DVOLFetcher
+from coding.service.deribit.dvol_fetcher import DVOLFetcher
 
 
 @pytest.fixture
@@ -58,7 +58,7 @@ def test_build_url_invalid_asset(fetcher):
         fetcher._build_url("SOL", 0, 1)
 
 
-@patch("coding.service.strategy.otm.fetchers.dvol_fetcher.requests.get")
+@patch("coding.service.deribit.dvol_fetcher.requests.get")
 def test_fetch_latest_returns_float_on_success(mock_get, fetcher):
     mock_get.return_value = MagicMock(
         status_code=200,
@@ -69,14 +69,14 @@ def test_fetch_latest_returns_float_on_success(mock_get, fetcher):
     assert result == 62.5
 
 
-@patch("coding.service.strategy.otm.fetchers.dvol_fetcher.requests.get")
+@patch("coding.service.deribit.dvol_fetcher.requests.get")
 def test_fetch_latest_returns_none_on_http_error(mock_get, fetcher):
     mock_get.return_value = MagicMock(status_code=500)
     result = fetcher.fetch_latest("BTC")
     assert result is None
 
 
-@patch("coding.service.strategy.otm.fetchers.dvol_fetcher.requests.get")
+@patch("coding.service.deribit.dvol_fetcher.requests.get")
 def test_fetch_history_returns_list(mock_get, fetcher):
     # Response with no continuation token — single batch, no pagination loop
     response_data = _mock_deribit_response([50.0, 55.0, 60.0])

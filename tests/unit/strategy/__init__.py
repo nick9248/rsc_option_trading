@@ -1,1 +1,0 @@
-"""Strategy unit tests package."""
