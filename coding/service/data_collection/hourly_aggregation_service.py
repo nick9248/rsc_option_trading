@@ -20,7 +20,7 @@ from typing import Dict, List, Optional
 
 from coding.core.analytics.black_scholes_calculator import BlackScholesCalculator
 from coding.core.database.repository import DatabaseRepository
-from coding.core.ml.models.snapshot_models import GreeksData, HourlySnapshotData
+from coding.core.schemas.snapshot_models import GreeksData, HourlySnapshotData
 
 logger = logging.getLogger(__name__)
 

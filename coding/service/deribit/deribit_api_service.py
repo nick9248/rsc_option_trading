@@ -590,7 +590,8 @@ class DeribitApiService:
 
     def get_book_summary_by_currency(self, asset: str) -> List[Dict[str, Any]]:
         """
-        Get the full options chain for an asset, normalized for OTMFinderService.
+        Get the full options chain for an asset, normalized with parsed
+        contract fields and enriched Greeks.
 
         Wraps get_book_summary() and enriches each entry with:
           - strike, expiry, dte, option_type (parsed from instrument_name)
