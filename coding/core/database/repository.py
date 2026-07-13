@@ -1710,6 +1710,11 @@ class DatabaseRepository:
         resistance_1 = resistance_levels[0] if resistance_levels else {}
         support_1 = support_levels[0] if support_levels else {}
 
+        # key_levels call_resistance/put_support are dicts ({"strike", "net_gex"})
+        # when greeks are non-zero; the table stores only the strike scalar
+        call_resistance = key_levels.get("call_resistance") or {}
+        put_support = key_levels.get("put_support") or {}
+
         volume_stats_call = volume_stats.get("total_call_volume", 0)
         volume_stats_put = volume_stats.get("total_put_volume", 0)
         put_call_ratio_volume = (
@@ -1773,7 +1778,7 @@ class DatabaseRepository:
                 put_call.get("ratio"), put_call_ratio_volume,
                 put_call.get("total_call_oi"), put_call.get("total_put_oi"),
                 gex_dex_data.get("total_net_gex"), gex_dex_data.get("total_net_dex"),
-                key_levels.get("call_resistance"), key_levels.get("put_support"), key_levels.get("hvl"),
+                call_resistance.get("strike"), put_support.get("strike"), key_levels.get("hvl"),
                 resistance_1.get("strike"), resistance_1.get("call_oi"),
                 support_1.get("strike"), support_1.get("put_oi"),
                 volume_stats.get("total_volume"),
