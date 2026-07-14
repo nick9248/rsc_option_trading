@@ -16,8 +16,10 @@ Nobel-level architecture:
 """
 
 import logging
+import os
 import signal
 import sys
+import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -46,6 +48,11 @@ class CollectionDaemon:
     - Graceful shutdown on system stop
     - Self-healing on errors
     """
+
+    # Bounded grace period (seconds) given to an in-flight collection cycle
+    # to finish naturally during shutdown before we force-terminate the
+    # process. See _shutdown() for why a hard-exit fallback is necessary here.
+    SHUTDOWN_GRACE_SECONDS = 60
 
     def __init__(
         self,
@@ -401,7 +408,28 @@ class CollectionDaemon:
         self._shutdown()
 
     def _shutdown(self):
-        """Graceful shutdown sequence."""
+        """
+        Graceful shutdown sequence.
+
+        Root cause of the historical shutdown hang (required `kill -9` on the
+        VPS despite this method completing and logging "Shutdown complete.
+        Goodbye!"): APScheduler's default executor runs jobs on a
+        `concurrent.futures.ThreadPoolExecutor`. That module registers a
+        process-wide, UNCONDITIONAL, no-timeout thread-join
+        (`threading._register_atexit(_python_exit)` in
+        Lib/concurrent/futures/thread.py) that runs during interpreter
+        finalization -- it joins every worker thread the pool has ever
+        spawned, regardless of the `wait` flag passed to
+        `scheduler.shutdown()` and regardless of the worker thread's daemon
+        flag. If a collection cycle (`_run_collection`) is still executing
+        in that worker thread when SIGTERM arrives, `sys.exit(0)` below
+        raises SystemExit and unwinds the main thread fine, but the process
+        does not actually terminate until the in-flight job finishes --
+        potentially indefinitely if it is blocked on a slow/stuck network or
+        DB call. Confirmed empirically: a scheduled job sleeping 8s caused
+        the process to hang ~8s past `sys.exit(0)` even with
+        `scheduler.shutdown(wait=False)`.
+        """
         logger.info(f"\n{'='*60}")
         logger.info(f"DAEMON SHUTTING DOWN")
         logger.info(f"{'='*60}")
@@ -419,6 +447,20 @@ class CollectionDaemon:
 
         logger.info(f"Shutdown complete. Goodbye!")
         logger.info(f"{'='*60}\n")
+
+        # Give any in-flight collection job a bounded grace period to finish
+        # naturally (this is the "proper" shutdown path -- scheduler.shutdown()
+        # above already stopped new jobs from being scheduled). If it hasn't
+        # finished within SHUTDOWN_GRACE_SECONDS, force-terminate at the OS
+        # level: os._exit() does not run atexit handlers and does not wait on
+        # any thread, so it bypasses concurrent.futures.thread's unconditional
+        # atexit join described above. This watchdog thread is a plain
+        # threading.Timer (not a ThreadPoolExecutor worker), so it is exempt
+        # from that same atexit join and fires independently even while the
+        # main thread is stuck waiting on it.
+        watchdog = threading.Timer(self.SHUTDOWN_GRACE_SECONDS, os._exit, args=(0,))
+        watchdog.daemon = True
+        watchdog.start()
 
         sys.exit(0)
 

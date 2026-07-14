@@ -20,6 +20,7 @@ from coding.core.database.repository import DatabaseRepository
 from coding.service.data_collection.hourly_aggregation_service import HourlyAggregationService
 from coding.service.deribit.deribit_api_service import DeribitApiService
 from coding.service.on_chain.forward_testing_harness import ForwardTestingHarness
+from coding.service.on_chain.volatility_reconstruction_service import VolatilityReconstructionService
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,7 @@ class ProspectiveCollector:
         self.repo = repository or DatabaseRepository()
         self.aggregation_service = HourlyAggregationService(repository=self.repo)
         self._forward_harness = ForwardTestingHarness(repository=self.repo)
+        self._volatility_reconstruction = VolatilityReconstructionService(repository=self.repo)
 
         logger.info("ProspectiveCollector initialized")
 
@@ -147,6 +149,27 @@ class ProspectiveCollector:
             except Exception as e:
                 logger.error(f"  Aggregation failed: {e}")
                 result["aggregation"] = {"error": str(e)}
+
+            # Reconstruct volatility-surface/VRP/percentile metrics for this hour so
+            # onchain_volatility_snapshots stays current going forward (previously
+            # only populated by the one-off scripts/backfill_volatility_reconstruction.py).
+            # Depends on hourly_snapshots for this hour, hence runs after aggregation above.
+            # Wrapped per-currency so one failure never breaks collection or another currency.
+            logger.info(f"\nRunning volatility reconstruction for hour {hour}...")
+            reconstruction_summary = {}
+            for currency in currencies:
+                try:
+                    recon_result = self._volatility_reconstruction.reconstruct_range(
+                        currency=currency,
+                        start=hour,
+                        end=hour,
+                    )
+                    reconstruction_summary[currency] = recon_result
+                    logger.info(f"  {currency} volatility reconstruction: {recon_result}")
+                except Exception as e:
+                    logger.warning(f"  Volatility reconstruction failed for {currency}: {e}")
+                    reconstruction_summary[currency] = {"error": str(e)}
+            result["volatility_reconstruction"] = reconstruction_summary
 
         return result
 

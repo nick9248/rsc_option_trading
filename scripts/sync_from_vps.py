@@ -137,6 +137,18 @@ SYNC_TABLES = [
         "watermark_type": "timestamp",
         "conflict_target": None,
     },
+    {
+        "name": "onchain_volatility_snapshots",
+        "watermark_col": "reconstructed_at",
+        "watermark_type": "timestamp",
+        "conflict_target": "(snapshot_hour, currency, expiration) DO NOTHING",
+    },
+    {
+        "name": "forward_test_predictions",
+        "watermark_col": "created_at",
+        "watermark_type": "timestamp",
+        "conflict_target": "(currency, snapshot_hour) DO NOTHING",
+    },
 ]
 
 
