@@ -7,7 +7,7 @@ Provides methods to save and retrieve data from PostgreSQL tables.
 import json
 import logging
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from coding.core.database.config import ConnectionPool, DatabaseConfig
@@ -906,31 +906,48 @@ class DatabaseRepository:
             logger.info(f"Saved regime detection: {currency} - {regime_data.get('regime')} (ID: {row_id})")
             return row_id
 
-    def get_unaggregated_hours(self, currency: str) -> List[datetime]:
+    def get_unaggregated_hours(
+        self,
+        currency: str,
+        lookback_hours: int = 168
+    ) -> List[datetime]:
         """
         Find hours that have trades but no hourly snapshots.
 
         This is used by HourlyAggregationService to discover gaps.
 
+        The scan is bounded to the last `lookback_hours` so the query stays
+        O(recent window) instead of rescanning the full, ever-growing trades
+        table every collection cycle (unbounded, this took minutes on the VPS
+        and stalled the pipeline). Gaps older than the window are filled
+        manually via scripts/aggregate_hourly_snapshots.py.
+
         Args:
             currency: Currency symbol (BTC, ETH).
+            lookback_hours: How far back to scan for gaps (default 7 days).
 
         Returns:
             List of datetime objects representing hour buckets that need aggregation.
         """
+        lookback_ms = int(
+            (datetime.now(timezone.utc) - timedelta(hours=lookback_hours)).timestamp() * 1000
+        )
         with self._db_cursor() as cursor:
             cursor.execute("""
                 SELECT DISTINCT
-                    date_trunc('hour', to_timestamp(trade_timestamp / 1000.0)) as hour_bucket
-                FROM historical_trades
-                WHERE currency = %s
-                  AND date_trunc('hour', to_timestamp(trade_timestamp / 1000.0)) NOT IN (
-                      SELECT DISTINCT snapshot_hour
-                      FROM hourly_snapshots
-                      WHERE currency = %s
+                    date_trunc('hour', to_timestamp(t.trade_timestamp / 1000.0)) as hour_bucket
+                FROM historical_trades t
+                WHERE t.currency = %s
+                  AND t.trade_timestamp >= %s
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM hourly_snapshots h
+                      WHERE h.currency = %s
+                        AND h.snapshot_hour =
+                            date_trunc('hour', to_timestamp(t.trade_timestamp / 1000.0))
                   )
                 ORDER BY hour_bucket
-            """, (currency, currency))
+            """, (currency, lookback_ms, currency))
 
             return [row[0] for row in cursor.fetchall()]
 
