@@ -5,13 +5,8 @@ from coding.core.analytics.chart_generator import generate_flow_trend_chart, gen
 
 
 def _mock_repo(rows):
-    mock_cursor = MagicMock()
-    mock_cursor.fetchall.return_value = rows
-    mock_ctx = MagicMock()
-    mock_ctx.__enter__ = MagicMock(return_value=mock_cursor)
-    mock_ctx.__exit__ = MagicMock(return_value=False)
     repo = MagicMock()
-    repo._db_cursor.return_value = mock_ctx
+    repo.get_hourly_flow_volumes.return_value = rows
     return repo
 
 
@@ -31,25 +26,21 @@ def test_trend_chart_specific_expiration_title():
     assert "27MAR26" in fig.layout.title.text
 
 
-def test_trend_chart_all_expirations_uses_fewer_query_params():
-    """When expiration=None, query must NOT pass expiration as a param."""
+def test_trend_chart_delegates_to_repository():
+    """The chart must fetch data via the public repository method."""
+    repo = _mock_repo([])
+    generate_flow_trend_chart(repo, "BTC", expiration="27MAR26", trade_filter="block")
+    kwargs = repo.get_hourly_flow_volumes.call_args.kwargs
+    assert kwargs["currency"] == "BTC"
+    assert kwargs["expiration"] == "27MAR26"
+    assert kwargs["trade_filter"] == "block"
+
+
+def test_trend_chart_all_expirations_passes_none():
+    """When expiration=None, None is forwarded to the repository."""
     repo = _mock_repo([])
     generate_flow_trend_chart(repo, "BTC", expiration=None)
-    # The cursor's execute call should have been called with 3 params (currency, start_ts, end_ts)
-    # not 4 (which would include expiration)
-    call_args = repo._db_cursor.return_value.__enter__.return_value.execute.call_args
-    params = call_args[0][1]  # second positional arg to execute() is the params tuple
-    assert len(params) == 3, f"Expected 3 params for all-expiration mode, got {len(params)}: {params}"
-
-
-def test_trend_chart_specific_expiration_uses_four_query_params():
-    """When expiration is given, query must pass 4 params including expiration."""
-    repo = _mock_repo([])
-    generate_flow_trend_chart(repo, "BTC", expiration="27MAR26")
-    call_args = repo._db_cursor.return_value.__enter__.return_value.execute.call_args
-    params = call_args[0][1]
-    assert len(params) == 4, f"Expected 4 params for specific expiration, got {len(params)}: {params}"
-    assert "27MAR26" in params
+    assert repo.get_hourly_flow_volumes.call_args.kwargs["expiration"] is None
 
 
 # ── Net Flow Chart Tests ──────────────────────────────────────────────────────
@@ -140,79 +131,5 @@ def test_net_flow_chart_barmode():
     assert fig.layout.barmode == "group"
 
 
-# ── trade_filter Tests ────────────────────────────────────────────────────────
-
-def test_trend_chart_block_filter_injects_sql():
-    """Block filter must inject the block clause into the trend chart SQL."""
-    captured_queries = []
-
-    class FakeCursor:
-        def execute(self, query, params):
-            captured_queries.append(query)
-        def fetchall(self):
-            return []
-        def __enter__(self): return self
-        def __exit__(self, *args): pass
-
-    repo = MagicMock()
-    repo._db_cursor.return_value = FakeCursor()
-
-    generate_flow_trend_chart(
-        repository=repo,
-        currency="BTC",
-        expiration="27MAR26",
-        trade_filter="block",
-    )
-
-    assert len(captured_queries) == 1
-    assert "(amount * index_price) >= 100000" in captured_queries[0]
-
-
-def test_trend_chart_non_block_filter_injects_sql():
-    """Non-block filter must inject the non-block clause."""
-    captured_queries = []
-
-    class FakeCursor:
-        def execute(self, query, params):
-            captured_queries.append(query)
-        def fetchall(self):
-            return []
-        def __enter__(self): return self
-        def __exit__(self, *args): pass
-
-    repo = MagicMock()
-    repo._db_cursor.return_value = FakeCursor()
-
-    generate_flow_trend_chart(
-        repository=repo,
-        currency="BTC",
-        expiration="27MAR26",
-        trade_filter="non_block",
-    )
-
-    assert "(amount * index_price) < 100000" in captured_queries[0]
-
-
-def test_trend_chart_all_filter_no_block_clause():
-    """Default 'all' filter must NOT inject any block clause."""
-    captured_queries = []
-
-    class FakeCursor:
-        def execute(self, query, params):
-            captured_queries.append(query)
-        def fetchall(self):
-            return []
-        def __enter__(self): return self
-        def __exit__(self, *args): pass
-
-    repo = MagicMock()
-    repo._db_cursor.return_value = FakeCursor()
-
-    generate_flow_trend_chart(
-        repository=repo,
-        currency="BTC",
-        expiration="27MAR26",
-        trade_filter="all",
-    )
-
-    assert "(amount * index_price)" not in captured_queries[0]
+# trade_filter SQL-clause tests live in tests/unit/test_repository_hourly_flow_volumes.py
+# since the query moved into DatabaseRepository.get_hourly_flow_volumes.

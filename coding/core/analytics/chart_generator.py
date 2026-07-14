@@ -500,51 +500,13 @@ def generate_flow_trend_chart(
     start_ts = int(start_time.timestamp() * 1000)
     end_ts = int(end_time.timestamp() * 1000)
 
-    filter_clause = {
-        "block":     "AND (amount * index_price) >= 100000",
-        "non_block": "AND (amount * index_price) < 100000",
-    }.get(trade_filter, "")
-
-    # Query hourly aggregated data
-    if expiration:
-        query = f"""
-            SELECT
-                DATE_TRUNC('hour', TO_TIMESTAMP(trade_timestamp / 1000)) AS hour,
-                option_type,
-                direction,
-                SUM(amount) AS total_volume
-            FROM historical_trades
-            WHERE currency = %s
-                AND expiration = %s
-                AND trade_timestamp >= %s
-                AND trade_timestamp <= %s
-                AND direction IS NOT NULL
-                {filter_clause}
-            GROUP BY hour, option_type, direction
-            ORDER BY hour ASC
-        """
-        params = (currency, expiration, start_ts, end_ts)
-    else:
-        query = f"""
-            SELECT
-                DATE_TRUNC('hour', TO_TIMESTAMP(trade_timestamp / 1000)) AS hour,
-                option_type,
-                direction,
-                SUM(amount) AS total_volume
-            FROM historical_trades
-            WHERE currency = %s
-                AND trade_timestamp >= %s
-                AND trade_timestamp <= %s
-                AND direction IS NOT NULL
-                {filter_clause}
-            GROUP BY hour, option_type, direction
-            ORDER BY hour ASC
-        """
-        params = (currency, start_ts, end_ts)
-
-    with repository._db_cursor() as cursor:
-        cursor.execute(query, params)
-        results = cursor.fetchall()
+    results = repository.get_hourly_flow_volumes(
+        currency=currency,
+        start_ts=start_ts,
+        end_ts=end_ts,
+        expiration=expiration,
+        trade_filter=trade_filter,
+    )
 
     if not results:
         logger.warning(f"No hourly flow data for {currency} {display_label}")

@@ -974,8 +974,9 @@ class OnChainAnalysisService:
         Fetch previous DB snapshots per expiration for trend comparison.
 
         Requires repository. Silently skipped when repository is None.
-        Each expiration gets the oldest of the 2 most-recent DB records
-        as its "previous" value to compare against live API data.
+        Each expiration gets the oldest of the 2 most-recent hourly
+        onchain_analysis_snapshots as its "previous" value to compare
+        against live API data.
 
         Args:
             analyzer: OnChainAnalyzer with parsed data.
@@ -988,41 +989,30 @@ class OnChainAnalysisService:
 
         for expiration in analyzer.get_expirations():
             try:
-                mp_history = self.repository.get_max_pain_history(
+                history = self.repository.get_onchain_snapshot_history(
                     analyzer.currency, expiration, limit=2
                 )
-                oi_history = self.repository.get_open_interest_history(
-                    analyzer.currency, expiration, limit=2
-                )
-                vol_history = self.repository.get_volume_history(
-                    analyzer.currency, expiration, limit=2
-                )
+                prev = history[0] if history else None
 
-                prev_mp = mp_history[0] if mp_history else None
-                prev_oi = oi_history[0] if oi_history else None
-                prev_vol = vol_history[0] if vol_history else None
-
-                if not any([prev_mp, prev_oi, prev_vol]):
+                if prev is None:
                     analyzer.set_trend_data(expiration, None)
                     continue
 
                 trend: Dict[str, Any] = {}
-                if prev_mp:
-                    trend["max_pain_strike"] = float(prev_mp["max_pain_strike"])
-                if prev_oi:
-                    trend["call_oi"] = float(prev_oi["total_call_oi"])
-                    trend["put_oi"] = float(prev_oi["total_put_oi"])
-                    pc = prev_oi.get("put_call_ratio")
-                    trend["pc_ratio"] = float(pc) if pc is not None else None
-                if prev_vol:
-                    trend["total_volume"] = (
-                        float(prev_vol["total_call_volume"])
-                        + float(prev_vol["total_put_volume"])
-                    )
-                    vr = prev_vol.get("volume_put_call_ratio")
-                    trend["volume_ratio"] = float(vr) if vr is not None else None
+                if prev["max_pain_strike"] is not None:
+                    trend["max_pain_strike"] = float(prev["max_pain_strike"])
+                if prev["total_call_oi"] is not None:
+                    trend["call_oi"] = float(prev["total_call_oi"])
+                if prev["total_put_oi"] is not None:
+                    trend["put_oi"] = float(prev["total_put_oi"])
+                pc = prev["put_call_ratio_oi"]
+                trend["pc_ratio"] = float(pc) if pc is not None else None
+                if prev["total_volume"] is not None:
+                    trend["total_volume"] = float(prev["total_volume"])
+                vr = prev["put_call_ratio_volume"]
+                trend["volume_ratio"] = float(vr) if vr is not None else None
 
-                analyzer.set_trend_data(expiration, trend)
+                analyzer.set_trend_data(expiration, trend if trend else None)
 
             except Exception as e:
                 logger.warning(f"Failed to fetch trend data for {expiration}: {e}")

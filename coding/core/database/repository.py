@@ -167,105 +167,6 @@ class DatabaseRepository:
             logger.error(f"Failed to save snapshot: {e}")
             raise
 
-    def get_max_pain_history(
-        self,
-        currency: str,
-        expiration: str,
-        limit: int = 100
-    ) -> List[Dict[str, Any]]:
-        """
-        Get max pain history for an expiration.
-
-        Args:
-            currency: Currency symbol.
-            expiration: Expiration date string.
-            limit: Maximum number of records to return.
-
-        Returns:
-            List of max pain records ordered by captured_at.
-        """
-        with self._db_cursor() as cursor:
-            cursor.execute("""
-                SELECT captured_at, max_pain_strike, underlying_price,
-                       distance_from_price, distance_percent
-                FROM max_pain
-                WHERE currency = %s AND expiration = %s
-                ORDER BY captured_at DESC
-                LIMIT %s
-            """, (currency, expiration, limit))
-
-            columns = ["captured_at", "max_pain_strike", "underlying_price",
-                       "distance_from_price", "distance_percent"]
-            results = [dict(zip(columns, row)) for row in cursor.fetchall()]
-
-            return list(reversed(results))  # Return in chronological order
-
-    def get_open_interest_history(
-        self,
-        currency: str,
-        expiration: str,
-        limit: int = 100
-    ) -> List[Dict[str, Any]]:
-        """
-        Get open interest history for an expiration.
-
-        Args:
-            currency: Currency symbol.
-            expiration: Expiration date string.
-            limit: Maximum number of records to return.
-
-        Returns:
-            List of OI records ordered by captured_at.
-        """
-        with self._db_cursor() as cursor:
-            cursor.execute("""
-                SELECT captured_at, total_call_oi, total_put_oi,
-                       total_oi, put_call_ratio, underlying_price
-                FROM open_interest
-                WHERE currency = %s AND expiration = %s
-                ORDER BY captured_at DESC
-                LIMIT %s
-            """, (currency, expiration, limit))
-
-            columns = ["captured_at", "total_call_oi", "total_put_oi",
-                       "total_oi", "put_call_ratio", "underlying_price"]
-            results = [dict(zip(columns, row)) for row in cursor.fetchall()]
-
-            return list(reversed(results))
-
-    def get_volume_history(
-        self,
-        currency: str,
-        expiration: str,
-        limit: int = 100
-    ) -> List[Dict[str, Any]]:
-        """
-        Get volume history for an expiration.
-
-        Args:
-            currency: Currency symbol.
-            expiration: Expiration date string.
-            limit: Maximum number of records to return.
-
-        Returns:
-            List of volume records ordered by captured_at.
-        """
-        with self._db_cursor() as cursor:
-            cursor.execute("""
-                SELECT captured_at, total_call_volume, total_put_volume,
-                       total_volume, volume_put_call_ratio, underlying_price
-                FROM volume
-                WHERE currency = %s AND expiration = %s
-                ORDER BY captured_at DESC
-                LIMIT %s
-            """, (currency, expiration, limit))
-
-            columns = ["captured_at", "total_call_volume", "total_put_volume",
-                       "total_volume", "volume_put_call_ratio", "underlying_price"]
-            results = [dict(zip(columns, row)) for row in cursor.fetchall()]
-
-            return list(reversed(results))
-
     def get_unaggregated_hours(
         self,
         currency: str,
@@ -443,6 +344,107 @@ class DatabaseRepository:
             ]
 
             return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+    def get_hourly_flow_volumes(
+        self,
+        currency: str,
+        start_ts: int,
+        end_ts: int,
+        expiration: Optional[str] = None,
+        trade_filter: str = "all",
+    ) -> List[tuple]:
+        """
+        Fetch hourly-bucketed traded volume split by option type and direction.
+
+        Used by chart_generator.generate_flow_trend_chart.
+
+        Args:
+            currency: Currency symbol (BTC or ETH).
+            start_ts: Window start, epoch milliseconds.
+            end_ts: Window end, epoch milliseconds.
+            expiration: Optional expiration filter (e.g., "27MAR26").
+                None aggregates across all expirations.
+            trade_filter: "all" (no filter), "block" (notional >= $100k), or
+                "non_block" (notional < $100k).
+
+        Returns:
+            List of (hour, option_type, direction, total_volume) tuples
+            ordered by hour ascending.
+        """
+        filter_clause = {
+            "block":     "AND (amount * index_price) >= 100000",
+            "non_block": "AND (amount * index_price) < 100000",
+        }.get(trade_filter, "")
+
+        expiration_clause = "AND expiration = %s" if expiration else ""
+        params = (
+            (currency, expiration, start_ts, end_ts)
+            if expiration
+            else (currency, start_ts, end_ts)
+        )
+
+        query = f"""
+            SELECT
+                DATE_TRUNC('hour', TO_TIMESTAMP(trade_timestamp / 1000)) AS hour,
+                option_type,
+                direction,
+                SUM(amount) AS total_volume
+            FROM historical_trades
+            WHERE currency = %s
+                {expiration_clause}
+                AND trade_timestamp >= %s
+                AND trade_timestamp <= %s
+                AND direction IS NOT NULL
+                {filter_clause}
+            GROUP BY hour, option_type, direction
+            ORDER BY hour ASC
+        """
+
+        with self._db_cursor() as cursor:
+            cursor.execute(query, params)
+            return cursor.fetchall()
+
+    def get_onchain_snapshot_history(
+        self,
+        currency: str,
+        expiration: str,
+        limit: int = 2
+    ) -> List[Dict[str, Any]]:
+        """
+        Get recent on-chain analysis snapshots for an expiration.
+
+        Replaces the legacy max_pain/open_interest/volume history readers —
+        those tables are frozen (writers removed 2026-07-13); the daemon
+        writes the same metrics hourly into onchain_analysis_snapshots.
+
+        Args:
+            currency: Currency symbol.
+            expiration: Expiration date string (e.g., "27MAR26").
+            limit: Number of most-recent snapshots to return.
+
+        Returns:
+            List of snapshot dicts in chronological order (oldest first) with
+            keys: snapshot_hour, max_pain_strike, total_call_oi, total_put_oi,
+            put_call_ratio_oi, total_volume, put_call_ratio_volume,
+            underlying_price.
+        """
+        columns = [
+            "snapshot_hour", "max_pain_strike", "total_call_oi",
+            "total_put_oi", "put_call_ratio_oi", "total_volume",
+            "put_call_ratio_volume", "underlying_price"
+        ]
+        with self._db_cursor() as cursor:
+            cursor.execute(f"""
+                SELECT {', '.join(columns)}
+                FROM onchain_analysis_snapshots
+                WHERE currency = %s AND expiration = %s
+                ORDER BY snapshot_hour DESC
+                LIMIT %s
+            """, (currency, expiration, limit))
+
+            results = [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+            return list(reversed(results))  # Chronological order
 
     def get_latest_snapshot_oi(
         self,
