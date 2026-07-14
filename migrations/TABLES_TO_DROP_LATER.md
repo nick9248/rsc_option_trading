@@ -10,9 +10,11 @@ explicit user decision, per this repo's CLAUDE.md rules and the cleanup spec
 
 - `strategy_signals` (migrations 001, 002) - scored strategy evaluation output.
   No writer remains after `coding/core/strategy/` + `coding/service/strategy/`
-  were deleted.
+  were deleted. `save_strategy_signal` / `get_strategy_signals` removed from
+  `repository.py` 2026-07-14 (zero live callers).
 - `otm_signals` (migration 011) - OTM contract finder signal output. No writer
-  remains after `coding/service/strategy/otm/` was deleted.
+  remains after `coding/service/strategy/otm/` was deleted. `save_otm_signals`
+  removed from `repository.py` 2026-07-14 (zero live callers).
 
 Not dropped: `dvol_history` (migration 011) - despite living in the same
 migration file as `otm_signals`, this table is NOT strategy-specific. It is
@@ -38,25 +40,39 @@ data every hour into `onchain_analysis_snapshots` / `hourly_snapshots`:
   capture path into it is gone.)
 - `max_pain` - per-expiration max pain strike + distance. Superseded by
   `onchain_analysis_snapshots.max_pain_strike` / `max_pain_distance_pct`,
-  computed and stored every hour.
+  computed and stored every hour. **Writer removed** (`save_max_pain`
+  deleted, 2026-07-14 dead-code cleanup) but the reader
+  (`get_max_pain_history`) is still alive - `OnChainAnalysisService.
+  _fetch_trend_data()` calls it for trend comparison, so it was kept in
+  `repository.py`. With no writer, that call will only ever return
+  historical rows already in the table (frozen since the writer was cut) -
+  it does not error, but the trend data it returns will not include
+  anything captured after this commit.
 - `open_interest` - per-expiration call/put OI totals + P/C ratio. Superseded
   by `onchain_analysis_snapshots.total_call_oi` / `total_put_oi` /
-  `put_call_ratio_oi`.
+  `put_call_ratio_oi`. **Writer removed** (`save_open_interest` deleted,
+  2026-07-14); reader `get_open_interest_history` kept alive for the same
+  reason as `max_pain` above.
 - `volume` - per-expiration call/put volume totals + P/C ratio. **Partial
   gap**: `onchain_analysis_snapshots` stores `total_volume` (combined) and
   `put_call_ratio_volume` (ratio) but not the separate absolute
   `total_call_volume` / `total_put_volume` values this table had. Not
   backfilled into the daemon (see audit note below) - nothing outside the
   deleted capture pipeline's own trend charts ever consumed the split.
+  **Writer removed** (`save_volume` deleted, 2026-07-14); reader
+  `get_volume_history` kept alive for the same reason as `max_pain` above.
 - `levels` - per-expiration support/resistance levels, multiple ranked levels
   plus short-term categories. **Partial gap**: `onchain_analysis_snapshots`
   only stores the single top resistance/support level
   (`resistance_1_strike`/`support_1_strike` + OI), not the full ranked list or
   the short-term categorization this table had. Not backfilled (see audit
-  note below).
+  note below). **Writer and reader both removed** 2026-07-14
+  (`save_levels`, `get_levels_history` - unlike max_pain/open_interest/volume,
+  nothing in live code read this one).
 - `gex_dex` - per-expiration GEX/DEX + key levels. Superseded by
   `onchain_analysis_snapshots.total_net_gex` / `total_net_dex` /
-  `call_resistance_strike` / `put_support_strike` / `hvl_level`.
+  `call_resistance_strike` / `put_support_strike` / `hvl_level`. **Writer and
+  reader both removed** 2026-07-14 (`save_gex_dex`, `get_gex_dex_history`).
 
 ### Audit note on the `volume`/`levels` partial gaps
 
@@ -68,9 +84,9 @@ pipeline's own legacy trend-chart functions in
 `generate_open_interest_trend`, `generate_pc_ratio_trend`,
 `generate_gex_dex_trend`, `generate_oi_distribution`,
 `generate_snapshot_oi_distribution`, `generate_snapshot_volume_distribution`).
-Those 9 functions have no other caller now that `capture_strategies.py` is
-gone - they are dead code inside an otherwise-kept file (flagged for the
-user, not removed in this pass; see the cleanup report). None of the Phase 2
+Those 9 functions had no other caller now that `capture_strategies.py` is
+gone - they were dead code inside an otherwise-kept file, and were deleted
+(2026-07-14 dead-code cleanup commit). None of the Phase 2
 validated predictive metrics (`itm/otm_*_oi_pct`, `max_pain_distance_pct`,
 the vol-surface family) depend on the call/put volume split or multi-level
 S/R, so `ProspectiveCollector` was NOT extended to backfill these two fields.

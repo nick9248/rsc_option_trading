@@ -8,7 +8,6 @@ Orchestrates the full morning note pipeline:
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Callable
 
 from coding.core.analytics.synthesis import SynthesisEngine, SynthesisMapper
 from coding.service.on_chain.on_chain_analysis_service import OnChainAnalysisService
@@ -33,38 +32,6 @@ class MorningNoteService:
         """
         self.on_chain_service = on_chain_service
         self.engine = SynthesisEngine()
-
-    def generate(
-        self,
-        currency: str = "BTC",
-        progress_callback: Optional[Callable[[str], None]] = None,
-    ) -> str:
-        """
-        Run on-chain analysis and return the morning note summary string.
-
-        Args:
-            currency: Currency symbol (BTC, ETH).
-            progress_callback: Optional callback for progress updates.
-
-        Returns:
-            Formatted executive summary string.
-        """
-        logger.info(f"Generating morning note for {currency}...")
-
-        _, analyzer = self.on_chain_service.fetch_and_analyze(
-            currency=currency,
-            progress_callback=progress_callback,
-            return_analyzer=True,
-        )
-
-        market, expiries = SynthesisMapper.build_all(analyzer)
-
-        if not expiries:
-            logger.warning("No expiry metrics could be built — synthesis may be incomplete")
-
-        note = self.engine.run(market, expiries)
-        logger.info("Morning note generation complete")
-        return note
 
     def generate_from_analyzer(self, analyzer) -> str:
         """
@@ -117,32 +84,3 @@ class MorningNoteService:
         logger.info(f"Report bundle saved to {folder}")
         return folder
 
-    def generate_and_save(
-        self,
-        currency: str = "BTC",
-        output_dir: str = "output/morning_notes",
-        progress_callback: Optional[Callable[[str], None]] = None,
-    ) -> str:
-        """
-        Generate morning note and save to a timestamped file.
-
-        Args:
-            currency: Currency symbol (BTC, ETH).
-            output_dir: Directory to save the note (created if missing).
-            progress_callback: Optional callback for progress updates.
-
-        Returns:
-            Generated morning note string.
-        """
-        note = self.generate(currency=currency, progress_callback=progress_callback)
-
-        output_path = Path(output_dir)
-        output_path.mkdir(parents=True, exist_ok=True)
-
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = output_path / f"{currency}_morning_note_{timestamp}.txt"
-
-        filename.write_text(note, encoding="utf-8")
-        logger.info(f"Morning note saved to {filename}")
-
-        return note

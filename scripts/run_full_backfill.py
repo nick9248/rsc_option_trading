@@ -191,13 +191,6 @@ def main():
 
     if success_count == total_steps:
         logger.info("✓ All stages completed successfully!")
-        logger.info("")
-        logger.info("Next steps:")
-        logger.info("1. Verify data quality:")
-        logger.info("   python scripts/check_database.py")
-        logger.info("")
-        logger.info("2. Start ML training:")
-        logger.info("   python scripts/train_regime_model.py")
         sys.exit(0)
     else:
         logger.error(f"✗ {total_steps - success_count} stages failed")

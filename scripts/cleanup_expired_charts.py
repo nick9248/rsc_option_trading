@@ -112,9 +112,6 @@ def cleanup_charts(dry_run: bool = True) -> None:
 if __name__ == "__main__":
     import sys
 
-    # Step1 line below will evaluate how many should be deleted and what is the size of the folders
-    #dry_run = "--execute" not in sys.argv
-
-    # Step2  put dry_run to False to remove the folders
-    dry_run = False
+    # Dry run by default; pass --execute to actually delete expired chart folders.
+    dry_run = "--execute" not in sys.argv
     cleanup_charts(dry_run=dry_run)
