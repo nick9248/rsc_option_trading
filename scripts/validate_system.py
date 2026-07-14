@@ -154,7 +154,6 @@ class SystemValidator:
             "onchain_analysis_snapshots",
             "onchain_volatility_snapshots",   # Phase 2/3 reconstructed metrics
             "forward_test_predictions",       # Phase 3 harness
-            "regime_detections",              # regime detection (foundation, keep)
             "ohlcv_history",
             "dvol_history",
         ]

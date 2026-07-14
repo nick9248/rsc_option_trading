@@ -94,3 +94,29 @@ If a future need for them resurfaces, add them to `onchain_analysis_snapshots`
 (or a companion table) computed from the same `analyzer.analyze_expiration()`
 call already running every hour - the raw data to compute them is already
 being parsed, just not persisted.
+
+## Regime detection tables (user decision 2026-07-14 - regime detection removed)
+
+The user decided to remove the regime detection/analysis system entirely
+("I will do it from the beginning once I wanted"), while explicitly keeping
+the raw data collection paths it used to consume (`funding_rate_history`,
+`ohlcv_history`, `dvol_history`, `external_metrics` are still written by the
+daemon / backfill scripts - untouched by this decision).
+
+- `regime_detections` (migration 003) - regime classification output
+  (regime label, confidence, component scores, reasoning). No writer remains
+  after `coding/service/regime/regime_detection_service.py` (`save_regime_detection`)
+  and its reader (`get_regime_detections`) were deleted 2026-07-14. Was
+  briefly listed as a "required" table in `scripts/validate_system.py`
+  (`_check_required_tables`) - that entry was removed in the same commit.
+- `technical_indicators` - SMA/EMA/ADX/ATR/RSI/MACD daily indicator values.
+  Its only writer (`scripts/backfill_technical_indicators.py`) and only
+  reader/consumer (`TechnicalIndicatorCalculator`, used exclusively by
+  `RegimeDetectionService`) were both deleted 2026-07-14 - nothing in
+  `synthesis.py`, the morning-note pipeline, or on-chain analysis ever used
+  this calculator (verified by grep before deletion). `repository.py`'s
+  `save_technical_indicators` was removed in the same commit.
+
+Not touched: `synthesis.py` has its own internal `RegimeClassifier` class -
+unrelated to the deleted `MarketRegimeDetector`, has no import of any deleted
+module, and was left alone.

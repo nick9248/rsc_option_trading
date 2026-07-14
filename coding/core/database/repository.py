@@ -266,87 +266,6 @@ class DatabaseRepository:
 
             return list(reversed(results))
 
-    def save_regime_detection(
-        self,
-        currency: str,
-        detected_at,
-        regime_data: dict
-    ) -> int:
-        """
-        Save regime detection result to database.
-
-        Args:
-            currency: Currency symbol (e.g., "BTC", "ETH")
-            detected_at: Detection timestamp
-            regime_data: Complete regime detection result dictionary
-
-        Returns:
-            Row ID of inserted record
-        """
-        with self._db_cursor() as cursor:
-            cursor.execute("""
-                INSERT INTO regime_detections (
-                    currency, detected_at, regime, confidence_score,
-                    trend_score, volatility_score, momentum_score,
-                    onchain_score, sentiment_score,
-                    current_price, sma_50, sma_200,
-                    adx, atr_percentile, rsi,
-                    funding_rate, put_call_ratio, fear_greed,
-                    reasoning
-                ) VALUES (
-                    %s, %s, %s, %s,
-                    %s, %s, %s,
-                    %s, %s,
-                    %s, %s, %s,
-                    %s, %s, %s,
-                    %s, %s, %s,
-                    %s
-                )
-                ON CONFLICT (currency, detected_at) DO UPDATE SET
-                    regime = EXCLUDED.regime,
-                    confidence_score = EXCLUDED.confidence_score,
-                    trend_score = EXCLUDED.trend_score,
-                    volatility_score = EXCLUDED.volatility_score,
-                    momentum_score = EXCLUDED.momentum_score,
-                    onchain_score = EXCLUDED.onchain_score,
-                    sentiment_score = EXCLUDED.sentiment_score,
-                    current_price = EXCLUDED.current_price,
-                    sma_50 = EXCLUDED.sma_50,
-                    sma_200 = EXCLUDED.sma_200,
-                    adx = EXCLUDED.adx,
-                    atr_percentile = EXCLUDED.atr_percentile,
-                    rsi = EXCLUDED.rsi,
-                    funding_rate = EXCLUDED.funding_rate,
-                    put_call_ratio = EXCLUDED.put_call_ratio,
-                    fear_greed = EXCLUDED.fear_greed,
-                    reasoning = EXCLUDED.reasoning
-                RETURNING id
-            """, (
-                currency,
-                detected_at,
-                regime_data.get("regime"),
-                regime_data.get("confidence"),
-                regime_data.get("signals", {}).get("trend"),
-                regime_data.get("signals", {}).get("volatility"),
-                regime_data.get("signals", {}).get("momentum"),
-                regime_data.get("signals", {}).get("onchain"),
-                regime_data.get("signals", {}).get("sentiment"),
-                regime_data.get("current_price"),
-                regime_data.get("indicators", {}).get("sma_50"),
-                regime_data.get("indicators", {}).get("sma_200"),
-                regime_data.get("indicators", {}).get("adx"),
-                regime_data.get("indicators", {}).get("atr_percentile"),
-                regime_data.get("indicators", {}).get("rsi"),
-                regime_data.get("indicators", {}).get("funding_rate"),
-                regime_data.get("indicators", {}).get("put_call_ratio"),
-                regime_data.get("indicators", {}).get("fear_greed"),
-                regime_data.get("reasoning")
-            ))
-
-            row_id = cursor.fetchone()[0]
-            logger.info(f"Saved regime detection: {currency} - {regime_data.get('regime')} (ID: {row_id})")
-            return row_id
-
     def get_unaggregated_hours(
         self,
         currency: str,
@@ -951,61 +870,6 @@ class DatabaseRepository:
 
             return result
 
-    def save_technical_indicators(
-        self,
-        currency: str,
-        date,
-        indicators: Dict[str, Any]
-    ) -> None:
-        """
-        Save calculated technical indicators to the database.
-
-        Args:
-            currency: Currency symbol (e.g., "BTC", "ETH").
-            date: Timestamp for these indicators.
-            indicators: Dict of indicator values (sma_50, sma_200, ema_50, ema_200,
-                        adx, plus_di, minus_di, atr, atr_percentile, rsi,
-                        macd, macd_signal, macd_histogram).
-        """
-        with self._db_cursor() as cursor:
-            cursor.execute("""
-                INSERT INTO technical_indicators (
-                    currency, date,
-                    sma_50, sma_200, ema_50, ema_200,
-                    adx, plus_di, minus_di,
-                    atr, atr_percentile, rsi,
-                    macd, macd_signal, macd_histogram
-                ) VALUES (
-                    %s, %s,
-                    %s, %s, %s, %s,
-                    %s, %s, %s,
-                    %s, %s, %s,
-                    %s, %s, %s
-                )
-                ON CONFLICT (currency, date) DO UPDATE SET
-                    sma_50 = EXCLUDED.sma_50,
-                    sma_200 = EXCLUDED.sma_200,
-                    ema_50 = EXCLUDED.ema_50,
-                    ema_200 = EXCLUDED.ema_200,
-                    adx = EXCLUDED.adx,
-                    plus_di = EXCLUDED.plus_di,
-                    minus_di = EXCLUDED.minus_di,
-                    atr = EXCLUDED.atr,
-                    atr_percentile = EXCLUDED.atr_percentile,
-                    rsi = EXCLUDED.rsi,
-                    macd = EXCLUDED.macd,
-                    macd_signal = EXCLUDED.macd_signal,
-                    macd_histogram = EXCLUDED.macd_histogram
-            """, (
-                currency, date,
-                indicators.get("sma_50"), indicators.get("sma_200"),
-                indicators.get("ema_50"), indicators.get("ema_200"),
-                indicators.get("adx"), indicators.get("plus_di"), indicators.get("minus_di"),
-                indicators.get("atr"), indicators.get("atr_percentile"), indicators.get("rsi"),
-                indicators.get("macd"), indicators.get("macd_signal"), indicators.get("macd_histogram"),
-            ))
-            logger.info(f"Saved technical indicators for {currency} at {date}")
-
     def save_funding_rate(
         self,
         currency: str,
@@ -1247,51 +1111,6 @@ class DatabaseRepository:
                 underlying_price,
             ))
             logger.info(f"Saved on-chain snapshot for {currency} {expiration} at {snapshot_hour}")
-
-    def get_regime_detections(
-        self,
-        currency: str,
-        start_time,
-        end_time
-    ) -> List[Dict[str, Any]]:
-        """
-        Retrieve regime detection results from the database.
-
-        Args:
-            currency: Currency symbol (e.g., "BTC", "ETH").
-            start_time: Start of the time range.
-            end_time: End of the time range.
-
-        Returns:
-            List of dicts with regime detection records.
-        """
-        with self._db_cursor() as cursor:
-            cursor.execute("""
-                SELECT
-                    id, currency, detected_at, regime, confidence_score,
-                    trend_score, volatility_score, momentum_score,
-                    onchain_score, sentiment_score,
-                    current_price, sma_50, sma_200,
-                    adx, atr_percentile, rsi,
-                    funding_rate, put_call_ratio, fear_greed,
-                    reasoning, created_at
-                FROM regime_detections
-                WHERE currency = %s
-                  AND detected_at >= %s
-                  AND detected_at <= %s
-                ORDER BY detected_at DESC
-            """, (currency, start_time, end_time))
-
-            columns = [
-                "id", "currency", "detected_at", "regime", "confidence_score",
-                "trend_score", "volatility_score", "momentum_score",
-                "onchain_score", "sentiment_score",
-                "current_price", "sma_50", "sma_200",
-                "adx", "atr_percentile", "rsi",
-                "funding_rate", "put_call_ratio", "fear_greed",
-                "reasoning", "created_at",
-            ]
-            return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
     def get_ohlcv_by_date_range(
         self,

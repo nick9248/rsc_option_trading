@@ -163,17 +163,29 @@ designed around strategies, ML models, and the manual capture pipeline.
   `on_chain_analysis_service.py`, `volatility_reconstruction_service.py`, `vrp_service.py`
 - Forward testing harness (Phase 3): `forward_testing_harness.py`, migration 013
 - Database repository and migration system (incl. migrations 012/013)
-- Regime detection — keep EVERYTHING: RegimeDetectionService, market_regime_detector,
-  regime_weight_optimizer, regime_dataset_builder, `scripts/optimize_regime_weights.py`,
-  regime tables (regime_detections, ohlcv_history, technical_indicators,
-  funding_rate_history, volatility_index_history, external_metrics)
+- Regime detection — **REMOVED by user decision (2026-07-14)**, superseding the
+  "keep EVERYTHING" line that used to be here. `RegimeDetectionService`,
+  `market_regime_detector.py`, `regime_weight_optimizer.py`,
+  `regime_dataset_builder.py`, `scripts/optimize_regime_weights.py`,
+  `coding/gui/tabs/regime_tab.py`, and `technical_indicator_calculator.py`
+  (its only caller was the regime service) were all deleted. Raw data
+  collection that regime detection used to consume is explicitly RETAINED:
+  `funding_rate_history`, `ohlcv_history`, `dvol_history`, and
+  `external_metrics` are still collected by the daemon / backfill scripts —
+  only the detection/analysis layer built on top of them is gone.
+  `regime_detections` and `technical_indicators` tables have no writer left;
+  see `migrations/TABLES_TO_DROP_LATER.md`. The user's own words: "I will do
+  it from the beginning once I wanted."
 - Chart generator `coding/core/analytics/chart_generator.py` (the analytics one —
   distinct from the strategy chart generators being deleted)
 - GUI: On-chain analysis tab, Database tab (sync only), System Health tab, plus
-  snapshot/regime/api-connection tabs and navigation page
+  snapshot/api-connection tabs and navigation page (regime tab removed
+  2026-07-14, see above)
 - Scripts: all backfill_* scripts, `phase2_backtest.py`, `sync_from_vps.py`,
-  `check_vps_health.py`, `check_collection_status.py`, `check_database.py`,
-  `run_migration.py`, `validate_system.py` (rewritten, not removed),
+  `check_vps_health.py`, `run_migration.py`, `validate_system.py` (rewritten,
+  not removed). `check_collection_status.py` and `check_database.py` were
+  themselves dead code (monitored dropped tables / hardcoded scrubbed
+  password) and were deleted 2026-07-14.
   `verify_flow_data.py`, `aggregate_hourly_snapshots.py`, `run_full_backfill.py`
 - Phase 2 artifacts worth keeping: `phase2_blueprint.txt`, `phase2_single_metric_results.csv`
   (move into a results folder or commit as-is)
