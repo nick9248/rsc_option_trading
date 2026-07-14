@@ -390,6 +390,60 @@ class DatabaseRepository:
                 for row in cursor.fetchall()
             ]
 
+    def get_trades_for_flow_analysis(
+        self,
+        currency: str,
+        expiration: str,
+        start_ts: int,
+        end_ts: int,
+        trade_filter: str = "all",
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch trades for buy/sell flow analysis (BuySellFlowAnalyzer).
+
+        Args:
+            currency: Currency symbol (BTC or ETH).
+            expiration: Expiration date string (e.g., "27MAR26").
+            start_ts: Window start, epoch milliseconds.
+            end_ts: Window end, epoch milliseconds.
+            trade_filter: "all" (no filter), "block" (notional >= $100k), or
+                "non_block" (notional < $100k).
+
+        Returns:
+            List of trade dicts with keys: trade_id, trade_timestamp,
+            instrument_name, strike, option_type, price, amount, direction,
+            index_price.
+        """
+        filter_clause = {
+            "block":     "AND (amount * index_price) >= 100000",
+            "non_block": "AND (amount * index_price) < 100000",
+        }.get(trade_filter, "")
+
+        query = f"""
+            SELECT
+                trade_id, trade_timestamp, instrument_name, strike,
+                option_type, price, amount, direction, index_price
+            FROM historical_trades
+            WHERE currency = %s
+                AND expiration = %s
+                AND trade_timestamp >= %s
+                AND trade_timestamp <= %s
+                AND strike IS NOT NULL
+                AND direction IS NOT NULL
+                {filter_clause}
+            ORDER BY trade_timestamp ASC
+        """
+
+        with self._db_cursor() as cursor:
+            cursor.execute(query, (currency, expiration, start_ts, end_ts))
+
+            columns = [
+                "trade_id", "trade_timestamp", "instrument_name", "strike",
+                "option_type", "price", "amount", "direction", "index_price"
+            ]
+
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
     def get_latest_snapshot_oi(
         self,
         currency: str,

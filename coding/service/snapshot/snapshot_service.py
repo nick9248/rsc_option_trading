@@ -5,6 +5,8 @@ Handles fetching and filtering option chain snapshots.
 """
 
 import logging
+from datetime import datetime
+from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 from coding.service.deribit.deribit_api_service import DeribitApiService
@@ -17,15 +19,17 @@ class SnapshotService:
     Service for fetching and filtering option chain snapshots.
 
     Handles book summary fetching, expiration filtering,
-    volume filtering, and optional Greek fetching.
+    volume filtering, optional Greek fetching, and CSV export.
     """
 
-    def __init__(self, api_service: DeribitApiService):
+    def __init__(self, api_service: Optional[DeribitApiService] = None):
         """
         Initialize service with API service.
 
         Args:
-            api_service: Deribit API service instance.
+            api_service: Deribit API service instance. Not required for the
+                CSV export methods (save_snapshot_to_csv, transform_to_modified_format),
+                which operate purely on already-fetched data.
         """
         self.api = api_service
 
@@ -154,3 +158,100 @@ class SnapshotService:
                 return float(item["underlying_price"])
 
         return 0.0
+
+    def save_snapshot_to_csv(
+        self,
+        data: List[Dict],
+        currency: str,
+        modified_format: bool = False
+    ) -> Path:
+        """
+        Save snapshot data to a CSV file under output/data/snapshots.
+
+        Args:
+            data: Snapshot instrument dictionaries (raw or already filtered).
+            currency: Currency symbol (BTC, ETH) - used in the output filename.
+            modified_format: If True, transform to the ordered/USD-priced format
+                via transform_to_modified_format before saving; otherwise save raw.
+
+        Returns:
+            Path to the created CSV file.
+        """
+        from coding.core.api.response_parser import ResponseParser
+
+        parser = ResponseParser()
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        if modified_format:
+            output_data = self.transform_to_modified_format(data)
+            filename = f"snapshot_{currency.lower()}_{timestamp}_modified"
+        else:
+            output_data = data
+            filename = f"snapshot_{currency.lower()}_{timestamp}_raw"
+
+        path = parser.to_csv(output_data, filename, "snapshots")
+        logger.info(f"Saved snapshot CSV to {path}")
+        return path
+
+    def transform_to_modified_format(self, data: List[Dict]) -> List[Dict]:
+        """
+        Transform raw snapshot data to modified format with ordered columns and USD prices.
+
+        Args:
+            data: Raw snapshot data.
+
+        Returns:
+            Transformed data with ordered columns and calculated USD prices.
+        """
+        modified_data = []
+
+        for item in data:
+            underlying_price = item.get("underlying_price") or 0
+
+            # Calculate USD prices
+            bid_price = item.get("bid_price")
+            mark_price = item.get("mark_price")
+            mid_price = item.get("mid_price")
+            ask_price = item.get("ask_price")
+
+            bid_price_usd = (bid_price * underlying_price) if bid_price and underlying_price else None
+            mark_price_usd = (mark_price * underlying_price) if mark_price and underlying_price else None
+            mid_price_usd = (mid_price * underlying_price) if mid_price and underlying_price else None
+            ask_price_usd = (ask_price * underlying_price) if ask_price and underlying_price else None
+
+            # Convert timestamp to human readable
+            creation_timestamp = item.get("creation_timestamp")
+            if creation_timestamp:
+                try:
+                    timestamp_readable = datetime.fromtimestamp(creation_timestamp / 1000).strftime("%Y-%m-%d %H:%M:%S")
+                except (ValueError, TypeError, OSError):
+                    timestamp_readable = str(creation_timestamp)
+            else:
+                timestamp_readable = None
+
+            # Build ordered row
+            row = {
+                "instrument_name": item.get("instrument_name"),
+                "bid_price": bid_price,
+                "bid_price_usd": round(bid_price_usd, 4) if bid_price_usd else None,
+                "mark_price": mark_price,
+                "mark_price_usd": round(mark_price_usd, 4) if mark_price_usd else None,
+                "mid_price": mid_price,
+                "mid_price_usd": round(mid_price_usd, 4) if mid_price_usd else None,
+                "ask_price": ask_price,
+                "ask_price_usd": round(ask_price_usd, 4) if ask_price_usd else None,
+                "open_interest": item.get("open_interest"),
+                "underlying_price": underlying_price,
+                "volume": item.get("volume"),
+                "volume_usd": item.get("volume_usd"),
+                "delta": item.get("delta"),
+                "gamma": item.get("gamma"),
+                "vega": item.get("vega"),
+                "theta": item.get("theta"),
+                "rho": item.get("rho"),
+                "timestamp": timestamp_readable,
+            }
+
+            modified_data.append(row)
+
+        return modified_data

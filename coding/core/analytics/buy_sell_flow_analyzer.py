@@ -156,35 +156,13 @@ class BuySellFlowAnalyzer:
         start_ts = int(start_time.timestamp() * 1000)
         end_ts = int(end_time.timestamp() * 1000)
 
-        filter_clause = {
-            "block":     "AND (amount * index_price) >= 100000",
-            "non_block": "AND (amount * index_price) < 100000",
-        }.get(self.trade_filter, "")
-
-        query = f"""
-            SELECT
-                trade_id, trade_timestamp, instrument_name, strike,
-                option_type, price, amount, direction, index_price
-            FROM historical_trades
-            WHERE currency = %s
-                AND expiration = %s
-                AND trade_timestamp >= %s
-                AND trade_timestamp <= %s
-                AND strike IS NOT NULL
-                AND direction IS NOT NULL
-                {filter_clause}
-            ORDER BY trade_timestamp ASC
-        """
-
-        with self.repository._db_cursor() as cursor:
-            cursor.execute(query, (self.currency, self.expiration, start_ts, end_ts))
-
-            columns = [
-                "trade_id", "trade_timestamp", "instrument_name", "strike",
-                "option_type", "price", "amount", "direction", "index_price"
-            ]
-
-            trades = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        trades = self.repository.get_trades_for_flow_analysis(
+            currency=self.currency,
+            expiration=self.expiration,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            trade_filter=self.trade_filter,
+        )
 
         logger.info(
             f"Fetched {len(trades)} trades for {self.currency} {self.expiration} "

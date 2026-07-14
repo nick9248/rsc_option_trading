@@ -10,7 +10,6 @@ Provides interface to:
 
 import logging
 from typing import Any, Dict, List, Optional
-from datetime import datetime
 
 from PySide6.QtWidgets import (
     QWidget,
@@ -150,6 +149,7 @@ class SnapshotTab(QWidget):
         super().__init__(parent)
         self.snapshot_data: List[Dict] = []
         self.worker: Optional[SnapshotWorker] = None
+        self.snapshot_service = SnapshotService()
 
         self._setup_ui()
         self._setup_logging()
@@ -531,91 +531,19 @@ class SnapshotTab(QWidget):
         self.log_viewer.log_error(f"Snapshot failed: {error_message}")
 
     def _save_to_csv(self, data: List[Dict]) -> None:
-        """Save snapshot data to CSV file."""
+        """Save snapshot data to CSV file via SnapshotService."""
         try:
-            from coding.core.api.response_parser import ResponseParser
+            currency = self.currency_combo.currentText()
+            modified_format = self.modified_format_checkbox.isChecked()
 
-            parser = ResponseParser()
-            currency = self.currency_combo.currentText().lower()
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            path = self.snapshot_service.save_snapshot_to_csv(
+                data, currency, modified_format=modified_format
+            )
 
-            if self.modified_format_checkbox.isChecked():
-                # Transform data to modified format
-                modified_data = self._transform_to_modified_format(data)
-                filename = f"snapshot_{currency}_{timestamp}_modified"
-                parser.to_csv(modified_data, filename, "snapshots")
-            else:
-                # Save raw data
-                filename = f"snapshot_{currency}_{timestamp}_raw"
-                parser.to_csv(data, filename, "snapshots")
-
-            self.log_viewer.log_info(f"Saved to output/data/snapshots/{filename}.csv")
+            self.log_viewer.log_info(f"Saved to {path}")
 
         except Exception as error:
             self.log_viewer.log_error(f"Failed to save CSV: {error}")
-
-    def _transform_to_modified_format(self, data: List[Dict]) -> List[Dict]:
-        """
-        Transform raw data to modified format with ordered columns and USD prices.
-
-        Args:
-            data: Raw snapshot data.
-
-        Returns:
-            Transformed data with ordered columns and calculated USD prices.
-        """
-        modified_data = []
-
-        for item in data:
-            underlying_price = item.get("underlying_price") or 0
-
-            # Calculate USD prices
-            bid_price = item.get("bid_price")
-            mark_price = item.get("mark_price")
-            mid_price = item.get("mid_price")
-            ask_price = item.get("ask_price")
-
-            bid_price_usd = (bid_price * underlying_price) if bid_price and underlying_price else None
-            mark_price_usd = (mark_price * underlying_price) if mark_price and underlying_price else None
-            mid_price_usd = (mid_price * underlying_price) if mid_price and underlying_price else None
-            ask_price_usd = (ask_price * underlying_price) if ask_price and underlying_price else None
-
-            # Convert timestamp to human readable
-            creation_timestamp = item.get("creation_timestamp")
-            if creation_timestamp:
-                try:
-                    timestamp_readable = datetime.fromtimestamp(creation_timestamp / 1000).strftime("%Y-%m-%d %H:%M:%S")
-                except (ValueError, TypeError, OSError):
-                    timestamp_readable = str(creation_timestamp)
-            else:
-                timestamp_readable = None
-
-            # Build ordered row
-            row = {
-                "instrument_name": item.get("instrument_name"),
-                "bid_price": bid_price,
-                "bid_price_usd": round(bid_price_usd, 4) if bid_price_usd else None,
-                "mark_price": mark_price,
-                "mark_price_usd": round(mark_price_usd, 4) if mark_price_usd else None,
-                "mid_price": mid_price,
-                "mid_price_usd": round(mid_price_usd, 4) if mid_price_usd else None,
-                "ask_price": ask_price,
-                "ask_price_usd": round(ask_price_usd, 4) if ask_price_usd else None,
-                "open_interest": item.get("open_interest"),
-                "underlying_price": underlying_price,
-                "volume": item.get("volume"),
-                "volume_usd": item.get("volume_usd"),
-                "delta": item.get("delta"),
-                "gamma": item.get("gamma"),
-                "vega": item.get("vega"),
-                "theta": item.get("theta"),
-                "rho": item.get("rho"),
-                "timestamp": timestamp_readable,
-            }
-
-            modified_data.append(row)
-
-        return modified_data
 
     def _clear_all(self) -> None:
         """Clear all data and selections."""
