@@ -127,6 +127,68 @@ class TestDeribitApiServiceEndpoints:
         assert "data" in result
         assert isinstance(result["data"], list)
 
+    def test_get_index_price_btc(self, api_service):
+        """Test getting the live BTC index (spot) price."""
+        price = api_service.get_index_price(currency="BTC")
+
+        assert isinstance(price, float)
+        assert price > 0
+
+    def test_get_index_price_eth(self, api_service):
+        """Test getting the live ETH index (spot) price."""
+        price = api_service.get_index_price(currency="ETH")
+
+        assert isinstance(price, float)
+        assert price > 0
+
+
+class TestGetOptionChainSnapshot:
+    """
+    Live integration tests for the foundational get_option_chain_snapshot
+    method — cross-checks that USD conversion matches index_price, not
+    underlying_price (the confirmed pricing bug this method fixes).
+    """
+
+    def test_snapshot_structure_and_pricing_basis(self, api_service):
+        """
+        Verifies the full snapshot shape and, critically, that ask_usd for a
+        real live contract equals ask_price * index_price (not
+        underlying_price). This is the live cross-check proof required
+        alongside the unit tests.
+        """
+        snapshot = api_service.get_option_chain_snapshot(currency="BTC")
+
+        assert "as_of" in snapshot
+        assert "index_price" in snapshot
+        assert "contracts" in snapshot
+        assert "futures_by_expiry" in snapshot
+        assert snapshot["index_price"] > 0
+        assert len(snapshot["contracts"]) > 0
+
+        priced = [
+            c for c in snapshot["contracts"]
+            if c["ask_price"] is not None and c["ask_usd"] is not None
+        ]
+        assert priced, "Expected at least one contract with a live ask price"
+
+        contract = priced[0]
+        expected_ask_usd = contract["ask_price"] * snapshot["index_price"]
+        assert contract["ask_usd"] == pytest.approx(expected_ask_usd)
+
+        # Sanity: underlying_price (future) must differ from index_price by
+        # only a small basis, and both must be positive.
+        if contract["underlying_price"]:
+            basis_pct = abs(
+                contract["underlying_price"] - snapshot["index_price"]
+            ) / snapshot["index_price"] * 100
+            assert basis_pct < 5.0  # futures basis is never anywhere near 5%
+
+    def test_dte_is_positive_float_for_future_expiries(self, api_service):
+        snapshot = api_service.get_option_chain_snapshot(currency="BTC")
+        future_contracts = [c for c in snapshot["contracts"] if c["dte"] > 0]
+        assert future_contracts
+        assert isinstance(future_contracts[0]["dte"], float)
+
 
 class TestDeribitApiServiceCsvExport:
     """Tests for CSV export functionality."""

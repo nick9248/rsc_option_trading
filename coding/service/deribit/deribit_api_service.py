@@ -571,104 +571,185 @@ class DeribitApiService:
 
         return result
 
-    @staticmethod
-    def _bs_delta(spot: float, strike: float, dte_days: int,
-                  iv_decimal: float, option_type: str) -> float:
-        """Black-Scholes delta via logistic N(d1) approximation. No external deps."""
-        import math
-        if dte_days <= 0 or iv_decimal <= 0 or spot <= 0 or strike <= 0:
-            return 0.0
-        T = dte_days / 365.0
-        try:
-            d1 = (math.log(spot / strike) + 0.5 * iv_decimal ** 2 * T) / (
-                iv_decimal * math.sqrt(T)
-            )
-        except (ValueError, ZeroDivisionError):
-            return 0.0
-        nd1 = 1.0 / (1.0 + math.exp(-1.7 * d1))  # logistic approx of N(d1)
-        return nd1 if option_type == "C" else nd1 - 1.0
-
-    def get_book_summary_by_currency(self, asset: str) -> List[Dict[str, Any]]:
+    def get_index_price(
+        self,
+        currency: str = "BTC",
+        save_to_csv: bool = False
+    ) -> float:
         """
-        Get the full options chain for an asset, normalized with parsed
-        contract fields and enriched Greeks.
+        Get the current Deribit index (spot) price for a currency.
 
-        Wraps get_book_summary() and enriches each entry with:
-          - strike, expiry, dte, option_type (parsed from instrument_name)
-          - delta, gamma, vega, theta (from nested 'greeks' dict if present)
-          - bid_iv, ask_iv (approximated from mark_iv and price spread)
-          - volume_24h (mapped from 'volume')
+        This is the price shown on Deribit's website and the price actually
+        used to convert an option premium (quoted in the base currency, e.g.
+        BTC) into USD. It is NOT the same as the per-expiry future price
+        (`underlying_price` in get_book_summary/ticker responses), which
+        trades above/below the index by the futures basis. See
+        get_option_chain_snapshot for the authoritative explanation of why
+        this distinction matters.
 
-        Returns list of normalized contract dicts. Malformed entries are skipped.
+        Args:
+            currency: Currency symbol (BTC, ETH, ...).
+            save_to_csv: Whether to save the result to CSV.
+
+        Returns:
+            Current index price as a float.
+        """
+        index_name = f"{currency.lower()}_usd"
+
+        result = fetch_and_process(
+            connection=self.connection,
+            parser=self.parser,
+            validator=self.validator,
+            endpoint=DeribitEndpoints.GET_INDEX_PRICE,
+            parameters={"index_name": index_name},
+            validate_responses=self.validate_responses,
+            save_to_csv=save_to_csv,
+            csv_filename=f"index_price_{currency.lower()}",
+            csv_subdirectory="index_price"
+        )
+
+        return float(result.get("index_price"))
+
+    def get_option_chain_snapshot(self, currency: str) -> Dict[str, Any]:
+        """
+        Get a single, authoritative, correctly-priced snapshot of an entire
+        options chain for a currency. This is the ONE method every current
+        and future consumer should call for option-chain market data — it
+        exists to stop the index-vs-future pricing bug from recurring.
+
+        THE INDEX-VS-FUTURE RULE (read this before touching pricing code):
+        ---------------------------------------------------------------
+        Deribit quotes option premiums in the base currency (e.g. BTC). To
+        get the USD value of a premium, Deribit's own website multiplies by
+        the INDEX price (a currency's spot index, e.g. "btc_usd") — that is
+        what a user actually pays/receives in USD terms:
+
+            premium_usd = premium_btc * index_price
+
+        Each option's response also carries `underlying_price`, which is
+        NOT the index — it is the price of the FUTURE contract expiring on
+        that option's own expiry date. Futures trade above/below the index
+        by the "basis" (currently roughly +0.3% to +0.8% for BTC, positive
+        = contango), and the basis differs per expiry. Using
+        `underlying_price` to convert a premium to USD is WRONG and was a
+        confirmed pricing bug (BTC-28AUG26-64000-C: ask x index = $3,159,
+        matching Deribit's website, vs ask x underlying_price = $3,173).
+
+        `underlying_price` (the future) is still the CORRECT basis for:
+          - strike distance / moneyness (both live in settlement space)
+          - breakeven and expected-range math (F*exp(+-sigma*sqrt(T)))
+          - anything comparing a strike against where the contract settles
+
+        Never use one where the other belongs. This method returns both,
+        clearly separated, so callers cannot conflate them by accident.
+
+        Args:
+            currency: Currency symbol (BTC, ETH, ...).
+
+        Returns:
+            Dict with:
+                as_of: UTC datetime of this fetch.
+                index_price: Current spot index price (USD per unit currency).
+                contracts: List of per-instrument dicts, each with:
+                    instrument_name, expiry (str, e.g. "25SEP26"),
+                    expiry_datetime (UTC datetime, 08:00 UTC settlement),
+                    dte (float days, NOT truncated), strike, option_type
+                    ("C"/"P"), bid_price/ask_price/mark_price (RAW, in the
+                    base currency e.g. BTC — never dropped), mark_iv
+                    (Deribit native units, i.e. percent, e.g. 65.0 = 65%),
+                    open_interest, volume, underlying_price (this expiry's
+                    future price), bid_usd/ask_usd/mark_usd (= raw price *
+                    index_price, or None if the raw price or index_price
+                    is unavailable).
+                futures_by_expiry: Dict of expiry (str) -> underlying_price
+                    (float), one future price per expiry. Picked from the
+                    highest-volume contract within that expiry to avoid the
+                    stale cached underlying_price that illiquid strikes can
+                    carry (mirrors the pattern already used in
+                    SnapshotService._extract_underlying_price).
+
+        Raises:
+            ApiConnectionError / ResponseParseError: propagated from the
+                underlying fetch calls if the API is unreachable or the
+                response is malformed.
         """
         from datetime import datetime, timezone
-        raw = self.get_book_summary(currency=asset, kind="option")
-        result = []
-        now = datetime.now(timezone.utc)
 
-        for item in raw:
+        as_of = datetime.now(timezone.utc)
+        index_price = self.get_index_price(currency=currency)
+        raw_contracts = self.get_book_summary(currency=currency, kind="option")
+
+        contracts: List[Dict[str, Any]] = []
+        by_expiry: Dict[str, List[Dict[str, Any]]] = {}
+
+        for item in raw_contracts:
             name = item.get("instrument_name", "")
             parts = name.split("-")
             if len(parts) < 4:
+                logger.warning(f"Skipping malformed instrument name: {name}")
                 continue
+
             try:
                 strike = float(parts[2])
-                option_type = parts[3]   # "C" or "P"
-                expiry_str = parts[1]    # e.g. "28MAR25"
-                expiry_date = datetime.strptime(expiry_str, "%d%b%y").replace(tzinfo=timezone.utc)
-                dte = max(0, (expiry_date - now).days)
-            except (ValueError, IndexError):
+                option_type = parts[3][0].upper()  # "C" or "P"
+                expiry_str = parts[1]  # e.g. "25SEP26"
+                # Deribit options settle at 08:00 UTC.
+                expiry_datetime = datetime.strptime(expiry_str, "%d%b%y").replace(
+                    hour=8, minute=0, second=0, tzinfo=timezone.utc
+                )
+            except (ValueError, IndexError) as error:
+                logger.warning(f"Skipping unparseable instrument {name}: {error}")
                 continue
 
-            greeks = item.get("greeks") or {}
-            delta = greeks.get("delta", 0.0)
-            gamma = greeks.get("gamma", 0.0)
-            vega = greeks.get("vega", 0.0)
-            theta = greeks.get("theta", 0.0)
+            dte = (expiry_datetime - as_of).total_seconds() / 86400.0
 
-            # mark_iv: Deribit returns IV in percent (e.g. 65.0 = 65%)
-            raw_iv = item.get("mark_iv") or 0.0
-            mark_iv = raw_iv / 100.0 if raw_iv > 2.0 else raw_iv
+            bid_price = item.get("bid_price")
+            ask_price = item.get("ask_price")
+            mark_price = item.get("mark_price")
+            underlying_price = item.get("underlying_price")
 
-            # Fallback: compute BS delta when API doesn't return greeks
-            underlying_price = item.get("underlying_price") or 0.0
-            if abs(delta) < 0.001 and mark_iv > 0 and dte > 0 and underlying_price > 0:
-                delta = self._bs_delta(underlying_price, strike, dte, mark_iv, option_type)
+            bid_usd = bid_price * index_price if bid_price is not None and index_price else None
+            ask_usd = ask_price * index_price if ask_price is not None and index_price else None
+            mark_usd = mark_price * index_price if mark_price is not None and index_price else None
 
-            # Approximate bid_iv / ask_iv from price spread
-            mark_price = item.get("mark_price") or 0.0
-            bid_price = item.get("bid_price") or 0.0
-            ask_price = item.get("ask_price") or 0.0
-            if mark_price > 0 and mark_iv > 0:
-                spread_ratio = (ask_price - bid_price) / mark_price
-                iv_half_spread = spread_ratio * mark_iv / 2
-                bid_iv = max(0.0, mark_iv - iv_half_spread)
-                ask_iv = mark_iv + iv_half_spread
-            else:
-                bid_iv = mark_iv
-                ask_iv = mark_iv
-
-            result.append({
+            contract = {
                 "instrument_name": name,
-                "asset": asset,
-                "strike": strike,
                 "expiry": expiry_str,
+                "expiry_datetime": expiry_datetime,
                 "dte": dte,
+                "strike": strike,
                 "option_type": option_type,
-                "delta": delta,
-                "gamma": gamma,
-                "vega": vega,
-                "theta": theta,
-                "bid_iv": bid_iv,
-                "ask_iv": ask_iv,
-                "mark_iv": mark_iv,
-                "open_interest": item.get("open_interest", 0),
-                "volume_24h": item.get("volume", 0),
+                "bid_price": bid_price,
+                "ask_price": ask_price,
                 "mark_price": mark_price,
-                "underlying_price": item.get("underlying_price", 0.0),
-            })
+                "mark_iv": item.get("mark_iv"),
+                "open_interest": item.get("open_interest"),
+                "volume": item.get("volume"),
+                "underlying_price": underlying_price,
+                "bid_usd": bid_usd,
+                "ask_usd": ask_usd,
+                "mark_usd": mark_usd,
+            }
+            contracts.append(contract)
+            by_expiry.setdefault(expiry_str, []).append(item)
 
-        return result
+        futures_by_expiry: Dict[str, float] = {}
+        for expiry_str, items in by_expiry.items():
+            active = [i for i in items if (i.get("volume") or 0) > 0 and i.get("underlying_price")]
+            if active:
+                futures_by_expiry[expiry_str] = max(
+                    active, key=lambda i: i.get("volume", 0)
+                ).get("underlying_price")
+            else:
+                priced = [i for i in items if i.get("underlying_price")]
+                futures_by_expiry[expiry_str] = priced[0]["underlying_price"] if priced else None
+
+        return {
+            "as_of": as_of,
+            "index_price": index_price,
+            "contracts": contracts,
+            "futures_by_expiry": futures_by_expiry,
+        }
 
     def close(self) -> None:
         """Close the API connection."""

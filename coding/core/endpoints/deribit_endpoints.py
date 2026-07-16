@@ -274,6 +274,32 @@ class DeribitEndpoints:
         requires_authentication=False
     )
 
+    GET_INDEX_PRICE = EndpointDefinition(
+        path="/public/get_index_price",
+        description=(
+            "Retrieves the current index (spot) price for an index name. "
+            "This is the price Deribit's website displays and the price used "
+            "to settle/mark option premiums in USD terms — distinct from any "
+            "per-expiry future price (see get_book_summary's underlying_price)."
+        ),
+        method=HttpMethod.GET,
+        parameters=[
+            EndpointParameter(
+                name="index_name",
+                required=True,
+                description="The index name (e.g., btc_usd, eth_usd).",
+                parameter_type="str",
+                allowed_values=[
+                    "btc_usd", "eth_usd", "ada_usd", "algo_usd", "avax_usd",
+                    "bch_usd", "bnb_usd", "doge_usd", "dot_usd", "link_usd",
+                    "ltc_usd", "matic_usd", "near_usd", "shib_usd", "sol_usd",
+                    "trx_usd", "uni_usd", "xrp_usd", "usdc_usd"
+                ]
+            )
+        ],
+        requires_authentication=False
+    )
+
     GET_LAST_TRADES_BY_CURRENCY_AND_TIME = EndpointDefinition(
         path="/public/get_last_trades_by_currency_and_time",
         description="Retrieves historical trades for a currency within a specific time range.",
@@ -344,5 +370,6 @@ class DeribitEndpoints:
             cls.GET_VOLATILITY_INDEX_DATA,
             cls.GET_TRADINGVIEW_CHART_DATA,
             cls.GET_LAST_TRADES_BY_CURRENCY,
-            cls.GET_LAST_TRADES_BY_CURRENCY_AND_TIME
+            cls.GET_LAST_TRADES_BY_CURRENCY_AND_TIME,
+            cls.GET_INDEX_PRICE
         ]

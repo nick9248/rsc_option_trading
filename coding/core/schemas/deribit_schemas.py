@@ -242,6 +242,16 @@ class DeribitSchemas:
         ]
     )
 
+    INDEX_PRICE = ResponseSchema(
+        name="IndexPrice",
+        result_type=dict,
+        description="Response from /public/get_index_price endpoint.",
+        fields=[
+            FieldSchema(name="index_price", field_type=[int, float], required=True),
+            FieldSchema(name="estimated_delivery_price", field_type=[int, float], required=False, nullable=True),
+        ]
+    )
+
     @classmethod
     def get_schema_for_endpoint(cls, endpoint_path: str) -> ResponseSchema:
         """
@@ -269,6 +279,7 @@ class DeribitSchemas:
             "/public/get_tradingview_chart_data": cls.TRADINGVIEW_CHART_DATA,
             "/public/get_last_trades_by_currency": cls.LAST_TRADES_BY_CURRENCY,
             "/public/get_last_trades_by_currency_and_time": cls.LAST_TRADES_BY_CURRENCY,  # Same schema
+            "/public/get_index_price": cls.INDEX_PRICE,
         }
 
         if endpoint_path not in schema_map:
