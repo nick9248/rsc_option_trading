@@ -27,11 +27,12 @@ from coding.gui.tabs.snapshot_tab import SnapshotTab
 from coding.gui.tabs.on_chain_analysis_tab import OnChainAnalysisTab
 from coding.gui.tabs.database_tab import DatabaseTab
 from coding.gui.tabs.system_validation_tab import SystemValidationTab
+from coding.gui.tabs.automation_tab import AutomationTab
 
 
 logger = logging.getLogger(__name__)
 
-# Stack indices 1–5 are active modules. 6–8 are placeholder modules.
+# Stack indices 1–6 are active modules. 7–9 are placeholder modules.
 # NavigationPage is index 0 (not counted in position indicator).
 MODULE_DEFS: list[dict] = [
     {"index": 1,  "icon": "🔗", "name": "API Connection",    "subtitle": "Test endpoints"},
@@ -39,16 +40,17 @@ MODULE_DEFS: list[dict] = [
     {"index": 3,  "icon": "⛓",  "name": "On Chain Analysis", "subtitle": "GEX · DEX · Max Pain"},
     {"index": 4,  "icon": "🗄",  "name": "Database",          "subtitle": "Capture & sync"},
     {"index": 5,  "icon": "✅", "name": "System Health",     "subtitle": "Diagnostics"},
-    {"index": 6,  "icon": "📈", "name": "Market Data",       "subtitle": "Coming soon"},
-    {"index": 7,  "icon": "💹", "name": "Trading",           "subtitle": "Coming soon"},
-    {"index": 8,  "icon": "🧮", "name": "Analytics",         "subtitle": "Coming soon"},
+    {"index": 6,  "icon": "🤖", "name": "Automation",        "subtitle": "Scanners · manual trigger"},
+    {"index": 7,  "icon": "📈", "name": "Market Data",       "subtitle": "Coming soon"},
+    {"index": 8,  "icon": "💹", "name": "Trading",           "subtitle": "Coming soon"},
+    {"index": 9,  "icon": "🧮", "name": "Analytics",         "subtitle": "Coming soon"},
 ]
 
 # Last active module index (used for wrap-around navigation)
-_LAST_ACTIVE = 5
+_LAST_ACTIVE = 6
 
 # Stack indices that are permanent placeholders (never active modules)
-_PLACEHOLDER_INDICES = {6, 7, 8}
+_PLACEHOLDER_INDICES = {7, 8, 9}
 
 
 class MainWindow(QMainWindow):
@@ -171,7 +173,10 @@ class MainWindow(QMainWindow):
         # Index 5: System Health
         self.stack.addWidget(SystemValidationTab())
 
-        # Indices 6–8: Future placeholders
+        # Index 6: Automation
+        self.stack.addWidget(AutomationTab())
+
+        # Indices 7–9: Future placeholders
         self.stack.addWidget(self._placeholder_widget("Market data visualization coming soon…"))
         self.stack.addWidget(self._placeholder_widget("Trading interface coming soon…"))
         self.stack.addWidget(self._placeholder_widget("Analytics dashboard coming soon…"))
