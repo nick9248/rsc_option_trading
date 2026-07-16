@@ -81,6 +81,19 @@ class SnapshotService:
         else:
             logger.warning("Could not determine underlying price from book summary")
 
+        # Fetch the INDEX price — this, not underlying_price (the per-expiry
+        # future), is the correct basis for converting BTC/ETH premiums to USD.
+        # See DeribitApiService.get_option_chain_snapshot docstring for the
+        # full index-vs-future rule. Failure here must not break the snapshot;
+        # transform_to_modified_format falls back to underlying_price if
+        # index_price is absent.
+        index_price = None
+        try:
+            index_price = self.api.get_index_price(currency=currency)
+            progress(f"Index price: ${index_price:,.2f}")
+        except Exception as e:
+            logger.warning(f"Could not fetch index price for {currency}: {e}")
+
         # Filter by expiration dates
         filtered_data = []
         for item in all_data:
@@ -99,6 +112,13 @@ class SnapshotService:
         if true_underlying_price:
             for item in filtered_data:
                 item["underlying_price"] = true_underlying_price
+
+        # Inject the index price into every filtered instrument. Consumers
+        # (transform_to_modified_format) use this for USD conversion instead
+        # of underlying_price.
+        if index_price is not None:
+            for item in filtered_data:
+                item["index_price"] = index_price
 
         # Filter by volume
         if min_volume > 0:
@@ -197,8 +217,23 @@ class SnapshotService:
         """
         Transform raw snapshot data to modified format with ordered columns and USD prices.
 
+        USD conversion uses the INDEX price (item["index_price"]), NOT
+        underlying_price (the per-expiry future) — this is the same basis
+        Deribit's own website uses to display premium USD values. See
+        DeribitApiService.get_option_chain_snapshot docstring for the full
+        index-vs-future rule this codebase must never regress on.
+
+        If an item has no index_price (e.g. legacy raw data fetched before
+        this fix, or an index_price fetch failure upstream), this falls back
+        to underlying_price and logs a warning so the caller can see the
+        USD figures are on the wrong basis rather than silently producing
+        the same wrong numbers with no trace.
+
         Args:
-            data: Raw snapshot data.
+            data: Raw snapshot data. Expected to carry "index_price" per item
+                (injected by get_filtered_instruments); "underlying_price" is
+                still reported as-is (it is correct for strike-space math,
+                just not for USD conversion).
 
         Returns:
             Transformed data with ordered columns and calculated USD prices.
@@ -207,6 +242,17 @@ class SnapshotService:
 
         for item in data:
             underlying_price = item.get("underlying_price") or 0
+            index_price = item.get("index_price")
+
+            if index_price:
+                usd_basis = index_price
+            else:
+                usd_basis = underlying_price
+                logger.warning(
+                    f"{item.get('instrument_name', '<unknown>')}: no index_price available, "
+                    f"falling back to underlying_price (future) for USD conversion — "
+                    f"this basis is wrong by the futures basis, see get_option_chain_snapshot docstring"
+                )
 
             # Calculate USD prices
             bid_price = item.get("bid_price")
@@ -214,10 +260,10 @@ class SnapshotService:
             mid_price = item.get("mid_price")
             ask_price = item.get("ask_price")
 
-            bid_price_usd = (bid_price * underlying_price) if bid_price and underlying_price else None
-            mark_price_usd = (mark_price * underlying_price) if mark_price and underlying_price else None
-            mid_price_usd = (mid_price * underlying_price) if mid_price and underlying_price else None
-            ask_price_usd = (ask_price * underlying_price) if ask_price and underlying_price else None
+            bid_price_usd = (bid_price * usd_basis) if bid_price and usd_basis else None
+            mark_price_usd = (mark_price * usd_basis) if mark_price and usd_basis else None
+            mid_price_usd = (mid_price * usd_basis) if mid_price and usd_basis else None
+            ask_price_usd = (ask_price * usd_basis) if ask_price and usd_basis else None
 
             # Convert timestamp to human readable
             creation_timestamp = item.get("creation_timestamp")
