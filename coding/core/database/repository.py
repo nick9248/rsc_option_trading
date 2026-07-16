@@ -1469,6 +1469,39 @@ class DatabaseRepository:
                 WHERE snapshot_hour = %s AND currency = %s AND expiration = %s
             """, (iv_percentile_expiry, snapshot_hour, currency, expiration))
 
+    def get_latest_iv_percentile_expiry(
+        self,
+        currency: str,
+        expiration: str
+    ) -> Optional[float]:
+        """
+        Latest per-expiry IV percentile for (currency, expiration) — the
+        entry-time ranking signal for the straddle scanner
+        (coding/service/scanner/straddle_scan_service.py). Chosen because
+        iv_percentile_expiry was the deal-quality metric that best predicted
+        long-straddle P&L in scripts/backtest_straddle_metrics.py.
+
+        Args:
+            currency: Currency symbol (e.g., "BTC", "ETH").
+            expiration: Expiration date string (e.g., "27DEC24").
+
+        Returns:
+            Most recent iv_percentile_expiry value (float), or None if no
+            volatility snapshot with a non-NULL percentile exists yet for
+            this (currency, expiration) pair.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                SELECT iv_percentile_expiry
+                FROM onchain_volatility_snapshots
+                WHERE currency = %s AND expiration = %s
+                  AND iv_percentile_expiry IS NOT NULL
+                ORDER BY snapshot_hour DESC
+                LIMIT 1
+            """, (currency, expiration))
+            row = cursor.fetchone()
+            return float(row[0]) if row else None
+
     # ── OTM Contract Finder ───────────────────────────────────────────────────
 
     def get_dvol_history_before(
