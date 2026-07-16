@@ -24,15 +24,17 @@ from coding.core.logging.logging_setup import init_logging
 init_logging(level="INFO")
 
 import psycopg2
+from coding.core.database.config import DatabaseConfig
 from coding.service.deribit.dvol_fetcher import DVOLFetcher
 
 logger = logging.getLogger(__name__)
 
 
 def get_connection():
+    cfg = DatabaseConfig()
     return psycopg2.connect(
-        host="localhost", port=5433, dbname="option_trading",
-        user="postgres", password=os.getenv("DB_PASSWORD", "")
+        host=cfg.host, port=cfg.port, dbname=cfg.database,
+        user=cfg.user, password=cfg.password
     )
 
 
