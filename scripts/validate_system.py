@@ -7,9 +7,16 @@ on-chain analysis validation. Checks:
 - API connectivity
 - Database connection
 - Required tables/views exist
-- Collection freshness (does the local DB show recent hourly data?)
+- Collection freshness (does the local DB show recent hourly data? -
+  includes onchain_volatility_snapshots, wired into the hourly collector
+  2026-07-14)
 - Collection gaps in the last 48 hours
 - Local DB sync status (age of the last "Sync from VPS")
+- dvol_history freshness (canonical DVOL table feeding IV-percentile /
+  expected-move calculations - refreshed manually/weekly via
+  scripts/backfill_dvol_history.py, NOT via sync_from_vps, so it is
+  checked on its own weekly-cadence thresholds rather than the hourly
+  sync-lag thresholds used above)
 - Forward-testing harness track record (Phase 3)
 - Historical trades data quality (direction/IV completeness - feeds
   buy/sell flow analysis)
@@ -18,18 +25,35 @@ on-chain analysis validation. Checks:
 
 Removed (obsolete after the foundation-cleanup sprint): strategy signal
 checks, ML model/pipeline checks, old manual-capture table checks
-(max_pain/open_interest/volume/gex_dex/levels), displacement checks.
+(max_pain/open_interest/volume/gex_dex/levels), displacement checks,
+regime detection / technical_indicators checks.
 
 Note on "daemon liveness": the collection daemon runs on a VPS
 (coding/service/data_collection/collection_daemon.py, systemd-managed,
 30-min interval), not on this machine, so its liveness cannot be checked
 via local log files or SSH from here. Instead we check freshness of the
-LOCAL onchain_analysis_snapshots/hourly_snapshots tables. A stale result
-means either the VPS daemon stopped OR the local DB simply hasn't been
-synced recently (use the Database tab's "Sync from VPS" button, or
-scripts/sync_from_vps.py) - this script cannot tell those two apart from
-the local DB alone; check logs/vps_health.json (pulled during sync) or
-scripts/check_vps_health.py for a VPS-side view.
+LOCAL onchain_analysis_snapshots/hourly_snapshots/onchain_volatility_snapshots
+tables. A stale result means either the VPS daemon stopped OR the local DB
+simply hasn't been synced recently (use the Database tab's "Sync from VPS"
+button, or scripts/sync_from_vps.py) - this script cannot tell those two
+apart from the local DB alone; check logs/vps_health.json (pulled during
+sync) or scripts/check_vps_health.py for a VPS-side view.
+
+Note on DVOL duplication: there are two DVOL-related tables.
+`dvol_history` (asset, timestamp, dvol_value) is the canonical one read by
+DatabaseRepository.get_dvol_history[_before]() for IV-percentile / expected
+move math - it is NOT part of sync_from_vps's table list, so its freshness
+here reflects whenever scripts/backfill_dvol_history.py was last run
+against THIS machine's DB, not sync lag. `volatility_index_history`
+(currency, index_name, timestamp, date, dvol) is a separate, older table
+written every collection cycle by the VPS daemon
+(ProspectiveCollector._fetch_dvol -> DatabaseRepository.save_dvol) and IS
+synced down; it is already monitored VPS-side by
+scripts/check_vps_health.py's check_dvol(). It is deliberately NOT given
+its own freshness check here to keep this check list lean - it is
+effectively covered by the existing hourly sync-lag checks (it moves in
+lockstep with hourly_snapshots/onchain_analysis_snapshots since all three
+are written by the same collection cycle) and by check_vps_health.py.
 
 Run this before claiming "everything works".
 """
@@ -52,7 +76,7 @@ from coding.core.logging.logging_setup import init_logging
 init_logging(level="INFO")
 logger = logging.getLogger(__name__)
 
-TOTAL_CHECKS = 10
+TOTAL_CHECKS = 11
 
 
 class SystemValidator:
@@ -85,6 +109,7 @@ class SystemValidator:
         self._check_collection_freshness()
         self._check_collection_gaps()
         self._check_last_sync_status()
+        self._check_dvol_history_freshness()
         self._check_forward_testing_harness()
         self._check_historical_trades_quality()
         self._check_ohlcv_history()
@@ -202,6 +227,7 @@ class SystemValidator:
             "historical_trades": ("trade_timestamp", "ms_epoch"),
             "hourly_snapshots": ("snapshot_hour", "timestamp"),
             "onchain_analysis_snapshots": ("snapshot_hour", "timestamp"),
+            "onchain_volatility_snapshots": ("snapshot_hour", "timestamp"),
         }
 
         conn = self.repo._get_connection()
@@ -323,9 +349,66 @@ class SystemValidator:
             logger.error(f"  Failed to read vps_health.json: {e}")
             self.results["warnings"].append(f"Could not read vps_health.json: {e}")
 
+    def _check_dvol_history_freshness(self):
+        """
+        Check freshness of the canonical dvol_history table (asset, timestamp,
+        dvol_value), used by IV-percentile / expected-move calculations.
+
+        Unlike the hourly, daemon-synced tables in _check_collection_freshness,
+        this table is refreshed manually/weekly by running
+        scripts/backfill_dvol_history.py directly against this machine's DB (it
+        is not part of sync_from_vps's table list), so it gets its own,
+        looser thresholds: WARN at 7+ days stale, FAIL at 30+ days stale. It
+        silently froze for ~3 months once (the VPS-side refresher was broken
+        on a hardcoded port, fixed 2026-07-16) with no check catching it -
+        this check exists to prevent that recurring silently.
+        """
+        logger.info(f"\n[7/{TOTAL_CHECKS}] Checking DVOL History Freshness (dvol_history)...")
+        logger.info("-" * 80)
+
+        conn = self.repo._get_connection()
+        cursor = conn.cursor()
+
+        try:
+            cursor.execute("""
+                SELECT asset, MAX(timestamp)
+                FROM dvol_history
+                GROUP BY asset
+                ORDER BY asset
+            """)
+            rows = cursor.fetchall()
+
+            if not rows:
+                logger.error("  dvol_history: NO DATA")
+                logger.error("  Run: python scripts/backfill_dvol_history.py")
+                self.results["failed"].append(
+                    "dvol_history is empty - IV-percentile/expected-move calculations will be "
+                    "degraded. Run: python scripts/backfill_dvol_history.py"
+                )
+                return
+
+            for asset, latest in rows:
+                # Stored as tz-aware timestamps; compare against tz-aware "now".
+                now = datetime.now(latest.tzinfo) if latest.tzinfo else datetime.now()
+                days_ago = (now - latest).total_seconds() / 86400
+
+                if days_ago < 7:
+                    logger.info(f"  {asset}: FRESH ({days_ago:.1f} days ago)")
+                    self.results["passed"].append(f"dvol_history {asset} is fresh ({days_ago:.1f}d)")
+                elif days_ago < 30:
+                    logger.warning(f"  {asset}: STALE ({days_ago:.1f} days ago) - run scripts/backfill_dvol_history.py")
+                    self.results["warnings"].append(f"dvol_history {asset} is {days_ago:.1f} days old")
+                else:
+                    logger.error(f"  {asset}: VERY STALE ({days_ago:.1f} days ago)")
+                    self.results["failed"].append(f"dvol_history {asset} is {days_ago:.1f} days old (>30d)")
+
+        finally:
+            cursor.close()
+            self.repo._return_connection(conn)
+
     def _check_forward_testing_harness(self):
         """Check the Phase 3 forward-testing harness is recording predictions."""
-        logger.info(f"\n[7/{TOTAL_CHECKS}] Checking Forward Testing Harness...")
+        logger.info(f"\n[8/{TOTAL_CHECKS}] Checking Forward Testing Harness...")
         logger.info("-" * 80)
 
         try:
@@ -361,7 +444,7 @@ class SystemValidator:
 
     def _check_historical_trades_quality(self):
         """Check historical_trades data quality (direction/IV - feeds flow analysis)."""
-        logger.info(f"\n[8/{TOTAL_CHECKS}] Checking Historical Trades Data Quality...")
+        logger.info(f"\n[9/{TOTAL_CHECKS}] Checking Historical Trades Data Quality...")
         logger.info("-" * 80)
 
         conn = self.repo._get_connection()
@@ -412,7 +495,7 @@ class SystemValidator:
 
     def _check_ohlcv_history(self):
         """Check OHLCV history has data (feeds regime detection)."""
-        logger.info(f"\n[9/{TOTAL_CHECKS}] Checking OHLCV History (regime detection input)...")
+        logger.info(f"\n[10/{TOTAL_CHECKS}] Checking OHLCV History (regime detection input)...")
         logger.info("-" * 80)
 
         conn = self.repo._get_connection()
@@ -460,7 +543,7 @@ class SystemValidator:
 
     def _check_backfill_coverage(self):
         """Check overall historical_trades backfill date-range coverage."""
-        logger.info(f"\n[10/{TOTAL_CHECKS}] Checking Backfill Coverage...")
+        logger.info(f"\n[11/{TOTAL_CHECKS}] Checking Backfill Coverage...")
         logger.info("-" * 80)
 
         conn = self.repo._get_connection()

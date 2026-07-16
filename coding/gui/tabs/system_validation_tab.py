@@ -5,7 +5,9 @@ Provides GUI interface to run system health checks reflecting the current
 data-collection + on-chain-analysis system:
 - API connectivity
 - Database health and required tables
-- Collection freshness and gaps (local DB, post-sync)
+- Collection freshness and gaps (local DB, post-sync), including
+  onchain_volatility_snapshots
+- dvol_history freshness (canonical DVOL table, manually/weekly refreshed)
 - Forward-testing harness (Phase 3) track record
 - Historical data quality and coverage
 """
@@ -94,6 +96,7 @@ class SystemValidationTab(QWidget):
             "Run health checks on the data-collection + on-chain-analysis system:\n"
             "• API connectivity and database tables\n"
             "• Collection freshness and gaps (local DB, post-sync)\n"
+            "• dvol_history freshness (canonical DVOL, manual/weekly refresh)\n"
             "• Forward-testing harness (Phase 3) track record\n"
             "• Historical trades quality and OHLCV/backfill coverage"
         )
