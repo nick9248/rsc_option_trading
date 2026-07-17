@@ -21,6 +21,10 @@ from coding.service.data_collection.hourly_aggregation_service import HourlyAggr
 from coding.service.deribit.deribit_api_service import DeribitApiService
 from coding.service.on_chain.forward_testing_harness import ForwardTestingHarness
 from coding.service.on_chain.volatility_reconstruction_service import VolatilityReconstructionService
+from coding.service.scanner.straddle_alert_rules import StraddleAlertRule
+from coding.service.scanner.straddle_forward_test_harness import StraddleForwardTestHarness
+from coding.service.scanner.straddle_scan_service import StraddleScanService
+from coding.service.scanner.telegram_alert_service import TelegramAlertService
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +58,13 @@ class ProspectiveCollector:
         self.aggregation_service = HourlyAggregationService(repository=self.repo)
         self._forward_harness = ForwardTestingHarness(repository=self.repo)
         self._volatility_reconstruction = VolatilityReconstructionService(repository=self.repo)
+        # Straddle scanner (increment 2): reuses the same live api connection
+        # and repository as the rest of this collector (THE ONE DATA SOURCE
+        # RULE — see straddle_scan_service.py module docstring).
+        self._straddle_scan_service = StraddleScanService(api_service=self.api, repository=self.repo)
+        self._straddle_harness = StraddleForwardTestHarness(repository=self.repo)
+        self._straddle_alert_rule = StraddleAlertRule(repository=self.repo)
+        self._straddle_telegram = TelegramAlertService()
 
         logger.info("ProspectiveCollector initialized")
 
@@ -170,6 +181,45 @@ class ProspectiveCollector:
                     logger.warning(f"  Volatility reconstruction failed for {currency}: {e}")
                     reconstruction_summary[currency] = {"error": str(e)}
             result["volatility_reconstruction"] = reconstruction_summary
+
+            # Straddle scanner (increment 2): rank expiries, record scan
+            # history for forward-testing, resolve settled expiries, and
+            # send a rate-limited Telegram alert when the rule fires.
+            # Wrapped in an outer try/except AND a per-currency try/except
+            # (same isolation pattern as ForwardTestingHarness/
+            # VolatilityReconstructionService above) so a scanner failure
+            # -- at any level -- can never break the collection cycle.
+            logger.info(f"\nRunning straddle scanner for hour {hour}...")
+            scanner_summary = {}
+            try:
+                for currency in currencies:
+                    try:
+                        scan_result = self._straddle_scan_service.scan(currency)
+                        inserted = self._straddle_harness.record_scan(scan_result, scan_time=hour)
+                        self._straddle_harness.resolve_due(currency)
+
+                        should_send, top_entry, reason = self._straddle_alert_rule.should_alert(scan_result)
+                        alert_sent = False
+                        if should_send:
+                            message = self._straddle_scan_service.format_alert(scan_result)
+                            alert_sent = self._straddle_telegram.send(message)
+                            if alert_sent:
+                                self.repo.mark_straddle_scan_alert_sent(
+                                    currency=currency,
+                                    expiration=top_entry["expiry"],
+                                    scan_time=hour,
+                                )
+
+                        scanner_summary[currency] = {
+                            "inserted": inserted, "alert_sent": alert_sent, "reason": reason,
+                        }
+                        logger.info(f"  {currency} straddle scan: {scanner_summary[currency]}")
+                    except Exception as e:
+                        logger.warning(f"  Straddle scanner failed for {currency}: {e}")
+                        scanner_summary[currency] = {"error": str(e)}
+            except Exception as e:
+                logger.warning(f"  Straddle scanner block failed: {e}")
+            result["straddle_scanner"] = scanner_summary
 
         return result
 
