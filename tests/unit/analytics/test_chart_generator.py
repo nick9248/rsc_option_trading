@@ -6,6 +6,8 @@ from coding.core.analytics.chart_generator import (
     generate_flow_trend_chart,
     generate_net_flow_chart,
     generate_straddle_payoff_chart,
+    inject_theme_toggle_js,
+    save_chart,
 )
 
 
@@ -204,3 +206,59 @@ def test_payoff_chart_no_crash_with_tiny_dte_and_iv():
     assert isinstance(fig, go.Figure)
     pnl_trace = fig.data[0]
     assert max(pnl_trace.x) > min(pnl_trace.x)
+
+
+# ── Theme Toggle: light-by-default on load ──────────────────────────────────
+
+def test_theme_toggle_defaults_to_light_on_load(tmp_path):
+    """
+    User decision: the page must open in the light theme, with the button
+    then offering 'Dark mode' (first click switches to dark).
+
+    Verifies the injected JS auto-applies the light payload on load through
+    the *same* applyTheme(plotDiv, isLight) call the button's onclick uses
+    (isLight starts true), rather than a separate/duplicated code path.
+    """
+    fig = generate_straddle_payoff_chart(**_payoff_kwargs())
+    html_path = tmp_path / "payoff.html"
+    fig.write_html(str(html_path))
+    inject_theme_toggle_js(html_path, fig)
+
+    content = html_path.read_text(encoding="utf-8")
+
+    # Light is the state on load.
+    assert "var isLight = true;" in content
+
+    # init() and the button's onclick both call this exact statement — the
+    # auto-apply on load reuses the same path as a manual click.
+    assert content.count("applyTheme(plotDiv, isLight);") == 2
+
+    # init() applies the theme before wiring up the button, so nothing is
+    # visibly dark once the button appears.
+    init_body_start = content.index("function init(attempts)")
+    init_body = content[init_body_start:content.index("makeButton(plotDiv);", init_body_start)]
+    assert "applyTheme(plotDiv, isLight);" in init_body
+
+    # document.body background is set synchronously (before Plotly is even
+    # ready) using the light payload, so there's no post-load flash.
+    assert "document.body.style.background = THEME.paper_bgcolor.light;" in content
+
+    # Button label reflects "next action" — starts on light, so it must
+    # read 'Dark mode' once rendered.
+    assert "isLight ? 'Dark mode' : 'Light mode'" in content
+
+
+def test_theme_toggle_survives_full_save_pipeline(tmp_path, monkeypatch):
+    """End-to-end: save_chart -> inject_theme_toggle_js, as StraddleScanService
+    actually calls it, still produces the light-default init wiring."""
+    import coding.core.analytics.chart_generator as chart_generator_module
+
+    monkeypatch.setattr(chart_generator_module, "CHARTS_DIR", tmp_path)
+
+    fig = generate_straddle_payoff_chart(**_payoff_kwargs())
+    path = save_chart(fig, "straddle_theme_test", subfolder="straddle", save_png=False)
+    inject_theme_toggle_js(chart_generator_module.Path(path), fig)
+
+    content = chart_generator_module.Path(path).read_text(encoding="utf-8")
+    assert "var isLight = true;" in content
+    assert content.count("applyTheme(plotDiv, isLight);") == 2

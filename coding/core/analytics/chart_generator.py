@@ -118,16 +118,29 @@ _DARK_TO_LIGHT_COLORS: Dict[str, str] = {
 }
 
 # JS injected into saved HTML files: a fixed top-right button that toggles
-# the page between the saved dark theme and a light theme. The color
-# mapping (__THEME_PAYLOAD_JSON__) is generated in Python from the actual
-# figure at save time — see _build_theme_toggle_payload — so every
-# annotations[i]/shapes[i]/trace-index path below is exact for this figure,
-# never guessed.
+# the page between a light theme (the default on load) and the figure's
+# saved dark theme. The color mapping (__THEME_PAYLOAD_JSON__) is generated
+# in Python from the actual figure at save time — see
+# _build_theme_toggle_payload — so every annotations[i]/shapes[i]/
+# trace-index path below is exact for this figure, never guessed.
 _THEME_TOGGLE_JS_TEMPLATE = """
 <script>
 (function() {
     var THEME = __THEME_PAYLOAD_JSON__;
-    var isLight = false;
+    // Light is the default state on page load (isLight starts true). The
+    // button's very first click therefore switches to dark — see init(),
+    // which calls the exact same applyTheme(plotDiv, true) path the button
+    // uses on toggle, just invoked once automatically instead of on click.
+    var isLight = true;
+
+    // Set the page chrome background immediately (synchronously, before
+    // Plotly has even loaded) so there is no light/dark mismatch flash for
+    // the area around the plot. The plot itself still renders in its saved
+    // (dark) colors until Plotly is ready and applyTheme() runs — a brief
+    // flash there is acceptable, this only guards document.body.
+    if (THEME.paper_bgcolor && THEME.paper_bgcolor.light) {
+        document.body.style.background = THEME.paper_bgcolor.light;
+    }
 
     function applyTheme(plotDiv, light) {
         var relayout = {};
@@ -181,10 +194,20 @@ _THEME_TOGGLE_JS_TEMPLATE = """
         if (bodyBg !== undefined) { document.body.style.background = bodyBg; }
     }
 
+    // Button label/border/background/color reflect the *current* state and
+    // describe the action the next click performs (e.g. while isLight is
+    // true — the load default — the button reads "Dark mode"). Shared by
+    // the initial render and every click so the two never drift apart.
+    function syncButtonUI(btn) {
+        btn.textContent = isLight ? 'Dark mode' : 'Light mode';
+        btn.style.border = isLight ? '1px solid #d1d5db' : '1px solid #666666';
+        btn.style.background = isLight ? 'rgba(255,255,255,0.85)' : 'rgba(60,60,60,0.55)';
+        btn.style.color = isLight ? '#1f2937' : '#e0e0e0';
+    }
+
     function makeButton(plotDiv) {
         var btn = document.createElement('button');
         btn.type = 'button';
-        btn.textContent = 'Light mode';
         btn.style.position = 'fixed';
         btn.style.top = '12px';
         btn.style.right = '12px';
@@ -193,9 +216,6 @@ _THEME_TOGGLE_JS_TEMPLATE = """
         btn.style.fontSize = '12px';
         btn.style.fontFamily = 'Arial, sans-serif';
         btn.style.borderRadius = '6px';
-        btn.style.border = '1px solid #666666';
-        btn.style.background = 'rgba(60,60,60,0.55)';
-        btn.style.color = '#e0e0e0';
         btn.style.cursor = 'pointer';
         btn.style.transition = 'opacity 0.15s ease';
         btn.onmouseenter = function() { btn.style.opacity = '0.8'; };
@@ -203,11 +223,9 @@ _THEME_TOGGLE_JS_TEMPLATE = """
         btn.onclick = function() {
             isLight = !isLight;
             applyTheme(plotDiv, isLight);
-            btn.textContent = isLight ? 'Dark mode' : 'Light mode';
-            btn.style.border = isLight ? '1px solid #d1d5db' : '1px solid #666666';
-            btn.style.background = isLight ? 'rgba(255,255,255,0.85)' : 'rgba(60,60,60,0.55)';
-            btn.style.color = isLight ? '#1f2937' : '#e0e0e0';
+            syncButtonUI(btn);
         };
+        syncButtonUI(btn);
         document.body.appendChild(btn);
     }
 
@@ -219,6 +237,11 @@ _THEME_TOGGLE_JS_TEMPLATE = """
             setTimeout(function() { init(attempts + 1); }, 150);
             return;
         }
+        // Auto-apply the light payload once on load — the exact same call
+        // the button's onclick makes when toggling to light (isLight is
+        // already true by default here, so this is applyTheme(plotDiv,
+        // true), same as a first click would produce).
+        applyTheme(plotDiv, isLight);
         makeButton(plotDiv);
     }
 
@@ -345,9 +368,12 @@ def inject_theme_toggle_js(html_path: Path, fig: go.Figure) -> None:
     """
     Inject a light/dark theme toggle button into a saved chart HTML file.
 
-    The button is fixed top-right, styled unobtrusively for both themes,
-    and defaults to the dark state the figure was saved in (nothing changes
-    until the user clicks). Every color it can flip — backgrounds, fonts,
+    The button is fixed top-right, styled unobtrusively for both themes.
+    The page opens in the light theme (auto-applied once Plotly is ready,
+    via the same code path the button uses) even though the figure itself
+    was saved with dark-mode colors; the button then reads "Dark mode" so
+    the first click switches back to the saved dark state. Every color it
+    can flip — backgrounds, fonts,
     axis grid/line/tick colors, legend, each annotation's font/bgcolor/
     bordercolor, each shape's line color, and the P&L trace's line color —
     is derived from the real `fig` passed in (see
