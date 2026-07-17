@@ -16,6 +16,7 @@ coding.core.analytics.chart_generator.
 """
 
 import logging
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from PySide6.QtWidgets import (
@@ -23,7 +24,7 @@ from PySide6.QtWidgets import (
     QFrame, QSizePolicy, QTreeWidget, QTreeWidgetItem, QHeaderView,
     QTextEdit, QGroupBox,
 )
-from PySide6.QtCore import Qt, QThread, Signal, QUrl
+from PySide6.QtCore import Qt, QThread, Signal, QUrl, QTimer
 from PySide6.QtGui import QColor, QDesktopServices
 
 from coding.gui.theme.colors import Colors
@@ -244,6 +245,17 @@ class AutomationTab(QWidget):
         self._scan_service = StraddleScanService()  # format_alert + generate_payoff_chart (no I/O of its own)
         self._chart_workers: List[PayoffChartWorker] = []
 
+        # Quote-age tracking: scan results are snapshots, and Deribit quotes
+        # drift within minutes. self._scan_as_of / self._scan_index_price
+        # hold the last scan's timestamp so _update_age_banner can recompute
+        # "how old is this data" every second, independent of the GUI thread
+        # doing anything else.
+        self._scan_as_of: Optional[datetime] = None
+        self._scan_index_price: Optional[float] = None
+        self._age_timer = QTimer(self)
+        self._age_timer.setInterval(1000)
+        self._age_timer.timeout.connect(self._update_age_banner)
+
         self._setup_ui()
         self._connect_signals()
 
@@ -268,6 +280,7 @@ class AutomationTab(QWidget):
         layout.addWidget(desc)
 
         layout.addWidget(self._build_controls())
+        layout.addWidget(self._build_age_banner())
         layout.addWidget(self._build_results_tree(), stretch=1)
         layout.addWidget(self._build_alert_preview())
 
@@ -314,6 +327,43 @@ class AutomationTab(QWidget):
         self.status_label.setStyleSheet(f"color: {Colors.TEXT_MUTED};")
         row.addWidget(self.status_label)
 
+        return frame
+
+    def _build_age_banner(self) -> QFrame:
+        """
+        Prominent "how stale is this data" banner shown above the results
+        tree. Hidden until the first scan completes; then a QTimer ticks
+        every second so the displayed age (and its color) stay live without
+        requiring another scan.
+        """
+        frame = QFrame()
+        frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: {Colors.SURFACE};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+            }}
+        """)
+        row = QHBoxLayout(frame)
+        row.setContentsMargins(16, 10, 16, 10)
+
+        self.age_banner_label = QLabel("")
+        self.age_banner_label.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-weight: 600;")
+        self.age_banner_label.setToolTip(
+            "Prices in this table are the executable ASK prices captured at "
+            "the moment the scan ran (\"as of\"). Deribit's live order book "
+            "moves continuously between scans — verified: a snapshot taken "
+            "at the same instant matches the website to the cent, but a "
+            "scan just a few minutes old can already differ by roughly 1%. "
+            "Only compare website prices against a FRESH scan — re-run the "
+            "scan first if the age below is amber or red."
+        )
+        row.addWidget(self.age_banner_label)
+        row.addStretch()
+
+        frame.setLayout(row)
+        frame.hide()  # nothing scanned yet
+        self.age_banner_frame = frame
         return frame
 
     def _build_results_tree(self) -> QGroupBox:
@@ -389,6 +439,19 @@ class AutomationTab(QWidget):
         self.run_button.setEnabled(True)
         self._last_scan_result = result
 
+        self._scan_as_of = result.get("as_of")
+        self._scan_index_price = result.get("index_price")
+        if self._scan_as_of is not None:
+            self.age_banner_frame.show()
+            self._update_age_banner()
+            if not self._age_timer.isActive():
+                self._age_timer.start()
+        else:
+            # Should not happen per StraddleScanService.scan()'s contract,
+            # but never show a banner we can't compute an age for.
+            self._age_timer.stop()
+            self.age_banner_frame.hide()
+
         expiries = result.get("expiries", [])
         excluded = result.get("excluded", [])
 
@@ -415,6 +478,52 @@ class AutomationTab(QWidget):
         self.status_label.setText("Scan failed")
         self.status_label.setStyleSheet(f"color: {Colors.ERROR};")
         self.alert_text.setPlainText(f"ERROR: {error_message}")
+
+    # ── Quote-age banner ──────────────────────────────────────────────────────
+
+    def _update_age_banner(self) -> None:
+        """
+        Recompute and redraw the age banner. Called once right after a scan
+        finishes and then every second via self._age_timer so the age (and
+        its color) advance live even if the user never re-scans.
+        """
+        if self._scan_as_of is None:
+            return
+
+        as_of = self._scan_as_of
+        if as_of.tzinfo is None:
+            as_of = as_of.replace(tzinfo=timezone.utc)
+        age_seconds = (datetime.now(timezone.utc) - as_of).total_seconds()
+
+        if age_seconds < 60:
+            color = Colors.TEXT_PRIMARY
+            suffix = ""
+        elif age_seconds < 180:
+            color = Colors.WARNING
+            suffix = ""
+        else:
+            color = Colors.ERROR
+            suffix = " — STALE, re-run scan"
+
+        index_str = (
+            f"${self._scan_index_price:,.2f}" if self._scan_index_price is not None else "N/A"
+        )
+        text = (
+            f"As of {as_of.strftime('%H:%M:%S')} UTC · Index {index_str} · "
+            f"age: {self._format_age(age_seconds)}{suffix}"
+        )
+        self.age_banner_label.setText(text)
+        self.age_banner_label.setStyleSheet(f"color: {color}; font-weight: 600;")
+
+    @staticmethod
+    def _format_age(age_seconds: float) -> str:
+        """Format elapsed seconds as 'M:SS' (or 'H:MM:SS' past an hour)."""
+        total_seconds = max(0, int(age_seconds))
+        minutes, seconds = divmod(total_seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+        if hours:
+            return f"{hours}:{minutes:02d}:{seconds:02d}"
+        return f"{minutes}:{seconds:02d}"
 
     # ── Tree rendering ────────────────────────────────────────────────────────
 

@@ -699,22 +699,43 @@ def generate_straddle_payoff_chart(
     x_values = [x_lo + i * (x_hi - x_lo) / steps for i in range(steps + 1)]
     y_values = [abs(s - strike) - cost_usd for s in x_values]
 
+    # Band styling: distinct, low-alpha fills that read clearly on the
+    # #1a1a1a chart background instead of the old heavy brown/purple blobs.
+    # Alpha is baked directly into the rgba() fillcolor (not a separate
+    # `opacity` multiplier) so it's unambiguous when inspecting the saved
+    # HTML. Thin dashed borders in the same hue mark each band's edges, and
+    # both an annotation label and a legend entry (via an invisible marker
+    # trace) identify what each band means.
+    IV_BAND_LINE = "#3b82f6"    # blue-500 — IV-implied range
+    IV_BAND_FILL = "rgba(59, 130, 246, 0.08)"
+    RV_BAND_LINE = "#22c55e"    # green-500 — realized-pace range
+    RV_BAND_FILL = "rgba(34, 197, 94, 0.07)"
+
     fig = go.Figure()
 
     fig.add_trace(go.Scatter(
         x=x_values, y=y_values, mode="lines", name="P&L at expiry",
         line=dict(color="#60a5fa", width=2.5),
         hovertemplate="Underlying: $%{x:,.0f}<br>P&L: $%{y:,.0f}<extra></extra>",
+        showlegend=False,
     ))
 
-    # IV-implied 1-sigma expected range (shaded, indigo)
+    # IV-implied 1-sigma expected range (shaded, blue)
     fig.add_vrect(
         x0=iv_range_lo, x1=iv_range_hi,
-        fillcolor="#818cf8", opacity=0.12, line_width=0,
+        fillcolor=IV_BAND_FILL, line_width=1, line_color=IV_BAND_LINE, line_dash="dash",
         annotation_text="IV-implied 1σ range", annotation_position="top left",
+        annotation_font=dict(color=IV_BAND_LINE, size=11),
     )
+    # Legend entry for the IV band (vrect shapes don't get their own legend
+    # entry, so an invisible marker trace carries the label + swatch color).
+    fig.add_trace(go.Scatter(
+        x=[None], y=[None], mode="markers",
+        marker=dict(size=10, symbol="square", color=IV_BAND_FILL, line=dict(color=IV_BAND_LINE, width=1)),
+        name="IV-implied 1σ range", showlegend=True,
+    ))
 
-    # Realized-pace equivalent range (shaded, amber) — only if rv known
+    # Realized-pace equivalent range (shaded, green) — only if rv known
     if rv is not None:
         rv_sigma_sqrt_t = (rv / 100.0) * math.sqrt(max(time_to_expiry_years, 0.0))
         if rv_sigma_sqrt_t > 0:
@@ -722,9 +743,15 @@ def generate_straddle_payoff_chart(
             rv_range_hi = future_price * math.exp(rv_sigma_sqrt_t)
             fig.add_vrect(
                 x0=rv_range_lo, x1=rv_range_hi,
-                fillcolor="#f59e0b", opacity=0.12, line_width=0,
-                annotation_text="Realized-pace range", annotation_position="bottom left",
+                fillcolor=RV_BAND_FILL, line_width=1, line_color=RV_BAND_LINE, line_dash="dash",
+                annotation_text="Realized-pace 1σ range", annotation_position="bottom left",
+                annotation_font=dict(color=RV_BAND_LINE, size=11),
             )
+            fig.add_trace(go.Scatter(
+                x=[None], y=[None], mode="markers",
+                marker=dict(size=10, symbol="square", color=RV_BAND_FILL, line=dict(color=RV_BAND_LINE, width=1)),
+                name="Realized-pace 1σ range", showlegend=True,
+            ))
 
     # Zero P&L line
     fig.add_hline(
@@ -760,10 +787,15 @@ def generate_straddle_payoff_chart(
         hovermode="x",
         autosize=True,
         margin=dict(t=80, r=40, b=60, l=60),
-        showlegend=False,
+        showlegend=True,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom", y=1.02,
+            xanchor="left", x=0,
+            bgcolor="rgba(26,26,26,0.85)",
+            bordercolor="#444444", borderwidth=1,
+        ),
         **theme
     )
-
-    return fig
 
     return fig
