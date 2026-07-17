@@ -634,6 +634,11 @@ def generate_flow_trend_chart(
     return fig
 
 
+def _fmt_k(value: float) -> str:
+    """Format a dollar value in compact $k notation, e.g. 54800 -> '$54.8k'."""
+    return f"${value / 1000.0:,.1f}k"
+
+
 def generate_straddle_payoff_chart(
     currency: str,
     expiry: str,
@@ -645,6 +650,8 @@ def generate_straddle_payoff_chart(
     breakeven_down: float,
     breakeven_up: float,
     rv: Optional[float] = None,
+    iv_percentile: Optional[float] = None,
+    vrp: Optional[float] = None,
 ) -> go.Figure:
     """
     Generate a long-straddle payoff-at-expiry chart.
@@ -652,18 +659,23 @@ def generate_straddle_payoff_chart(
     Pure function — takes the primitives already computed by
     StraddleScanService (no API/DB access here, per the Core layer rule).
 
-    Content:
-      - x = underlying price at expiry, spanning roughly
-        F +/- 2.5 * (IV-implied 1-sigma dollar move), so both shaded bands
-        below comfortably fit inside the plotted range.
-      - y = long-straddle P&L in USD at expiry: |S - K| - cost_usd.
-      - Zero-P&L horizontal line.
-      - Vertical markers: strike, current F, both breakevens.
-      - Shaded band: IV-implied 1-sigma expected range
-        (F/exp(sigma_sqrt_t) .. F*exp(sigma_sqrt_t), same formula
-        StraddleScanService uses to pick candidate strikes).
-      - Shaded band (different color): realized-pace equivalent range,
-        using rv in place of atm_iv. Omitted when rv is None.
+    Layout:
+      - fig.data[0] is the P&L curve (y = |S - K| - cost_usd), 2px neutral
+        blue. Green/red area fills (added as separate showlegend=False
+        traces right after it) mark the profit/loss polarity.
+      - Zero-P&L line: thin solid gray, no text annotation (avoids edge
+        clipping).
+      - Two slim horizontal "range strips" reserved in a bottom sliver of
+        the y-axis (below the lowest P&L value) show the IV-implied and
+        realized-pace 1-sigma ranges — recessive, not full-height boxes.
+      - Vertical dotted/dash-dot markers for strike, current F and both
+        breakevens, with staggered small-font labels above the plot so
+        nothing overlaps even when strike and F sit close together.
+      - A stats box (top-right, inside the plot) with max loss, IV/RV and
+        (when provided) IV percentile / VRP context.
+      - Title is top-left with a smaller gray subtitle line; legend is
+        horizontal, below the plot — the title and legend never compete
+        for the same corner.
 
     Args:
         currency: Currency symbol (BTC, ETH, ...).
@@ -676,7 +688,11 @@ def generate_straddle_payoff_chart(
         breakeven_down: strike - cost_usd.
         breakeven_up: strike + cost_usd.
         rv: Realized vol (percent units), or None if unavailable — the
-            realized-pace band is omitted when None.
+            realized-pace range strip is omitted when None.
+        iv_percentile: Per-expiry ATM-IV percentile, 0-100 scale, or None —
+            shown in the stats box when provided.
+        vrp: Variance risk premium (atm_iv - rv, percentage points), or
+            None — shown in the stats box when provided.
 
     Returns:
         Plotly figure object.
@@ -699,101 +715,201 @@ def generate_straddle_payoff_chart(
     x_values = [x_lo + i * (x_hi - x_lo) / steps for i in range(steps + 1)]
     y_values = [abs(s - strike) - cost_usd for s in x_values]
 
-    # Band styling: distinct, low-alpha fills that read clearly on the
-    # #1a1a1a chart background instead of the old heavy brown/purple blobs.
-    # Alpha is baked directly into the rgba() fillcolor (not a separate
-    # `opacity` multiplier) so it's unambiguous when inspecting the saved
-    # HTML. Thin dashed borders in the same hue mark each band's edges, and
-    # both an annotation label and a legend entry (via an invisible marker
-    # trace) identify what each band means.
-    IV_BAND_LINE = "#3b82f6"    # blue-500 — IV-implied range
-    IV_BAND_FILL = "rgba(59, 130, 246, 0.08)"
-    RV_BAND_LINE = "#22c55e"    # green-500 — realized-pace range
-    RV_BAND_FILL = "rgba(34, 197, 94, 0.07)"
-
-    fig = go.Figure()
-
-    fig.add_trace(go.Scatter(
-        x=x_values, y=y_values, mode="lines", name="P&L at expiry",
-        line=dict(color="#60a5fa", width=2.5),
-        hovertemplate="Underlying: $%{x:,.0f}<br>P&L: $%{y:,.0f}<extra></extra>",
-        showlegend=False,
-    ))
-
-    # IV-implied 1-sigma expected range (shaded, blue)
-    fig.add_vrect(
-        x0=iv_range_lo, x1=iv_range_hi,
-        fillcolor=IV_BAND_FILL, line_width=1, line_color=IV_BAND_LINE, line_dash="dash",
-        annotation_text="IV-implied 1σ range", annotation_position="top left",
-        annotation_font=dict(color=IV_BAND_LINE, size=11),
-    )
-    # Legend entry for the IV band (vrect shapes don't get their own legend
-    # entry, so an invisible marker trace carries the label + swatch color).
-    fig.add_trace(go.Scatter(
-        x=[None], y=[None], mode="markers",
-        marker=dict(size=10, symbol="square", color=IV_BAND_FILL, line=dict(color=IV_BAND_LINE, width=1)),
-        name="IV-implied 1σ range", showlegend=True,
-    ))
-
-    # Realized-pace equivalent range (shaded, green) — only if rv known
+    rv_range_lo = rv_range_hi = None
     if rv is not None:
         rv_sigma_sqrt_t = (rv / 100.0) * math.sqrt(max(time_to_expiry_years, 0.0))
         if rv_sigma_sqrt_t > 0:
             rv_range_lo = future_price / math.exp(rv_sigma_sqrt_t)
             rv_range_hi = future_price * math.exp(rv_sigma_sqrt_t)
-            fig.add_vrect(
-                x0=rv_range_lo, x1=rv_range_hi,
-                fillcolor=RV_BAND_FILL, line_width=1, line_color=RV_BAND_LINE, line_dash="dash",
-                annotation_text="Realized-pace 1σ range", annotation_position="bottom left",
-                annotation_font=dict(color=RV_BAND_LINE, size=11),
-            )
-            fig.add_trace(go.Scatter(
-                x=[None], y=[None], mode="markers",
-                marker=dict(size=10, symbol="square", color=RV_BAND_FILL, line=dict(color=RV_BAND_LINE, width=1)),
-                name="Realized-pace 1σ range", showlegend=True,
-            ))
 
-    # Zero P&L line
-    fig.add_hline(
-        y=0, line_dash="dash", line_color="#666666",
-        annotation_text="Breakeven", annotation_position="right",
+    # ── y-axis layout: reserve a bottom sliver for the two range strips ────
+    data_y_min = min(y_values)
+    data_y_max = max(y_values)
+    data_span = max(data_y_max - data_y_min, 1e-9)
+    strip_zone_height = 0.22 * data_span
+    y_axis_bottom = data_y_min - strip_zone_height
+    y_axis_top = data_y_max + 0.08 * data_span
+
+    IV_STRIP_COLOR = "#3b82f6"   # blue-500 — IV-implied range
+    RV_STRIP_COLOR = "#22c55e"   # green-500 — realized-pace range
+    iv_strip_y0 = y_axis_bottom + 0.58 * strip_zone_height
+    iv_strip_y1 = y_axis_bottom + 0.80 * strip_zone_height
+    rv_strip_y0 = y_axis_bottom + 0.16 * strip_zone_height
+    rv_strip_y1 = y_axis_bottom + 0.38 * strip_zone_height
+
+    fig = go.Figure()
+
+    # ── data[0]: the P&L curve — invariant relied on by callers/tests ──────
+    fig.add_trace(go.Scatter(
+        x=x_values, y=y_values, mode="lines", name="P&L at expiry",
+        line=dict(color="#60a5fa", width=2),
+        hovertemplate="S = $%{x:,.0f}<br>P&L = $%{y:,.0f}<extra></extra>",
+        showlegend=False,
+    ))
+
+    # ── polarity fills: profit (green) / loss (red), masked segments ───────
+    # None gaps break the line/fill at the sign change so each region fills
+    # to zero independently instead of one fill spanning the whole curve.
+    profit_y = [y if y >= 0 else None for y in y_values]
+    loss_y = [y if y < 0 else None for y in y_values]
+
+    fig.add_trace(go.Scatter(
+        x=x_values, y=profit_y, mode="lines", line=dict(width=0),
+        fill="tozeroy", fillcolor="rgba(34,197,94,0.15)",
+        hoverinfo="skip", showlegend=False,
+    ))
+    fig.add_trace(go.Scatter(
+        x=x_values, y=loss_y, mode="lines", line=dict(width=0),
+        fill="tozeroy", fillcolor="rgba(239,68,68,0.12)",
+        hoverinfo="skip", showlegend=False,
+    ))
+
+    # ── zero P&L line — thin solid gray, no annotation (avoids clipping) ───
+    fig.add_shape(
+        type="line", xref="x", yref="y",
+        x0=x_lo, x1=x_hi, y0=0, y1=0,
+        line=dict(color="#666666", width=1),
     )
 
-    # Vertical markers
-    fig.add_vline(
-        x=strike, line_dash="dot", line_color="#e0e0e0",
-        annotation_text=f"Strike ${strike:,.0f}", annotation_position="top",
+    # ── range strips: slim, recessive, stacked in the reserved bottom zone ─
+    fig.add_shape(
+        type="rect", xref="x", yref="y",
+        x0=iv_range_lo, x1=iv_range_hi, y0=iv_strip_y0, y1=iv_strip_y1,
+        fillcolor=IV_STRIP_COLOR, opacity=0.5, line_width=0,
     )
-    fig.add_vline(
-        x=future_price, line_dash="dot", line_color="#ffd93d",
-        annotation_text=f"F ${future_price:,.0f}", annotation_position="bottom",
+    fig.add_annotation(
+        x=iv_range_lo, y=(iv_strip_y0 + iv_strip_y1) / 2, xref="x", yref="y",
+        text=_fmt_k(iv_range_lo), showarrow=False, xanchor="right", xshift=-4,
+        font=dict(color="#9ca3af", size=10),
     )
-    fig.add_vline(
-        x=breakeven_down, line_dash="dashdot", line_color="#f43f5e",
-        annotation_text=f"BE↓ ${breakeven_down:,.0f}", annotation_position="top left",
+    fig.add_annotation(
+        x=iv_range_hi, y=(iv_strip_y0 + iv_strip_y1) / 2, xref="x", yref="y",
+        text=_fmt_k(iv_range_hi), showarrow=False, xanchor="left", xshift=4,
+        font=dict(color="#9ca3af", size=10),
     )
-    fig.add_vline(
-        x=breakeven_up, line_dash="dashdot", line_color="#10b981",
-        annotation_text=f"BE↑ ${breakeven_up:,.0f}", annotation_position="top right",
+    fig.add_trace(go.Scatter(
+        x=[None], y=[None], mode="lines",
+        line=dict(color=IV_STRIP_COLOR, width=6),
+        name="IV-implied 1σ range", showlegend=True,
+    ))
+
+    if rv_range_lo is not None and rv_range_hi is not None:
+        fig.add_shape(
+            type="rect", xref="x", yref="y",
+            x0=rv_range_lo, x1=rv_range_hi, y0=rv_strip_y0, y1=rv_strip_y1,
+            fillcolor=RV_STRIP_COLOR, opacity=0.5, line_width=0,
+        )
+        fig.add_annotation(
+            x=rv_range_lo, y=(rv_strip_y0 + rv_strip_y1) / 2, xref="x", yref="y",
+            text=_fmt_k(rv_range_lo), showarrow=False, xanchor="right", xshift=-4,
+            font=dict(color="#9ca3af", size=10),
+        )
+        fig.add_annotation(
+            x=rv_range_hi, y=(rv_strip_y0 + rv_strip_y1) / 2, xref="x", yref="y",
+            text=_fmt_k(rv_range_hi), showarrow=False, xanchor="left", xshift=4,
+            font=dict(color="#9ca3af", size=10),
+        )
+        fig.add_trace(go.Scatter(
+            x=[None], y=[None], mode="lines",
+            line=dict(color=RV_STRIP_COLOR, width=6),
+            name="Realized-pace 1σ range", showlegend=True,
+        ))
+
+    # ── vertical markers: dotted/dash-dot lines, full data-y span ──────────
+    def _marker_line(x: float, color: str, dash: str) -> None:
+        fig.add_shape(
+            type="line", xref="x", yref="y",
+            x0=x, x1=x, y0=y_axis_bottom, y1=y_axis_top,
+            line=dict(color=color, width=1.5, dash=dash),
+        )
+
+    STRIKE_COLOR = "#f59e0b"   # amber
+    F_COLOR = "#e5e7eb"        # near-white
+    BE_COLOR = "#fb7185"       # rose
+
+    _marker_line(strike, STRIKE_COLOR, "dot")
+    _marker_line(future_price, F_COLOR, "dot")
+    _marker_line(breakeven_down, BE_COLOR, "dashdot")
+    _marker_line(breakeven_up, BE_COLOR, "dashdot")
+
+    # Staggered paper-space labels — two height tiers so nothing collides
+    # even when strike and F sit only a small distance apart on the x-axis.
+    down_pct = (breakeven_down / future_price - 1.0) * 100.0
+    up_pct = (breakeven_up / future_price - 1.0) * 100.0
+
+    def _marker_label(x: float, y: float, text: str, color: str) -> None:
+        fig.add_annotation(
+            x=x, y=y, xref="x", yref="paper",
+            text=text, showarrow=False,
+            font=dict(color=color, size=11),
+            bgcolor="rgba(26,26,26,0.6)",
+        )
+
+    _marker_label(strike, 1.09, f"Strike {strike:,.0f}", STRIKE_COLOR)
+    _marker_label(future_price, 1.02, f"F {future_price:,.0f}", F_COLOR)
+    _marker_label(breakeven_down, 1.09, f"BE↓ {breakeven_down:,.0f} ({down_pct:+.1f}%)", BE_COLOR)
+    _marker_label(breakeven_up, 1.02, f"BE↑ {breakeven_up:,.0f} ({up_pct:+.1f}%)", BE_COLOR)
+
+    # ── stats box: top-right, inside the plot area ──────────────────────────
+    stats_lines = [
+        f"Max loss ${cost_usd:,.0f} (at {strike:,.0f})",
+    ]
+    iv_rv_line = f"IV {atm_iv:.1f}%"
+    if rv is not None:
+        iv_rv_line += f" · RV {rv:.1f}%"
+    stats_lines.append(iv_rv_line)
+
+    extra_parts = []
+    if iv_percentile is not None:
+        extra_parts.append(f"IV %ile {iv_percentile:.1f}%")
+    if vrp is not None:
+        extra_parts.append(f"VRP {vrp:+.1f}")
+    if extra_parts:
+        stats_lines.append(" · ".join(extra_parts))
+
+    fig.add_annotation(
+        x=0.98, y=0.95, xref="paper", yref="paper",
+        xanchor="right", yanchor="top", align="left",
+        text="<br>".join(stats_lines), showarrow=False,
+        font=dict(color="#9ca3af", size=11),
+        bgcolor="rgba(26,26,26,0.85)",
+        bordercolor="#444444", borderwidth=1, borderpad=8,
     )
+
+    # ── title (top-left, with gray subtitle) + layout ───────────────────────
+    title_text = (
+        f"Long Straddle Payoff — {currency} {expiry}"
+        f"<br><span style='font-size:12px;color:#9ca3af'>"
+        f"Strike {strike:,.0f} · Cost ${cost_usd:,.0f} · "
+        f"Breakevens {breakeven_down:,.0f} / {breakeven_up:,.0f} · "
+        f"DTE {dte:.0f}</span>"
+    )
+
+    # Merge theme's base xaxis/yaxis styling (gridcolor, linecolor, tickcolor)
+    # with this chart's own axis settings — both use the "xaxis"/"yaxis" key
+    # so a plain **theme spread here would collide with explicit overrides.
+    theme_xaxis = dict(theme.pop("xaxis", {}))
+    theme_yaxis = dict(theme.pop("yaxis", {}))
+    theme_xaxis.update(title="Underlying price at expiry (USD)", tickformat=",", range=[x_lo, x_hi])
+    theme_yaxis.update(title="P&L (USD)", tickprefix="$", tickformat="~s", range=[y_axis_bottom, y_axis_top])
 
     fig.update_layout(
-        title=(
-            f"Long Straddle Payoff — {currency} {expiry} {strike:,.0f} strike "
-            f"(cost ${cost_usd:,.0f})"
+        title=dict(
+            text=title_text, x=0.0, xanchor="left", y=0.97, yanchor="top",
+            font=dict(size=18, color="#ffffff"),
         ),
-        xaxis_title="Underlying price at expiry (USD)",
-        yaxis_title="P&L (USD)",
-        hovermode="x",
+        xaxis=theme_xaxis,
+        yaxis=theme_yaxis,
+        hovermode="x unified",
         autosize=True,
-        margin=dict(t=80, r=40, b=60, l=60),
+        margin=dict(t=110, r=40, b=90, l=70),
         showlegend=True,
         legend=dict(
             orientation="h",
-            yanchor="bottom", y=1.02,
-            xanchor="left", x=0,
-            bgcolor="rgba(26,26,26,0.85)",
-            bordercolor="#444444", borderwidth=1,
+            yanchor="top", y=-0.12,
+            xanchor="center", x=0.5,
+            bgcolor="rgba(0,0,0,0)",
+            font=dict(color="#9ca3af", size=11),
         ),
         **theme
     )

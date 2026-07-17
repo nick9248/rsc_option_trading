@@ -302,6 +302,8 @@ class StraddleScanService:
             breakeven_down=candidate["breakeven_down"],
             breakeven_up=candidate["breakeven_up"],
             rv=entry["rv"],
+            iv_percentile=entry.get("iv_percentile"),
+            vrp=entry.get("vrp"),
         )
 
         filename = f"straddle_{scan_result['currency']}_{expiry}_{int(strike)}"
