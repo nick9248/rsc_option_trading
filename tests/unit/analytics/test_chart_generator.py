@@ -1,7 +1,12 @@
-"""Tests for chart_generator: generate_flow_trend_chart and generate_net_flow_chart."""
+"""Tests for chart_generator: generate_flow_trend_chart, generate_net_flow_chart,
+and generate_straddle_payoff_chart."""
 from unittest.mock import MagicMock
 import plotly.graph_objects as go
-from coding.core.analytics.chart_generator import generate_flow_trend_chart, generate_net_flow_chart
+from coding.core.analytics.chart_generator import (
+    generate_flow_trend_chart,
+    generate_net_flow_chart,
+    generate_straddle_payoff_chart,
+)
 
 
 def _mock_repo(rows):
@@ -133,3 +138,69 @@ def test_net_flow_chart_barmode():
 
 # trade_filter SQL-clause tests live in tests/unit/test_repository_hourly_flow_volumes.py
 # since the query moved into DatabaseRepository.get_hourly_flow_volumes.
+
+
+# ── Straddle Payoff Chart Tests ────────────────────────────────────────────────
+
+def _payoff_kwargs(**overrides):
+    kwargs = dict(
+        currency="BTC",
+        expiry="25SEP26",
+        dte=68.0,
+        future_price=118432.50,
+        atm_iv=64.8,
+        strike=118000.0,
+        cost_usd=4820.0,
+        breakeven_down=113180.0,
+        breakeven_up=122820.0,
+        rv=39.4,
+    )
+    kwargs.update(overrides)
+    return kwargs
+
+
+def test_payoff_chart_returns_figure():
+    fig = generate_straddle_payoff_chart(**_payoff_kwargs())
+    assert isinstance(fig, go.Figure)
+
+
+def test_payoff_chart_title_contains_key_facts():
+    fig = generate_straddle_payoff_chart(**_payoff_kwargs())
+    title = fig.layout.title.text
+    assert "BTC" in title
+    assert "25SEP26" in title
+    assert "118,000" in title
+    assert "4,820" in title
+
+
+def test_payoff_chart_pnl_curve_matches_straddle_formula():
+    """y = |S - K| - cost for every x on the plotted line."""
+    fig = generate_straddle_payoff_chart(**_payoff_kwargs())
+    pnl_trace = fig.data[0]
+    strike, cost = 118000.0, 4820.0
+    for x, y in zip(pnl_trace.x, pnl_trace.y):
+        assert y == abs(x - strike) - cost
+
+
+def test_payoff_chart_x_range_spans_future_price():
+    """The plotted x range must bracket F (payoff chart must show both wings)."""
+    fig = generate_straddle_payoff_chart(**_payoff_kwargs())
+    pnl_trace = fig.data[0]
+    assert min(pnl_trace.x) < 118432.50 < max(pnl_trace.x)
+
+
+def test_payoff_chart_omits_realized_band_when_rv_none():
+    """With rv=None, no crash and the figure still renders (fewer shapes)."""
+    fig_with_rv = generate_straddle_payoff_chart(**_payoff_kwargs(rv=39.4))
+    fig_without_rv = generate_straddle_payoff_chart(**_payoff_kwargs(rv=None))
+    assert isinstance(fig_without_rv, go.Figure)
+    # One fewer shaded vrect region when rv is omitted.
+    assert len(fig_without_rv.layout.shapes) < len(fig_with_rv.layout.shapes)
+
+
+def test_payoff_chart_no_crash_with_tiny_dte_and_iv():
+    """Degenerate near-zero sigma must not produce a zero-width x-range crash."""
+    fig = generate_straddle_payoff_chart(**_payoff_kwargs(dte=0.01, atm_iv=0.01, rv=0.01))
+    assert isinstance(fig, go.Figure)
+    pnl_trace = fig.data[0]
+    assert max(pnl_trace.x) > min(pnl_trace.x)

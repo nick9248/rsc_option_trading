@@ -5,6 +5,7 @@ Uses Plotly to create interactive charts saved as HTML and PNG files.
 """
 
 import logging
+import math
 from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -629,5 +630,140 @@ def generate_flow_trend_chart(
         ),
         **theme
     )
+
+    return fig
+
+
+def generate_straddle_payoff_chart(
+    currency: str,
+    expiry: str,
+    dte: float,
+    future_price: float,
+    atm_iv: float,
+    strike: float,
+    cost_usd: float,
+    breakeven_down: float,
+    breakeven_up: float,
+    rv: Optional[float] = None,
+) -> go.Figure:
+    """
+    Generate a long-straddle payoff-at-expiry chart.
+
+    Pure function — takes the primitives already computed by
+    StraddleScanService (no API/DB access here, per the Core layer rule).
+
+    Content:
+      - x = underlying price at expiry, spanning roughly
+        F +/- 2.5 * (IV-implied 1-sigma dollar move), so both shaded bands
+        below comfortably fit inside the plotted range.
+      - y = long-straddle P&L in USD at expiry: |S - K| - cost_usd.
+      - Zero-P&L horizontal line.
+      - Vertical markers: strike, current F, both breakevens.
+      - Shaded band: IV-implied 1-sigma expected range
+        (F/exp(sigma_sqrt_t) .. F*exp(sigma_sqrt_t), same formula
+        StraddleScanService uses to pick candidate strikes).
+      - Shaded band (different color): realized-pace equivalent range,
+        using rv in place of atm_iv. Omitted when rv is None.
+
+    Args:
+        currency: Currency symbol (BTC, ETH, ...).
+        expiry: Expiry label (e.g. "25SEP26").
+        dte: Days to expiry (float).
+        future_price: F — this expiry's future price (strike-space math).
+        atm_iv: ATM implied vol, Deribit native percent units (e.g. 65.0).
+        strike: Straddle strike.
+        cost_usd: Total premium paid (both legs), USD.
+        breakeven_down: strike - cost_usd.
+        breakeven_up: strike + cost_usd.
+        rv: Realized vol (percent units), or None if unavailable — the
+            realized-pace band is omitted when None.
+
+    Returns:
+        Plotly figure object.
+    """
+    theme = get_chart_theme()
+    time_to_expiry_years = dte / 365.0
+
+    iv_sigma_sqrt_t = (atm_iv / 100.0) * math.sqrt(max(time_to_expiry_years, 0.0))
+    iv_range_lo = future_price / math.exp(iv_sigma_sqrt_t) if iv_sigma_sqrt_t > 0 else future_price
+    iv_range_hi = future_price * math.exp(iv_sigma_sqrt_t) if iv_sigma_sqrt_t > 0 else future_price
+
+    iv_dollar_sigma = future_price * iv_sigma_sqrt_t
+    if iv_dollar_sigma <= 0:
+        iv_dollar_sigma = future_price * 0.1  # fallback so the chart isn't degenerate
+
+    x_lo = max(future_price - 2.5 * iv_dollar_sigma, future_price * 0.01)
+    x_hi = future_price + 2.5 * iv_dollar_sigma
+
+    steps = 400
+    x_values = [x_lo + i * (x_hi - x_lo) / steps for i in range(steps + 1)]
+    y_values = [abs(s - strike) - cost_usd for s in x_values]
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter(
+        x=x_values, y=y_values, mode="lines", name="P&L at expiry",
+        line=dict(color="#60a5fa", width=2.5),
+        hovertemplate="Underlying: $%{x:,.0f}<br>P&L: $%{y:,.0f}<extra></extra>",
+    ))
+
+    # IV-implied 1-sigma expected range (shaded, indigo)
+    fig.add_vrect(
+        x0=iv_range_lo, x1=iv_range_hi,
+        fillcolor="#818cf8", opacity=0.12, line_width=0,
+        annotation_text="IV-implied 1σ range", annotation_position="top left",
+    )
+
+    # Realized-pace equivalent range (shaded, amber) — only if rv known
+    if rv is not None:
+        rv_sigma_sqrt_t = (rv / 100.0) * math.sqrt(max(time_to_expiry_years, 0.0))
+        if rv_sigma_sqrt_t > 0:
+            rv_range_lo = future_price / math.exp(rv_sigma_sqrt_t)
+            rv_range_hi = future_price * math.exp(rv_sigma_sqrt_t)
+            fig.add_vrect(
+                x0=rv_range_lo, x1=rv_range_hi,
+                fillcolor="#f59e0b", opacity=0.12, line_width=0,
+                annotation_text="Realized-pace range", annotation_position="bottom left",
+            )
+
+    # Zero P&L line
+    fig.add_hline(
+        y=0, line_dash="dash", line_color="#666666",
+        annotation_text="Breakeven", annotation_position="right",
+    )
+
+    # Vertical markers
+    fig.add_vline(
+        x=strike, line_dash="dot", line_color="#e0e0e0",
+        annotation_text=f"Strike ${strike:,.0f}", annotation_position="top",
+    )
+    fig.add_vline(
+        x=future_price, line_dash="dot", line_color="#ffd93d",
+        annotation_text=f"F ${future_price:,.0f}", annotation_position="bottom",
+    )
+    fig.add_vline(
+        x=breakeven_down, line_dash="dashdot", line_color="#f43f5e",
+        annotation_text=f"BE↓ ${breakeven_down:,.0f}", annotation_position="top left",
+    )
+    fig.add_vline(
+        x=breakeven_up, line_dash="dashdot", line_color="#10b981",
+        annotation_text=f"BE↑ ${breakeven_up:,.0f}", annotation_position="top right",
+    )
+
+    fig.update_layout(
+        title=(
+            f"Long Straddle Payoff — {currency} {expiry} {strike:,.0f} strike "
+            f"(cost ${cost_usd:,.0f})"
+        ),
+        xaxis_title="Underlying price at expiry (USD)",
+        yaxis_title="P&L (USD)",
+        hovermode="x",
+        autosize=True,
+        margin=dict(t=80, r=40, b=60, l=60),
+        showlegend=False,
+        **theme
+    )
+
+    return fig
 
     return fig
