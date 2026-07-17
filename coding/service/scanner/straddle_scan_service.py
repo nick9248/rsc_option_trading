@@ -23,8 +23,14 @@ touching any pricing math in this file. Do not add any other Deribit call.
 import logging
 import math
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
+from coding.core.analytics.chart_generator import (
+    generate_straddle_payoff_chart,
+    inject_hover_js,
+    save_chart,
+)
 from coding.core.database.repository import DatabaseRepository
 from coding.service.deribit.deribit_api_service import DeribitApiService
 
@@ -91,12 +97,23 @@ class StraddleScanService:
         """
         Run one straddle scan for a currency.
 
+        Every expiry present in the fetched option chain ends up in exactly
+        one of `expiries` (included) or `excluded` — nothing is silently
+        dropped; see module docstring for per-field meaning of an included
+        entry.
+
         Returns:
-            Dict: {as_of, currency, index_price, expiries: [...]}. Each
-            expiries entry: {expiry, dte, F, atm_iv, iv_percentile, rv,
-            rv_iv_ratio, vrp, best, candidates}. See module docstring for
-            per-field meaning. Expiries with no usable ATM strike or no
-            candidate passing the liquidity gate are omitted (logged).
+            Dict: {as_of, currency, index_price, expiries: [...],
+            excluded: [...]}.
+              expiries entry: {expiry, dte, F, atm_iv, iv_percentile, rv,
+                rv_iv_ratio, vrp, best, candidates}. `candidates` is ranked
+                best-first (ascending by max required move); `best` ==
+                `candidates[0]`.
+              excluded entry: {expiry, dte, reason} — dte may be None if the
+                expiry couldn't even be parsed to a DTE (shouldn't happen
+                given the snapshot contract, but guarded). reason is a short
+                human-readable string, e.g. "DTE 2.1 below minimum 5" or
+                "no strikes passed liquidity gate (checked 4)".
         """
         snapshot = self._fetch_snapshot(currency)
         repo = self.repository or DatabaseRepository()
@@ -110,17 +127,34 @@ class StraddleScanService:
             contracts_by_expiry.setdefault(contract["expiry"], []).append(contract)
 
         expiry_entries: List[Dict[str, Any]] = []
+        excluded: List[Dict[str, Any]] = []
+
         for expiry, expiry_contracts in contracts_by_expiry.items():
             dte = expiry_contracts[0]["dte"]
-            if not (self.MIN_DTE <= dte <= self.MAX_DTE):
+
+            if dte < self.MIN_DTE:
+                excluded.append({
+                    "expiry": expiry, "dte": dte,
+                    "reason": f"DTE {dte:.1f} below minimum {self.MIN_DTE}",
+                })
+                continue
+            if dte > self.MAX_DTE:
+                excluded.append({
+                    "expiry": expiry, "dte": dte,
+                    "reason": f"DTE {dte:.1f} above maximum {self.MAX_DTE}",
+                })
                 continue
 
             future_price = futures_by_expiry.get(expiry)
             if not future_price:
                 logger.warning(f"{currency} {expiry}: no future price available, skipping")
+                excluded.append({
+                    "expiry": expiry, "dte": dte,
+                    "reason": "no future price available",
+                })
                 continue
 
-            entry = self._build_expiry_entry(
+            entry, exclusion_reason = self._build_expiry_entry(
                 currency=currency,
                 expiry=expiry,
                 dte=dte,
@@ -131,14 +165,18 @@ class StraddleScanService:
             )
             if entry is not None:
                 expiry_entries.append(entry)
+            else:
+                excluded.append({"expiry": expiry, "dte": dte, "reason": exclusion_reason})
 
         expiry_entries.sort(key=self._expiry_sort_key)
+        excluded.sort(key=lambda x: x["expiry"])
 
         return {
             "as_of": as_of,
             "currency": currency,
             "index_price": index_price,
             "expiries": expiry_entries,
+            "excluded": excluded,
         }
 
     def format_alert(self, scan_result: Dict[str, Any], top_n: int = 1) -> str:
@@ -223,6 +261,54 @@ class StraddleScanService:
 
         return "\n".join(lines)
 
+    def generate_payoff_chart(self, scan_result: Dict[str, Any], expiry: str, strike: float) -> str:
+        """
+        Build and save a long-straddle payoff-at-expiry chart for one
+        candidate from an existing scan() result — no new API/DB fetch, this
+        purely re-uses data already computed for `scan_result`.
+
+        Args:
+            scan_result: Output of scan() (must still contain `expiry` with
+                a matching `strike` among its candidates).
+            expiry: Expiry label to chart, e.g. "25SEP26".
+            strike: Candidate strike to chart (must be one of that expiry's
+                candidates — best or a runner-up).
+
+        Returns:
+            Path to the saved chart HTML file (output/charts/straddle/...).
+
+        Raises:
+            ValueError: If the expiry or strike isn't present in
+                scan_result — the GUI should only ever pass values it just
+                rendered from this same scan_result, so this indicates a
+                caller bug, not a data problem.
+        """
+        entry = next((e for e in scan_result["expiries"] if e["expiry"] == expiry), None)
+        if entry is None:
+            raise ValueError(f"Expiry {expiry} not found in scan result")
+
+        candidate = next((c for c in entry["candidates"] if c["strike"] == strike), None)
+        if candidate is None:
+            raise ValueError(f"Strike {strike} not found among {expiry} candidates")
+
+        fig = generate_straddle_payoff_chart(
+            currency=scan_result["currency"],
+            expiry=expiry,
+            dte=entry["dte"],
+            future_price=entry["F"],
+            atm_iv=entry["atm_iv"],
+            strike=candidate["strike"],
+            cost_usd=candidate["cost_usd"],
+            breakeven_down=candidate["breakeven_down"],
+            breakeven_up=candidate["breakeven_up"],
+            rv=entry["rv"],
+        )
+
+        filename = f"straddle_{scan_result['currency']}_{expiry}_{int(strike)}"
+        path = save_chart(fig, filename, subfolder="straddle", save_png=False)
+        inject_hover_js(Path(path))
+        return path
+
     # ── Internals: fetch ────────────────────────────────────────────────────
 
     def _fetch_snapshot(self, currency: str) -> Dict[str, Any]:
@@ -243,33 +329,45 @@ class StraddleScanService:
         contracts: List[Dict[str, Any]],
         repo: DatabaseRepository,
         as_of: datetime,
-    ) -> Optional[Dict[str, Any]]:
-        """Build one expiry's scan entry, or None if it yields no usable candidate."""
+    ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+        """
+        Build one expiry's scan entry.
+
+        Returns:
+            (entry, None) on success, or (None, reason) if this expiry
+            yields no usable candidate — `reason` is a short human-readable
+            string surfaced to the caller's `excluded` list.
+        """
         both_legs = self._pair_legs_by_strike(contracts)
         if not both_legs:
-            logger.info(f"{currency} {expiry}: no strike has both legs quoted, skipping")
-            return None
+            reason = "no strike has both legs quoted"
+            logger.info(f"{currency} {expiry}: {reason}, skipping")
+            return None, reason
 
         atm_strike = min(both_legs, key=lambda k: abs(k - future_price))
         atm_iv = self._average_mark_iv(both_legs[atm_strike])
         if atm_iv is None:
-            logger.info(f"{currency} {expiry}: ATM strike {atm_strike} missing mark_iv, skipping")
-            return None
+            reason = f"ATM strike {atm_strike:.0f} missing mark_iv"
+            logger.info(f"{currency} {expiry}: {reason}, skipping")
+            return None, reason
 
         time_to_expiry_years = dte / 365.0
         sigma_sqrt_t = (atm_iv / 100.0) * math.sqrt(time_to_expiry_years)
         range_lo = future_price / math.exp(sigma_sqrt_t)
         range_hi = future_price * math.exp(sigma_sqrt_t)
 
+        strikes_checked = sum(1 for k in both_legs if range_lo <= k <= range_hi)
+
         candidates = self._build_candidates(
             both_legs, range_lo, range_hi, future_price, currency, expiry
         )
         if not candidates:
+            reason = f"no strikes passed liquidity gate (checked {strikes_checked})"
             logger.info(
-                f"{currency} {expiry}: no candidate strikes passed the liquidity gate "
+                f"{currency} {expiry}: {reason} "
                 f"within the expected range [{range_lo:.2f}, {range_hi:.2f}]"
             )
-            return None
+            return None, reason
 
         rv = self._compute_realized_vol(repo, currency, dte, as_of)
         for candidate in candidates:
@@ -279,6 +377,10 @@ class StraddleScanService:
                 if rv is not None else None
             )
 
+        # Ranked best-first: lowest max(required_move_up, required_move_down)
+        # i.e. the strike needing the smallest move in either direction to
+        # break even. candidates[0] == best; candidates[1]/[2] feed the
+        # GUI's tree "rank 2 / rank 3" child rows.
         candidates.sort(key=lambda c: max(c["required_move_up_pct"], c["required_move_down_pct"]))
         best = candidates[0]
 
@@ -286,7 +388,7 @@ class StraddleScanService:
         rv_iv_ratio = (rv / atm_iv) if (rv is not None and atm_iv) else None
         vrp = (atm_iv - rv) if rv is not None else None
 
-        return {
+        entry = {
             "expiry": expiry,
             "dte": dte,
             "F": future_price,
@@ -298,6 +400,7 @@ class StraddleScanService:
             "best": best,
             "candidates": candidates,
         }
+        return entry, None
 
     @staticmethod
     def _pair_legs_by_strike(

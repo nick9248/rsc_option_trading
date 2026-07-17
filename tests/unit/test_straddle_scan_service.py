@@ -162,6 +162,11 @@ class TestDteWindow:
         )
         result = service.scan("BTC")
         assert result["expiries"] == []
+        assert len(result["excluded"]) == 1
+        excl = result["excluded"][0]
+        assert excl["expiry"] == "27DEC26"
+        assert excl["dte"] == 4.0
+        assert excl["reason"] == "DTE 4.0 below minimum 5"
 
     def test_expiry_above_max_dte_excluded(self):
         service = StraddleScanService(
@@ -170,6 +175,10 @@ class TestDteWindow:
         )
         result = service.scan("BTC")
         assert result["expiries"] == []
+        assert len(result["excluded"]) == 1
+        excl = result["excluded"][0]
+        assert excl["dte"] == 401.0
+        assert excl["reason"] == "DTE 401.0 above maximum 400"
 
     def test_expiry_within_window_included(self):
         service = StraddleScanService(
@@ -179,6 +188,78 @@ class TestDteWindow:
         result = service.scan("BTC")
         assert len(result["expiries"]) == 1
         assert result["expiries"][0]["expiry"] == "27DEC26"
+        assert result["excluded"] == []
+
+
+# ── Excluded-expiry visibility ───────────────────────────────────────────────
+
+class TestExcludedVisibility:
+    def test_no_liquid_candidates_reason_reports_checked_count(self):
+        # All 5 strikes fail the OI gate -> expiry excluded with a
+        # "checked N" count reflecting strikes inside the expected range.
+        snapshot = _basic_snapshot(open_interest=1)
+        service = StraddleScanService(
+            api_service=FakeApiService(snapshot),
+            repository=FakeRepository(percentiles={"27DEC26": 5.0}),
+        )
+        result = service.scan("BTC")
+        assert result["expiries"] == []
+        assert len(result["excluded"]) == 1
+        excl = result["excluded"][0]
+        assert excl["expiry"] == "27DEC26"
+        assert "no strikes passed liquidity gate" in excl["reason"]
+        assert "checked" in excl["reason"]
+
+    def test_no_paired_legs_reason(self):
+        expiry = "27DEC26"
+        contracts = [_contract(50000, "C", expiry, 30.0)]  # only a call, no put
+        snapshot = {
+            "as_of": datetime.now(timezone.utc),
+            "index_price": 50000.0,
+            "contracts": contracts,
+            "futures_by_expiry": {expiry: 50000.0},
+        }
+        service = StraddleScanService(
+            api_service=FakeApiService(snapshot),
+            repository=FakeRepository(),
+        )
+        result = service.scan("BTC")
+        assert result["expiries"] == []
+        assert result["excluded"] == [
+            {"expiry": expiry, "dte": 30.0, "reason": "no strike has both legs quoted"}
+        ]
+
+    def test_included_and_excluded_reconcile_with_chain_expiry_count(self):
+        """Every expiry in the chain must land in exactly one of the two lists."""
+        good_expiry, bad_expiry = "27DEC26", "15JAN27"
+        contracts = []
+        for strike in (45000, 50000, 55000):
+            contracts.append(_contract(strike, "C", good_expiry, 30.0))
+            contracts.append(_contract(strike, "P", good_expiry, 30.0))
+        # bad_expiry: below MIN_DTE
+        contracts.append(_contract(50000, "C", bad_expiry, 2.0))
+        contracts.append(_contract(50000, "P", bad_expiry, 2.0))
+
+        snapshot = {
+            "as_of": datetime.now(timezone.utc),
+            "index_price": 50000.0,
+            "contracts": contracts,
+            "futures_by_expiry": {good_expiry: 50000.0, bad_expiry: 50000.0},
+        }
+        service = StraddleScanService(
+            api_service=FakeApiService(snapshot),
+            repository=FakeRepository(percentiles={good_expiry: 5.0}),
+        )
+        result = service.scan("BTC")
+
+        total_chain_expiries = {good_expiry, bad_expiry}
+        included_expiries = {e["expiry"] for e in result["expiries"]}
+        excluded_expiries = {e["expiry"] for e in result["excluded"]}
+
+        assert included_expiries == {good_expiry}
+        assert excluded_expiries == {bad_expiry}
+        assert included_expiries | excluded_expiries == total_chain_expiries
+        assert included_expiries & excluded_expiries == set()
 
 
 # ── Candidate window (expected range) ────────────────────────────────────────
@@ -437,6 +518,83 @@ class TestFormatAlert:
         assert "Data is fresh" in text
 
 
+# ── generate_payoff_chart ─────────────────────────────────────────────────────
+
+class TestGeneratePayoffChart:
+    @staticmethod
+    def _scan_result_with_two_candidates() -> Dict[str, Any]:
+        expiry = "25SEP26"
+        best = {
+            "strike": 118000.0, "cost_usd": 4820.0,
+            "breakeven_down": 113180.0, "breakeven_up": 122820.0,
+            "min_pnl_score": 1240.0,
+            "deribit_url": "https://www.deribit.com/options/BTC/BTC-25SEP26-118000-C",
+        }
+        runner_up_candidate = {**best, "strike": 120000.0}
+        entry = {
+            "expiry": expiry, "dte": 68.0, "F": 118432.50, "atm_iv": 64.8,
+            "iv_percentile": 8.2, "rv": 39.4, "rv_iv_ratio": 0.61, "vrp": 25.4,
+            "best": best, "candidates": [best, runner_up_candidate],
+        }
+        return {
+            "as_of": datetime.now(timezone.utc), "currency": "BTC",
+            "index_price": 118432.50, "expiries": [entry], "excluded": [],
+        }
+
+    def test_calls_save_chart_and_returns_its_path(self, monkeypatch):
+        service = StraddleScanService()
+        scan_result = self._scan_result_with_two_candidates()
+
+        captured = {}
+
+        def fake_save_chart(fig, filename, subfolder="", save_png=True):
+            captured["filename"] = filename
+            captured["subfolder"] = subfolder
+            captured["save_png"] = save_png
+            return f"C:/fake/output/charts/{subfolder}/{filename}.html"
+
+        monkeypatch.setattr(
+            "coding.service.scanner.straddle_scan_service.save_chart", fake_save_chart
+        )
+        monkeypatch.setattr(
+            "coding.service.scanner.straddle_scan_service.inject_hover_js", lambda path: None
+        )
+
+        path = service.generate_payoff_chart(scan_result, "25SEP26", 118000.0)
+
+        assert path == "C:/fake/output/charts/straddle/straddle_BTC_25SEP26_118000.html"
+        assert captured["subfolder"] == "straddle"
+        assert captured["save_png"] is False
+        assert captured["filename"] == "straddle_BTC_25SEP26_118000"
+
+    def test_selects_runner_up_candidate_by_strike(self, monkeypatch):
+        service = StraddleScanService()
+        scan_result = self._scan_result_with_two_candidates()
+
+        monkeypatch.setattr(
+            "coding.service.scanner.straddle_scan_service.save_chart",
+            lambda fig, filename, subfolder="", save_png=True: f"{subfolder}/{filename}.html",
+        )
+        monkeypatch.setattr(
+            "coding.service.scanner.straddle_scan_service.inject_hover_js", lambda path: None
+        )
+
+        path = service.generate_payoff_chart(scan_result, "25SEP26", 120000.0)
+        assert "120000" in path
+
+    def test_unknown_expiry_raises(self):
+        service = StraddleScanService()
+        scan_result = self._scan_result_with_two_candidates()
+        with pytest.raises(ValueError):
+            service.generate_payoff_chart(scan_result, "NOPE", 118000.0)
+
+    def test_unknown_strike_raises(self):
+        service = StraddleScanService()
+        scan_result = self._scan_result_with_two_candidates()
+        with pytest.raises(ValueError):
+            service.generate_payoff_chart(scan_result, "25SEP26", 999999.0)
+
+
 # ── Deribit URL ────────────────────────────────────────────────────────────────
 
 class TestDeribitUrl:
@@ -455,7 +613,7 @@ class TestScanShape:
             repository=FakeRepository(percentiles={"27DEC26": 5.0}),
         )
         result = service.scan("BTC")
-        assert set(result.keys()) == {"as_of", "currency", "index_price", "expiries"}
+        assert set(result.keys()) == {"as_of", "currency", "index_price", "expiries", "excluded"}
         assert result["currency"] == "BTC"
 
         entry = result["expiries"][0]
