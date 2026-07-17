@@ -4,6 +4,7 @@ Chart generator for on-chain analysis data visualization.
 Uses Plotly to create interactive charts saved as HTML and PNG files.
 """
 
+import json
 import logging
 import math
 from collections import defaultdict
@@ -92,6 +93,282 @@ def inject_hover_js(html_path: Path) -> None:
             html_path.write_text(content, encoding="utf-8")
     except Exception as e:
         logger.warning(f"Failed to inject hover JS into {html_path}: {e}")
+
+
+# Dark → light color equivalents for every hardcoded color used by charts
+# that support the theme toggle (currently the straddle payoff chart). Keys
+# are the exact dark-mode literals as they appear in figure JSON (hex or
+# rgba() strings); a color not present here is left unchanged in light mode
+# (this is correct for hues like amber/rose/blue/green that read fine on
+# both backgrounds — only backgrounds, grays, borders and the near-white
+# F-price marker need remapping).
+_DARK_TO_LIGHT_COLORS: Dict[str, str] = {
+    "#1a1a1a": "#ffffff",   # paper / plot background
+    "#e0e0e0": "#1f2937",   # primary font color
+    "#ffffff": "#1f2937",   # title font (pure white -> dark slate)
+    "#9ca3af": "#6b7280",   # secondary text (legend, stats box, range labels, subtitle)
+    "#666666": "#9ca3af",   # zero line / tick color
+    "#444444": "#d1d5db",   # borders / axis linecolor
+    "#333333": "#e5e7eb",   # grid lines
+    "#e5e7eb": "#1f2937",   # F-price marker: near-white is invisible on white bg
+    "#60a5fa": "#2563eb",   # P&L line: weak blue-400 -> stronger blue-600 on white
+    "rgba(26,26,26,0.85)": "rgba(255,255,255,0.92)",  # stats box background
+    "rgba(26,26,26,0.6)": "rgba(255,255,255,0.85)",   # marker-label background
+    "rgba(26,26,26,0.75)": "rgba(255,255,255,0.90)",  # (other charts' annotation bg)
+}
+
+# JS injected into saved HTML files: a fixed top-right button that toggles
+# the page between the saved dark theme and a light theme. The color
+# mapping (__THEME_PAYLOAD_JSON__) is generated in Python from the actual
+# figure at save time — see _build_theme_toggle_payload — so every
+# annotations[i]/shapes[i]/trace-index path below is exact for this figure,
+# never guessed.
+_THEME_TOGGLE_JS_TEMPLATE = """
+<script>
+(function() {
+    var THEME = __THEME_PAYLOAD_JSON__;
+    var isLight = false;
+
+    function applyTheme(plotDiv, light) {
+        var relayout = {};
+
+        function pick(pair) { return pair ? (light ? pair.light : pair.dark) : undefined; }
+        function set(key, pair) { var v = pick(pair); if (v !== undefined) relayout[key] = v; }
+
+        set('paper_bgcolor', THEME.paper_bgcolor);
+        set('plot_bgcolor', THEME.plot_bgcolor);
+        set('font.color', THEME.font_color);
+        set('title.font.color', THEME.title_font_color);
+        set('title.text', THEME.title_text);
+        if (THEME.xaxis) {
+            set('xaxis.gridcolor', THEME.xaxis.gridcolor);
+            set('xaxis.linecolor', THEME.xaxis.linecolor);
+            set('xaxis.tickcolor', THEME.xaxis.tickcolor);
+        }
+        if (THEME.yaxis) {
+            set('yaxis.gridcolor', THEME.yaxis.gridcolor);
+            set('yaxis.linecolor', THEME.yaxis.linecolor);
+            set('yaxis.tickcolor', THEME.yaxis.tickcolor);
+        }
+        set('legend.font.color', THEME.legend_font_color);
+        set('legend.bgcolor', THEME.legend_bgcolor);
+
+        (THEME.annotations || []).forEach(function(a) {
+            set('annotations[' + a.index + '].font.color', a.font_color);
+            set('annotations[' + a.index + '].bgcolor', a.bgcolor);
+            set('annotations[' + a.index + '].bordercolor', a.bordercolor);
+        });
+
+        (THEME.shapes || []).forEach(function(s) {
+            set('shapes[' + s.index + '].line.color', s.line_color);
+        });
+
+        if (Object.keys(relayout).length > 0) {
+            Plotly.relayout(plotDiv, relayout);
+        }
+
+        var restyleIdx = [];
+        var restyleColors = [];
+        (THEME.traces || []).forEach(function(t) {
+            var v = pick(t.line_color);
+            if (v !== undefined) { restyleIdx.push(t.index); restyleColors.push(v); }
+        });
+        if (restyleIdx.length > 0) {
+            Plotly.restyle(plotDiv, {'line.color': restyleColors}, restyleIdx);
+        }
+
+        var bodyBg = pick(THEME.paper_bgcolor);
+        if (bodyBg !== undefined) { document.body.style.background = bodyBg; }
+    }
+
+    function makeButton(plotDiv) {
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = 'Light mode';
+        btn.style.position = 'fixed';
+        btn.style.top = '12px';
+        btn.style.right = '12px';
+        btn.style.zIndex = '9999';
+        btn.style.padding = '6px 12px';
+        btn.style.fontSize = '12px';
+        btn.style.fontFamily = 'Arial, sans-serif';
+        btn.style.borderRadius = '6px';
+        btn.style.border = '1px solid #666666';
+        btn.style.background = 'rgba(60,60,60,0.55)';
+        btn.style.color = '#e0e0e0';
+        btn.style.cursor = 'pointer';
+        btn.style.transition = 'opacity 0.15s ease';
+        btn.onmouseenter = function() { btn.style.opacity = '0.8'; };
+        btn.onmouseleave = function() { btn.style.opacity = '1'; };
+        btn.onclick = function() {
+            isLight = !isLight;
+            applyTheme(plotDiv, isLight);
+            btn.textContent = isLight ? 'Dark mode' : 'Light mode';
+            btn.style.border = isLight ? '1px solid #d1d5db' : '1px solid #666666';
+            btn.style.background = isLight ? 'rgba(255,255,255,0.85)' : 'rgba(60,60,60,0.55)';
+            btn.style.color = isLight ? '#1f2937' : '#e0e0e0';
+        };
+        document.body.appendChild(btn);
+    }
+
+    function init(attempts) {
+        attempts = attempts || 0;
+        if (attempts > 40) return;
+        var plotDiv = document.querySelector('.plotly-graph-div');
+        if (!plotDiv || !plotDiv.data || !window.Plotly) {
+            setTimeout(function() { init(attempts + 1); }, 150);
+            return;
+        }
+        makeButton(plotDiv);
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', function() { setTimeout(init, 200); });
+    } else {
+        setTimeout(init, 200);
+    }
+})();
+</script>
+"""
+
+
+def _map_color(color: Optional[str]) -> Optional[str]:
+    """Map a dark-mode color literal to its light-mode equivalent (identity if unmapped)."""
+    if color is None:
+        return None
+    return _DARK_TO_LIGHT_COLORS.get(color, color)
+
+
+def _map_title_text(text: Optional[str]) -> Optional[str]:
+    """Rewrite inline HTML color hexes (e.g. a subtitle <span style='color:#9ca3af'>) to light equivalents."""
+    if text is None:
+        return None
+    mapped = text
+    for dark, light in _DARK_TO_LIGHT_COLORS.items():
+        if dark.startswith("rgba"):
+            continue
+        mapped = mapped.replace(dark, light)
+    return mapped
+
+
+def _color_pair(dark_color: Optional[str]) -> Optional[Dict[str, str]]:
+    """Build a {"dark": ..., "light": ...} pair from a color actually found on the figure."""
+    if dark_color is None:
+        return None
+    return {"dark": dark_color, "light": _map_color(dark_color)}
+
+
+def _build_theme_toggle_payload(fig: go.Figure) -> Dict[str, Any]:
+    """
+    Introspect a saved figure's actual layout/annotations/shapes/traces and
+    build the dark<->light color mapping the toggle JS needs, keyed by the
+    figure's real annotation/shape/trace indices.
+
+    This is deliberately introspective rather than a static/guessed index
+    list: if `generate_straddle_payoff_chart` ever adds, removes, or
+    reorders an annotation or shape (e.g. the rv-band annotations that only
+    exist when `rv` is provided), the indices here are still exactly right
+    because they're read off `fig` itself at save time.
+
+    Args:
+        fig: The exact figure that was (or will be) saved to the HTML file
+            this payload's JS will be injected into.
+
+    Returns:
+        JSON-serializable dict consumed by _THEME_TOGGLE_JS_TEMPLATE.
+    """
+    layout = fig.layout
+
+    xaxis = layout.xaxis
+    yaxis = layout.yaxis
+    title = layout.title
+    legend = layout.legend
+    base_font = layout.font
+
+    payload: Dict[str, Any] = {
+        "paper_bgcolor": _color_pair(layout.paper_bgcolor),
+        "plot_bgcolor": _color_pair(layout.plot_bgcolor),
+        "font_color": _color_pair(base_font.color if base_font is not None else None),
+        "title_font_color": _color_pair(
+            title.font.color if title is not None and title.font is not None else None
+        ),
+        "title_text": {
+            "dark": title.text if title is not None else None,
+            "light": _map_title_text(title.text if title is not None else None),
+        },
+        "xaxis": {
+            "gridcolor": _color_pair(xaxis.gridcolor if xaxis is not None else None),
+            "linecolor": _color_pair(xaxis.linecolor if xaxis is not None else None),
+            "tickcolor": _color_pair(xaxis.tickcolor if xaxis is not None else None),
+        },
+        "yaxis": {
+            "gridcolor": _color_pair(yaxis.gridcolor if yaxis is not None else None),
+            "linecolor": _color_pair(yaxis.linecolor if yaxis is not None else None),
+            "tickcolor": _color_pair(yaxis.tickcolor if yaxis is not None else None),
+        },
+        "legend_font_color": _color_pair(
+            legend.font.color if legend is not None and legend.font is not None else None
+        ),
+        "legend_bgcolor": _color_pair(legend.bgcolor if legend is not None else None),
+        "annotations": [],
+        "shapes": [],
+        "traces": [],
+    }
+
+    for i, ann in enumerate(layout.annotations or []):
+        entry: Dict[str, Any] = {"index": i}
+        if ann.font is not None and ann.font.color is not None:
+            entry["font_color"] = _color_pair(ann.font.color)
+        if ann.bgcolor is not None:
+            entry["bgcolor"] = _color_pair(ann.bgcolor)
+        if ann.bordercolor is not None:
+            entry["bordercolor"] = _color_pair(ann.bordercolor)
+        if len(entry) > 1:
+            payload["annotations"].append(entry)
+
+    for i, shp in enumerate(layout.shapes or []):
+        entry = {"index": i}
+        if shp.line is not None and shp.line.color is not None:
+            entry["line_color"] = _color_pair(shp.line.color)
+        if len(entry) > 1:
+            payload["shapes"].append(entry)
+
+    for i, tr in enumerate(fig.data):
+        line = getattr(tr, "line", None)
+        if line is not None and line.color is not None:
+            payload["traces"].append({"index": i, "line_color": _color_pair(line.color)})
+
+    return payload
+
+
+def inject_theme_toggle_js(html_path: Path, fig: go.Figure) -> None:
+    """
+    Inject a light/dark theme toggle button into a saved chart HTML file.
+
+    The button is fixed top-right, styled unobtrusively for both themes,
+    and defaults to the dark state the figure was saved in (nothing changes
+    until the user clicks). Every color it can flip — backgrounds, fonts,
+    axis grid/line/tick colors, legend, each annotation's font/bgcolor/
+    bordercolor, each shape's line color, and the P&L trace's line color —
+    is derived from the real `fig` passed in (see
+    _build_theme_toggle_payload), so the injected `annotations[i]` /
+    `shapes[i]` / trace-index paths are always exact for this figure.
+
+    Args:
+        html_path: Path to the already-saved chart HTML file.
+        fig: The exact Plotly figure that was saved to `html_path`.
+    """
+    try:
+        payload = _build_theme_toggle_payload(fig)
+        js = _THEME_TOGGLE_JS_TEMPLATE.replace(
+            "__THEME_PAYLOAD_JSON__", json.dumps(payload)
+        )
+        content = html_path.read_text(encoding="utf-8")
+        if "</body>" in content:
+            content = content.replace("</body>", js + "\n</body>")
+            html_path.write_text(content, encoding="utf-8")
+    except Exception as e:
+        logger.warning(f"Failed to inject theme toggle JS into {html_path}: {e}")
 
 
 def ensure_charts_dir() -> Path:

@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from coding.core.analytics.chart_generator import (
     generate_straddle_payoff_chart,
     inject_hover_js,
+    inject_theme_toggle_js,
     save_chart,
 )
 from coding.core.database.repository import DatabaseRepository
@@ -309,6 +310,7 @@ class StraddleScanService:
         filename = f"straddle_{scan_result['currency']}_{expiry}_{int(strike)}"
         path = save_chart(fig, filename, subfolder="straddle", save_png=False)
         inject_hover_js(Path(path))
+        inject_theme_toggle_js(Path(path), fig)
         return path
 
     # ── Internals: fetch ────────────────────────────────────────────────────
