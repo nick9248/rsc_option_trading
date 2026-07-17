@@ -68,12 +68,25 @@ class FakeRepository:
         self,
         percentiles: Optional[Dict[str, float]] = None,
         ohlcv_rows: Optional[List[Dict[str, Any]]] = None,
+        windows: Optional[Dict[str, Dict[str, Any]]] = None,
     ):
         self._percentiles = percentiles or {}
         self._ohlcv_rows = ohlcv_rows or []
+        # Per-expiry override of the full window dict; falls back to a
+        # canned n_obs/window_days pair built from `percentiles` when a
+        # test only cares about the percentile value itself.
+        self._windows = windows or {}
 
     def get_latest_iv_percentile_expiry(self, currency: str, expiration: str) -> Optional[float]:
         return self._percentiles.get(expiration)
+
+    def get_iv_percentile_with_window(self, currency: str, expiration: str) -> Dict[str, Any]:
+        if expiration in self._windows:
+            return self._windows[expiration]
+        percentile = self._percentiles.get(expiration)
+        if percentile is None:
+            return {"percentile": None, "n_obs": 0, "window_days": 0, "latest_atm_iv": None}
+        return {"percentile": percentile, "n_obs": 100, "window_days": 200.0, "latest_atm_iv": 55.0}
 
     def get_ohlcv_by_date_range(self, currency, start, end) -> List[Dict[str, Any]]:
         return self._ohlcv_rows
@@ -453,6 +466,8 @@ class TestFormatAlert:
             "F": 118432.50,
             "atm_iv": 64.8,
             "iv_percentile": 8.2,
+            "iv_percentile_n_obs": 1405,
+            "iv_percentile_window_days": 112.0,
             "rv": 39.4,
             "rv_iv_ratio": 0.61,
             "vrp": 25.4,
@@ -494,6 +509,27 @@ class TestFormatAlert:
         assert "[CONTEXT]" in text and "+25.4" in text and "1,240.00" in text
         assert "Runner-up: 30OCT26" in text and "14.5%" in text
         assert "Chart: https://www.deribit.com/options/BTC/BTC-25SEP26-118000-C" in text
+
+    def test_alert_trigger_line_shows_percentile_window(self):
+        """
+        Part 1(b): the percentile alone is misleading for young expiries
+        with short history -- the trigger line must show n_obs/window_days
+        alongside the percentile so it's never presented as a full-year rank.
+        """
+        service = StraddleScanService()
+        text = service.format_alert(self._fixed_scan_result())
+        assert "n=1,405" in text
+        assert "112d" in text
+
+    def test_alert_trigger_line_omits_window_when_unavailable(self):
+        """No window info (e.g. very old scan_result shape) -> no crash, no window suffix."""
+        service = StraddleScanService()
+        result = self._fixed_scan_result()
+        del result["expiries"][0]["iv_percentile_n_obs"]
+        del result["expiries"][0]["iv_percentile_window_days"]
+        text = service.format_alert(result)
+        assert "[TRIGGER] IV percentile (expiry): 8.2%" in text
+        assert "n=" not in text
 
     def test_no_expiries_gives_short_message(self):
         service = StraddleScanService()
@@ -605,6 +641,43 @@ class TestDeribitUrl:
 
 # ── Full scan() shape ──────────────────────────────────────────────────────────
 
+class TestIvPercentileWindow:
+    """Part 1: scan() must carry n_obs/window_days from the repository into each entry."""
+
+    def test_window_fields_carried_into_expiry_entry(self):
+        snapshot = _basic_snapshot()
+        service = StraddleScanService(
+            api_service=FakeApiService(snapshot),
+            repository=FakeRepository(windows={
+                "27DEC26": {
+                    "percentile": 1.0, "n_obs": 1405, "window_days": 112.0,
+                    "latest_atm_iv": 58.0,
+                }
+            }),
+        )
+        result = service.scan("BTC")
+        entry = result["expiries"][0]
+        assert entry["iv_percentile"] == 1.0
+        assert entry["iv_percentile_n_obs"] == 1405
+        assert entry["iv_percentile_window_days"] == 112.0
+
+    def test_no_history_yields_none_percentile_and_zero_window(self):
+        snapshot = _basic_snapshot()
+        service = StraddleScanService(
+            api_service=FakeApiService(snapshot),
+            repository=FakeRepository(windows={
+                "27DEC26": {
+                    "percentile": None, "n_obs": 0, "window_days": 0, "latest_atm_iv": None,
+                }
+            }),
+        )
+        result = service.scan("BTC")
+        entry = result["expiries"][0]
+        assert entry["iv_percentile"] is None
+        assert entry["iv_percentile_n_obs"] == 0
+        assert entry["iv_percentile_window_days"] == 0
+
+
 class TestScanShape:
     def test_scan_returns_expected_top_level_keys(self):
         snapshot = _basic_snapshot()
@@ -619,6 +692,7 @@ class TestScanShape:
         entry = result["expiries"][0]
         expected_keys = {
             "expiry", "dte", "F", "atm_iv", "iv_percentile",
+            "iv_percentile_n_obs", "iv_percentile_window_days",
             "rv", "rv_iv_ratio", "vrp", "best", "candidates",
         }
         assert set(entry.keys()) == expected_keys

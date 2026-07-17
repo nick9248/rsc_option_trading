@@ -117,13 +117,19 @@ _COLUMN_TOOLTIPS: Dict[str, str] = {
         "maxing out the loss exactly at the strike."
     ),
     "IV %ile": (
-        "IV %ile — ATM IV percentile vs this expiry's own 365-day history\n\n"
-        "Formula: percentile rank of the current reconstructed ATM IV "
-        "within the trailing 365 days of ATM IV observations for this "
-        "SAME expiry tenor.\n\n"
-        "Example: current ATM IV = 58%; over the past year this expiry's "
-        "ATM IV mostly ranged 55-95% -> today ranks at the 8th percentile "
-        "-> \"8.2%\".\n\n"
+        "IV %ile — ATM IV percentile vs this expiry's own history\n\n"
+        "Formula: percentile rank of the current ATM IV within this "
+        "expiry's own valid (non-zero, non-NULL) ATM IV observation "
+        "history — zero/missing-data rows are excluded, they are never "
+        "treated as \"cheap\" IV.\n\n"
+        "Example: current ATM IV = 58%; over its available history this "
+        "expiry's ATM IV mostly ranged 55-95% -> today ranks at the 8th "
+        "percentile -> \"8.2% (n=1,405, 112d)\".\n\n"
+        "The \"(n=..., ...d)\" suffix shows exactly how much history backs "
+        "the number — n = valid observation count, d = days spanned. A "
+        "young expiry (e.g. a few months since listing) will show a small "
+        "window; ALWAYS check this before treating the percentile as a "
+        "full-year rank.\n\n"
         "Interpretation: LOW percentile = historically CHEAP volatility = "
         "the primary buy signal. This is THE ranking metric for this "
         "scanner (expiries are sorted ascending by this column) — "
@@ -559,7 +565,14 @@ class AutomationTab(QWidget):
         cost_pct = (candidate["cost_usd"] / future_price * 100.0) if future_price else 0.0
 
         iv_percentile = entry["iv_percentile"]
-        iv_percentile_str = f"{iv_percentile:.1f}%" if iv_percentile is not None else "N/A"
+        n_obs = entry.get("iv_percentile_n_obs")
+        window_days = entry.get("iv_percentile_window_days")
+        if iv_percentile is not None and n_obs is not None and window_days is not None:
+            iv_percentile_str = f"{iv_percentile:.1f}% (n={n_obs:,}, {window_days:.0f}d)"
+        elif iv_percentile is not None:
+            iv_percentile_str = f"{iv_percentile:.1f}%"
+        else:
+            iv_percentile_str = "N/A"
 
         rv_iv_ratio = entry["rv_iv_ratio"]
         rv_iv_str = f"{rv_iv_ratio:.2f}" if rv_iv_ratio is not None else "N/A"

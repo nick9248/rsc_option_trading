@@ -227,7 +227,13 @@ class StraddleScanService:
 
         iv_pct = top["iv_percentile"]
         iv_pct_str = f"{iv_pct:.1f}%" if iv_pct is not None else "N/A"
-        lines.append(f"  [TRIGGER] IV percentile (expiry): {iv_pct_str}")
+        n_obs = top.get("iv_percentile_n_obs")
+        window_days = top.get("iv_percentile_window_days")
+        if n_obs is not None and window_days is not None:
+            window_str = f" (n={n_obs:,}, {window_days:.0f}d)"
+        else:
+            window_str = ""
+        lines.append(f"  [TRIGGER] IV percentile (expiry): {iv_pct_str}{window_str}")
 
         if top["rv_iv_ratio"] is not None and top["rv"] is not None:
             lines.append(
@@ -388,7 +394,10 @@ class StraddleScanService:
         candidates.sort(key=lambda c: max(c["required_move_up_pct"], c["required_move_down_pct"]))
         best = candidates[0]
 
-        iv_percentile = repo.get_latest_iv_percentile_expiry(currency, expiry)
+        iv_window = repo.get_iv_percentile_with_window(currency, expiry)
+        iv_percentile = iv_window["percentile"]
+        iv_percentile_n_obs = iv_window["n_obs"]
+        iv_percentile_window_days = iv_window["window_days"]
         rv_iv_ratio = (rv / atm_iv) if (rv is not None and atm_iv) else None
         vrp = (atm_iv - rv) if rv is not None else None
 
@@ -398,6 +407,8 @@ class StraddleScanService:
             "F": future_price,
             "atm_iv": atm_iv,
             "iv_percentile": iv_percentile,
+            "iv_percentile_n_obs": iv_percentile_n_obs,
+            "iv_percentile_window_days": iv_percentile_window_days,
             "rv": rv,
             "rv_iv_ratio": rv_iv_ratio,
             "vrp": vrp,
