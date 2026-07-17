@@ -1502,6 +1502,255 @@ class DatabaseRepository:
             row = cursor.fetchone()
             return float(row[0]) if row else None
 
+    def get_iv_percentile_with_window(
+        self,
+        currency: str,
+        expiration: str
+    ) -> Dict[str, Any]:
+        """
+        Freshly computed per-expiry IV percentile that excludes invalid
+        atm_iv (NULL or <= 0) observations from the ranking population, and
+        reports how much history backs the number.
+
+        Unlike get_latest_iv_percentile_expiry (which reads the pre-computed
+        iv_percentile_expiry column written by VolatilityReconstructionService
+        against an UNFILTERED population), this method recomputes the
+        percentile at query time against a population that has zero/NULL
+        atm_iv rows stripped out first -- those are missing-data artifacts,
+        not real "cheap IV" observations, and must never rank as cheap.
+
+        Same percentile convention as the stored column (count of population
+        values <= the latest valid observation, divided by population size,
+        x100) -- the two will differ ONLY when the stored column's unfiltered
+        population included a zero/NULL atm_iv row that this method excludes,
+        or (for long-lived expiries) because the stored column also applies
+        a 365-day trailing window while this method uses the expiry's full
+        available history (that's what window_days below exposes).
+
+        Args:
+            currency: Currency symbol (e.g., "BTC", "ETH").
+            expiration: Expiration date string (e.g., "27DEC24").
+
+        Returns:
+            Dict: {percentile, n_obs, window_days, latest_atm_iv}.
+              percentile: float in [0, 100], or None if no valid
+                observations exist yet for this (currency, expiration).
+              n_obs: count of valid (non-NULL, non-zero) atm_iv
+                observations backing the percentile, including the latest.
+              window_days: days spanned by the valid population (latest
+                snapshot_hour - earliest), 0.0 if fewer than 2 observations.
+              latest_atm_iv: the most recent valid atm_iv value, or None.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                SELECT snapshot_hour, atm_iv
+                FROM onchain_volatility_snapshots
+                WHERE currency = %s AND expiration = %s
+                  AND atm_iv IS NOT NULL AND atm_iv > 0
+                ORDER BY snapshot_hour ASC
+            """, (currency, expiration))
+            rows = cursor.fetchall()
+
+        if not rows:
+            return {"percentile": None, "n_obs": 0, "window_days": 0, "latest_atm_iv": None}
+
+        valid = [(row[0], float(row[1])) for row in rows]
+        n_obs = len(valid)
+        latest_atm_iv = valid[-1][1]
+        window_days = (
+            (valid[-1][0] - valid[0][0]).total_seconds() / 86400.0 if n_obs > 1 else 0.0
+        )
+
+        below_or_equal = sum(1 for _, iv in valid if iv <= latest_atm_iv)
+        percentile = (below_or_equal / n_obs) * 100.0
+
+        return {
+            "percentile": percentile,
+            "n_obs": n_obs,
+            "window_days": window_days,
+            "latest_atm_iv": latest_atm_iv,
+        }
+
+    # ------------------------------------------------------------------
+    # Straddle scanner forward-testing (migration 014)
+    # ------------------------------------------------------------------
+
+    def save_straddle_scan(self, row: Dict[str, Any]) -> bool:
+        """
+        Insert one straddle_scan_history row (one per included expiry per
+        scan cycle). Deduped on (currency, expiration, scan_time) — a
+        repeat call for the same cycle is a silent no-op.
+
+        Args:
+            row: Dict with keys matching straddle_scan_history columns
+                (see migrations/014_add_straddle_scan_history.sql).
+                Required: scan_time, currency, expiration, dte,
+                future_price, index_price, strike, cost_usd,
+                breakeven_down, breakeven_up. Everything else optional.
+
+        Returns:
+            True if a new row was inserted, False if a row for this
+            (currency, expiration, scan_time) already existed (dedup skip).
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO straddle_scan_history (
+                    scan_time, currency, expiration,
+                    dte, future_price, index_price,
+                    strike, call_ask_usd, put_ask_usd, cost_usd,
+                    breakeven_down, breakeven_up,
+                    atm_iv, iv_percentile, iv_percentile_n_obs, iv_percentile_window_days,
+                    rv, rv_iv_ratio, vrp, min_pnl_score, deribit_url
+                ) VALUES (
+                    %(scan_time)s, %(currency)s, %(expiration)s,
+                    %(dte)s, %(future_price)s, %(index_price)s,
+                    %(strike)s, %(call_ask_usd)s, %(put_ask_usd)s, %(cost_usd)s,
+                    %(breakeven_down)s, %(breakeven_up)s,
+                    %(atm_iv)s, %(iv_percentile)s, %(iv_percentile_n_obs)s, %(iv_percentile_window_days)s,
+                    %(rv)s, %(rv_iv_ratio)s, %(vrp)s, %(min_pnl_score)s, %(deribit_url)s
+                )
+                ON CONFLICT (currency, expiration, scan_time) DO NOTHING
+                RETURNING id
+            """, {
+                "scan_time": row["scan_time"],
+                "currency": row["currency"],
+                "expiration": row["expiration"],
+                "dte": row["dte"],
+                "future_price": row["future_price"],
+                "index_price": row["index_price"],
+                "strike": row["strike"],
+                "call_ask_usd": row.get("call_ask_usd"),
+                "put_ask_usd": row.get("put_ask_usd"),
+                "cost_usd": row["cost_usd"],
+                "breakeven_down": row["breakeven_down"],
+                "breakeven_up": row["breakeven_up"],
+                "atm_iv": row.get("atm_iv"),
+                "iv_percentile": row.get("iv_percentile"),
+                "iv_percentile_n_obs": row.get("iv_percentile_n_obs"),
+                "iv_percentile_window_days": row.get("iv_percentile_window_days"),
+                "rv": row.get("rv"),
+                "rv_iv_ratio": row.get("rv_iv_ratio"),
+                "vrp": row.get("vrp"),
+                "min_pnl_score": row.get("min_pnl_score"),
+                "deribit_url": row.get("deribit_url"),
+            })
+            inserted = cursor.fetchone()
+            return inserted is not None
+
+    def get_unresolved_straddle_scans(self, currency: str) -> List[Dict[str, Any]]:
+        """
+        Return straddle_scan_history rows for `currency` awaiting settlement
+        resolution (resolved_at IS NULL), oldest first.
+
+        Args:
+            currency: Currency symbol (e.g., "BTC", "ETH").
+
+        Returns:
+            List of dicts: {id, expiration, scan_time, strike, cost_usd}.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                SELECT id, expiration, scan_time, strike, cost_usd
+                FROM straddle_scan_history
+                WHERE currency = %s AND resolved_at IS NULL
+                ORDER BY scan_time ASC
+            """, (currency,))
+            rows = cursor.fetchall()
+            return [
+                {
+                    "id": r[0], "expiration": r[1], "scan_time": r[2],
+                    "strike": float(r[3]), "cost_usd": float(r[4]),
+                }
+                for r in rows
+            ]
+
+    def resolve_straddle_scan(
+        self,
+        scan_id: int,
+        settlement_index_price: float,
+        settlement_pnl_usd: float,
+        settlement_return_pct: float,
+        resolved_at,
+    ) -> None:
+        """
+        Fill in the settlement resolution fields for a straddle_scan_history row.
+
+        Args:
+            scan_id: Primary key of the row.
+            settlement_index_price: Underlying settlement price used to
+                compute the P&L.
+            settlement_pnl_usd: |settlement_index_price - strike| - cost_usd.
+            settlement_return_pct: settlement_pnl_usd / cost_usd.
+            resolved_at: Timestamp of resolution.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                UPDATE straddle_scan_history
+                SET settlement_index_price = %s,
+                    settlement_pnl_usd = %s,
+                    settlement_return_pct = %s,
+                    resolved_at = %s
+                WHERE id = %s
+            """, (
+                settlement_index_price, settlement_pnl_usd,
+                settlement_return_pct, resolved_at, scan_id,
+            ))
+
+    def get_last_alert_for_expiry(
+        self,
+        currency: str,
+        expiration: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Return the most recently alerted straddle_scan_history row for
+        (currency, expiration) — used by the alert rate-limit rule.
+
+        Args:
+            currency: Currency symbol (e.g., "BTC", "ETH").
+            expiration: Expiration date string (e.g., "25SEP26").
+
+        Returns:
+            Dict {iv_percentile, alert_sent_at}, or None if never alerted.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                SELECT iv_percentile, alert_sent_at
+                FROM straddle_scan_history
+                WHERE currency = %s AND expiration = %s AND alert_sent = TRUE
+                ORDER BY alert_sent_at DESC
+                LIMIT 1
+            """, (currency, expiration))
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            return {
+                "iv_percentile": float(row[0]) if row[0] is not None else None,
+                "alert_sent_at": row[1],
+            }
+
+    def mark_straddle_scan_alert_sent(
+        self,
+        currency: str,
+        expiration: str,
+        scan_time,
+    ) -> None:
+        """
+        Mark the straddle_scan_history row for this (currency, expiration,
+        scan_time) as alerted — called right after a successful Telegram send.
+
+        Args:
+            currency: Currency symbol (e.g., "BTC", "ETH").
+            expiration: Expiration date string (e.g., "25SEP26").
+            scan_time: The scan cycle's timestamp (same value passed to
+                save_straddle_scan for this row).
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                UPDATE straddle_scan_history
+                SET alert_sent = TRUE, alert_sent_at = NOW()
+                WHERE currency = %s AND expiration = %s AND scan_time = %s
+            """, (currency, expiration, scan_time))
+
     # ── OTM Contract Finder ───────────────────────────────────────────────────
 
     def get_dvol_history_before(
