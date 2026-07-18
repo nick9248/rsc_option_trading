@@ -47,6 +47,7 @@ class SystemValidator:
 
     def _log_summary(self, grouped: Dict[str, List[CheckResult]]) -> None:
         passed = warnings = failed = 0
+        problems: List[str] = []
         for category, results in grouped.items():
             logger.info(f"\n{category}")
             logger.info("-" * 80)
@@ -57,9 +58,11 @@ class SystemValidator:
                 elif result.status == CheckStatus.WARN:
                     warnings += 1
                     logger.warning(f"  [WARN] {result.message}")
+                    problems.append(f"[WARN] {category}: {result.message}")
                 else:
                     failed += 1
                     logger.error(f"  [FAIL] {result.message}")
+                    problems.append(f"[FAIL] {category}: {result.message}")
 
         logger.info("\n" + "=" * 80)
         logger.info(f"Total: {passed} passed, {warnings} warnings, {failed} failed")
@@ -70,6 +73,11 @@ class SystemValidator:
         else:
             logger.info("OVERALL STATUS: ALL SYSTEMS OPERATIONAL")
         logger.info("=" * 80)
+
+        if problems:
+            logger.info(f"\nPROBLEMS ({len(problems)}):")
+            for problem in problems:
+                logger.info(f"  - {problem}")
 
 
 def main():

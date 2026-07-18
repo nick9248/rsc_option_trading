@@ -48,3 +48,40 @@ def test_main_does_not_exit_when_all_pass(monkeypatch):
     )
     monkeypatch.setattr("scripts.validate_system.DatabaseRepository", lambda: _FakeRepo())
     main()
+
+
+def test_log_summary_lists_problems(monkeypatch, caplog):
+    monkeypatch.setattr(
+        "scripts.validate_system.run_checks",
+        lambda environment, repo: {
+            "Scanner Activity": [
+                CheckResult(name="x", status=CheckStatus.FAIL, message="BTC: no straddle scans recorded in the last 6h"),
+                CheckResult(name="y", status=CheckStatus.PASS, message="ETH: 5 scans in last 6h"),
+            ],
+            "Database — Local": [
+                CheckResult(name="z", status=CheckStatus.WARN, message="hourly_snapshots: stale (4.5h ago)"),
+            ],
+        },
+    )
+    validator = SystemValidator(repository=_FakeRepo())
+    with caplog.at_level("INFO"):
+        validator.validate_all()
+
+    assert "PROBLEMS (2):" in caplog.text
+    assert "[FAIL] Scanner Activity: BTC: no straddle scans recorded in the last 6h" in caplog.text
+    assert "[WARN] Database — Local: hourly_snapshots: stale (4.5h ago)" in caplog.text
+    # The passing result must not appear in the problems list
+    assert "[FAIL] Scanner Activity: ETH: 5 scans in last 6h" not in caplog.text
+    assert "[WARN] Scanner Activity: ETH: 5 scans in last 6h" not in caplog.text
+
+
+def test_log_summary_omits_problems_section_when_all_pass(monkeypatch, caplog):
+    monkeypatch.setattr(
+        "scripts.validate_system.run_checks",
+        lambda environment, repo: {"API Connectivity": [CheckResult(name="x", status=CheckStatus.PASS, message="ok")]},
+    )
+    validator = SystemValidator(repository=_FakeRepo())
+    with caplog.at_level("INFO"):
+        validator.validate_all()
+
+    assert "PROBLEMS" not in caplog.text
