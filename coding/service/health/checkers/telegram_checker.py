@@ -23,11 +23,12 @@ class TelegramConfigCheck(HealthCheck):
     category = "Telegram"
     environment = CheckEnvironment.BOTH
 
-    def __init__(self, requests_module=requests):
+    def __init__(self, requests_module=requests, env_path=None):
         self._requests = requests_module
+        self._env_path = env_path if env_path is not None else _ENV_PATH
 
     def run(self, repo) -> List[CheckResult]:
-        load_dotenv(dotenv_path=_ENV_PATH)
+        load_dotenv(dotenv_path=self._env_path)
         token = os.getenv("OSF_TELEGRAM_BOT_TOKEN", "")
         chat_id = os.getenv("OSF_TELEGRAM_CHAT_ID", "")
 
