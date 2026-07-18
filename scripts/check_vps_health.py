@@ -55,11 +55,20 @@ def run(log_dir: Optional[Path] = None) -> int:
 
     repo = DatabaseRepository()
     grouped = run_checks(CheckEnvironment.VPS, repo)
-    tables = _table_snapshot(repo)
+
+    try:
+        tables = _table_snapshot(repo)
+        table_snapshot_error = None
+    except Exception as exc:
+        print(f"  [ERR ] Failed to collect table row counts: {exc}")
+        tables = {}
+        table_snapshot_error = str(exc)
 
     all_results = [r for results in grouped.values() for r in results]
     passed = sum(1 for r in all_results if r.status == CheckStatus.PASS)
     problems = [r.message for r in all_results if r.status != CheckStatus.PASS]
+    if table_snapshot_error is not None:
+        problems.append(f"Table row-count snapshot failed: {table_snapshot_error}")
 
     data = {
         "timestamp": now,

@@ -59,3 +59,24 @@ def test_run_returns_zero_when_all_pass(tmp_path, monkeypatch):
         },
     )
     assert check_vps_health.run(log_dir=tmp_path) == 0
+
+
+def test_run_still_writes_json_when_table_snapshot_fails(tmp_path, monkeypatch):
+    class _RaisingRepo:
+        def _get_connection(self):
+            raise RuntimeError("connection pool exhausted")
+
+    monkeypatch.setattr(check_vps_health, "DatabaseRepository", lambda: _RaisingRepo())
+    monkeypatch.setattr(
+        check_vps_health, "run_checks",
+        lambda environment, repo: {
+            "API Connectivity": [CheckResult(name="Deribit API", status=CheckStatus.PASS, message="ok")],
+        },
+    )
+
+    exit_code = check_vps_health.run(log_dir=tmp_path)
+    assert exit_code == 1
+
+    data = json.loads((tmp_path / "vps_health.json").read_text())
+    assert data["tables"] == {}
+    assert any("Table row-count snapshot failed" in p for p in data["problems"])
