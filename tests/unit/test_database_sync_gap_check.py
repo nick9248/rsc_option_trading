@@ -61,3 +61,19 @@ def test_local_behind_warns(tmp_path):
     results = check.run(repo=_FakeRepo(local_rows=50))
     assert results[0].status == CheckStatus.WARN
     assert "Sync from VPS" in results[0].message
+
+
+def test_vps_row_count_unavailable_warns_without_crashing(tmp_path):
+    """
+    check_vps_health.py's _table_snapshot can now report {"rows": None,
+    "error": ...} for a table it failed to count -- this must degrade to
+    a WARN, not crash on `None - int` arithmetic.
+    """
+    health_json = tmp_path / "vps_health.json"
+    health_json.write_text(json.dumps({
+        "tables": {"onchain_volatility_snapshots": {"rows": None, "error": "relation does not exist"}},
+    }))
+    check = DatabaseSyncGapCheck(health_json_path=health_json)
+    results = check.run(repo=_FakeRepo(local_rows=50))
+    assert results[0].status == CheckStatus.WARN
+    assert "unavailable" in results[0].message

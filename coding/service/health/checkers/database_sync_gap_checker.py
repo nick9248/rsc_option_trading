@@ -54,7 +54,17 @@ class DatabaseSyncGapCheck(HealthCheck):
         return results
 
     def _diff_result(self, cursor, table: str, vps_info: Dict[str, Any]) -> CheckResult:
-        vps_rows = vps_info.get("rows", 0)
+        vps_rows = vps_info.get("rows")
+
+        if vps_rows is None:
+            return CheckResult(
+                name=f"{table} sync", status=CheckStatus.WARN,
+                message=(
+                    f"{table}: VPS-side row count unavailable "
+                    f"({vps_info.get('error', 'unknown reason')}) — cannot compare"
+                ),
+                details={"vps_error": vps_info.get("error")},
+            )
 
         cursor.execute(f"SELECT COUNT(*) FROM {table}")
         local_rows = cursor.fetchone()[0]
