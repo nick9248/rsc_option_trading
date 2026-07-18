@@ -48,18 +48,37 @@ class DatabaseLocalFreshnessCheck(HealthCheck):
             cursor = conn.cursor()
             try:
                 for table, ts_col, ts_kind, warn_h, fail_h, required in _HOURLY_TABLES:
-                    results.append(self._freshness_result(cursor, table, ts_col, ts_kind, warn_h, fail_h))
-                    if required:
-                        results.append(self._completeness_result(cursor, table, ts_col, required))
+                    results.extend(self._safe_table_checks(conn, cursor, table, ts_col, ts_kind, warn_h, fail_h, required))
                 for table, ts_col, warn_d, fail_d, required in _DAILY_TABLES:
-                    results.append(self._freshness_result(cursor, table, ts_col, "datetime", warn_d * 24, fail_d * 24))
-                    if required:
-                        results.append(self._completeness_result(cursor, table, ts_col, required))
+                    results.extend(self._safe_table_checks(conn, cursor, table, ts_col, "datetime", warn_d * 24, fail_d * 24, required))
             finally:
                 cursor.close()
         finally:
             repo._return_connection(conn)
         return results
+
+    def _safe_table_checks(
+        self, conn, cursor, table: str, ts_col: str, ts_kind: str,
+        warn_h: float, fail_h: float, required: List[str],
+    ) -> List[CheckResult]:
+        """
+        One table's freshness+completeness checks, isolated so a schema
+        problem on this table (a renamed/dropped column, for instance)
+        doesn't lose visibility into every other table sharing this
+        connection. Rolls back on failure so the connection's transaction
+        can continue cleanly for the next table.
+        """
+        try:
+            table_results = [self._freshness_result(cursor, table, ts_col, ts_kind, warn_h, fail_h)]
+            if required:
+                table_results.append(self._completeness_result(cursor, table, ts_col, required))
+            return table_results
+        except Exception as exc:
+            conn.rollback()
+            return [CheckResult(
+                name=f"{table} check", status=CheckStatus.FAIL,
+                message=f"{table}: check failed: {exc}",
+            )]
 
     def _freshness_result(
         self, cursor, table: str, ts_col: str, ts_kind: str, warn_hours: float, fail_hours: float

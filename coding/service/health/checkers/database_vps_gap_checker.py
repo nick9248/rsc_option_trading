@@ -39,7 +39,14 @@ class DatabaseVpsGapCheck(HealthCheck):
             cursor = conn.cursor()
             try:
                 for table, ts_col in _CADENCE_TABLES:
-                    results.extend(self._gap_results(cursor, table, ts_col, window_start))
+                    try:
+                        results.extend(self._gap_results(cursor, table, ts_col, window_start))
+                    except Exception as exc:
+                        conn.rollback()
+                        results.append(CheckResult(
+                            name=f"{table} continuity", status=CheckStatus.FAIL,
+                            message=f"{table}: continuity check failed: {exc}",
+                        ))
             finally:
                 cursor.close()
         finally:

@@ -66,3 +66,32 @@ def test_completeness_fail_when_no_rows():
     check = DatabaseLocalFreshnessCheck()
     result = check._completeness_result(cursor, "historical_trades", "trade_timestamp", ["direction", "iv"])
     assert result.status == CheckStatus.FAIL
+
+
+def test_freshness_handles_ms_epoch_conversion():
+    five_minutes_ago_ms = int((datetime.now() - timedelta(minutes=5)).timestamp() * 1000)
+    cursor = _FakeCursor(fetchone_result=(five_minutes_ago_ms,))
+    check = DatabaseLocalFreshnessCheck()
+    result = check._freshness_result(cursor, "historical_trades", "trade_timestamp", "ms_epoch", 2.0, 24.0)
+    assert result.status == CheckStatus.PASS
+
+
+def test_safe_table_checks_isolates_failure_and_rolls_back():
+    class _FailingCursor:
+        def execute(self, query, params=None):
+            raise Exception("relation does not exist")
+
+    class _FakeConnWithRollback:
+        def __init__(self):
+            self.rolled_back = False
+
+        def rollback(self):
+            self.rolled_back = True
+
+    conn = _FakeConnWithRollback()
+    cursor = _FailingCursor()
+    check = DatabaseLocalFreshnessCheck()
+    results = check._safe_table_checks(conn, cursor, "hourly_snapshots", "snapshot_hour", "datetime", 2.0, 24.0, [])
+    assert results[0].status == CheckStatus.FAIL
+    assert "check failed" in results[0].message
+    assert conn.rolled_back is True

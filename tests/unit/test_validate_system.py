@@ -1,7 +1,9 @@
 """Unit tests for the rewritten SystemValidator (thin wrapper over the health registry)."""
 
+import pytest
+
 from coding.core.health.models import CheckEnvironment, CheckResult, CheckStatus
-from scripts.validate_system import SystemValidator
+from scripts.validate_system import SystemValidator, main
 
 
 class _FakeRepo:
@@ -26,3 +28,23 @@ def test_validate_all_handles_empty_grouping(monkeypatch):
     validator = SystemValidator(repository=_FakeRepo())
     grouped = validator.validate_all()
     assert grouped == {}
+
+
+def test_main_exits_1_when_any_check_fails(monkeypatch):
+    monkeypatch.setattr(
+        "scripts.validate_system.run_checks",
+        lambda environment, repo: {"API Connectivity": [CheckResult(name="x", status=CheckStatus.FAIL, message="down")]},
+    )
+    monkeypatch.setattr("scripts.validate_system.DatabaseRepository", lambda: _FakeRepo())
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+    assert exc_info.value.code == 1
+
+
+def test_main_does_not_exit_when_all_pass(monkeypatch):
+    monkeypatch.setattr(
+        "scripts.validate_system.run_checks",
+        lambda environment, repo: {"API Connectivity": [CheckResult(name="x", status=CheckStatus.PASS, message="ok")]},
+    )
+    monkeypatch.setattr("scripts.validate_system.DatabaseRepository", lambda: _FakeRepo())
+    main()

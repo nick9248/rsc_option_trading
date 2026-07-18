@@ -30,20 +30,34 @@ _SYNC_TRACKED_TABLES = [
 
 
 def _table_snapshot(repo: DatabaseRepository) -> dict:
-    """Row counts for the tables the local sync-gap check compares against."""
+    """
+    Row counts for the tables the local sync-gap check compares against.
+    Each table is isolated: a failure counting one table doesn't discard
+    the row counts already collected for the others -- the connection is
+    rolled back so the transaction can continue for the next table.
+    """
     snapshot = {}
     conn = repo._get_connection()
     try:
         cursor = conn.cursor()
         try:
             for table in _SYNC_TRACKED_TABLES:
-                cursor.execute(f"SELECT COUNT(*) FROM {table}")
-                snapshot[table] = {"rows": cursor.fetchone()[0]}
+                try:
+                    cursor.execute(f"SELECT COUNT(*) FROM {table}")
+                    snapshot[table] = {"rows": cursor.fetchone()[0]}
+                except Exception as exc:
+                    conn.rollback()
+                    snapshot[table] = {"rows": None, "error": str(exc)}
         finally:
             cursor.close()
     finally:
         repo._return_connection(conn)
     return snapshot
+
+
+def _write_health_json(log_dir: Path, data: dict) -> None:
+    log_dir.mkdir(exist_ok=True, parents=True)
+    (log_dir / "vps_health.json").write_text(json.dumps(data, indent=2, default=str))
 
 
 def run(log_dir: Optional[Path] = None) -> int:
@@ -53,8 +67,24 @@ def run(log_dir: Optional[Path] = None) -> int:
     print(f"VPS HEALTH CHECK — {now}")
     print(f"{'='*60}")
 
-    repo = DatabaseRepository()
-    grouped = run_checks(CheckEnvironment.VPS, repo)
+    log_dir = log_dir or (Path(__file__).parents[1] / "logs")
+
+    try:
+        repo = DatabaseRepository()
+        grouped = run_checks(CheckEnvironment.VPS, repo)
+    except Exception as exc:
+        print(f"  [ERR ] Failed to run health checks: {exc}")
+        _write_health_json(log_dir, {
+            "timestamp": now,
+            "total": 0,
+            "passed": 0,
+            "results": [],
+            "problems": [f"Health check run failed entirely: {exc}"],
+            "tables": {},
+        })
+        print(f"\nRESULT: could not run health checks — {exc}")
+        print(f"{'='*60}\n")
+        return 1
 
     try:
         tables = _table_snapshot(repo)
@@ -81,10 +111,7 @@ def run(log_dir: Optional[Path] = None) -> int:
         "problems": problems,
         "tables": tables,
     }
-
-    log_dir = log_dir or (Path(__file__).parents[1] / "logs")
-    log_dir.mkdir(exist_ok=True, parents=True)
-    (log_dir / "vps_health.json").write_text(json.dumps(data, indent=2, default=str))
+    _write_health_json(log_dir, data)
 
     print()
     for r in all_results:
