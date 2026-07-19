@@ -1,35 +1,39 @@
+# coding/gui/tabs/system_validation_tab.py — full file replacement
 """
-System Validation Tab
+System Validation Tab (Health Check)
 
-Provides GUI interface to run system health checks reflecting the current
-data-collection + on-chain-analysis system:
-- API connectivity
-- Database health and required tables
-- Collection freshness and gaps (local DB, post-sync), including
-  onchain_volatility_snapshots
-- dvol_history freshness (canonical DVOL table, manually/weekly refreshed)
-- Forward-testing harness (Phase 3) track record
-- Historical data quality and coverage
+GUI presentation for the shared health-check registry
+(coding/service/health). Local checks run on demand via "Run
+Validation"; VPS checks are read from the last-synced
+logs/vps_health.json via "Check VPS Health" (the VPS side runs
+automatically on cron — see scripts/check_vps_health.py).
 """
 
 import json
 import logging
 from datetime import datetime
 from pathlib import Path
+from typing import Dict, List
+
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-    QTextEdit, QLabel, QGroupBox
+    QTextEdit, QLabel, QGroupBox, QTreeWidget, QTreeWidgetItem,
 )
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QFont
 
+from coding.core.health.models import CheckResult, CheckStatus
 from scripts.validate_system import SystemValidator
 
 logger = logging.getLogger(__name__)
 
+_STATUS_ICON = {CheckStatus.PASS: "✓", CheckStatus.WARN: "⚠", CheckStatus.FAIL: "✗"}
+_CATEGORY_ICON = {CheckStatus.PASS: "🟢", CheckStatus.WARN: "🟡", CheckStatus.FAIL: "🔴"}
+_STATUS_RANK = {CheckStatus.PASS: 0, CheckStatus.WARN: 1, CheckStatus.FAIL: 2}
+
 
 class ValidationWorker(QThread):
-    """Worker thread for running system validation."""
+    """Worker thread for running the LOCAL health-check registry."""
 
     finished = Signal(dict)
     error = Signal(str)
@@ -39,30 +43,23 @@ class ValidationWorker(QThread):
         """Run validation."""
         try:
             validator = SystemValidator()
-
-            # Redirect logs to GUI
             self._setup_log_capture()
-
-            results = validator.validate_all()
-            self.finished.emit(results)
-
+            grouped = validator.validate_all()
+            self.finished.emit(grouped)
         except Exception as e:
             logger.exception(f"Validation failed: {e}")
             self.error.emit(str(e))
 
     def _setup_log_capture(self):
         """Setup logging to capture output for GUI."""
-        # Add handler to send logs to progress signal
         class SignalHandler(logging.Handler):
             def __init__(self, signal):
                 super().__init__()
                 self.signal = signal
 
             def emit(self, record):
-                msg = self.format(record)
-                self.signal.emit(msg)
+                self.signal.emit(self.format(record))
 
-        # Get the root logger
         root_logger = logging.getLogger()
         handler = SignalHandler(self.progress)
         handler.setFormatter(logging.Formatter('%(message)s'))
@@ -70,12 +67,11 @@ class ValidationWorker(QThread):
 
 
 class SystemValidationTab(QWidget):
-    """System validation and health check tab."""
+    """System health tab: category tree of every module's checks, plus VPS health."""
 
     def __init__(self):
         """Initialize system validation tab."""
         super().__init__()
-
         self.worker = None
         self.init_ui()
 
@@ -83,67 +79,66 @@ class SystemValidationTab(QWidget):
         """Initialize user interface."""
         layout = QVBoxLayout()
 
-        # Header
-        header = QLabel("System Health Validation")
+        header = QLabel("System Health")
         header_font = QFont()
         header_font.setPointSize(14)
         header_font.setBold(True)
         header.setFont(header_font)
         layout.addWidget(header)
 
-        # Description
         desc = QLabel(
-            "Run health checks on the data-collection + on-chain-analysis system:\n"
-            "• API connectivity and database tables\n"
-            "• Collection freshness and gaps (local DB, post-sync)\n"
-            "• dvol_history freshness (canonical DVOL, manual/weekly refresh)\n"
-            "• Forward-testing harness (Phase 3) track record\n"
-            "• Historical trades quality and OHLCV/backfill coverage"
+            "Every module in one place: API, database (local freshness/gaps/"
+            "completeness + VPS sync/continuity), scanner activity, Telegram "
+            "delivery, forward-test harnesses, IV-percentile window "
+            "freshness, and morning note synthesis."
         )
+        desc.setWordWrap(True)
         layout.addWidget(desc)
 
         layout.addSpacing(10)
 
-        # Controls
         controls_layout = QHBoxLayout()
-
         self.run_button = QPushButton("Run Validation")
         self.run_button.clicked.connect(self.run_validation)
         self.run_button.setMinimumHeight(40)
         controls_layout.addWidget(self.run_button)
 
-        self.clear_button = QPushButton("Clear Output")
+        self.clear_button = QPushButton("Clear")
         self.clear_button.clicked.connect(self.clear_output)
         controls_layout.addWidget(self.clear_button)
 
         controls_layout.addStretch()
         layout.addLayout(controls_layout)
 
-        # Output area
-        output_group = QGroupBox("Validation Output")
-        output_layout = QVBoxLayout()
+        self.summary_strip = QHBoxLayout()
+        self.summary_strip.addStretch()
+        layout.addLayout(self.summary_strip)
 
+        self.status_label = QLabel("Click 'Run Validation' to check system health")
+        self.status_label.setWordWrap(True)
+        layout.addWidget(self.status_label)
+
+        tree_group = QGroupBox("Checks by Category")
+        tree_layout = QVBoxLayout()
+        self.results_tree = QTreeWidget()
+        self.results_tree.setColumnCount(1)
+        self.results_tree.setHeaderHidden(True)
+        self.results_tree.setMinimumHeight(300)
+        tree_layout.addWidget(self.results_tree)
+        tree_group.setLayout(tree_layout)
+        layout.addWidget(tree_group, 1)
+
+        log_group = QGroupBox("Raw Log")
+        log_layout = QVBoxLayout()
         self.output_text = QTextEdit()
         self.output_text.setReadOnly(True)
         self.output_text.setFontFamily("Consolas")
         self.output_text.setFontPointSize(9)
-        output_layout.addWidget(self.output_text)
+        self.output_text.setMaximumHeight(150)
+        log_layout.addWidget(self.output_text)
+        log_group.setLayout(log_layout)
+        layout.addWidget(log_group)
 
-        output_group.setLayout(output_layout)
-        layout.addWidget(output_group)
-
-        # Status area
-        status_group = QGroupBox("Summary")
-        status_layout = QVBoxLayout()
-
-        self.status_label = QLabel("Click 'Run Validation' to check system health")
-        self.status_label.setWordWrap(True)
-        status_layout.addWidget(self.status_label)
-
-        status_group.setLayout(status_layout)
-        layout.addWidget(status_group)
-
-        # VPS Health section
         vps_group = QGroupBox("VPS Health (last sync)")
         vps_layout = QVBoxLayout()
 
@@ -177,14 +172,13 @@ class SystemValidationTab(QWidget):
             logger.warning("Validation already running")
             return
 
-        # Clear previous output
         self.output_text.clear()
+        self.results_tree.clear()
+        self._clear_summary_strip()
         self.status_label.setText("Running validation...")
         self.run_button.setEnabled(False)
 
-        # Start validation
         self.log(f"Starting system validation at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        self.log("=" * 80)
 
         self.worker = ValidationWorker()
         self.worker.finished.connect(self.on_validation_complete)
@@ -192,52 +186,86 @@ class SystemValidationTab(QWidget):
         self.worker.progress.connect(self.log)
         self.worker.start()
 
-    def on_validation_complete(self, results: dict):
+    def on_validation_complete(self, grouped: Dict[str, List[CheckResult]]):
         """Handle validation completion."""
         self.run_button.setEnabled(True)
+        self._populate_tree(grouped)
+        self._populate_summary_strip(grouped)
 
-        # Update status
-        passed = len(results["passed"])
-        warnings = len(results["warnings"])
-        failed = len(results["failed"])
+        all_results = [r for results in grouped.values() for r in results]
+        passed = sum(1 for r in all_results if r.status == CheckStatus.PASS)
+        warnings = sum(1 for r in all_results if r.status == CheckStatus.WARN)
+        failed = sum(1 for r in all_results if r.status == CheckStatus.FAIL)
 
-        if failed > 0:
-            status = f"❌ FAILED: {failed} critical issues found"
-            color = "red"
-        elif warnings > 0:
-            status = f"⚠️ WARNING: {warnings} warnings found"
-            color = "orange"
+        if failed:
+            status, color = f"FAILED: {failed} critical issues found", "red"
+        elif warnings:
+            status, color = f"WARNING: {warnings} warnings found", "orange"
         else:
-            status = f"✅ SUCCESS: All {passed} checks passed"
-            color = "green"
+            status, color = f"SUCCESS: All {passed} checks passed", "green"
 
         self.status_label.setText(
             f"<b style='color: {color}'>{status}</b><br>"
             f"Passed: {passed} | Warnings: {warnings} | Failed: {failed}"
         )
-
-        self.log("\n" + "=" * 80)
-        self.log(f"Validation completed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-
+        self.log(f"\nValidation completed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info(f"Validation complete: {status}")
 
     def on_validation_error(self, error_msg: str):
         """Handle validation error."""
         self.run_button.setEnabled(True)
         self.status_label.setText(f"<b style='color: red'>ERROR: {error_msg}</b>")
-        self.log(f"\n❌ ERROR: {error_msg}")
+        self.log(f"\nERROR: {error_msg}")
         logger.error(f"Validation error: {error_msg}")
 
+    def _populate_tree(self, grouped: Dict[str, List[CheckResult]]):
+        """Rebuild the category tree from a fresh grouped result set."""
+        self.results_tree.clear()
+        for category, results in grouped.items():
+            worst = max((r.status for r in results), key=lambda s: _STATUS_RANK[s])
+            passed_count = sum(1 for r in results if r.status == CheckStatus.PASS)
+
+            parent = QTreeWidgetItem([f"{_CATEGORY_ICON[worst]} {category} ({passed_count}/{len(results)})"])
+            self.results_tree.addTopLevelItem(parent)
+            if worst != CheckStatus.PASS:
+                parent.setExpanded(True)
+
+            for result in results:
+                child = QTreeWidgetItem([f"{_STATUS_ICON[result.status]} {result.message}"])
+                parent.addChild(child)
+
+    def _populate_summary_strip(self, grouped: Dict[str, List[CheckResult]]):
+        """Rebuild the colored per-category summary chips."""
+        self._clear_summary_strip()
+        for category, results in grouped.items():
+            worst = max((r.status for r in results), key=lambda s: _STATUS_RANK[s])
+            passed_count = sum(1 for r in results if r.status == CheckStatus.PASS)
+
+            chip = QLabel(f"{_CATEGORY_ICON[worst]} {category} ({passed_count}/{len(results)})")
+            chip.setStyleSheet(
+                "padding: 3px 8px; border-radius: 4px; font-size: 11px; "
+                "background-color: rgba(128,128,128,40);"
+            )
+            self.summary_strip.insertWidget(self.summary_strip.count() - 1, chip)
+
+    def _clear_summary_strip(self):
+        """Remove all chips from the summary strip (keeps the trailing stretch)."""
+        while self.summary_strip.count() > 1:
+            item = self.summary_strip.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
     def log(self, message: str):
-        """Append message to output."""
+        """Append message to the raw log."""
         self.output_text.append(message)
-        # Auto-scroll to bottom
         scrollbar = self.output_text.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
 
     def clear_output(self):
-        """Clear output text."""
+        """Clear tree, chips, and raw log."""
         self.output_text.clear()
+        self.results_tree.clear()
+        self._clear_summary_strip()
         self.status_label.setText("Output cleared")
 
     def _load_vps_health(self):
@@ -259,32 +287,34 @@ class SystemValidationTab(QWidget):
             total = data.get("total", 0)
             problems = data.get("problems", [])
             results = data.get("results", [])
+            tables = data.get("tables", {})
 
-            # Minutes since last check
             try:
                 checked_at = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
                 mins_ago = int((datetime.now() - checked_at).total_seconds() / 60)
-                age_str = f"{mins_ago}min ago" if mins_ago < 120 else f"{mins_ago//60}h ago"
+                age_str = f"{mins_ago}min ago" if mins_ago < 120 else f"{mins_ago // 60}h ago"
             except Exception:
                 age_str = "unknown time"
 
             if problems:
-                color = "red"
-                summary = f"❌ {len(problems)} problem(s) — {passed}/{total} checks OK"
+                color, summary = "red", f"{len(problems)} problem(s) — {passed}/{total} checks OK"
             else:
-                color = "green"
-                summary = f"✅ {passed}/{total} checks OK"
+                color, summary = "green", f"{passed}/{total} checks OK"
 
             self.vps_status_label.setText(
                 f"<b style='color:{color}'>{summary}</b><br>"
                 f"Last checked: {timestamp} ({age_str})"
             )
 
-            # Detail lines
             lines = []
             for r in results:
                 icon = "OK " if r["ok"] else "ERR"
                 lines.append(f"[{icon}] {r['message']}")
+            if tables:
+                lines.append("")
+                lines.append("VPS TABLE ROW COUNTS (used by Database — VPS Sync check):")
+                for table, info in tables.items():
+                    lines.append(f"  {table}: {info.get('rows', '?')} rows")
             if problems:
                 lines.append("")
                 lines.append("PROBLEMS:")
