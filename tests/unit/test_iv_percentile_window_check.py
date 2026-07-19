@@ -95,3 +95,55 @@ def test_expiry_active_but_never_reconstructed_fails():
     results = IvPercentileWindowCheck().run(repo)
     assert results[0].status == CheckStatus.FAIL
     assert "never run" in results[0].message
+
+
+def test_one_candidate_failure_does_not_block_others():
+    class _PartiallyFailingCursor:
+        def execute(self, query, params=None):
+            if "onchain_analysis_snapshots" in query:
+                return
+            if params == ("ETH", "26MAR27"):
+                raise Exception("connection reset")
+
+        def fetchall(self):
+            return [("BTC", "25SEP26"), ("ETH", "26MAR27")]
+
+        def fetchone(self):
+            return (datetime.now(timezone.utc) - timedelta(hours=1),)
+
+        def close(self):
+            pass
+
+    class _FakeConnWithRollback:
+        def __init__(self, cursor):
+            self._cursor = cursor
+            self.rolled_back = False
+
+        def cursor(self):
+            return self._cursor
+
+        def rollback(self):
+            self.rolled_back = True
+
+    class _FakeRepoWithRollback:
+        def __init__(self, conn):
+            self._conn = conn
+
+        def _get_connection(self):
+            return self._conn
+
+        def _return_connection(self, conn):
+            pass
+
+        def get_iv_percentile_with_window(self, currency, expiration):
+            return {"percentile": 12.0, "n_obs": 100, "window_days": 50.0, "latest_atm_iv": 0.5}
+
+    cursor = _PartiallyFailingCursor()
+    conn = _FakeConnWithRollback(cursor)
+    repo = _FakeRepoWithRollback(conn)
+
+    results = IvPercentileWindowCheck().run(repo)
+    by_name = {r.name: r for r in results}
+    assert by_name["IV-percentile window (BTC 25SEP26)"].status == CheckStatus.PASS
+    assert by_name["IV-percentile window (ETH 26MAR27)"].status == CheckStatus.FAIL
+    assert conn.rolled_back is True

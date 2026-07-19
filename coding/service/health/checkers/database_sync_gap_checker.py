@@ -46,7 +46,14 @@ class DatabaseSyncGapCheck(HealthCheck):
             cursor = conn.cursor()
             try:
                 for table, vps_info in tables.items():
-                    results.append(self._diff_result(cursor, table, vps_info))
+                    try:
+                        results.append(self._diff_result(cursor, table, vps_info))
+                    except Exception as exc:
+                        conn.rollback()
+                        results.append(CheckResult(
+                            name=f"{table} sync", status=CheckStatus.FAIL,
+                            message=f"{table}: sync check failed: {exc}",
+                        ))
             finally:
                 cursor.close()
         finally:

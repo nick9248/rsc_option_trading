@@ -24,7 +24,15 @@ class OnChainForwardTestCheck(HealthCheck):
         results: List[CheckResult] = []
 
         for currency in _CURRENCIES:
-            record = harness.get_track_record(currency)
+            try:
+                record = harness.get_track_record(currency)
+            except Exception as exc:
+                results.append(CheckResult(
+                    name=f"On-chain forward-test ({currency})", status=CheckStatus.FAIL,
+                    message=f"{currency}: check failed: {exc}",
+                ))
+                continue
+
             n_total = record.get("n_total", 0)
             n_signals = record.get("n_signals", 0)
             hit_rate = record.get("hit_rate")
@@ -62,33 +70,40 @@ class StraddleForwardTestCheck(HealthCheck):
             cursor = conn.cursor()
             try:
                 for currency in _CURRENCIES:
-                    cursor.execute("""
-                        SELECT
-                            COUNT(*) AS total,
-                            COUNT(resolved_at) AS resolved,
-                            AVG(settlement_return_pct) FILTER (WHERE resolved_at IS NOT NULL) AS avg_return
-                        FROM straddle_scan_history
-                        WHERE currency = %s
-                    """, (currency,))
-                    total, resolved, avg_return = cursor.fetchone()
+                    try:
+                        cursor.execute("""
+                            SELECT
+                                COUNT(*) AS total,
+                                COUNT(resolved_at) AS resolved,
+                                AVG(settlement_return_pct) FILTER (WHERE resolved_at IS NOT NULL) AS avg_return
+                            FROM straddle_scan_history
+                            WHERE currency = %s
+                        """, (currency,))
+                        total, resolved, avg_return = cursor.fetchone()
 
-                    if total == 0:
+                        if total == 0:
+                            results.append(CheckResult(
+                                name=f"Straddle forward-test ({currency})", status=CheckStatus.WARN,
+                                message=f"{currency}: no straddle scan history recorded yet",
+                            ))
+                        elif resolved < _MIN_RESOLVED_FOR_PASS:
+                            results.append(CheckResult(
+                                name=f"Straddle forward-test ({currency})", status=CheckStatus.WARN,
+                                message=f"{currency}: {total} scans recorded, none settled yet",
+                                details={"total": total, "resolved": resolved},
+                            ))
+                        else:
+                            avg_str = f"{avg_return:.1f}%" if avg_return is not None else "n/a"
+                            results.append(CheckResult(
+                                name=f"Straddle forward-test ({currency})", status=CheckStatus.PASS,
+                                message=f"{currency}: {resolved}/{total} scans settled, avg return {avg_str}",
+                                details={"total": total, "resolved": resolved, "avg_return": avg_return},
+                            ))
+                    except Exception as exc:
+                        conn.rollback()
                         results.append(CheckResult(
-                            name=f"Straddle forward-test ({currency})", status=CheckStatus.WARN,
-                            message=f"{currency}: no straddle scan history recorded yet",
-                        ))
-                    elif resolved < _MIN_RESOLVED_FOR_PASS:
-                        results.append(CheckResult(
-                            name=f"Straddle forward-test ({currency})", status=CheckStatus.WARN,
-                            message=f"{currency}: {total} scans recorded, none settled yet",
-                            details={"total": total, "resolved": resolved},
-                        ))
-                    else:
-                        avg_str = f"{avg_return:.1f}%" if avg_return is not None else "n/a"
-                        results.append(CheckResult(
-                            name=f"Straddle forward-test ({currency})", status=CheckStatus.PASS,
-                            message=f"{currency}: {resolved}/{total} scans settled, avg return {avg_str}",
-                            details={"total": total, "resolved": resolved, "avg_return": avg_return},
+                            name=f"Straddle forward-test ({currency})", status=CheckStatus.FAIL,
+                            message=f"{currency}: check failed: {exc}",
                         ))
             finally:
                 cursor.close()

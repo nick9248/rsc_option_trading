@@ -77,3 +77,56 @@ def test_vps_row_count_unavailable_warns_without_crashing(tmp_path):
     results = check.run(repo=_FakeRepo(local_rows=50))
     assert results[0].status == CheckStatus.WARN
     assert "unavailable" in results[0].message
+
+
+def test_one_table_failure_does_not_block_others(tmp_path):
+    class _PartiallyFailingCursor:
+        def execute(self, query, params=None):
+            if "onchain_volatility_snapshots" in query:
+                raise Exception("relation does not exist")
+
+        def fetchone(self):
+            return (100,)
+
+        def close(self):
+            pass
+
+    class _FakeConnWithRollback:
+        def __init__(self, cursor):
+            self._cursor = cursor
+            self.rolled_back = False
+
+        def cursor(self):
+            return self._cursor
+
+        def rollback(self):
+            self.rolled_back = True
+
+    class _FakeRepoWithRollback:
+        def __init__(self, conn):
+            self._conn = conn
+
+        def _get_connection(self):
+            return self._conn
+
+        def _return_connection(self, conn):
+            pass
+
+    health_json = tmp_path / "vps_health.json"
+    health_json.write_text(json.dumps({
+        "tables": {
+            "hourly_snapshots": {"rows": 100},
+            "onchain_volatility_snapshots": {"rows": 200},
+        },
+    }))
+    cursor = _PartiallyFailingCursor()
+    conn = _FakeConnWithRollback(cursor)
+    repo = _FakeRepoWithRollback(conn)
+
+    check = DatabaseSyncGapCheck(health_json_path=health_json)
+    results = check.run(repo)
+
+    by_name = {r.name: r for r in results}
+    assert by_name["hourly_snapshots sync"].status == CheckStatus.PASS
+    assert by_name["onchain_volatility_snapshots sync"].status == CheckStatus.FAIL
+    assert conn.rolled_back is True

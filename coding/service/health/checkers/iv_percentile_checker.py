@@ -52,13 +52,20 @@ class IvPercentileWindowCheck(HealthCheck):
 
                 results: List[CheckResult] = []
                 for currency, expiration in candidates:
-                    cursor.execute("""
-                        SELECT MAX(reconstructed_at)
-                        FROM onchain_volatility_snapshots
-                        WHERE currency = %s AND expiration = %s
-                    """, (currency, expiration))
-                    latest_reconstructed = cursor.fetchone()[0]
-                    results.append(self._evaluate(repo, currency, expiration, latest_reconstructed))
+                    try:
+                        cursor.execute("""
+                            SELECT MAX(reconstructed_at)
+                            FROM onchain_volatility_snapshots
+                            WHERE currency = %s AND expiration = %s
+                        """, (currency, expiration))
+                        latest_reconstructed = cursor.fetchone()[0]
+                        results.append(self._evaluate(repo, currency, expiration, latest_reconstructed))
+                    except Exception as exc:
+                        conn.rollback()
+                        results.append(CheckResult(
+                            name=f"IV-percentile window ({currency} {expiration})", status=CheckStatus.FAIL,
+                            message=f"{currency} {expiration}: check failed: {exc}",
+                        ))
             finally:
                 cursor.close()
         finally:
