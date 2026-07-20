@@ -1,17 +1,22 @@
 """
 Automation tab.
 
-Manual trigger point for scanner jobs. v1 ships a single job — "Straddle
-Scanner (manual)" — that runs StraddleScanService.scan() in a background
-thread and displays the ranked results (tree view, top-3 candidates per
-expiry, excluded expiries shown dimmed) plus a preview of the Telegram-style
-alert text. No scheduling, no DB recording, no Telegram send yet (increment
-2) — this tab only triggers a single scan and displays its output.
+Manual trigger point for scanner jobs. The job dropdown picks one of three
+manual scans — "Straddle Scanner (manual)", "Iron Condor Scanner (manual)",
+or "Long Butterfly Scanner (manual)" — each running its own scan service in
+a background thread and rendering results into the same results tree and
+alert-preview widgets, with the tree's columns and row-builder swapped per
+job in `_run_job`. Straddle shows the ranked results with top-3 candidates
+per expiry (excluded expiries shown dimmed); iron condor/butterfly show the
+best candidate per expiry only. No scheduling, no DB recording, no Telegram
+send yet (increment 2) — this tab only triggers a single scan and displays
+its output.
 
-All business logic lives in StraddleScanService; this tab only orchestrates
-worker threads and renders the returned dict. No scan math and no chart
-figure-building here — payoff charts are built by
-StraddleScanService.generate_payoff_chart(), which delegates to
+All business logic lives in the scan services (StraddleScanService,
+IronCondorScanService, ButterflyScanService); this tab only orchestrates
+worker threads and renders the returned dicts. No scan math and no chart
+figure-building here — payoff charts are built by each service's own
+generate_payoff_chart(), which delegates to
 coding.core.analytics.chart_generator.
 """
 
@@ -29,12 +34,20 @@ from PySide6.QtGui import QColor, QDesktopServices
 
 from coding.gui.theme.colors import Colors
 from coding.service.scanner.straddle_scan_service import StraddleScanService
+from coding.service.scanner.butterfly_scan_service import ButterflyScanService
+from coding.service.scanner.iron_condor_scan_service import IronCondorScanService
+from coding.service.scanner.defined_risk_alert_rules import format_defined_risk_alert
 
 logger = logging.getLogger(__name__)
 
-# Job registry: dropdown label -> currently only one job exists in v1.
-# A future job just adds an entry here plus a branch in _run_job.
-_JOBS = ["Straddle Scanner (manual)"]
+# Job registry: dropdown label -> one of three jobs (straddle, iron condor,
+# long butterfly). Each shares the single results-tree/alert-preview widget
+# pair, swapping columns and row-builder per job in _run_job.
+_JOBS = [
+    "Straddle Scanner (manual)",
+    "Iron Condor Scanner (manual)",
+    "Long Butterfly Scanner (manual)",
+]
 
 # Tree column layout — parent (best candidate) and child (rank 2/3) rows
 # share this exact layout.
@@ -47,6 +60,30 @@ _COLUMNS = [
     _COL_BE, _COL_IV, _COL_RVIV, _COL_VRP, _COL_SCORE, _COL_PAYOFF,
     _COL_DERIBIT,
 ) = range(len(_COLUMNS))
+
+# Iron condor column layout — same single-tree widget as the straddle job,
+# swapped in by _run_job when "Iron Condor Scanner (manual)" is selected.
+_IC_COLUMNS = [
+    "Expiry", "DTE", "Short C", "Long C", "Short P", "Long P", "Credit $",
+    "Max Loss $", "Breakevens", "Prob %", "EV $", "Gate", "Payoff", "Deribit",
+]
+(
+    _IC_COL_EXPIRY, _IC_COL_DTE, _IC_COL_SHORTC, _IC_COL_LONGC, _IC_COL_SHORTP,
+    _IC_COL_LONGP, _IC_COL_CREDIT, _IC_COL_MAXLOSS, _IC_COL_BE, _IC_COL_PROB,
+    _IC_COL_EV, _IC_COL_GATE, _IC_COL_PAYOFF, _IC_COL_DERIBIT,
+) = range(len(_IC_COLUMNS))
+
+# Long butterfly column layout — same single-tree widget, swapped in by
+# _run_job when "Long Butterfly Scanner (manual)" is selected.
+_BF_COLUMNS = [
+    "Expiry", "DTE", "K1", "K2 (mid)", "K3", "Cost $", "Max Profit $",
+    "Breakevens", "Prob %", "EV $", "Gate", "Payoff", "Deribit",
+]
+(
+    _BF_COL_EXPIRY, _BF_COL_DTE, _BF_COL_K1, _BF_COL_K2, _BF_COL_K3,
+    _BF_COL_COST, _BF_COL_MAXPROFIT, _BF_COL_BE, _BF_COL_PROB, _BF_COL_EV,
+    _BF_COL_GATE, _BF_COL_PAYOFF, _BF_COL_DERIBIT,
+) = range(len(_BF_COLUMNS))
 
 # Rich, multi-line header tooltips: (a) what it is, (b) exact formula,
 # (c) a worked example, (d) how to interpret it. Kept as a module-level
@@ -241,15 +278,110 @@ class PayoffChartWorker(QThread):
             self.error.emit(str(error))
 
 
+class IronCondorScanWorker(QThread):
+    """Runs IronCondorScanService.scan() off the GUI thread."""
+
+    finished = Signal(dict)
+    error = Signal(str)
+
+    def __init__(self, currency: str, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.currency = currency
+
+    def run(self) -> None:
+        try:
+            service = IronCondorScanService()
+            result = service.scan(self.currency)
+            self.finished.emit(result)
+        except Exception as error:
+            logger.exception(f"Iron condor scan failed for {self.currency}")
+            self.error.emit(str(error))
+
+
+class ButterflyScanWorker(QThread):
+    """Runs ButterflyScanService.scan() off the GUI thread."""
+
+    finished = Signal(dict)
+    error = Signal(str)
+
+    def __init__(self, currency: str, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.currency = currency
+
+    def run(self) -> None:
+        try:
+            service = ButterflyScanService()
+            result = service.scan(self.currency)
+            self.finished.emit(result)
+        except Exception as error:
+            logger.exception(f"Butterfly scan failed for {self.currency}")
+            self.error.emit(str(error))
+
+
+class IronCondorPayoffChartWorker(QThread):
+    """Runs IronCondorScanService.generate_payoff_chart() off the GUI thread."""
+
+    finished = Signal(str)
+    error = Signal(str)
+
+    def __init__(
+        self, scan_service: IronCondorScanService, scan_result: Dict[str, Any],
+        expiry: str, short_call: float, long_call: float, short_put: float, long_put: float,
+        parent: Optional[QWidget] = None,
+    ):
+        super().__init__(parent)
+        self.scan_service = scan_service
+        self.scan_result = scan_result
+        self.expiry = expiry
+        self.short_call, self.long_call, self.short_put, self.long_put = short_call, long_call, short_put, long_put
+
+    def run(self) -> None:
+        try:
+            path = self.scan_service.generate_payoff_chart(
+                self.scan_result, self.expiry, self.short_call, self.long_call, self.short_put, self.long_put,
+            )
+            self.finished.emit(path)
+        except Exception as error:
+            logger.exception(f"Iron condor payoff chart generation failed for {self.expiry}")
+            self.error.emit(str(error))
+
+
+class ButterflyPayoffChartWorker(QThread):
+    """Runs ButterflyScanService.generate_payoff_chart() off the GUI thread."""
+
+    finished = Signal(str)
+    error = Signal(str)
+
+    def __init__(
+        self, scan_service: ButterflyScanService, scan_result: Dict[str, Any],
+        expiry: str, k1: float, k2: float, k3: float, parent: Optional[QWidget] = None,
+    ):
+        super().__init__(parent)
+        self.scan_service = scan_service
+        self.scan_result = scan_result
+        self.expiry = expiry
+        self.k1, self.k2, self.k3 = k1, k2, k3
+
+    def run(self) -> None:
+        try:
+            path = self.scan_service.generate_payoff_chart(self.scan_result, self.expiry, self.k1, self.k2, self.k3)
+            self.finished.emit(path)
+        except Exception as error:
+            logger.exception(f"Butterfly payoff chart generation failed for {self.expiry}")
+            self.error.emit(str(error))
+
+
 class AutomationTab(QWidget):
     """Automation tab: pick a job + currency, run it, review the results."""
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
-        self.worker: Optional[StraddleScanWorker] = None
+        self.worker: Optional[QThread] = None
         self._last_scan_result: Optional[Dict[str, Any]] = None
         self._scan_service = StraddleScanService()  # format_alert + generate_payoff_chart (no I/O of its own)
-        self._chart_workers: List[PayoffChartWorker] = []
+        self._iron_condor_scan_service = IronCondorScanService()  # generate_payoff_chart (no I/O of its own)
+        self._butterfly_scan_service = ButterflyScanService()  # generate_payoff_chart (no I/O of its own)
+        self._chart_workers: List[QThread] = []
 
         # Quote-age tracking: scan results are snapshots, and Deribit quotes
         # drift within minutes. self._scan_as_of / self._scan_index_price
@@ -423,21 +555,35 @@ class AutomationTab(QWidget):
         job = self.job_combo.currentText()
         currency = self.currency_combo.currentText()
 
-        if job != "Straddle Scanner (manual)":
-            # Only one job exists today; guard so a future dropdown addition
-            # can't silently fall through without a handler.
-            self.status_label.setText(f"No handler for job: {job}")
-            self.status_label.setStyleSheet(f"color: {Colors.ERROR};")
-            return
-
         self.results_tree.clear()
         self.alert_text.clear()
         self.run_button.setEnabled(False)
         self.status_label.setText(f"Scanning {currency}...")
         self.status_label.setStyleSheet(f"color: {Colors.WARNING};")
 
-        self.worker = StraddleScanWorker(currency)
-        self.worker.finished.connect(self._on_scan_finished)
+        if job == "Straddle Scanner (manual)":
+            self.results_tree.setColumnCount(len(_COLUMNS))
+            self.results_tree.setHeaderLabels(_COLUMNS)
+            self.worker = StraddleScanWorker(currency)
+            self.worker.finished.connect(self._on_scan_finished)
+        elif job == "Iron Condor Scanner (manual)":
+            self.results_tree.setColumnCount(len(_IC_COLUMNS))
+            self.results_tree.setHeaderLabels(_IC_COLUMNS)
+            self.worker = IronCondorScanWorker(currency)
+            self.worker.finished.connect(self._on_ic_scan_finished)
+        elif job == "Long Butterfly Scanner (manual)":
+            self.results_tree.setColumnCount(len(_BF_COLUMNS))
+            self.results_tree.setHeaderLabels(_BF_COLUMNS)
+            self.worker = ButterflyScanWorker(currency)
+            self.worker.finished.connect(self._on_bf_scan_finished)
+        else:
+            # Guards against a future dropdown addition silently falling
+            # through without a handler.
+            self.status_label.setText(f"No handler for job: {job}")
+            self.status_label.setStyleSheet(f"color: {Colors.ERROR};")
+            self.run_button.setEnabled(True)
+            return
+
         self.worker.error.connect(self._on_scan_error)
         self.worker.start()
 
@@ -484,6 +630,105 @@ class AutomationTab(QWidget):
         self.status_label.setText("Scan failed")
         self.status_label.setStyleSheet(f"color: {Colors.ERROR};")
         self.alert_text.setPlainText(f"ERROR: {error_message}")
+
+    def _on_ic_scan_finished(self, result: Dict[str, Any]) -> None:
+        self.run_button.setEnabled(True)
+        self._last_scan_result = result
+        self._scan_as_of = result.get("as_of")
+        self._scan_index_price = result.get("index_price")
+        if self._scan_as_of is not None:
+            self.age_banner_frame.show()
+            self._update_age_banner()
+            if not self._age_timer.isActive():
+                self._age_timer.start()
+        else:
+            self._age_timer.stop()
+            self.age_banner_frame.hide()
+
+        expiries = result.get("expiries", [])
+        excluded = result.get("excluded", [])
+        self.results_tree.clear()
+        for entry in expiries:
+            candidates = entry.get("candidates") or []
+            if not candidates:
+                continue
+            best = candidates[0]
+            regime = entry.get("regime", {}) or {}
+            values = [""] * len(_IC_COLUMNS)
+            values[_IC_COL_EXPIRY] = entry["expiry"]
+            values[_IC_COL_DTE] = f"{entry['dte']:.0f}"
+            values[_IC_COL_SHORTC] = f"{best['short_call']:,.0f}"
+            values[_IC_COL_LONGC] = f"{best['long_call']:,.0f}"
+            values[_IC_COL_SHORTP] = f"{best['short_put']:,.0f}"
+            values[_IC_COL_LONGP] = f"{best['long_put']:,.0f}"
+            values[_IC_COL_CREDIT] = f"${best['cost_or_credit']:,.2f}"
+            values[_IC_COL_MAXLOSS] = f"${best['max_loss']:,.2f}"
+            values[_IC_COL_BE] = f"{best['breakeven_lo']:,.0f} / {best['breakeven_hi']:,.0f}"
+            values[_IC_COL_PROB] = f"{best['prob_profit']:.1f}%" if best.get("prob_profit") is not None else "N/A"
+            values[_IC_COL_EV] = f"${best['ev']:,.2f}" if best.get("ev") is not None else "N/A"
+            values[_IC_COL_GATE] = "PASS" if regime.get("gate_pass") else "-"
+            item = QTreeWidgetItem(values)
+            self.results_tree.addTopLevelItem(item)
+            self._attach_ic_payoff_widget(item, entry["expiry"], best)
+        if excluded:
+            self._add_excluded_items(excluded)
+
+        if not expiries:
+            self.status_label.setText(f"No iron condor candidates ({len(excluded)} expiries excluded)")
+            self.status_label.setStyleSheet(f"color: {Colors.WARNING};")
+        else:
+            self.status_label.setText(f"Found {len(expiries)} iron condor candidate(s)")
+            self.status_label.setStyleSheet(f"color: {Colors.SUCCESS};")
+        self.alert_text.setPlainText(format_defined_risk_alert(result, "iron_condor"))
+
+    def _on_bf_scan_finished(self, result: Dict[str, Any]) -> None:
+        self.run_button.setEnabled(True)
+        self._last_scan_result = result
+        self._scan_as_of = result.get("as_of")
+        self._scan_index_price = result.get("index_price")
+        if self._scan_as_of is not None:
+            self.age_banner_frame.show()
+            self._update_age_banner()
+            if not self._age_timer.isActive():
+                self._age_timer.start()
+        else:
+            self._age_timer.stop()
+            self.age_banner_frame.hide()
+
+        expiries = result.get("expiries", [])
+        excluded = result.get("excluded", [])
+        self.results_tree.clear()
+        for entry in expiries:
+            candidates = entry.get("candidates") or []
+            if not candidates:
+                continue
+            best = candidates[0]
+            regime = entry.get("regime", {}) or {}
+            values = [""] * len(_BF_COLUMNS)
+            values[_BF_COL_EXPIRY] = entry["expiry"]
+            values[_BF_COL_DTE] = f"{entry['dte']:.0f}"
+            values[_BF_COL_K1] = f"{best['k1']:,.0f}"
+            values[_BF_COL_K2] = f"{best['k2']:,.0f}"
+            values[_BF_COL_K3] = f"{best['k3']:,.0f}"
+            values[_BF_COL_COST] = f"${best['cost_or_credit']:,.2f}"
+            values[_BF_COL_MAXPROFIT] = f"${best['max_profit']:,.2f}"
+            values[_BF_COL_BE] = f"{best['breakeven_lo']:,.0f} / {best['breakeven_hi']:,.0f}"
+            values[_BF_COL_PROB] = f"{best['prob_profit']:.1f}%" if best.get("prob_profit") is not None else "N/A"
+            values[_BF_COL_EV] = f"${best['ev']:,.2f}" if best.get("ev") is not None else "N/A"
+            values[_BF_COL_GATE] = "PASS" if regime.get("gate_pass") else "-"
+            item = QTreeWidgetItem(values)
+            self.results_tree.addTopLevelItem(item)
+            self._attach_bf_payoff_widget(item, entry["expiry"], best)
+        if excluded:
+            self._add_excluded_items(excluded)
+
+        if not expiries:
+            self.status_label.setText(f"No butterfly candidates ({len(excluded)} expiries excluded)")
+            self.status_label.setStyleSheet(f"color: {Colors.WARNING};")
+        else:
+            self.status_label.setText(f"Found {len(expiries)} butterfly candidate(s)")
+            self.status_label.setStyleSheet(f"color: {Colors.SUCCESS};")
+        self.alert_text.setPlainText(format_defined_risk_alert(result, "butterfly"))
 
     # ── Quote-age banner ──────────────────────────────────────────────────────
 
@@ -660,14 +905,78 @@ class AutomationTab(QWidget):
         self._chart_workers.append(worker)
         worker.start()
 
-    def _on_chart_ready(self, path: str, worker: PayoffChartWorker, button: QPushButton) -> None:
+    def _attach_ic_payoff_widget(self, item: QTreeWidgetItem, expiry: str, candidate: Dict[str, Any]) -> None:
+        button = QPushButton("View chart")
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.setStyleSheet(f"""
+            QPushButton {{
+                background-color: transparent;
+                color: {Colors.ACCENT};
+                border: none;
+                text-decoration: underline;
+                padding: 2px 4px;
+                text-align: left;
+            }}
+            QPushButton:hover {{ color: {Colors.ACCENT_HOVER}; }}
+            QPushButton:disabled {{ color: {Colors.TEXT_MUTED}; }}
+        """)
+        button.clicked.connect(lambda checked=False, e=expiry, c=candidate, b=button: self._on_view_ic_chart_clicked(e, c, b))
+        self.results_tree.setItemWidget(item, _IC_COL_PAYOFF, button)
+
+    def _on_view_ic_chart_clicked(self, expiry: str, candidate: Dict[str, Any], button: QPushButton) -> None:
+        if self._last_scan_result is None:
+            return
+        button.setEnabled(False)
+        button.setText("Generating...")
+        worker = IronCondorPayoffChartWorker(
+            self._iron_condor_scan_service, self._last_scan_result, expiry,
+            candidate["short_call"], candidate["long_call"], candidate["short_put"], candidate["long_put"],
+        )
+        worker.finished.connect(lambda path, w=worker, b=button: self._on_chart_ready(path, w, b))
+        worker.error.connect(lambda msg, w=worker, b=button: self._on_chart_error(msg, w, b))
+        self._chart_workers.append(worker)
+        worker.start()
+
+    def _attach_bf_payoff_widget(self, item: QTreeWidgetItem, expiry: str, candidate: Dict[str, Any]) -> None:
+        button = QPushButton("View chart")
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.setStyleSheet(f"""
+            QPushButton {{
+                background-color: transparent;
+                color: {Colors.ACCENT};
+                border: none;
+                text-decoration: underline;
+                padding: 2px 4px;
+                text-align: left;
+            }}
+            QPushButton:hover {{ color: {Colors.ACCENT_HOVER}; }}
+            QPushButton:disabled {{ color: {Colors.TEXT_MUTED}; }}
+        """)
+        button.clicked.connect(lambda checked=False, e=expiry, c=candidate, b=button: self._on_view_bf_chart_clicked(e, c, b))
+        self.results_tree.setItemWidget(item, _BF_COL_PAYOFF, button)
+
+    def _on_view_bf_chart_clicked(self, expiry: str, candidate: Dict[str, Any], button: QPushButton) -> None:
+        if self._last_scan_result is None:
+            return
+        button.setEnabled(False)
+        button.setText("Generating...")
+        worker = ButterflyPayoffChartWorker(
+            self._butterfly_scan_service, self._last_scan_result, expiry,
+            candidate["k1"], candidate["k2"], candidate["k3"],
+        )
+        worker.finished.connect(lambda path, w=worker, b=button: self._on_chart_ready(path, w, b))
+        worker.error.connect(lambda msg, w=worker, b=button: self._on_chart_error(msg, w, b))
+        self._chart_workers.append(worker)
+        worker.start()
+
+    def _on_chart_ready(self, path: str, worker: QThread, button: QPushButton) -> None:
         QDesktopServices.openUrl(QUrl.fromLocalFile(path))
         button.setEnabled(True)
         button.setText("View chart")
         if worker in self._chart_workers:
             self._chart_workers.remove(worker)
 
-    def _on_chart_error(self, message: str, worker: PayoffChartWorker, button: QPushButton) -> None:
+    def _on_chart_error(self, message: str, worker: QThread, button: QPushButton) -> None:
         logger.error(f"Payoff chart generation failed: {message}")
         button.setEnabled(True)
         button.setText("View chart")
