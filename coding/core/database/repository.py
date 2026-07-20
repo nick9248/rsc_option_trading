@@ -1751,6 +1751,116 @@ class DatabaseRepository:
                 WHERE currency = %s AND expiration = %s AND scan_time = %s
             """, (currency, expiration, scan_time))
 
+    # ── Defined-Risk Scanner (Iron Condor / Butterfly) ──────────────────────────
+
+    def save_defined_risk_scan(self, row: Dict[str, Any]) -> bool:
+        """
+        Insert one defined_risk_scan_history row. Deduped on (currency,
+        expiration, structure_type, scan_time).
+
+        Args:
+            row: Dict with keys matching defined_risk_scan_history columns
+                (see migrations/015_add_defined_risk_scan_history.sql).
+
+        Returns:
+            True if a new row was inserted, False on dedup skip.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO defined_risk_scan_history (
+                    scan_time, currency, expiration, structure_type,
+                    dte, future_price, index_price,
+                    short_call, long_call, short_put, long_put,
+                    k1, k2, k3,
+                    cost_or_credit, max_loss, max_profit,
+                    breakeven_lo, breakeven_hi, prob_profit, ev,
+                    net_gex, rv_10d, rv_30d, rv_ratio, gate_pass,
+                    deribit_url
+                ) VALUES (
+                    %(scan_time)s, %(currency)s, %(expiration)s, %(structure_type)s,
+                    %(dte)s, %(future_price)s, %(index_price)s,
+                    %(short_call)s, %(long_call)s, %(short_put)s, %(long_put)s,
+                    %(k1)s, %(k2)s, %(k3)s,
+                    %(cost_or_credit)s, %(max_loss)s, %(max_profit)s,
+                    %(breakeven_lo)s, %(breakeven_hi)s, %(prob_profit)s, %(ev)s,
+                    %(net_gex)s, %(rv_10d)s, %(rv_30d)s, %(rv_ratio)s, %(gate_pass)s,
+                    %(deribit_url)s
+                )
+                ON CONFLICT (currency, expiration, structure_type, scan_time) DO NOTHING
+                RETURNING id
+            """, row)
+            return cursor.fetchone() is not None
+
+    def get_unresolved_defined_risk_scans(self, currency: str, structure_type: str) -> List[Dict[str, Any]]:
+        """
+        Return defined_risk_scan_history rows for (currency, structure_type)
+        awaiting settlement resolution, oldest first.
+
+        Returns:
+            List of dicts: {id, expiration, scan_time, short_call, long_call,
+            short_put, long_put, k1, k2, k3, cost_or_credit, max_loss, max_profit}.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                SELECT id, expiration, scan_time,
+                       short_call, long_call, short_put, long_put,
+                       k1, k2, k3, cost_or_credit, max_loss, max_profit
+                FROM defined_risk_scan_history
+                WHERE currency = %s AND structure_type = %s AND resolved_at IS NULL
+                ORDER BY scan_time ASC
+            """, (currency, structure_type))
+            cols = ["id", "expiration", "scan_time", "short_call", "long_call",
+                    "short_put", "long_put", "k1", "k2", "k3",
+                    "cost_or_credit", "max_loss", "max_profit"]
+            return [dict(zip(cols, r)) for r in cursor.fetchall()]
+
+    def resolve_defined_risk_scan(
+        self,
+        scan_id: int,
+        settlement_index_price: float,
+        settlement_pnl_usd: float,
+        settlement_return_pct: Optional[float],
+        resolved_at,
+    ) -> None:
+        """Fill in the settlement resolution fields for a defined_risk_scan_history row."""
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                UPDATE defined_risk_scan_history
+                SET settlement_index_price = %s,
+                    settlement_pnl_usd = %s,
+                    settlement_return_pct = %s,
+                    resolved_at = %s
+                WHERE id = %s
+            """, (settlement_index_price, settlement_pnl_usd, settlement_return_pct, resolved_at, scan_id))
+
+    def get_last_alert_for_defined_risk(
+        self, currency: str, expiration: str, structure_type: str
+    ) -> Optional[Dict[str, Any]]:
+        """Return the most recently alerted row for (currency, expiration, structure_type), or None."""
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                SELECT ev, alert_sent_at
+                FROM defined_risk_scan_history
+                WHERE currency = %s AND expiration = %s AND structure_type = %s AND alert_sent = TRUE
+                ORDER BY alert_sent_at DESC
+                LIMIT 1
+            """, (currency, expiration, structure_type))
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            return {"ev": float(row[0]) if row[0] is not None else None, "alert_sent_at": row[1]}
+
+    def mark_defined_risk_scan_alert_sent(
+        self, currency: str, expiration: str, structure_type: str, scan_time
+    ) -> None:
+        """Mark the row for this (currency, expiration, structure_type, scan_time) as alerted."""
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                UPDATE defined_risk_scan_history
+                SET alert_sent = TRUE, alert_sent_at = NOW()
+                WHERE currency = %s AND expiration = %s AND structure_type = %s AND scan_time = %s
+            """, (currency, expiration, structure_type, scan_time))
+
     # ── OTM Contract Finder ───────────────────────────────────────────────────
 
     def get_dvol_history_before(
