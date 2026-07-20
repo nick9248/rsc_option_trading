@@ -138,3 +138,33 @@ class IronCondorScanService:
         if not rv:
             return None
         return (rv / 100.0) * math.sqrt(dte / 365.0)
+
+    def generate_payoff_chart(
+        self, scan_result: Dict[str, Any], expiry: str,
+        short_call: float, long_call: float, short_put: float, long_put: float,
+    ) -> str:
+        """
+        Build and save an iron condor payoff-at-expiry chart from an
+        existing scan() result -- no new API/DB fetch. Raises ValueError if
+        the expiry/strikes aren't present in scan_result (caller bug, not a
+        data problem -- the GUI should only ever pass values it just
+        rendered from this same scan_result).
+        """
+        from coding.core.analytics.chart_generator import generate_iron_condor_payoff_chart, inject_hover_js, inject_theme_toggle_js, save_chart
+        from pathlib import Path
+
+        entry = next((e for e in scan_result["expiries"] if e["expiry"] == expiry), None)
+        if entry is None:
+            raise ValueError(f"Expiry {expiry} not found in scan result")
+        candidate = next((c for c in entry["candidates"]
+                           if c["short_call"] == short_call and c["long_call"] == long_call
+                           and c["short_put"] == short_put and c["long_put"] == long_put), None)
+        if candidate is None:
+            raise ValueError(f"Candidate {short_call}/{long_call}/{short_put}/{long_put} not found among {expiry} candidates")
+
+        fig = generate_iron_condor_payoff_chart(scan_result["currency"], expiry, entry["dte"], entry["F"], candidate)
+        filename = f"iron_condor_{scan_result['currency']}_{expiry}_{int(short_call)}_{int(short_put)}"
+        path = save_chart(fig, filename, subfolder="iron_condor", save_png=False)
+        inject_hover_js(Path(path))
+        inject_theme_toggle_js(Path(path), fig)
+        return path

@@ -139,3 +139,22 @@ class ButterflyScanService:
         if not rv:
             return None
         return (rv / 100.0) * math.sqrt(dte / 365.0)
+
+    def generate_payoff_chart(self, scan_result: Dict[str, Any], expiry: str, k1: float, k2: float, k3: float) -> str:
+        """Same contract as IronCondorScanService.generate_payoff_chart -- see that docstring."""
+        from coding.core.analytics.chart_generator import generate_butterfly_payoff_chart, inject_hover_js, inject_theme_toggle_js, save_chart
+        from pathlib import Path
+
+        entry = next((e for e in scan_result["expiries"] if e["expiry"] == expiry), None)
+        if entry is None:
+            raise ValueError(f"Expiry {expiry} not found in scan result")
+        candidate = next((c for c in entry["candidates"] if c["k1"] == k1 and c["k2"] == k2 and c["k3"] == k3), None)
+        if candidate is None:
+            raise ValueError(f"Candidate {k1}/{k2}/{k3} not found among {expiry} candidates")
+
+        fig = generate_butterfly_payoff_chart(scan_result["currency"], expiry, entry["dte"], entry["F"], candidate)
+        filename = f"butterfly_{scan_result['currency']}_{expiry}_{int(k2)}"
+        path = save_chart(fig, filename, subfolder="butterfly", save_png=False)
+        inject_hover_js(Path(path))
+        inject_theme_toggle_js(Path(path), fig)
+        return path

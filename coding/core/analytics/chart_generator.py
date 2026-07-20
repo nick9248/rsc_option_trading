@@ -1218,3 +1218,57 @@ def generate_straddle_payoff_chart(
     )
 
     return fig
+
+
+def generate_iron_condor_payoff_chart(
+    currency: str, expiry: str, dte: float, future_price: float, candidate: Dict[str, float],
+) -> go.Figure:
+    """
+    Iron condor payoff-at-expiry chart. Pure function -- takes the
+    candidate dict already produced by defined_risk_candidate_builder
+    (no API/DB access here, per the Core layer rule).
+    """
+    from coding.service.scanner.defined_risk_candidate_builder import iron_condor_payoff
+
+    k1, k2, k3, k4 = candidate["short_call"], candidate["long_call"], candidate["short_put"], candidate["long_put"]
+    lo = min(k4, future_price * 0.7)
+    hi = max(k2, future_price * 1.3)
+    xs = [lo + (hi - lo) * i / 200 for i in range(201)]
+    ys = [iron_condor_payoff(candidate, x) for x in xs]
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", name="P&L at expiry", line=dict(width=2, color="#4f46e5")))
+    fig.add_hline(y=0, line=dict(color="gray", width=1))
+    for x, label in [(k1, "short C"), (k2, "long C"), (k3, "short P"), (k4, "long P"), (future_price, "F")]:
+        fig.add_vline(x=x, line=dict(dash="dot", width=1, color="#888"))
+    fig.update_layout(
+        title=f"Iron Condor — {currency} {expiry} ({dte:.0f}d)",
+        xaxis_title="Settlement price", yaxis_title="P&L (USD)",
+        template="plotly_dark",
+    )
+    return fig
+
+
+def generate_butterfly_payoff_chart(
+    currency: str, expiry: str, dte: float, future_price: float, candidate: Dict[str, float],
+) -> go.Figure:
+    """Long call butterfly payoff-at-expiry chart. Same pure-function contract as generate_iron_condor_payoff_chart."""
+    from coding.service.scanner.defined_risk_candidate_builder import butterfly_payoff
+
+    k1, k2, k3 = candidate["k1"], candidate["k2"], candidate["k3"]
+    lo = min(k1, future_price * 0.85)
+    hi = max(k3, future_price * 1.15)
+    xs = [lo + (hi - lo) * i / 200 for i in range(201)]
+    ys = [butterfly_payoff(candidate, x) for x in xs]
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", name="P&L at expiry", line=dict(width=2, color="#4f46e5")))
+    fig.add_hline(y=0, line=dict(color="gray", width=1))
+    for x, label in [(k1, "K1"), (k2, "K2"), (k3, "K3"), (future_price, "F")]:
+        fig.add_vline(x=x, line=dict(dash="dot", width=1, color="#888"))
+    fig.update_layout(
+        title=f"Long Butterfly — {currency} {expiry} ({dte:.0f}d)",
+        xaxis_title="Settlement price", yaxis_title="P&L (USD)",
+        template="plotly_dark",
+    )
+    return fig
