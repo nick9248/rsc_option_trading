@@ -22,7 +22,7 @@ touching any pricing math in this file. Do not add any other Deribit call.
 
 import logging
 import math
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -34,6 +34,7 @@ from coding.core.analytics.chart_generator import (
 )
 from coding.core.database.repository import DatabaseRepository
 from coding.service.deribit.deribit_api_service import DeribitApiService
+from coding.service.scanner import realized_vol
 
 logger = logging.getLogger(__name__)
 
@@ -509,36 +510,18 @@ class StraddleScanService:
         as_of: datetime,
     ) -> Optional[float]:
         """
-        Annualized realized vol (percent units, matching atm_iv) from daily
-        OHLCV closes: stdev(log returns) * sqrt(365) * 100, over
-        max(RV_MIN_WINDOW_DAYS, round(dte)) trailing closes.
+        Annualized realized vol (percent units, matching atm_iv) -- delegates
+        to the shared coding.service.scanner.realized_vol module (extracted
+        2026-07-20 so the defined-risk scanners don't duplicate this).
         """
-        window_days = max(self.RV_MIN_WINDOW_DAYS, round(dte))
-        end = as_of.replace(tzinfo=None)
-        start = end - timedelta(days=window_days + self.RV_FETCH_BUFFER_DAYS)
-
-        rows = repo.get_ohlcv_by_date_range(currency, start, end)
-        if len(rows) < window_days + 1:
+        window_days = realized_vol.dte_matched_window(dte)
+        result = realized_vol.compute_realized_vol(repo, currency, window_days, as_of.replace(tzinfo=None))
+        if result is None:
             logger.warning(
                 f"{currency}: insufficient OHLCV history for RV window {window_days}d "
-                f"(have {len(rows)} rows, need {window_days + 1}) — RV unavailable"
+                f"— RV unavailable"
             )
-            return None
-
-        closes = [row["close"] for row in rows[-(window_days + 1):]]
-        log_returns = [
-            math.log(closes[i] / closes[i - 1])
-            for i in range(1, len(closes))
-            if closes[i - 1] > 0 and closes[i] > 0
-        ]
-        n = len(log_returns)
-        if n < 2:
-            return None
-
-        mean = sum(log_returns) / n
-        variance = sum((r - mean) ** 2 for r in log_returns) / (n - 1)
-        stdev = math.sqrt(variance)
-        return stdev * math.sqrt(365.0) * 100.0
+        return result
 
     @staticmethod
     def _min_pnl_score(

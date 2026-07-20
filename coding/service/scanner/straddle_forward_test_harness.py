@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from coding.core.database.repository import DatabaseRepository
+from coding.service.scanner import settlement_lookup
 
 logger = logging.getLogger(__name__)
 
@@ -187,25 +188,18 @@ class StraddleForwardTestHarness:
 
     @staticmethod
     def _parse_expiry_settlement(expiry: str) -> Optional[datetime]:
-        """Deribit expiration string ('25SEP26') -> settlement datetime (08:00 UTC)."""
-        try:
-            expiry_date = datetime.strptime(expiry, "%d%b%y")
-            return expiry_date.replace(hour=8, tzinfo=timezone.utc)
-        except ValueError:
-            return None
+        """Deribit expiration string ('25SEP26') -> settlement datetime (08:00 UTC) --
+        delegates to the shared coding.service.scanner.settlement_lookup module
+        (extracted 2026-07-20 so the defined-risk harness doesn't duplicate it)."""
+        return settlement_lookup.parse_expiry_settlement(expiry)
 
     def _lookup_settlement_price(self, currency: str, settle_dt: datetime) -> Optional[float]:
         """
-        ohlcv_history.close on the expiry's calendar date — same approach as
-        scripts/backtest_straddle_metrics.py's resolve_settlements(). Returns
-        None (never raises) if that row hasn't been collected yet.
+        ohlcv_history.close on the expiry's calendar date — delegates to the
+        shared coding.service.scanner.settlement_lookup module. Returns None
+        (never raises) if that row hasn't been collected yet.
         """
-        day_start = settle_dt.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
-        day_end = day_start.replace(hour=23, minute=59, second=59)
-        rows = self.repo.get_ohlcv_by_date_range(currency, day_start, day_end)
-        if not rows:
-            return None
-        return rows[-1]["close"]
+        return settlement_lookup.lookup_settlement_price(self.repo, currency, settle_dt)
 
     @staticmethod
     def _truncate_to_hour(dt: datetime) -> datetime:
