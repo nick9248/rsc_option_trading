@@ -515,13 +515,7 @@ class StraddleScanService:
         2026-07-20 so the defined-risk scanners don't duplicate this).
         """
         window_days = realized_vol.dte_matched_window(dte)
-        result = realized_vol.compute_realized_vol(repo, currency, window_days, as_of.replace(tzinfo=None))
-        if result is None:
-            logger.warning(
-                f"{currency}: insufficient OHLCV history for RV window {window_days}d "
-                f"— RV unavailable"
-            )
-        return result
+        return realized_vol.compute_realized_vol(repo, currency, window_days, as_of.replace(tzinfo=None))
 
     @staticmethod
     def _min_pnl_score(
