@@ -520,12 +520,25 @@ class AutomationTab(QWidget):
         header = self.results_tree.header()
         header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         header.setStretchLastSection(True)
-        for col, name in enumerate(_COLUMNS):
-            self.results_tree.headerItem().setToolTip(col, _COLUMN_TOOLTIPS.get(name, name))
+        self._apply_header_tooltips(_COLUMNS)
 
         layout.addWidget(self.results_tree)
         group.setLayout(layout)
         return group
+
+    def _apply_header_tooltips(self, columns: list) -> None:
+        """
+        Apply header tooltips for the given column set. results_tree is
+        shared across the straddle/iron-condor/butterfly jobs (see
+        _COLUMNS/_IC_COLUMNS/_BF_COLUMNS above); setHeaderLabels only
+        changes header TEXT, not tooltips, so this must be re-called
+        after every setHeaderLabels swap in _run_job -- otherwise a
+        tooltip set for one job's column index stays attached to that
+        index after the header text there changes to a different job's
+        column name.
+        """
+        for col, name in enumerate(columns):
+            self.results_tree.headerItem().setToolTip(col, _COLUMN_TOOLTIPS.get(name, name))
 
     def _build_alert_preview(self) -> QGroupBox:
         group = QGroupBox("Alert Preview (top result — what a Telegram send would say)")
@@ -564,16 +577,19 @@ class AutomationTab(QWidget):
         if job == "Straddle Scanner (manual)":
             self.results_tree.setColumnCount(len(_COLUMNS))
             self.results_tree.setHeaderLabels(_COLUMNS)
+            self._apply_header_tooltips(_COLUMNS)
             self.worker = StraddleScanWorker(currency)
             self.worker.finished.connect(self._on_scan_finished)
         elif job == "Iron Condor Scanner (manual)":
             self.results_tree.setColumnCount(len(_IC_COLUMNS))
             self.results_tree.setHeaderLabels(_IC_COLUMNS)
+            self._apply_header_tooltips(_IC_COLUMNS)
             self.worker = IronCondorScanWorker(currency)
             self.worker.finished.connect(self._on_ic_scan_finished)
         elif job == "Long Butterfly Scanner (manual)":
             self.results_tree.setColumnCount(len(_BF_COLUMNS))
             self.results_tree.setHeaderLabels(_BF_COLUMNS)
+            self._apply_header_tooltips(_BF_COLUMNS)
             self.worker = ButterflyScanWorker(currency)
             self.worker.finished.connect(self._on_bf_scan_finished)
         else:

@@ -1240,7 +1240,7 @@ def generate_iron_condor_payoff_chart(
     fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", name="P&L at expiry", line=dict(width=2, color="#4f46e5")))
     fig.add_hline(y=0, line=dict(color="gray", width=1))
     for x, label in [(k1, "short C"), (k2, "long C"), (k3, "short P"), (k4, "long P"), (future_price, "F")]:
-        fig.add_vline(x=x, line=dict(dash="dot", width=1, color="#888"))
+        fig.add_vline(x=x, line=dict(dash="dot", width=1, color="#888"), annotation_text=label, annotation_position="top")
     fig.update_layout(
         title=f"Iron Condor — {currency} {expiry} ({dte:.0f}d)",
         xaxis_title="Settlement price", yaxis_title="P&L (USD)",
@@ -1265,7 +1265,7 @@ def generate_butterfly_payoff_chart(
     fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", name="P&L at expiry", line=dict(width=2, color="#4f46e5")))
     fig.add_hline(y=0, line=dict(color="gray", width=1))
     for x, label in [(k1, "K1"), (k2, "K2"), (k3, "K3"), (future_price, "F")]:
-        fig.add_vline(x=x, line=dict(dash="dot", width=1, color="#888"))
+        fig.add_vline(x=x, line=dict(dash="dot", width=1, color="#888"), annotation_text=label, annotation_position="top")
     fig.update_layout(
         title=f"Long Butterfly — {currency} {expiry} ({dte:.0f}d)",
         xaxis_title="Settlement price", yaxis_title="P&L (USD)",

@@ -37,6 +37,16 @@ class TestIronCondorChart:
             expected = iron_condor_payoff(candidate, settlement=x)
             assert abs(y - expected) < 0.01
 
+    def test_strike_lines_are_labeled_with_annotations(self):
+        # Regression test: add_vline's `label` variable was computed but
+        # never passed to add_vline, so strike markers rendered with no
+        # annotation text at all. Verified against the actual plotly
+        # Figure structure (fig.layout.annotations), not assumed.
+        candidate = _ic_candidate()
+        fig = generate_iron_condor_payoff_chart("BTC", "1SEP26", 39.0, 65000.0, candidate)
+        annotation_texts = [a.text for a in fig.layout.annotations]
+        assert annotation_texts == ["short C", "long C", "short P", "long P", "F"]
+
 
 class TestButterflyChart:
     def test_returns_figure_with_pnl_curve_matching_payoff_formula(self):
@@ -46,3 +56,9 @@ class TestButterflyChart:
         for x, y in zip(pnl_trace.x, pnl_trace.y):
             expected = butterfly_payoff(candidate, settlement=x)
             assert abs(y - expected) < 0.01
+
+    def test_strike_lines_are_labeled_with_annotations(self):
+        candidate = _bf_candidate()
+        fig = generate_butterfly_payoff_chart("BTC", "1SEP26", 39.0, 65000.0, candidate)
+        annotation_texts = [a.text for a in fig.layout.annotations]
+        assert annotation_texts == ["K1", "K2", "K3", "F"]

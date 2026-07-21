@@ -249,15 +249,24 @@ class ProspectiveCollector:
         gate_pass -- the gate only affects the alert's header label (see
         docs/superpowers/specs/2026-07-20-defined-risk-scanner-design.md).
         Same per-currency try/except isolation as the straddle scanner and
-        ForwardTestingHarness above: a failure here can never break the
-        collection cycle.
+        ForwardTestingHarness above: a failure here -- including a regime
+        gate compute() failure -- can never break the collection cycle or
+        skip a later currency in the same cycle. The regime is computed
+        exactly once per currency and shared across both structure-type
+        scans below.
         """
         logger.info(f"\nRunning defined-risk scanners for hour {hour}...")
         scanner_summary: dict = {}
         try:
             for currency in currencies:
                 scanner_summary[currency] = {}
-                regime = self._regime_gate_service.compute(currency)
+
+                try:
+                    regime = self._regime_gate_service.compute(currency)
+                except Exception as e:
+                    logger.warning(f"  Regime gate compute failed for {currency}: {e}")
+                    scanner_summary[currency]["regime_gate"] = {"error": str(e)}
+                    continue
 
                 for structure_type, scan_service, alert_rule in (
                     ("iron_condor", self._iron_condor_scan_service, self._iron_condor_alert_rule),
