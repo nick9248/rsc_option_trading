@@ -686,7 +686,7 @@ class AutomationTab(QWidget):
             item = QTreeWidgetItem(values)
             self.results_tree.addTopLevelItem(item)
             self._attach_ic_payoff_widget(item, entry["expiry"], best)
-            self._attach_deribit_widget(item, best["deribit_url"])
+            self._attach_deribit_widget(item, best["deribit_url"], column=_IC_COL_DERIBIT)
         if excluded:
             self._add_excluded_items(excluded)
 
@@ -736,7 +736,7 @@ class AutomationTab(QWidget):
             item = QTreeWidgetItem(values)
             self.results_tree.addTopLevelItem(item)
             self._attach_bf_payoff_widget(item, entry["expiry"], best)
-            self._attach_deribit_widget(item, best["deribit_url"])
+            self._attach_deribit_widget(item, best["deribit_url"], column=_BF_COL_DERIBIT)
         if excluded:
             self._add_excluded_items(excluded)
 
@@ -884,12 +884,12 @@ class AutomationTab(QWidget):
         button.clicked.connect(lambda checked=False, e=expiry, s=strike, b=button: self._on_view_chart_clicked(e, s, b))
         self.results_tree.setItemWidget(item, _COL_PAYOFF, button)
 
-    def _attach_deribit_widget(self, item: QTreeWidgetItem, url: str) -> None:
+    def _attach_deribit_widget(self, item: QTreeWidgetItem, url: str, column: int = _COL_DERIBIT) -> None:
         label = QLabel(f'<a href="{url}">Open Deribit ↗</a>')
         label.setTextFormat(Qt.TextFormat.RichText)
         label.setOpenExternalLinks(True)
         label.setStyleSheet(f"color: {Colors.ACCENT}; padding: 2px 4px;")
-        self.results_tree.setItemWidget(item, _COL_DERIBIT, label)
+        self.results_tree.setItemWidget(item, column, label)
 
     def _add_excluded_items(self, excluded: List[Dict[str, Any]]) -> None:
         separator = QTreeWidgetItem(["Excluded expiries"])
