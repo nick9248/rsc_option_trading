@@ -1220,6 +1220,91 @@ def generate_straddle_payoff_chart(
     return fig
 
 
+def _payoff_chart_markers(fig: go.Figure, markers: List[Any], y_axis_bottom: float, y_axis_top: float) -> None:
+    """
+    Shared vertical-marker + staggered-label renderer for the defined-risk
+    payoff charts. `markers` is a list of (x, color, dash, label) tuples.
+    Labels are staggered across a small set of paper-space height tiers
+    (cycling in x-sorted order) so adjacent markers never collide, same
+    approach as generate_straddle_payoff_chart's two-tier staggering, just
+    generalized to more than 4 markers (iron condor has 7: 4 strikes + F +
+    2 breakevens).
+    """
+    TIERS = [1.02, 1.11, 1.20]
+    for x, color, dash, _label in markers:
+        fig.add_shape(
+            type="line", xref="x", yref="y",
+            x0=x, x1=x, y0=y_axis_bottom, y1=y_axis_top,
+            line=dict(color=color, width=1.5, dash=dash),
+        )
+    for i, (x, color, _dash, label) in enumerate(sorted(markers, key=lambda m: m[0])):
+        fig.add_annotation(
+            x=x, y=TIERS[i % len(TIERS)], xref="x", yref="paper",
+            text=label, showarrow=False,
+            font=dict(color=color, size=11),
+            bgcolor="rgba(26,26,26,0.6)",
+        )
+
+
+def _payoff_chart_stats_box(fig: go.Figure, lines: List[str]) -> None:
+    """Shared top-right stats box, same styling as generate_straddle_payoff_chart's."""
+    fig.add_annotation(
+        x=0.98, y=0.95, xref="paper", yref="paper",
+        xanchor="right", yanchor="top", align="left",
+        text="<br>".join(lines), showarrow=False,
+        font=dict(color="#9ca3af", size=11),
+        bgcolor="rgba(26,26,26,0.85)",
+        bordercolor="#444444", borderwidth=1, borderpad=8,
+    )
+
+
+def _payoff_chart_prob_ev_line(prob_profit: Optional[float], ev: Optional[float]) -> Optional[str]:
+    """Shared 'Prob X% · EV $Y' stats-box line, omitting either half when unavailable."""
+    parts = []
+    if prob_profit is not None:
+        parts.append(f"Prob {prob_profit:.1f}%")
+    if ev is not None:
+        parts.append(f"EV ${ev:,.0f}")
+    return " · ".join(parts) if parts else None
+
+
+def _finish_payoff_chart_layout(
+    fig: go.Figure, theme: Dict[str, Any], title_text: str,
+    x_range: List[float], y_range: List[float],
+) -> go.Figure:
+    """
+    Shared axis/legend/margin layout for the defined-risk payoff charts --
+    same theme-merge pattern as generate_straddle_payoff_chart (explicit
+    colors, not a named template, so inject_theme_toggle_js can remap them).
+    """
+    theme_xaxis = dict(theme.pop("xaxis", {}))
+    theme_yaxis = dict(theme.pop("yaxis", {}))
+    theme_xaxis.update(title="Settlement price (USD)", tickformat=",", range=x_range)
+    theme_yaxis.update(title="P&L (USD)", tickprefix="$", tickformat="~s", range=y_range)
+
+    fig.update_layout(
+        title=dict(
+            text=title_text, x=0.0, xanchor="left", y=0.97, yanchor="top",
+            font=dict(size=18, color="#ffffff"),
+        ),
+        xaxis=theme_xaxis,
+        yaxis=theme_yaxis,
+        hovermode="x unified",
+        autosize=True,
+        margin=dict(t=110, r=40, b=90, l=70),
+        showlegend=True,
+        legend=dict(
+            orientation="h",
+            yanchor="top", y=-0.12,
+            xanchor="center", x=0.5,
+            bgcolor="rgba(0,0,0,0)",
+            font=dict(color="#9ca3af", size=11),
+        ),
+        **theme,
+    )
+    return fig
+
+
 def generate_iron_condor_payoff_chart(
     currency: str, expiry: str, dte: float, future_price: float, candidate: Dict[str, float],
 ) -> go.Figure:
@@ -1227,48 +1312,152 @@ def generate_iron_condor_payoff_chart(
     Iron condor payoff-at-expiry chart. Pure function -- takes the
     candidate dict already produced by defined_risk_candidate_builder
     (no API/DB access here, per the Core layer rule).
+
+    Same visual language as generate_straddle_payoff_chart -- explicit
+    theme colors (not a named template), polarity fills, staggered strike
+    markers, a stats box and a legend -- so the two chart types read as
+    one system and both work with the light/dark theme toggle injected by
+    inject_theme_toggle_js (which can only remap colors set explicitly on
+    the figure, never colors baked into a `template=...` string).
     """
     from coding.service.scanner.defined_risk_candidate_builder import iron_condor_payoff
 
-    k1, k2, k3, k4 = candidate["short_call"], candidate["long_call"], candidate["short_put"], candidate["long_put"]
-    lo = min(k4, future_price * 0.7)
-    hi = max(k2, future_price * 1.3)
-    xs = [lo + (hi - lo) * i / 200 for i in range(201)]
-    ys = [iron_condor_payoff(candidate, x) for x in xs]
+    theme = get_chart_theme()
+
+    short_call, long_call, short_put, long_put = (
+        candidate["short_call"], candidate["long_call"], candidate["short_put"], candidate["long_put"],
+    )
+    credit, max_loss = candidate["cost_or_credit"], candidate["max_loss"]
+    breakeven_lo, breakeven_hi = candidate["breakeven_lo"], candidate["breakeven_hi"]
+    prob_profit, ev = candidate.get("prob_profit"), candidate.get("ev")
+
+    lo = min(long_put, future_price * 0.7)
+    hi = max(long_call, future_price * 1.3)
+    x_values = [lo + (hi - lo) * i / 200 for i in range(201)]
+    y_values = [iron_condor_payoff(candidate, x) for x in x_values]
+
+    data_y_min, data_y_max = min(y_values), max(y_values)
+    data_span = max(data_y_max - data_y_min, 1e-9)
+    y_axis_bottom = data_y_min - 0.10 * data_span
+    y_axis_top = data_y_max + 0.10 * data_span
 
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", name="P&L at expiry", line=dict(width=2, color="#4f46e5")))
-    fig.add_hline(y=0, line=dict(color="gray", width=1))
-    for x, label in [(k1, "short C"), (k2, "long C"), (k3, "short P"), (k4, "long P"), (future_price, "F")]:
-        fig.add_vline(x=x, line=dict(dash="dot", width=1, color="#888"), annotation_text=label, annotation_position="top")
-    fig.update_layout(
-        title=f"Iron Condor — {currency} {expiry} ({dte:.0f}d)",
-        xaxis_title="Settlement price", yaxis_title="P&L (USD)",
-        template="plotly_dark",
+    fig.add_trace(go.Scatter(
+        x=x_values, y=y_values, mode="lines", name="P&L at expiry",
+        line=dict(color="#60a5fa", width=2),
+        hovertemplate="S = $%{x:,.0f}<br>P&L = $%{y:,.0f}<extra></extra>",
+        showlegend=True,
+    ))
+
+    profit_y = [y if y >= 0 else None for y in y_values]
+    loss_y = [y if y < 0 else None for y in y_values]
+    fig.add_trace(go.Scatter(
+        x=x_values, y=profit_y, mode="lines", line=dict(width=0),
+        fill="tozeroy", fillcolor="rgba(34,197,94,0.15)",
+        hoverinfo="skip", showlegend=False,
+    ))
+    fig.add_trace(go.Scatter(
+        x=x_values, y=loss_y, mode="lines", line=dict(width=0),
+        fill="tozeroy", fillcolor="rgba(239,68,68,0.12)",
+        hoverinfo="skip", showlegend=False,
+    ))
+
+    fig.add_shape(type="line", xref="x", yref="y", x0=lo, x1=hi, y0=0, y1=0, line=dict(color="#666666", width=1))
+
+    markers = [
+        (long_put, "#fb923c", "dot", "long P"),
+        (short_put, "#f59e0b", "dot", "short P"),
+        (short_call, "#06b6d4", "dot", "short C"),
+        (long_call, "#a78bfa", "dot", "long C"),
+        (future_price, "#e5e7eb", "dot", "F"),
+        (breakeven_lo, "#fb7185", "dashdot", f"BE↓ {breakeven_lo:,.0f}"),
+        (breakeven_hi, "#fb7185", "dashdot", f"BE↑ {breakeven_hi:,.0f}"),
+    ]
+    _payoff_chart_markers(fig, markers, y_axis_bottom, y_axis_top)
+
+    stats_lines = [f"Credit ${credit:,.0f} · Max loss ${max_loss:,.0f}"]
+    prob_ev_line = _payoff_chart_prob_ev_line(prob_profit, ev)
+    if prob_ev_line:
+        stats_lines.append(prob_ev_line)
+    _payoff_chart_stats_box(fig, stats_lines)
+
+    title_text = (
+        f"Iron Condor — {currency} {expiry}"
+        f"<br><span style='font-size:12px;color:#9ca3af'>"
+        f"Credit ${credit:,.0f} · Max Loss ${max_loss:,.0f} · "
+        f"Breakevens {breakeven_lo:,.0f} / {breakeven_hi:,.0f} · "
+        f"DTE {dte:.0f}</span>"
     )
-    return fig
+    return _finish_payoff_chart_layout(fig, theme, title_text, [lo, hi], [y_axis_bottom, y_axis_top])
 
 
 def generate_butterfly_payoff_chart(
     currency: str, expiry: str, dte: float, future_price: float, candidate: Dict[str, float],
 ) -> go.Figure:
-    """Long call butterfly payoff-at-expiry chart. Same pure-function contract as generate_iron_condor_payoff_chart."""
+    """Long call butterfly payoff-at-expiry chart. Same visual contract as generate_iron_condor_payoff_chart."""
     from coding.service.scanner.defined_risk_candidate_builder import butterfly_payoff
 
+    theme = get_chart_theme()
+
     k1, k2, k3 = candidate["k1"], candidate["k2"], candidate["k3"]
+    cost, max_profit = candidate["cost_or_credit"], candidate["max_profit"]
+    breakeven_lo, breakeven_hi = candidate["breakeven_lo"], candidate["breakeven_hi"]
+    prob_profit, ev = candidate.get("prob_profit"), candidate.get("ev")
+
     lo = min(k1, future_price * 0.85)
     hi = max(k3, future_price * 1.15)
-    xs = [lo + (hi - lo) * i / 200 for i in range(201)]
-    ys = [butterfly_payoff(candidate, x) for x in xs]
+    x_values = [lo + (hi - lo) * i / 200 for i in range(201)]
+    y_values = [butterfly_payoff(candidate, x) for x in x_values]
+
+    data_y_min, data_y_max = min(y_values), max(y_values)
+    data_span = max(data_y_max - data_y_min, 1e-9)
+    y_axis_bottom = data_y_min - 0.10 * data_span
+    y_axis_top = data_y_max + 0.10 * data_span
 
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", name="P&L at expiry", line=dict(width=2, color="#4f46e5")))
-    fig.add_hline(y=0, line=dict(color="gray", width=1))
-    for x, label in [(k1, "K1"), (k2, "K2"), (k3, "K3"), (future_price, "F")]:
-        fig.add_vline(x=x, line=dict(dash="dot", width=1, color="#888"), annotation_text=label, annotation_position="top")
-    fig.update_layout(
-        title=f"Long Butterfly — {currency} {expiry} ({dte:.0f}d)",
-        xaxis_title="Settlement price", yaxis_title="P&L (USD)",
-        template="plotly_dark",
+    fig.add_trace(go.Scatter(
+        x=x_values, y=y_values, mode="lines", name="P&L at expiry",
+        line=dict(color="#60a5fa", width=2),
+        hovertemplate="S = $%{x:,.0f}<br>P&L = $%{y:,.0f}<extra></extra>",
+        showlegend=True,
+    ))
+
+    profit_y = [y if y >= 0 else None for y in y_values]
+    loss_y = [y if y < 0 else None for y in y_values]
+    fig.add_trace(go.Scatter(
+        x=x_values, y=profit_y, mode="lines", line=dict(width=0),
+        fill="tozeroy", fillcolor="rgba(34,197,94,0.15)",
+        hoverinfo="skip", showlegend=False,
+    ))
+    fig.add_trace(go.Scatter(
+        x=x_values, y=loss_y, mode="lines", line=dict(width=0),
+        fill="tozeroy", fillcolor="rgba(239,68,68,0.12)",
+        hoverinfo="skip", showlegend=False,
+    ))
+
+    fig.add_shape(type="line", xref="x", yref="y", x0=lo, x1=hi, y0=0, y1=0, line=dict(color="#666666", width=1))
+
+    markers = [
+        (k1, "#fb923c", "dot", "K1"),
+        (k2, "#f59e0b", "dot", "K2"),
+        (k3, "#a78bfa", "dot", "K3"),
+        (future_price, "#e5e7eb", "dot", "F"),
+        (breakeven_lo, "#fb7185", "dashdot", f"BE↓ {breakeven_lo:,.0f}"),
+        (breakeven_hi, "#fb7185", "dashdot", f"BE↑ {breakeven_hi:,.0f}"),
+    ]
+    _payoff_chart_markers(fig, markers, y_axis_bottom, y_axis_top)
+
+    stats_lines = [f"Cost ${cost:,.0f} · Max profit ${max_profit:,.0f}"]
+    prob_ev_line = _payoff_chart_prob_ev_line(prob_profit, ev)
+    if prob_ev_line:
+        stats_lines.append(prob_ev_line)
+    _payoff_chart_stats_box(fig, stats_lines)
+
+    title_text = (
+        f"Long Butterfly — {currency} {expiry}"
+        f"<br><span style='font-size:12px;color:#9ca3af'>"
+        f"Cost ${cost:,.0f} · Max Profit ${max_profit:,.0f} · "
+        f"Breakevens {breakeven_lo:,.0f} / {breakeven_hi:,.0f} · "
+        f"DTE {dte:.0f}</span>"
     )
-    return fig
+    return _finish_payoff_chart_layout(fig, theme, title_text, [lo, hi], [y_axis_bottom, y_axis_top])

@@ -682,10 +682,11 @@ class AutomationTab(QWidget):
             values[_IC_COL_BE] = f"{best['breakeven_lo']:,.0f} / {best['breakeven_hi']:,.0f}"
             values[_IC_COL_PROB] = f"{best['prob_profit']:.1f}%" if best.get("prob_profit") is not None else "N/A"
             values[_IC_COL_EV] = f"${best['ev']:,.2f}" if best.get("ev") is not None else "N/A"
-            values[_IC_COL_GATE] = "PASS" if regime.get("gate_pass") else "-"
+            values[_IC_COL_GATE] = "PASS" if regime.get("gate_pass") else "FAIL"
             item = QTreeWidgetItem(values)
             self.results_tree.addTopLevelItem(item)
             self._attach_ic_payoff_widget(item, entry["expiry"], best)
+            self._attach_deribit_widget(item, best["deribit_url"])
         if excluded:
             self._add_excluded_items(excluded)
 
@@ -731,10 +732,11 @@ class AutomationTab(QWidget):
             values[_BF_COL_BE] = f"{best['breakeven_lo']:,.0f} / {best['breakeven_hi']:,.0f}"
             values[_BF_COL_PROB] = f"{best['prob_profit']:.1f}%" if best.get("prob_profit") is not None else "N/A"
             values[_BF_COL_EV] = f"${best['ev']:,.2f}" if best.get("ev") is not None else "N/A"
-            values[_BF_COL_GATE] = "PASS" if regime.get("gate_pass") else "-"
+            values[_BF_COL_GATE] = "PASS" if regime.get("gate_pass") else "FAIL"
             item = QTreeWidgetItem(values)
             self.results_tree.addTopLevelItem(item)
             self._attach_bf_payoff_widget(item, entry["expiry"], best)
+            self._attach_deribit_widget(item, best["deribit_url"])
         if excluded:
             self._add_excluded_items(excluded)
 
