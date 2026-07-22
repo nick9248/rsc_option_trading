@@ -1262,9 +1262,13 @@ def _payoff_chart_markers(fig: go.Figure, markers: List[Any], y_axis_bottom: flo
     (cycling in x-sorted order) so adjacent markers never collide, same
     approach as generate_straddle_payoff_chart's two-tier staggering, just
     generalized to more than 4 markers (iron condor has 7: 4 strikes + F +
-    2 breakevens).
+    2 breakevens). Tier ceiling is kept at/below straddle's proven-safe
+    1.09 (not stretched to fit 3 tiers, which clipped the top tier's
+    labels above the chart -- margin.t in _finish_payoff_chart_layout only
+    reserves a fixed pixel headroom above paper y=1.0, and 1.20 needed
+    more of it than was reserved).
     """
-    TIERS = [1.02, 1.11, 1.20]
+    TIERS = [1.02, 1.06, 1.10]
     for x, color, dash, _label in markers:
         fig.add_shape(
             type="line", xref="x", yref="y",
@@ -1325,7 +1329,7 @@ def _finish_payoff_chart_layout(
         yaxis=theme_yaxis,
         hovermode="x unified",
         autosize=True,
-        margin=dict(t=110, r=40, b=90, l=70),
+        margin=dict(t=140, r=40, b=90, l=70),
         showlegend=True,
         legend=dict(
             orientation="h",
