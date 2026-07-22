@@ -79,10 +79,23 @@ class TestIronCondorChart:
         assert "Max loss" in stats_texts[0] and "$1,500" in stats_texts[0]
 
     def test_polarity_fill_traces_present(self):
+        # Regression test: iron condor's loss region is two disconnected
+        # wings either side of a profit plateau -- one gapped trace per
+        # polarity let Plotly bridge a thin sliver of red fill across the
+        # gap, under the plateau (see _add_polarity_fills' docstring).
+        # Each contiguous same-sign run must be its own trace: 2 loss
+        # segments (the wings) + 1 profit segment (the plateau) = 3, not 2.
         candidate = _ic_candidate()
         fig = generate_iron_condor_payoff_chart("BTC", "1SEP26", 39.0, 65000.0, candidate)
         fill_traces = [t for t in fig.data if getattr(t, "fill", None) == "tozeroy"]
-        assert len(fill_traces) == 2
+        assert len(fill_traces) == 3
+        loss_segments = [t for t in fill_traces if t.fillcolor == "rgba(239,68,68,0.12)"]
+        profit_segments = [t for t in fill_traces if t.fillcolor == "rgba(34,197,94,0.15)"]
+        assert len(loss_segments) == 2
+        assert len(profit_segments) == 1
+        for seg in loss_segments:
+            assert all(y is not None and y < 0 for y in seg.y)
+        assert all(y is not None and y >= 0 for y in profit_segments[0].y)
 
 
 class TestButterflyChart:
@@ -119,7 +132,16 @@ class TestButterflyChart:
         assert "Max profit" in stats_texts[0] and "$1,600" in stats_texts[0]
 
     def test_polarity_fill_traces_present(self):
+        # Same regression as the iron condor test: butterfly's loss region
+        # is two disconnected wings either side of a profit peak.
         candidate = _bf_candidate()
         fig = generate_butterfly_payoff_chart("BTC", "1SEP26", 39.0, 65000.0, candidate)
         fill_traces = [t for t in fig.data if getattr(t, "fill", None) == "tozeroy"]
-        assert len(fill_traces) == 2
+        assert len(fill_traces) == 3
+        loss_segments = [t for t in fill_traces if t.fillcolor == "rgba(239,68,68,0.12)"]
+        profit_segments = [t for t in fill_traces if t.fillcolor == "rgba(34,197,94,0.15)"]
+        assert len(loss_segments) == 2
+        assert len(profit_segments) == 1
+        for seg in loss_segments:
+            assert all(y is not None and y < 0 for y in seg.y)
+        assert all(y is not None and y >= 0 for y in profit_segments[0].y)

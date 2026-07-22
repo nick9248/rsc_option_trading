@@ -1220,6 +1220,40 @@ def generate_straddle_payoff_chart(
     return fig
 
 
+def _add_polarity_fills(fig: go.Figure, x_values: List[float], y_values: List[float]) -> None:
+    """
+    Add profit (green) / loss (red) area fills as one trace per contiguous
+    same-sign run, not one gapped (None-containing) trace per polarity.
+
+    generate_straddle_payoff_chart's curve only ever has ONE loss dip
+    framed by two profit regions, so a single trace with a None gap in the
+    middle works fine there. Defined-risk structures can have a polarity
+    split into two *disconnected* runs -- iron condor's loss region is two
+    separate wings on either side of a profit plateau, same for
+    butterfly's two loss wings either side of its profit peak. A single
+    Scatter trace with fill="tozeroy" and an internal None gap can bridge
+    a thin sliver of fill color across that gap along the y=0 baseline
+    (confirmed directly: a visible red band under the iron condor's
+    profit plateau in the rendered chart, even though the underlying
+    per-point y-values there are provably None/not-loss) -- so each
+    contiguous run gets its own trace, which has no internal gap to bridge.
+    """
+    n = len(x_values)
+    i = 0
+    while i < n:
+        is_profit = y_values[i] >= 0
+        j = i
+        while j < n and (y_values[j] >= 0) == is_profit:
+            j += 1
+        fig.add_trace(go.Scatter(
+            x=x_values[i:j], y=y_values[i:j], mode="lines", line=dict(width=0),
+            fill="tozeroy",
+            fillcolor="rgba(34,197,94,0.15)" if is_profit else "rgba(239,68,68,0.12)",
+            hoverinfo="skip", showlegend=False,
+        ))
+        i = j
+
+
 def _payoff_chart_markers(fig: go.Figure, markers: List[Any], y_axis_bottom: float, y_axis_top: float) -> None:
     """
     Shared vertical-marker + staggered-label renderer for the defined-risk
@@ -1349,18 +1383,7 @@ def generate_iron_condor_payoff_chart(
         showlegend=True,
     ))
 
-    profit_y = [y if y >= 0 else None for y in y_values]
-    loss_y = [y if y < 0 else None for y in y_values]
-    fig.add_trace(go.Scatter(
-        x=x_values, y=profit_y, mode="lines", line=dict(width=0),
-        fill="tozeroy", fillcolor="rgba(34,197,94,0.15)",
-        hoverinfo="skip", showlegend=False,
-    ))
-    fig.add_trace(go.Scatter(
-        x=x_values, y=loss_y, mode="lines", line=dict(width=0),
-        fill="tozeroy", fillcolor="rgba(239,68,68,0.12)",
-        hoverinfo="skip", showlegend=False,
-    ))
+    _add_polarity_fills(fig, x_values, y_values)
 
     fig.add_shape(type="line", xref="x", yref="y", x0=lo, x1=hi, y0=0, y1=0, line=dict(color="#666666", width=1))
 
@@ -1422,18 +1445,7 @@ def generate_butterfly_payoff_chart(
         showlegend=True,
     ))
 
-    profit_y = [y if y >= 0 else None for y in y_values]
-    loss_y = [y if y < 0 else None for y in y_values]
-    fig.add_trace(go.Scatter(
-        x=x_values, y=profit_y, mode="lines", line=dict(width=0),
-        fill="tozeroy", fillcolor="rgba(34,197,94,0.15)",
-        hoverinfo="skip", showlegend=False,
-    ))
-    fig.add_trace(go.Scatter(
-        x=x_values, y=loss_y, mode="lines", line=dict(width=0),
-        fill="tozeroy", fillcolor="rgba(239,68,68,0.12)",
-        hoverinfo="skip", showlegend=False,
-    ))
+    _add_polarity_fills(fig, x_values, y_values)
 
     fig.add_shape(type="line", xref="x", yref="y", x0=lo, x1=hi, y0=0, y1=0, line=dict(color="#666666", width=1))
 
