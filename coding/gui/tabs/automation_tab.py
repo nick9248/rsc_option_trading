@@ -222,6 +222,203 @@ _COLUMN_TOOLTIPS: Dict[str, str] = {
         "Use this to check the live order book before placing a trade — "
         "scanner data can be a few minutes old."
     ),
+    "Gate": (
+        "Gate — regime filter, recorded as data (NOT a live filter)\n\n"
+        "Formula: gate_pass = (net_gex > 0) AND (RV10/RV30 < 1) — positive "
+        "market-wide gamma exposure (dealers likely dampening moves) AND "
+        "contracting realized vol (market calming down).\n\n"
+        "Example: net_gex=+$175M, RV10/RV30=1.12 (expanding) -> "
+        "gate_pass=False, even though net_gex alone was positive.\n\n"
+        "Every candidate is scanned and alerted on regardless of this "
+        "value — an earlier backtest of this exact formula on 16 "
+        "historical trades came out backwards (gate-passing trades did "
+        "worse), so it's deliberately recorded unfiltered here. The idea "
+        "is to let a much larger live forward-test sample judge whether "
+        "it's actually predictive, rather than trust or discard it on a "
+        "small backtest."
+    ),
+}
+
+# Iron-condor-specific tooltip overrides — merged on top of _COLUMN_TOOLTIPS
+# by _apply_header_tooltips. "Breakevens" must be overridden here: the base
+# dict's entry states the straddle's formula AND profit direction, both of
+# which are wrong for a credit structure (profit is INSIDE these breakevens,
+# not outside).
+_IC_COLUMN_TOOLTIPS: Dict[str, str] = {
+    "Short C": (
+        "Short C — the call strike you SELL (nearer the money)\n\n"
+        "Formula: nearest listed strike to F x (1 + short_distance%), "
+        "tried across a grid of short distances (6%, 8%, 10%, 12%, 15% "
+        "OTM). Paired with Long C as a credit call spread.\n\n"
+        "Example: F=$66,500, 8% OTM target -> $71,820 -> nearest listed "
+        "strike $71,000 sold.\n\n"
+        "This leg collects most of the credit; risk above it is capped "
+        "by the Long C strike."
+    ),
+    "Long C": (
+        "Long C — the call strike you BUY (further OTM, caps the risk)\n\n"
+        "Formula: nearest listed strike above Short C at "
+        "Short C + F x wing_width% (tried across 2%, 3%, 5% widths).\n\n"
+        "Example: Short C $77,000, wing 3% of F=$66,500 (~$2,000) -> "
+        "Long C $80,000.\n\n"
+        "The gap between Short C and Long C, minus the credit collected, "
+        "IS the max loss on the call side — see Max Loss $."
+    ),
+    "Short P": (
+        "Short P — the put strike you SELL (nearer the money)\n\n"
+        "Formula: nearest listed strike to F x (1 - short_distance%), "
+        "same short-distance grid as Short C, mirrored on the put side.\n\n"
+        "Example: F=$66,500, 8% OTM -> $61,180 -> nearest listed strike "
+        "$57,000 sold (grid-dependent — actual strike depends on which "
+        "distance/wing combination this candidate came from).\n\n"
+        "Paired with Long P as a credit put spread; collects premium "
+        "symmetric to the call side."
+    ),
+    "Long P": (
+        "Long P — the put strike you BUY (further OTM, caps the risk)\n\n"
+        "Formula: nearest listed strike below Short P at "
+        "Short P - F x wing_width%.\n\n"
+        "Example: Short P $57,000, wing ~$3,000 -> Long P $54,000.\n\n"
+        "Same role as Long C on the other side: caps max loss on a down "
+        "move."
+    ),
+    "Credit $": (
+        "Credit $ — net premium received for the whole 4-leg structure\n\n"
+        "Formula: (Short C bid - Long C ask) + (Short P bid - Long P ask), "
+        "in USD.\n\n"
+        "Example: call spread nets $180, put spread nets $151 -> "
+        "Credit $331.\n\n"
+        "This is what you receive today. It's also the MAX PROFIT — if "
+        "price settles between the short strikes at expiry, you keep the "
+        "whole credit."
+    ),
+    "Max Loss $": (
+        "Max Loss $ — worst case if price blows through a wing\n\n"
+        "Formula: max(Long C - Short C, Short P - Long P) - Credit — the "
+        "wider of the two spread widths, minus the credit already "
+        "collected.\n\n"
+        "Example: both wings $3,000 wide, credit $331 -> "
+        "Max Loss = $3,000 - $331 = $2,669.\n\n"
+        "This is the correct divisor for return-on-capital, NOT the "
+        "credit — an iron condor is a CREDIT structure, so "
+        "%return = P&L / Max Loss."
+    ),
+    "Breakevens": (
+        "Breakevens\n\n"
+        "Formula: breakeven_hi = Short C + Credit; "
+        "breakeven_lo = Short P - Credit\n\n"
+        "Example: Short C $77,000 + credit $331 -> breakeven_hi $77,331; "
+        "Short P $57,000 - credit $331 -> breakeven_lo $56,669.\n\n"
+        "Unlike a straddle, this position PROFITS INSIDE this range "
+        "(between breakeven_lo and breakeven_hi) and loses money OUTSIDE "
+        "it — opposite direction from the straddle's Breakevens column. "
+        "Max profit (the full credit) happens anywhere between the two "
+        "short strikes."
+    ),
+    "Prob %": (
+        "Prob % — probability of profit (RV-implied)\n\n"
+        "Formula: P(price settles between breakeven_lo and breakeven_hi "
+        "at expiry), from a lognormal distribution centered on F, using "
+        "REALIZED vol (not implied) over a DTE-matched trailing window "
+        "as the sigma input.\n\n"
+        "Example: breakevens $56,669/$77,331, F=$66,500, DTE=37 -> ~91% "
+        "probability of landing inside.\n\n"
+        "A high probability is inherent to this structure (the trade-off "
+        "for a small, capped credit) — always read alongside EV $, not "
+        "by itself; a 90%+ win rate with a negative EV is still a bad "
+        "trade."
+    ),
+    "EV $": (
+        "EV $ — expected value, RV-implied\n\n"
+        "Formula: Prob% x Credit - (1 - Prob%) x Max Loss\n\n"
+        "Example: Prob 91%, Credit $331, Max Loss $2,669 -> "
+        "0.91 x 331 - 0.09 x 2,669 ~= $61.\n\n"
+        "This is THE ranking metric — candidates and expiries are sorted "
+        "descending by this column. Positive EV is also required before "
+        "an alert can fire."
+    ),
+}
+
+# Butterfly-specific tooltip overrides — same merge pattern as
+# _IC_COLUMN_TOOLTIPS. "Breakevens" is overridden for the same reason.
+_BF_COLUMN_TOOLTIPS: Dict[str, str] = {
+    "K1": (
+        "K1 — the lower wing strike (long call, BUY)\n\n"
+        "Formula: nearest listed strike below K2 at K2 - F x width% "
+        "(tried across 2%, 3%, 5%, 8% widths).\n\n"
+        "Example: K2 $65,000, width 3% of F=$66,500 (~$2,000) -> "
+        "K1 $63,000.\n\n"
+        "Bought as part of the butterfly's protective wing; loses its "
+        "full cost if price settles at or below here."
+    ),
+    "K2 (mid)": (
+        "K2 (mid) — the body strike, SOLD TWICE\n\n"
+        "Formula: candidate strikes within ±3% of F are tried as the "
+        "body; two contracts at this strike are sold.\n\n"
+        "Example: F=$66,500 -> K2 candidates near $65,000-$68,000 are "
+        "tried.\n\n"
+        "Max profit happens exactly at this strike at expiry — the "
+        "classic butterfly \"peak\"."
+    ),
+    "K3": (
+        "K3 — the upper wing strike (long call, BUY)\n\n"
+        "Formula: nearest listed strike above K2 at K2 + F x width%, same "
+        "width grid as K1 (kept roughly symmetric — the K1/K2 and K2/K3 "
+        "widths must be within 20% of each other or the candidate is "
+        "rejected).\n\n"
+        "Example: K2 $65,000, width ~$2,000 -> K3 $67,000.\n\n"
+        "Bought as the upper protective wing; loses its full cost if "
+        "price settles at or above here."
+    ),
+    "Cost $": (
+        "Cost $ — net debit paid for the whole structure\n\n"
+        "Formula: Call ask at K1 + Call ask at K3 - 2 x Call bid at K2\n\n"
+        "Example: K1 ask $2,700, K3 ask $2,100, K2 bid (x2) $4,400 -> "
+        "cost = 2,700 + 2,100 - 4,400 = $400.\n\n"
+        "This is what you pay today. It's also the MAX LOSS — a "
+        "butterfly is a DEBIT structure, so %return = P&L / Cost, not "
+        "credit-based like the iron condor."
+    ),
+    "Max Profit $": (
+        "Max Profit $ — best case, if price settles exactly at K2\n\n"
+        "Formula: min(K2-K1, K3-K2) - Cost — the narrower of the two "
+        "wing widths, minus the debit paid.\n\n"
+        "Example: K2-K1=$2,000, K3-K2=$2,000, cost $400 -> "
+        "max profit = $2,000 - $400 = $1,600.\n\n"
+        "Only achieved exactly at K2 at expiry; P&L tapers off linearly "
+        "toward either breakeven."
+    ),
+    "Breakevens": (
+        "Breakevens\n\n"
+        "Formula: breakeven_lo = K1 + Cost; breakeven_hi = K3 - Cost\n\n"
+        "Example: K1 $63,000 + cost $400 -> breakeven_lo $63,400; "
+        "K3 $67,000 - cost $400 -> breakeven_hi $66,600.\n\n"
+        "Same direction as the iron condor: this position PROFITS INSIDE "
+        "this range (between breakeven_lo and breakeven_hi) and loses "
+        "the full debit OUTSIDE it — opposite of the straddle's "
+        "Breakevens column."
+    ),
+    "Prob %": (
+        "Prob % — probability of profit (RV-implied)\n\n"
+        "Formula: P(price settles between breakeven_lo and breakeven_hi "
+        "at expiry), lognormal centered on F, sigma from REALIZED vol "
+        "over a DTE-matched window (not implied vol).\n\n"
+        "Example: breakevens $63,400/$66,600 (a narrow band around F) -> "
+        "a much lower probability than the iron condor's wide band, "
+        "e.g. ~40%.\n\n"
+        "A butterfly trades a lower win probability for a much bigger "
+        "payoff ratio than an iron condor — always read alongside EV $, "
+        "not alone."
+    ),
+    "EV $": (
+        "EV $ — expected value, RV-implied\n\n"
+        "Formula: Prob% x Max Profit - (1 - Prob%) x Cost\n\n"
+        "Example: Prob 40%, Max Profit $1,600, Cost $400 -> "
+        "0.40 x 1,600 - 0.60 x 400 = $400.\n\n"
+        "This is THE ranking metric — candidates and expiries are sorted "
+        "descending by this column. Positive EV is also required before "
+        "an alert can fire."
+    ),
 }
 
 
@@ -526,7 +723,7 @@ class AutomationTab(QWidget):
         group.setLayout(layout)
         return group
 
-    def _apply_header_tooltips(self, columns: list) -> None:
+    def _apply_header_tooltips(self, columns: list, overrides: Optional[Dict[str, str]] = None) -> None:
         """
         Apply header tooltips for the given column set. results_tree is
         shared across the straddle/iron-condor/butterfly jobs (see
@@ -536,9 +733,17 @@ class AutomationTab(QWidget):
         tooltip set for one job's column index stays attached to that
         index after the header text there changes to a different job's
         column name.
+
+        `overrides` (_IC_COLUMN_TOOLTIPS / _BF_COLUMN_TOOLTIPS) layers on
+        top of the base _COLUMN_TOOLTIPS for column names that collide
+        across job types but mean something different -- "Breakevens"
+        in particular: the base entry states the straddle's formula AND
+        profit direction, both wrong for a credit/debit structure that
+        profits INSIDE its breakevens instead of outside.
         """
+        tooltips = {**_COLUMN_TOOLTIPS, **(overrides or {})}
         for col, name in enumerate(columns):
-            self.results_tree.headerItem().setToolTip(col, _COLUMN_TOOLTIPS.get(name, name))
+            self.results_tree.headerItem().setToolTip(col, tooltips.get(name, name))
 
     def _build_alert_preview(self) -> QGroupBox:
         group = QGroupBox("Alert Preview (top result — what a Telegram send would say)")
@@ -583,13 +788,13 @@ class AutomationTab(QWidget):
         elif job == "Iron Condor Scanner (manual)":
             self.results_tree.setColumnCount(len(_IC_COLUMNS))
             self.results_tree.setHeaderLabels(_IC_COLUMNS)
-            self._apply_header_tooltips(_IC_COLUMNS)
+            self._apply_header_tooltips(_IC_COLUMNS, _IC_COLUMN_TOOLTIPS)
             self.worker = IronCondorScanWorker(currency)
             self.worker.finished.connect(self._on_ic_scan_finished)
         elif job == "Long Butterfly Scanner (manual)":
             self.results_tree.setColumnCount(len(_BF_COLUMNS))
             self.results_tree.setHeaderLabels(_BF_COLUMNS)
-            self._apply_header_tooltips(_BF_COLUMNS)
+            self._apply_header_tooltips(_BF_COLUMNS, _BF_COLUMN_TOOLTIPS)
             self.worker = ButterflyScanWorker(currency)
             self.worker.finished.connect(self._on_bf_scan_finished)
         else:
