@@ -6,11 +6,116 @@ and generates formatted text reports per expiration.
 """
 
 import logging
-import math
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
+from coding.core.analytics.reporting.report_formatter import (
+    ExpirationRenderInput,
+    OnChainReportFormatter,
+)
+from coding.core.analytics.results.analysis_result import MarketMetricsResult, TrendSnapshot
+from coding.core.analytics.results.expiry_results import (
+    ExpirationAnalysisResult,
+    LevelRef,
+    MaxPainResult,
+    MoneynessLeg,
+    MoneynessResult,
+    PutCallRatioResult,
+    StrikeOiRow,
+    SupportResistanceResult,
+    VolumeStatsResult,
+)
+
 logger = logging.getLogger(__name__)
+
+
+def _to_market_metrics(market_metrics: Dict[str, Any]) -> Optional[MarketMetricsResult]:
+    """Adapt the legacy market_metrics dict into a MarketMetricsResult.
+
+    Returns None when set_market_metrics() was never called (empty dict) —
+    matches the legacy ``if self.market_metrics:`` truthiness gate.
+    """
+    if not market_metrics:
+        return None
+    return MarketMetricsResult(**market_metrics)
+
+
+def _to_trend_snapshot(prev: Optional[Dict[str, Any]]) -> Optional[TrendSnapshot]:
+    """Adapt a legacy trend_data dict entry into a TrendSnapshot.
+
+    Returns None when there is no prior record (None or empty dict) —
+    matches the legacy ``if prev:`` truthiness gate. Missing keys map to
+    None fields, identical to the legacy dict's ``.get(key)`` behavior.
+    """
+    if not prev:
+        return None
+    return TrendSnapshot(
+        max_pain_strike=prev.get("max_pain_strike"),
+        call_oi=prev.get("call_oi"),
+        put_oi=prev.get("put_oi"),
+        pc_ratio=prev.get("pc_ratio"),
+        total_volume=prev.get("total_volume"),
+        volume_ratio=prev.get("volume_ratio"),
+    )
+
+
+def _level_ref(level: Optional[Dict[str, Any]], oi_key: str) -> Optional[LevelRef]:
+    """Adapt a legacy {"strike": ..., "call_oi"|"put_oi": ...} dict into a LevelRef."""
+    if not level:
+        return None
+    return LevelRef(strike=level["strike"], open_interest=level[oi_key])
+
+
+def _to_expiration_analysis_result(analysis: Dict[str, Any]) -> ExpirationAnalysisResult:
+    """
+    Adapt the legacy ``analyze_expiration()`` dict into an
+    ExpirationAnalysisResult. Temporary adapter (refactor_design_spec.md
+    section T3) — analyze_expiration() itself keeps returning the legacy
+    dict shape until a later task wires the calculators to produce typed
+    results directly.
+    """
+    strike_data = analysis["strike_data"]
+    strike_rows = tuple(
+        StrikeOiRow(
+            strike=strike,
+            call_oi=strike_data[strike]["call_oi"],
+            put_oi=strike_data[strike]["put_oi"],
+            call_volume=strike_data[strike]["call_volume"],
+            put_volume=strike_data[strike]["put_volume"],
+        )
+        for strike in sorted(strike_data.keys())
+    )
+
+    money = analysis["moneyness"]
+    sr = analysis["support_resistance"]
+
+    return ExpirationAnalysisResult(
+        expiration=analysis["expiration"],
+        underlying_price=analysis["underlying_price"],
+        total_instruments=analysis["total_instruments"],
+        call_count=analysis["call_count"],
+        put_count=analysis["put_count"],
+        strike_rows=strike_rows,
+        max_pain=MaxPainResult(**analysis["max_pain"]),
+        put_call_ratio=PutCallRatioResult(**analysis["put_call_ratio"]),
+        volume_stats=VolumeStatsResult(**analysis["volume_stats"]),
+        moneyness=MoneynessResult(
+            calls=MoneynessLeg(**money["calls"]),
+            puts=MoneynessLeg(**money["puts"]),
+            totals=MoneynessLeg(**money["totals"]),
+            oi_skew=money["oi_skew"],
+        ),
+        support_resistance=SupportResistanceResult(
+            resistance_levels=tuple(
+                _level_ref(level, "call_oi") for level in sr["resistance_levels"]
+            ),
+            support_levels=tuple(
+                _level_ref(level, "put_oi") for level in sr["support_levels"]
+            ),
+            short_term_resistance=_level_ref(sr["short_term_resistance"], "call_oi"),
+            short_term_support=_level_ref(sr["short_term_support"], "put_oi"),
+        ),
+    )
 
 
 class OnChainAnalyzer:
@@ -586,354 +691,64 @@ class OnChainAnalyzer:
         """
         Generate a formatted text report for all expirations.
 
+        Pure delegator (refactor_design_spec.md section T3): builds a
+        temporary ExpirationRenderInput per expiration (adapting this
+        analyzer's own dicts into the typed ExpirationAnalysisResult /
+        TrendSnapshot models, plus whatever pre-rendered extra section text
+        the other calculators already produced) and hands everything to
+        OnChainReportFormatter, which owns all the actual text formatting.
+
         Returns:
             Formatted text report string.
         """
         if not self.parsed_data:
             self.parse_instruments()
 
-        lines = []
-        separator = "=" * 80
-        sub_separator = "-" * 80
+        generated_at = datetime.now()
+        market_metrics = _to_market_metrics(self.market_metrics)
 
-        # Header
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        lines.append(separator)
-        lines.append("ON CHAIN ANALYSIS REPORT")
-        lines.append(f"Generated: {timestamp}")
-        lines.append(f"Currency: {self.currency}")
-        lines.append(f"Current Underlying Price: ${self.underlying_price:,.2f}")
-        lines.append(separator)
-        lines.append("")
-
-        # Market Metrics (DVOL, Funding Rate) - if available
-        if self.market_metrics:
-            lines.append("MARKET METRICS")
-            lines.append(sub_separator)
-
-            dvol = self.market_metrics.get("dvol")
-            iv_percentile = self.market_metrics.get("iv_percentile")
-            current_funding = self.market_metrics.get("current_funding")
-            funding_8h = self.market_metrics.get("funding_8h")
-            iv_rank = self.market_metrics.get("iv_rank")
-
-            if dvol is not None:
-                lines.append(f"DVOL (Volatility Index): {dvol:.2f}")
-            if iv_percentile is not None:
-                lines.append(f"IV Percentile (365d): {iv_percentile:.1f}%")
-            if iv_rank is not None:
-                lines.append(f"IV Rank (365d): {iv_rank:.1f}%")
-            if dvol is not None:
-                daily_move = dvol / 100 / math.sqrt(365) * self.underlying_price
-                weekly_move = dvol / 100 / math.sqrt(52) * self.underlying_price
-                monthly_move = dvol / 100 / math.sqrt(12) * self.underlying_price
-                daily_pct = dvol / 100 / math.sqrt(365) * 100
-                weekly_pct = dvol / 100 / math.sqrt(52) * 100
-                monthly_pct = dvol / 100 / math.sqrt(12) * 100
-                lines.append(
-                    f"Expected Daily Move:    ${daily_move:,.2f}  ({daily_pct:.1f}%)"
-                )
-                lines.append(
-                    f"Expected Weekly Move:   ${weekly_move:,.2f}  ({weekly_pct:.1f}%)"
-                )
-                lines.append(
-                    f"Expected Monthly Move:  ${monthly_move:,.2f}  ({monthly_pct:.1f}%)"
-                )
-            if current_funding is not None:
-                # Convert to percentage and annualized
-                funding_pct = current_funding * 100
-                funding_annualized = current_funding * 3 * 365 * 100  # 3 funding periods per day
-                lines.append(
-                    f"Current Funding Rate: {funding_pct:.4f}% "
-                    f"({funding_annualized:.2f}% annualized)"
-                )
-            if funding_8h is not None:
-                funding_8h_pct = funding_8h * 100
-                lines.append(f"8h Funding Rate: {funding_8h_pct:.4f}%")
-
-            lines.append("")
-            lines.append(separator)
-            lines.append("")
-
-        # Sort expirations chronologically
-        expirations = sorted(self.parsed_data.keys())
-
-        for expiration in expirations:
+        render_inputs = []
+        for expiration in sorted(self.parsed_data.keys()):
             analysis = self.analyze_expiration(expiration)
             if not analysis:
                 continue
 
-            lines.append(f"EXPIRATION: {expiration}")
-            lines.append(sub_separator)
-
-            # Summary
-            lines.append(
-                f"Total Instruments: {analysis['total_instruments']} "
-                f"({analysis['call_count']} Calls, {analysis['put_count']} Puts)"
-            )
-            lines.append("")
-
-            # Max Pain
-            max_pain = analysis["max_pain"]
-            max_pain_strike = max_pain["max_pain_strike"]
-            lines.append("MAX PAIN ANALYSIS")
-            lines.append(sub_separator)
-            if max_pain_strike is not None:
-                lines.append(f"Max Pain Strike: ${max_pain_strike:,.0f}")
-                diff = self.underlying_price - max_pain_strike
-                diff_pct = (diff / max_pain_strike * 100) if max_pain_strike else 0
-                lines.append(f"Distance from Current: ${diff:+,.2f} ({diff_pct:+.2f}%)")
-            else:
-                lines.append("Max Pain Strike: N/A")
-
-            prev = self.trend_data.get(expiration)
-            if prev:
-                prev_mp = prev.get("max_pain_strike")
-                if prev_mp is not None and max_pain_strike is not None:
-                    trend_str = self._format_trend(max_pain_strike, prev_mp)
-                    lines.append(f"Trend (Max Pain): {trend_str.strip()}")
-
-            lines.append("")
-
-            # Put/Call Ratio
-            pcr = analysis["put_call_ratio"]
-            lines.append("PUT/CALL RATIO (Open Interest)")
-            lines.append(sub_separator)
-            lines.append(f"Total Call OI: {pcr['total_call_oi']:,.0f}")
-            lines.append(f"Total Put OI: {pcr['total_put_oi']:,.0f}")
-            if pcr["ratio"] != float("inf"):
-                lines.append(f"P/C Ratio: {pcr['ratio']:.2f} ({pcr['bias']})")
-            else:
-                lines.append(f"P/C Ratio: N/A (No Call OI)")
-
-            if prev:
-                prev_call_oi = prev.get("call_oi")
-                prev_put_oi = prev.get("put_oi")
-                prev_pc = prev.get("pc_ratio")
-                if prev_call_oi is not None:
-                    lines.append(
-                        f"Trend (Call OI):  {self._format_trend(pcr['total_call_oi'], prev_call_oi).strip()}"
-                    )
-                    lines.append(
-                        f"Trend (Put OI):   {self._format_trend(pcr['total_put_oi'], prev_put_oi).strip()}"
-                    )
-                if prev_pc is not None and pcr["ratio"] != float("inf"):
-                    lines.append(
-                        f"Trend (P/C):      {self._format_trend(pcr['ratio'], prev_pc, is_ratio=True).strip()}"
-                    )
-
-            lines.append("")
-
-            # Volume Stats
-            vol = analysis["volume_stats"]
-            lines.append("VOLUME STATISTICS")
-            lines.append(sub_separator)
-            lines.append(f"Total Call Volume: {vol['total_call_volume']:,.2f}")
-            lines.append(f"Total Put Volume: {vol['total_put_volume']:,.2f}")
-            lines.append(f"Total Volume: {vol['total_volume']:,.2f}")
-            if vol["volume_ratio"] != float("inf"):
-                lines.append(f"Volume P/C Ratio: {vol['volume_ratio']:.2f}")
-            else:
-                lines.append("Volume P/C Ratio: N/A (No Call Volume)")
-
-            if prev:
-                prev_vol = prev.get("total_volume")
-                prev_vr = prev.get("volume_ratio")
-                if prev_vol is not None:
-                    lines.append(
-                        f"Trend (Volume):   {self._format_trend(vol['total_volume'], prev_vol).strip()}"
-                    )
-                if prev_vr is not None and vol["volume_ratio"] != float("inf"):
-                    lines.append(
-                        f"Trend (Vol P/C):  {self._format_trend(vol['volume_ratio'], prev_vr, is_ratio=True).strip()}"
-                    )
-
-            lines.append("")
-
-            # ITM/OTM Analysis (Deribit-style, no ATM)
-            money = analysis["moneyness"]
-            totals = money["totals"]
-            calls = money["calls"]
-            puts = money["puts"]
-
-            lines.append("MONEYNESS ANALYSIS (ITM/OTM)")
-            lines.append(sub_separator)
-            lines.append(f"OI Skew: {money['oi_skew']}")
-            lines.append("")
-
-            # Calls breakdown
-            lines.append("CALLS:")
-            lines.append(
-                f"  ITM: {calls['itm_oi']:>8,.0f} OI    "
-                f"Notional: ${calls['itm_notional']:>14,.2f}    ({calls['itm_pct']:>5.2f}%)"
-            )
-            lines.append(
-                f"  OTM: {calls['otm_oi']:>8,.0f} OI    "
-                f"Notional: ${calls['otm_notional']:>14,.2f}    ({calls['otm_pct']:>5.2f}%)"
-            )
-            lines.append(
-                f"  Total: {calls['total_oi']:>6,.0f} OI    "
-                f"Notional: ${calls['total_notional']:>14,.2f}"
-            )
-            lines.append("")
-
-            # Puts breakdown
-            lines.append("PUTS:")
-            lines.append(
-                f"  ITM: {puts['itm_oi']:>8,.0f} OI    "
-                f"Notional: ${puts['itm_notional']:>14,.2f}    ({puts['itm_pct']:>5.2f}%)"
-            )
-            lines.append(
-                f"  OTM: {puts['otm_oi']:>8,.0f} OI    "
-                f"Notional: ${puts['otm_notional']:>14,.2f}    ({puts['otm_pct']:>5.2f}%)"
-            )
-            lines.append(
-                f"  Total: {puts['total_oi']:>6,.0f} OI    "
-                f"Notional: ${puts['total_notional']:>14,.2f}"
-            )
-            lines.append("")
-
-            # Combined totals
-            lines.append("COMBINED TOTALS:")
-            lines.append(
-                f"  ITM: {totals['itm_oi']:>8,.0f} OI    "
-                f"Notional: ${totals['itm_notional']:>14,.2f}    ({totals['itm_pct']:>5.2f}%)"
-            )
-            lines.append(
-                f"  OTM: {totals['otm_oi']:>8,.0f} OI    "
-                f"Notional: ${totals['otm_notional']:>14,.2f}    ({totals['otm_pct']:>5.2f}%)"
-            )
-            lines.append(
-                f"  Total: {totals['total_oi']:>6,.0f} OI    "
-                f"Notional: ${totals['total_notional']:>14,.2f}"
-            )
-            lines.append("")
-
-            # Open Interest and Volume by Strike
-            lines.append("OPEN INTEREST & VOLUME BY STRIKE")
-            lines.append(sub_separator)
-            lines.append(
-                f"{'Strike':>10}  {'Call OI':>10}  {'Put OI':>10}  "
-                f"{'Call Vol':>10}  {'Put Vol':>10}  Notes"
-            )
-            lines.append(
-                f"{'------':>10}  {'--------':>10}  {'-------':>10}  "
-                f"{'--------':>10}  {'-------':>10}  -----"
-            )
-
-            strike_data = analysis["strike_data"]
-            sr = analysis["support_resistance"]
-
-            # Get top OI strikes for annotations
-            top_call_strikes = set(
-                level["strike"] for level in sr["resistance_levels"]
-            )
-            top_put_strikes = set(level["strike"] for level in sr["support_levels"])
-
-            for strike in sorted(strike_data.keys()):
-                data = strike_data[strike]
-
-                notes = []
-                if strike == max_pain_strike:
-                    notes.append("<< MAX PAIN")
-                if strike in top_call_strikes:
-                    notes.append("Resistance")
-                if strike in top_put_strikes:
-                    notes.append("Support")
-
-                notes_str = " | ".join(notes) if notes else ""
-
-                lines.append(
-                    f"{strike:>10,.0f}  {data['call_oi']:>10,.0f}  "
-                    f"{data['put_oi']:>10,.0f}  {data['call_volume']:>10,.2f}  "
-                    f"{data['put_volume']:>10,.2f}  {notes_str}"
+            render_inputs.append(
+                ExpirationRenderInput(
+                    expiration=expiration,
+                    analysis=_to_expiration_analysis_result(analysis),
+                    trend=_to_trend_snapshot(self.trend_data.get(expiration)),
+                    extra_sections=tuple(self._raw_extra_sections(expiration)),
                 )
-            lines.append("")
-
-            # Support/Resistance Levels
-            lines.append("SUPPORT/RESISTANCE LEVELS")
-            lines.append(sub_separator)
-
-            lines.append("RESISTANCE (Top 3 Call OI):")
-            for i, level in enumerate(sr["resistance_levels"], 1):
-                lines.append(
-                    f"  {i}. ${level['strike']:,.0f} - Call OI: {level['call_oi']:,.0f}"
-                )
-            if not sr["resistance_levels"]:
-                lines.append("  None found")
-            lines.append("")
-
-            lines.append("SUPPORT (Top 3 Put OI):")
-            for i, level in enumerate(sr["support_levels"], 1):
-                lines.append(
-                    f"  {i}. ${level['strike']:,.0f} - Put OI: {level['put_oi']:,.0f}"
-                )
-            if not sr["support_levels"]:
-                lines.append("  None found")
-            lines.append("")
-
-            lines.append(
-                f"SHORT-TERM LEVELS (nearest to current price ${self.underlying_price:,.2f}):"
             )
-            if sr["short_term_resistance"]:
-                lines.append(
-                    f"  Nearest Resistance: ${sr['short_term_resistance']['strike']:,.0f} "
-                    f"(Call OI: {sr['short_term_resistance']['call_oi']:,.0f})"
-                )
-            else:
-                lines.append("  Nearest Resistance: None found above current price")
 
-            if sr["short_term_support"]:
-                lines.append(
-                    f"  Nearest Support: ${sr['short_term_support']['strike']:,.0f} "
-                    f"(Put OI: {sr['short_term_support']['put_oi']:,.0f})"
-                )
-            else:
-                lines.append("  Nearest Support: None found below current price")
+        return OnChainReportFormatter().render_full(
+            currency=self.currency,
+            underlying_price=self.underlying_price,
+            generated_at=generated_at,
+            market_metrics=market_metrics,
+            expirations=tuple(render_inputs),
+            market_wide_sections=self.market_wide_sections,
+        )
 
-            lines.append("")
-
-            # GEX/DEX section (if available for this expiration)
-            if expiration in self.gex_dex_data:
-                lines.append(self.gex_dex_data[expiration])
-
-            # Buy/Sell Flow section (if available for this expiration)
-            if expiration in self.buy_sell_flow_data:
-                lines.append(self.buy_sell_flow_data[expiration])
-
-            # Volatility Surface section (if available for this expiration)
-            if expiration in self.volatility_surface_data:
-                lines.append(self.volatility_surface_data[expiration])
-
-            # OI Changes section (if available for this expiration)
-            if expiration in self.oi_changes_data:
-                lines.append(self.oi_changes_data[expiration])
-
-            lines.append(separator)
-            lines.append("")
-
-        # Market-wide sections (appended after all per-expiry sections)
-        if self.market_wide_sections:
-            lines.append(separator)
-            lines.append(
-                f"{'MARKET-WIDE METRICS':^80}"
-            )
-            lines.append(separator)
-            lines.append("")
-
-            for section_name in [
-                "aggregate_gex_dex",
-                "iv_term_structure", "futures_basis",
-                "realized_volatility", "vrp", "volatility_cone",
-                "perpetual_funding", "block_trades", "cross_asset_correlation"
-            ]:
-                if section_name in self.market_wide_sections:
-                    lines.append(self.market_wide_sections[section_name])
-                    lines.append("")
-
-            lines.append(separator)
-
-        return "\n".join(lines)
+    def _raw_extra_sections(self, expiration: str) -> List[str]:
+        """
+        Collect this expiration's already-formatted GEX/DEX, buy/sell flow,
+        volatility surface, and OI-changes text, in that fixed order —
+        matches the legacy inline appends in generate_report(). These
+        calculators still produce plain text (not typed results) until
+        T4/T5/T8, so generate_report() passes their output through verbatim.
+        """
+        texts = []
+        if expiration in self.gex_dex_data:
+            texts.append(self.gex_dex_data[expiration])
+        if expiration in self.buy_sell_flow_data:
+            texts.append(self.buy_sell_flow_data[expiration])
+        if expiration in self.volatility_surface_data:
+            texts.append(self.volatility_surface_data[expiration])
+        if expiration in self.oi_changes_data:
+            texts.append(self.oi_changes_data[expiration])
+        return texts
 
     def get_expirations(self) -> List[str]:
         """
