@@ -183,7 +183,7 @@ class OnChainAnalysisService:
                 )
                 gex_structured = calculator.calculate()
                 analyzer.set_gex_dex_structured(expiration, gex_structured)
-                gex_dex_report = calculator.generate_report_section()
+                gex_dex_report = calculator.generate_report_section(result=gex_structured)
                 analyzer.set_gex_dex_data(expiration, gex_dex_report)
 
         # Aggregate GEX/DEX across all expirations after per-expiry loop

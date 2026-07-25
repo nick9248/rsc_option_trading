@@ -55,9 +55,15 @@ class GexDexCalculator:
         """
         Calculate all GEX/DEX metrics.
 
+        Idempotent: repeated calls on unchanged instruments/spot_price return
+        equal results. strike_data is reset (reassigned, not mutated in place)
+        at entry so a stale reference held by a previous caller is never
+        touched by a later recalculation.
+
         Returns:
             Dict with per-strike data, cumulative profiles, and key levels.
         """
+        self.strike_data = {}
         self._aggregate_by_strike()
         self._calculate_gex_dex()
         cumulative = self._calculate_cumulative_profiles()
@@ -446,14 +452,19 @@ class GexDexCalculator:
 
         return "\n".join(lines)
 
-    def generate_report_section(self) -> str:
+    def generate_report_section(self, result: Optional[Dict[str, Any]] = None) -> str:
         """
         Generate formatted text report section for GEX/DEX.
+
+        Args:
+            result: Pre-computed result from calculate(). If None, calculate() is
+                    called. Pass a pre-computed result to avoid recomputation.
 
         Returns:
             Formatted string for inclusion in analysis report.
         """
-        result = self.calculate()
+        if result is None:
+            result = self.calculate()
         lines = []
         separator = "-" * 80
 

@@ -185,6 +185,29 @@ class TestVolatilitySurfaceCalculator:
         # Should not crash
         assert result is not None
 
+    def test_zero_spot_pc_by_moneyness_buckets_have_ratio_and_bias(self, sample_instruments):
+        """
+        bugfix_spec.md H2: the spot<=0 early return in _calculate_pc_by_moneyness()
+        must populate ratio/bias on every bucket, not just call_oi/put_oi/range,
+        otherwise generate_report_section() KeyErrors on bucket["ratio"].
+        """
+        calc = VolatilitySurfaceCalculator(sample_instruments, 0, "28MAR26")
+        buckets = calc._calculate_pc_by_moneyness()
+
+        for bucket_name in ("atm", "near_otm", "far_otm"):
+            bucket = buckets[bucket_name]
+            assert bucket["ratio"] == 0.0
+            assert bucket["bias"] == "N/A"
+
+    def test_zero_spot_report_generation_does_not_raise(self, sample_instruments):
+        """bugfix_spec.md H2: report path must not KeyError when spot_price == 0."""
+        calc = VolatilitySurfaceCalculator(sample_instruments, 0, "28MAR26")
+        report = calc.generate_report_section()
+
+        assert isinstance(report, str)
+        assert "P/C RATIO BY MONEYNESS" in report
+        assert "N/A" in report
+
     def test_empty_instruments(self):
         calc = VolatilitySurfaceCalculator([], 90000, "28MAR26")
         result = calc.calculate()

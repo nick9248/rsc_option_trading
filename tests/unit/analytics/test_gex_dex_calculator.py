@@ -406,6 +406,74 @@ class TestGexDexCalculator:
         assert result["key_levels"]["put_support"]["strike"] == 68000
 
 
+class TestIdempotentCalculateAndResultPassing:
+    """
+    Regression tests for the confirmed production bug (bugfix_spec.md Item 1):
+    calculate() never reset strike_data, so calling generate_report_section()
+    after calculate() doubled every stored total (and tripled it on a 2nd render).
+
+    Fixture and expected numbers are verbatim from bugfix_spec.md section 1.1/1.5.
+    spot = 100,000:
+      K=100,000: net_gamma = 0.00002*100 - 0.00001*50 = 0.0015 -> net_gex = +150,000; net_dex = +25
+      K=110,000: net_gamma = 0.00001*40 - 0.00003*80 = -0.0020 -> net_gex = -200,000; net_dex = -44
+      total_net_gex = -50,000.00, total_net_dex = -19.0000
+    """
+
+    FIXTURE = [
+        {"strike": 100_000, "option_type": "C", "gamma": 0.00002, "delta": 0.5, "open_interest": 100},
+        {"strike": 100_000, "option_type": "P", "gamma": 0.00001, "delta": -0.5, "open_interest": 50},
+        {"strike": 110_000, "option_type": "C", "gamma": 0.00001, "delta": 0.3, "open_interest": 40},
+        {"strike": 110_000, "option_type": "P", "gamma": 0.00003, "delta": -0.7, "open_interest": 80},
+    ]
+
+    def test_calculate_is_idempotent(self):
+        """T1.1 - calling calculate() twice must yield identical totals and strike_data."""
+        calc = GexDexCalculator(self.FIXTURE, 100_000.0, "BTC")
+        first = calc.calculate()
+        second = calc.calculate()
+
+        assert first["total_net_gex"] == second["total_net_gex"] == pytest.approx(-50_000.0)
+        assert first["total_net_dex"] == second["total_net_dex"] == pytest.approx(-19.0)
+        assert calc.strike_data[100_000.0]["call_oi"] == pytest.approx(100.0)
+
+    def test_generate_report_section_with_result_does_not_recompute(self):
+        """T1.2 - passing result= must not call calculate() again (no doubling)."""
+        calc = GexDexCalculator(self.FIXTURE, 100_000.0, "BTC")
+        stored = calc.calculate()
+        report = calc.generate_report_section(result=stored)
+
+        assert "Total Net GEX: -50,000.00 USD" in report
+        assert "Total Net DEX: -19.0000 BTC" in report
+        assert stored["strike_data"][100_000.0]["net_gex"] == pytest.approx(150_000.0)
+        assert stored["strike_data"][110_000.0]["net_gex"] == pytest.approx(-200_000.0)
+        assert stored["strike_data"][100_000.0]["call_oi"] == pytest.approx(100.0)
+
+    def test_repeated_report_generation_without_result_does_not_drift(self):
+        """T1.3 - regression guard: 3 renders with no result= must never accumulate."""
+        calc = GexDexCalculator(self.FIXTURE, 100_000.0, "BTC")
+        stored = calc.calculate()
+        for _ in range(3):
+            calc.generate_report_section()  # no result= : must still be safe
+
+        assert sum(d["net_gex"] for d in calc.strike_data.values()) == pytest.approx(-50_000.0)
+        assert stored["strike_data"][100_000.0]["call_oi"] == pytest.approx(100.0)
+
+    def test_aggregate_across_expirations_matches_true_sum(self):
+        """T1.4 - service-level regression: aggregate must not double-count."""
+        a = GexDexCalculator(self.FIXTURE, 100_000.0, "BTC")
+        ra = a.calculate()
+        a.generate_report_section(result=ra)
+        b = GexDexCalculator(self.FIXTURE, 100_000.0, "BTC")
+        rb = b.calculate()
+        b.generate_report_section(result=rb)
+
+        agg = GexDexCalculator.aggregate_across_expirations({"A": ra, "B": rb}, 100_000.0, "BTC")
+
+        assert agg["total_net_gex"] == pytest.approx(-100_000.0)  # was -200,000.00 before the fix
+        assert agg["total_net_dex"] == pytest.approx(-38.0)  # was -76.0000 before the fix
+        assert agg["expiration_count"] == 2
+
+
 class TestAggregateAcrossExpirations:
     """Tests for GexDexCalculator.aggregate_across_expirations."""
 
