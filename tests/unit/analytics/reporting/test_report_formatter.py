@@ -93,6 +93,48 @@ def test_render_header_ends_with_single_trailing_newline_no_metrics():
     assert text.endswith("$95,000.00\n" + "=" * 80 + "\n")
 
 
+def test_render_header_funding_annualization_uses_funding_8h_not_current_funding():
+    """
+    CARRIED FINDING #2 (A5 review, task A6 brief): render_header used to
+    compute funding_annualized = current_funding * 3 * 365 * 100 --
+    current_funding is the instantaneous accruing rate, funding_8h is the
+    realised 8h rate; bugfix_spec.md Item 4 defect (b) already fixed the
+    calculator's own annualization to use funding_8h but missed this
+    second site. Live evidence cited in the bug report: current_funding =
+    5.562e-05, funding_8h = 9.1e-07 two hours apart from current_funding =
+    0.0, funding_8h = 1.41e-06 -- a 61x divergence between the two bases.
+    """
+    formatter = OnChainReportFormatter()
+    # Deliberately divergent values so the two possible formulas disagree.
+    metrics = MarketMetricsResult(
+        dvol=None, iv_percentile=None, iv_rank=None,
+        current_funding=5.562e-05, funding_8h=9.1e-07,
+    )
+    text = formatter.render_header("BTC", 95000.0, GENERATED_AT, metrics)
+
+    # Correct: 9.1e-07 * 1095 * 100 = 0.0996...% -- NOT the current_funding-based
+    # 5.562e-05 * 1095 * 100 = 6.0904...% the old formula would have printed.
+    assert "0.10% annualized" in text
+    assert "6.09% annualized" not in text
+
+
+def test_render_header_current_funding_without_funding_8h_omits_annualized():
+    """
+    With no funding_8h available, there is no correct annualization basis
+    -- the line must show the instantaneous rate without a fabricated
+    annualized figure, rather than falling back to the wrong formula.
+    """
+    formatter = OnChainReportFormatter()
+    metrics = MarketMetricsResult(
+        dvol=None, iv_percentile=None, iv_rank=None,
+        current_funding=0.0001, funding_8h=None,
+    )
+    text = formatter.render_header("BTC", 95000.0, GENERATED_AT, metrics)
+
+    assert "Current Funding Rate: 0.0100%" in text
+    assert "annualized" not in text
+
+
 # ---------------------------------------------------------------------------
 # render_expiration
 # ---------------------------------------------------------------------------

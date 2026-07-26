@@ -13,7 +13,7 @@ IV Rank (365d): 8.1%
 Expected Daily Move:    $1,265.18  (2.0%)
 Expected Weekly Move:   $3,351.94  (5.2%)
 Expected Monthly Move:  $6,977.63  (10.8%)
-Current Funding Rate: 0.0000% (0.00% annualized)
+Current Funding Rate: 0.0000% (0.28% annualized)
 8h Funding Rate: 0.0003%
 
 ================================================================================

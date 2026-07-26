@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, Optional, Tuple
 
+from coding.core.analytics.market_wide_calculator import FUNDING_PERIODS_PER_YEAR
 from coding.core.analytics.reporting.expiry_formatter import format_expiration_section
 from coding.core.analytics.reporting.flow_formatter import format_flow_section
 from coding.core.analytics.reporting.gex_dex_formatter import (
@@ -154,12 +155,28 @@ class OnChainReportFormatter:
                 lines.append(f"Expected Weekly Move:   ${weekly_move:,.2f}  ({weekly_pct:.1f}%)")
                 lines.append(f"Expected Monthly Move:  ${monthly_move:,.2f}  ({monthly_pct:.1f}%)")
             if current_funding is not None:
+                # CARRIED FINDING #2 (A5 review, task A6 brief): this line
+                # used to compute funding_annualized = current_funding * 3
+                # * 365 * 100 -- current_funding is the instantaneous
+                # accruing rate, not the realised 8h rate; bugfix_spec.md
+                # Item 4 defect (b) already fixed the calculator's own
+                # annualization (market_wide_formatter.format_
+                # perpetual_funding_section) to use funding_8h but missed
+                # this second site, so the header and the funding section
+                # printed two contradictory annualized numbers for the same
+                # instant. Same basis as the calculator fix: funding_8h *
+                # FUNDING_PERIODS_PER_YEAR. When funding_8h is unavailable
+                # there is no correct annualization basis -- show the
+                # instantaneous rate alone rather than a fabricated figure.
                 funding_pct = current_funding * 100
-                funding_annualized = current_funding * 3 * 365 * 100  # 3 funding periods per day
-                lines.append(
-                    f"Current Funding Rate: {funding_pct:.4f}% "
-                    f"({funding_annualized:.2f}% annualized)"
-                )
+                if funding_8h is not None:
+                    funding_annualized = funding_8h * FUNDING_PERIODS_PER_YEAR * 100
+                    lines.append(
+                        f"Current Funding Rate: {funding_pct:.4f}% "
+                        f"({funding_annualized:.2f}% annualized)"
+                    )
+                else:
+                    lines.append(f"Current Funding Rate: {funding_pct:.4f}%")
             if funding_8h is not None:
                 funding_8h_pct = funding_8h * 100
                 lines.append(f"8h Funding Rate: {funding_8h_pct:.4f}%")

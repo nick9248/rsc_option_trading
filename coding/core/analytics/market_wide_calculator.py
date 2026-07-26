@@ -34,6 +34,15 @@ DERIBIT_SETTLEMENT_HOUR_UTC = 8
 DAYS_PER_YEAR = 365.0
 MINIMUM_DAYS_FOR_ANNUALIZATION = 1.0
 
+# calculate_volatility_cone's own "Insufficient price history" threshold.
+# Named so on_chain_analysis_service.py can gate VolatilityConeResult
+# construction on the SAME condition (rather than duplicating the literal
+# 35) -- see the additional finding logged alongside task A6 carried
+# finding #1: the typed result was previously constructed unconditionally
+# whenever price_history was truthy, even when too short for this method's
+# own "Insufficient" branch, producing a fake all-zero-percentile result.
+MINIMUM_PRICE_HISTORY_DAYS_FOR_VOL_CONE = 35
+
 # bugfix_spec.md Item 4 (F4.3) — the real get_funding_chart_data point shape
 # is {"data": [{"timestamp":..., "index_price":..., "interest_8h":...}, ...]}.
 # The old code read "funding_rate"/"value" keys that don't exist on any
@@ -342,7 +351,7 @@ class MarketWideCalculator:
         lines.append("VOLATILITY CONE")
         lines.append(sub_separator)
 
-        if not price_history or len(price_history) < 35:
+        if not price_history or len(price_history) < MINIMUM_PRICE_HISTORY_DAYS_FOR_VOL_CONE:
             lines.append("  Insufficient price history for vol cone")
             lines.append("")
             return "\n".join(lines), structured
@@ -635,21 +644,28 @@ class MarketWideCalculator:
         """
         lines = []
         sub_separator = "-" * 80
-        structured: Dict = {"btc_eth_price_corr": 0.0, "btc_eth_dvol_corr": 0.0}
+        # Additional finding (same bug class as task A6 carried finding
+        # #1): these two keys used to pre-seed at 0.0, indistinguishable
+        # from a genuine zero correlation once a typed CrossAssetCorrelationResult
+        # (whose fields are Optional[float]) was built from this dict via
+        # plain .get() -- an insufficient-data run silently looked like a
+        # measured zero correlation. Pre-seed None instead; both branches
+        # below now always assign the real (possibly-None) value.
+        structured: Dict = {"btc_eth_price_corr": None, "btc_eth_dvol_corr": None}
 
         lines.append(f"CROSS-ASSET CORRELATION (30d, {self.currency}/{other_currency})")
         lines.append(sub_separator)
 
         # Price correlation
         price_corr = self._calculate_return_correlation(own_prices, other_prices)
+        structured["btc_eth_price_corr"] = price_corr
         if price_corr is not None:
-            structured["btc_eth_price_corr"] = price_corr
             lines.append(f"  Price Correlation: {price_corr:.2f}")
         else:
             lines.append("  Price Correlation: Insufficient data")
 
         # DVOL correlation
-        dvol_corr = 0.0
+        dvol_corr = None
         if own_dvol_history and other_dvol_history:
             min_len = min(len(own_dvol_history), len(other_dvol_history), 30)
             if min_len >= 10:

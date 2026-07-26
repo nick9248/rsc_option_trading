@@ -27,7 +27,10 @@ from coding.core.analytics.on_chain_analyzer import (
     _to_market_metrics,
     _to_trend_snapshot,
 )
-from coding.core.analytics.market_wide_calculator import MarketWideCalculator
+from coding.core.analytics.market_wide_calculator import (
+    MINIMUM_PRICE_HISTORY_DAYS_FOR_VOL_CONE,
+    MarketWideCalculator,
+)
 from coding.core.analytics.reporting.market_wide_formatter import format_futures_basis_section
 from coding.core.analytics.reporting.report_formatter import OnChainReportFormatter
 from coding.core.analytics.results.analysis_result import (
@@ -872,23 +875,44 @@ class OnChainAnalysisService:
                     vrp_text, vrp_data = calc.calculate_vrp(rv_30d)
                     analyzer.set_market_wide_section("vrp", vrp_text)
                     market_wide_structured.update(vrp_data)
-                    if dvol is not None:
-                        vrp_result = VarianceRiskPremiumResult(
-                            vrp=vrp_data["vrp"], signal=vrp_data["signal"],
-                            dvol=dvol, rv_30d=rv_30d,
-                        )
+                    # Additional finding (same bug class as carried finding
+                    # #1, found verifying the render-path flip): dvol is
+                    # Optional on VarianceRiskPremiumResult and
+                    # calc.calculate_vrp's own text branch already renders
+                    # "DVOL not available" when dvol is None -- gating
+                    # construction on dvol being available too meant a
+                    # dvol-unavailable-but-rv_30d>0 run silently DROPPED the
+                    # VRP section from the typed path while the legacy text
+                    # path still showed it (with its own "not available"
+                    # message). Always construct when rv_30d > 0; dvol=None
+                    # flows straight through the same way it already does
+                    # for the calculator's own text.
+                    vrp_result = VarianceRiskPremiumResult(
+                        vrp=vrp_data["vrp"], signal=vrp_data["signal"],
+                        dvol=dvol, rv_30d=rv_30d,
+                    )
 
                 # Vol Cone
                 cone_text, cone_data = calc.calculate_volatility_cone(price_history)
                 analyzer.set_market_wide_section("volatility_cone", cone_text)
                 market_wide_structured.update(cone_data)
-                volatility_cone_result = VolatilityConeResult(
-                    percentile_by_window={
-                        10: cone_data.get("cone_10d_pctile", 0.0),
-                        20: cone_data.get("cone_20d_pctile", 0.0),
-                        30: cone_data.get("cone_30d_pctile", 0.0),
-                    }
-                )
+                # Additional finding (same bug class as carried finding #1):
+                # cone_data pre-seeds all three percentile keys at 0.0, so
+                # constructing unconditionally whenever price_history was
+                # truthy produced a fake all-zero-percentile
+                # VolatilityConeResult on the calculator's own "Insufficient
+                # price history" path. Mirror that method's exact threshold
+                # (the shared constant, not a re-declared literal) so the
+                # typed result is None exactly when the legacy text says
+                # "Insufficient".
+                if len(price_history) >= MINIMUM_PRICE_HISTORY_DAYS_FOR_VOL_CONE:
+                    volatility_cone_result = VolatilityConeResult(
+                        percentile_by_window={
+                            10: cone_data.get("cone_10d_pctile", 0.0),
+                            20: cone_data.get("cone_20d_pctile", 0.0),
+                            30: cone_data.get("cone_30d_pctile", 0.0),
+                        }
+                    )
 
         except Exception as e:
             logger.warning(f"Failed to calculate RV/VRP/Vol Cone: {e}")
@@ -911,11 +935,25 @@ class OnChainAnalysisService:
             )
             analyzer.set_market_wide_section("perpetual_funding", funding_text)
             market_wide_structured.update(funding_data_struct)
-            if funding_data_struct.get("funding_8h") is not None or "funding_rate" in funding_data_struct:
+
+            # CARRIED FINDING #1 (A5 review, gates the render-path flip):
+            # funding_data_struct pre-seeds "funding_8h": 0.0 /
+            # "perp_funding_trend": "Stable" (market_wide_calculator.py's
+            # own structured-dict defaults, read by the legacy text path
+            # too), so funding_data_struct.get("funding_8h") is never None
+            # even when funding is genuinely unavailable -- the typed
+            # result never represented "unavailable". Read the ticker's raw
+            # Optional values directly and gate construction on their
+            # presence, so an unavailable reading produces funding_8h=None
+            # (matching the "not available" case the formatter already
+            # handles) instead of a fabricated zero-value result.
+            ticker_funding_8h = perp_ticker.get("funding_8h")
+            ticker_current_funding = perp_ticker.get("current_funding")
+            if ticker_funding_8h is not None or ticker_current_funding is not None:
                 funding_result = PerpetualFundingResult(
                     perp_open_interest=funding_data_struct.get("perp_oi", 0.0),
-                    funding_rate=funding_data_struct.get("funding_rate"),
-                    funding_8h=funding_data_struct.get("funding_8h"),
+                    funding_rate=ticker_current_funding,
+                    funding_8h=ticker_funding_8h,
                     funding_trend=funding_data_struct.get("perp_funding_trend", "Stable"),
                     history_points=len(calc._extract_funding_rates(funding_data)),
                 )
