@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
+from coding.core.analytics.results.market_wide_results import FuturesBasisEntry, FuturesBasisResult
 from coding.core.analytics.vrp_calculator import VRPCalculator
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,19 @@ logger = logging.getLogger(__name__)
 DERIBIT_SETTLEMENT_HOUR_UTC = 8
 DAYS_PER_YEAR = 365.0
 MINIMUM_DAYS_FOR_ANNUALIZATION = 1.0
+
+# bugfix_spec.md Item 4 (F4.3) — the real get_funding_chart_data point shape
+# is {"data": [{"timestamp":..., "index_price":..., "interest_8h":...}, ...]}.
+# The old code read "funding_rate"/"value" keys that don't exist on any
+# point, so recent_rates was always [0]*10 and the trend was always "Stable".
+FUNDING_POINT_RATE_KEY = "interest_8h"          # Deribit 8h funding rate, decimal
+FUNDING_TREND_RECENT_POINTS = 8                 # ~8h at hourly resolution
+FUNDING_TREND_BASELINE_POINTS = 24              # ~24h at hourly resolution
+FUNDING_TREND_MINIMUM_POINTS = 12
+# 1e-5 per 8h = 0.001% per 8h = 1.10% annualized. Below this the change is noise:
+# live BTC |interest_8h| median is 2.4e-5.
+FUNDING_TREND_THRESHOLD_8H = 1.0e-5
+FUNDING_PERIODS_PER_YEAR = 3 * 365              # 1095
 
 
 class MarketWideCalculator:
@@ -137,21 +151,29 @@ class MarketWideCalculator:
         self,
         futures_data: List[Dict[str, Any]],
         now_utc: Optional[datetime] = None,
-    ) -> Tuple[str, Dict]:
+    ) -> FuturesBasisResult:
         """
-        Generate futures basis report.
+        Calculate futures basis (annualized simple basis on ACT/365 to
+        08:00 UTC settlement — bugfix_spec.md Item 5).
 
-        Annualized simple (not compounded) basis on ACT/365 to 08:00 UTC
-        settlement (bugfix_spec.md Item 5). Simple annualization is the
-        crypto-market/CME convention for a quoted "annualized basis" and is
-        what a cash-and-carry desk can actually lock on a single trade;
-        empirically it differs from compound by <=0.11pt at every observed
-        tenor, so the choice is immaterial next to the ~1-2pt bug being
-        fixed here (F5.2 confirmation evidence).
+        T6 (refactor_design_spec.md, carried from A4 review): returns the
+        typed ``FuturesBasisResult`` instead of a ``(text, dict)`` tuple.
+        Rendering moved to
+        ``coding.core.analytics.reporting.market_wide_formatter.format_futures_basis_section``
+        (the dormant T3 formatter, now the live path for this section) —
+        this method no longer builds report text itself.
+
+        Simple annualization is the crypto-market/CME convention for a
+        quoted "annualized basis" and is what a cash-and-carry desk can
+        actually lock on a single trade; empirically it differs from
+        compound by <=0.11pt at every observed tenor, so the choice is
+        immaterial next to the ~1-2pt bug being fixed here (F5.2
+        confirmation evidence).
 
         Sub-daily tenors (< 1 day to settlement) suppress annualization
         entirely (``None``) rather than showing a number scaled by up to
-        ~1000x noise; the raw basis is still computed and shown.
+        ~1000x noise; the raw basis is still computable from
+        ``mark_price``/``index_price`` on the entry.
 
         Args:
             futures_data: List of dicts with instrument_name, mark_price,
@@ -161,32 +183,16 @@ class MarketWideCalculator:
                 a frozen, reproducible clock.
 
         Returns:
-            Tuple of (formatted report string, dict with "futures_basis"
-            mapping expiry -> Optional[float] annualized premium; ``None``
-            when annualization is suppressed — Decision D12: weight-zero in
-            every downstream consumer, never "neutral").
+            ``FuturesBasisResult`` — ``futures_basis`` maps expiry ->
+            ``Optional[float]`` annualized premium; ``None`` when
+            annualization is suppressed (Decision D12: weight-zero in every
+            downstream consumer, never "neutral").
         """
-        lines = []
-        sub_separator = "-" * 80
-        basis_dict: Dict[str, Optional[float]] = {}
-
-        lines.append("FUTURES BASIS (annualized simple, ACT/365, to 08:00 UTC settlement)")
-        lines.append(sub_separator)
-
-        if not futures_data:
-            lines.append("  No futures data available")
-            lines.append("")
-            return "\n".join(lines), {"futures_basis": basis_dict}
-
         if now_utc is None:
             now_utc = datetime.now(timezone.utc)
 
-        lines.append(
-            f"  {'Future':>20}  {'Price':>12}  {'Spot':>12}  {'Ann. Premium':>12}"
-        )
-        lines.append(
-            f"  {'------':>20}  {'-----':>12}  {'----':>12}  {'------------':>12}"
-        )
+        entries: List[FuturesBasisEntry] = []
+        basis_dict: Dict[str, Optional[float]] = {}
 
         for future in futures_data:
             name = future.get("instrument_name", "")
@@ -205,28 +211,26 @@ class MarketWideCalculator:
             days = self._calculate_days_to_expiry(expiry_label, now_utc)
 
             basis_pct = ((price - spot) / spot) * 100.0
-            raw_basis_note = ""
 
             if days is None or days <= 0:
                 annualized: Optional[float] = None
-                ann_display = "n/a (expired)" if days is not None else "n/a"
             elif days < MINIMUM_DAYS_FOR_ANNUALIZATION:
                 annualized = None
-                ann_display = "n/a (<1d)"
-                raw_basis_note = f"  (raw basis: {basis_pct:.4f}%)"
             else:
                 annualized = basis_pct * (DAYS_PER_YEAR / days)
-                ann_display = f"{annualized:>.1f}%"
 
+            dte = None if days is None else int(math.floor(days))
             basis_dict[expiry_label] = annualized
 
-            lines.append(
-                f"  {name:>20}  ${price:>11,.0f}  ${spot:>11,.0f}  "
-                f"{ann_display:>12}{raw_basis_note}"
-            )
+            entries.append(FuturesBasisEntry(
+                instrument_name=name,
+                dte=dte,
+                mark_price=price,
+                index_price=spot,
+                annualized_premium_pct=annualized,
+            ))
 
-        lines.append("")
-        return "\n".join(lines), {"futures_basis": basis_dict}
+        return FuturesBasisResult(entries=tuple(entries), futures_basis=basis_dict)
 
     def calculate_realized_volatility_multi_window(
         self,
@@ -393,6 +397,70 @@ class MarketWideCalculator:
         lines.append("")
         return "\n".join(lines), structured
 
+    def _extract_funding_rates(self, funding_data: Dict[str, Any]) -> List[float]:
+        """
+        Extract the 8h funding rate series from a get_funding_chart_data response.
+
+        Deribit points are dicts keyed
+        ['timestamp', 'index_price', 'interest_8h'] — interest_8h is the 8-hour
+        funding rate as a decimal (4.118e-05 == 0.004118% per 8h).
+
+        bugfix_spec.md Item 4 (F4.3): the old extraction read
+        ``funding_rate``/``value`` keys that don't exist on any point, so the
+        series was always ``[0]*10`` and the trend was always "Stable".
+        """
+        if not isinstance(funding_data, dict):
+            return []
+        points = funding_data.get("data")
+        if not isinstance(points, list):
+            return []
+
+        rates: List[float] = []
+        for point in points:
+            if not isinstance(point, dict):
+                continue
+            rate = point.get(FUNDING_POINT_RATE_KEY)
+            if rate is None:
+                continue
+            try:
+                rates.append(float(rate))
+            except (TypeError, ValueError):
+                continue
+
+        if not rates and points:
+            logger.warning(
+                "Funding chart data carried %d points but no '%s' key; "
+                "point keys were %s",
+                len(points), FUNDING_POINT_RATE_KEY,
+                list(points[0].keys()) if isinstance(points[0], dict) else type(points[0]).__name__,
+            )
+        return rates
+
+    def _classify_funding_trend(self, rates: List[float]) -> str:
+        """
+        Additive (not multiplicative) trend classification.
+
+        Funding crosses zero and sits near zero, so a ratio test is undefined
+        there. Compare the mean of the most recent window against the mean of
+        the preceding baseline window and require the difference to exceed an
+        absolute threshold expressed in 8h-rate units (bugfix_spec.md Item 4).
+        """
+        if len(rates) < FUNDING_TREND_MINIMUM_POINTS:
+            return "N/A"
+
+        recent = rates[-FUNDING_TREND_RECENT_POINTS:]
+        baseline = rates[-(FUNDING_TREND_RECENT_POINTS + FUNDING_TREND_BASELINE_POINTS):
+                          -FUNDING_TREND_RECENT_POINTS]
+        if not baseline:
+            return "N/A"
+
+        change = float(np.mean(recent)) - float(np.mean(baseline))
+        if change > FUNDING_TREND_THRESHOLD_8H:
+            return "Rising"
+        if change < -FUNDING_TREND_THRESHOLD_8H:
+            return "Falling"
+        return "Stable"
+
     def calculate_perpetual_funding_trend(
         self,
         funding_data: Dict[str, Any],
@@ -401,12 +469,19 @@ class MarketWideCalculator:
         """
         Generate perpetual funding trend report.
 
+        bugfix_spec.md Item 4 (F4.3): trend is classified from the real
+        ``interest_8h`` series (via ``_extract_funding_rates`` /
+        ``_classify_funding_trend``), and annualization uses ``funding_8h``
+        (the realised 8h rate), never ``current_funding`` (the instantaneous
+        accruing rate) — a 61x divergence was observed live between the two.
+
         Args:
             funding_data: Funding chart data from API.
             perp_ticker: Perpetual ticker data with OI and funding.
 
         Returns:
-            Tuple of (formatted report string, dict with perp_oi, perp_funding_trend, funding_8h).
+            Tuple of (formatted report string, dict with perp_oi,
+            perp_funding_trend, funding_8h, funding_annualized_pct).
         """
         lines = []
         sub_separator = "-" * 80
@@ -426,51 +501,28 @@ class MarketWideCalculator:
         if funding_8h is not None:
             structured["funding_8h"] = funding_8h
 
-        if current_funding is not None:
-            funding_pct = current_funding * 100
-
-            # Determine trend from funding chart data
-            trend = "N/A"
-            if funding_data and "data" in funding_data:
-                data_points = funding_data["data"]
-                if isinstance(data_points, list) and len(data_points) >= 2:
-                    # Data format varies, try to extract funding rates
-                    try:
-                        if isinstance(data_points[0], list):
-                            recent_rates = [p[1] for p in data_points[-10:]]
-                        elif isinstance(data_points[0], dict):
-                            recent_rates = [
-                                p.get("funding_rate", p.get("value", 0))
-                                for p in data_points[-10:]
-                            ]
-                        else:
-                            recent_rates = []
-
-                        if len(recent_rates) >= 2:
-                            avg_recent = np.mean(recent_rates[-3:])
-                            avg_older = np.mean(recent_rates[:3])
-                            if avg_recent > avg_older * 1.2:
-                                trend = "Rising"
-                            elif avg_recent < avg_older * 0.8:
-                                trend = "Falling"
-                            else:
-                                trend = "Stable"
-                    except (IndexError, TypeError):
-                        trend = "N/A"
-
+        # bugfix_spec.md Item 4 F4.3: gate on funding_8h OR current_funding —
+        # a None current_funding must not suppress the whole section
+        # (including OI and the trend) when funding_8h is available.
+        if funding_8h is not None or current_funding is not None:
+            rates = self._extract_funding_rates(funding_data)
+            trend = self._classify_funding_trend(rates)
             structured["perp_funding_trend"] = trend
-
-            lines.append(
-                f"  Perp OI: {perp_oi:,.0f} USD  |  "
-                f"Funding: {funding_pct:.4f}%  |  Trend: {trend}"
+            structured["funding_annualized_pct"] = (
+                funding_8h * FUNDING_PERIODS_PER_YEAR * 100 if funding_8h is not None else None
             )
 
+            lines.append(f"  Perp OI: {perp_oi:,.0f} USD")
             if funding_8h is not None:
-                ann_funding = current_funding * 3 * 365 * 100
                 lines.append(
-                    f"  8h Funding: {funding_8h * 100:.4f}%  |  "
-                    f"Annualized: {ann_funding:.1f}%"
+                    f"  Funding (8h): {funding_8h * 100:.4f}%  |  "
+                    f"Annualized: {funding_8h * FUNDING_PERIODS_PER_YEAR * 100:.2f}%  |  "
+                    f"Trend: {trend}"
                 )
+            else:
+                lines.append("  Funding (8h): not available")
+            if current_funding is not None:
+                lines.append(f"  Instantaneous funding: {current_funding * 100:.4f}%")
         else:
             lines.append("  Funding data not available")
 

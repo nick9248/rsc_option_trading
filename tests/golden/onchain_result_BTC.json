@@ -1541,6 +1541,7 @@
     "cone_30d_pctile": 11.258278145695364,
     "dvol": 37.53,
     "funding_8h": 2.54e-06,
+    "funding_annualized_pct": 0.27813,
     "funding_rate": 0.0,
     "futures_basis": {
       "14AUG26": 3.877942594093819,
@@ -1571,7 +1572,7 @@
       "334": 43.46
     },
     "iv_percentile_365d": 20.491803278688526,
-    "perp_funding_trend": "Stable",
+    "perp_funding_trend": "Falling",
     "perp_oi": 736492670,
     "rv_10d": 0.2863239198655574,
     "rv_20d": 0.2838154232653767,

@@ -59,6 +59,16 @@ class FuturesBasisResult:
     # consumer (see synthesis.py's basis_values list-comprehension filter).
     futures_basis: Dict[str, Optional[float]]
 
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Reproduce the legacy ``calculate_futures_basis`` structured-dict
+        shape (``{"futures_basis": {...}}``) for the remaining dict
+        consumer — ``market_wide_structured``, read by
+        ``SynthesisMapper.build_market_wide`` until T7 migrates it off the
+        dict (T6 carryover, A4 review).
+        """
+        return {"futures_basis": dict(self.futures_basis)}
+
 
 @dataclass(frozen=True)
 class RealizedVolatilityResult:

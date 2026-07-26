@@ -2821,8 +2821,9 @@ VOLATILITY CONE
 
 PERPETUAL FUNDING & OI
 --------------------------------------------------------------------------------
-  Perp OI: 736,492,670 USD  |  Funding: 0.0000%  |  Trend: Stable
-  8h Funding: 0.0003%  |  Annualized: 0.0%
+  Perp OI: 736,492,670 USD
+  Funding (8h): 0.0003%  |  Annualized: 0.28%  |  Trend: Falling
+  Instantaneous funding: 0.0000%
 
 
 BLOCK TRADES (>$100,000 notional)

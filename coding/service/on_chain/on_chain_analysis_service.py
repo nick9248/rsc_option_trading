@@ -8,7 +8,7 @@ import logging
 import re
 import time
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -21,13 +21,65 @@ from coding.core.analytics.chart_generator import (
     save_chart,
 )
 from coding.core.analytics.gex_dex_calculator import GexDexCalculator
-from coding.core.analytics.on_chain_analyzer import OnChainAnalyzer
+from coding.core.analytics.on_chain_analyzer import (
+    OnChainAnalyzer,
+    _to_expiration_analysis_result,
+    _to_market_metrics,
+    _to_trend_snapshot,
+)
 from coding.core.analytics.market_wide_calculator import MarketWideCalculator
+from coding.core.analytics.reporting.market_wide_formatter import format_futures_basis_section
+from coding.core.analytics.results.analysis_result import IvPercentileResult, OiChangesResult, OiChangeRow
+from coding.core.analytics.results.market_wide_results import (
+    BlockTrade,
+    BlockTradesResult,
+    CrossAssetCorrelationResult,
+    MarketWideResult,
+    PerpetualFundingResult,
+    RealizedVolatilityResult,
+    TermStructureEntry,
+    TermStructureResult,
+    VarianceRiskPremiumResult,
+    VolatilityConeResult,
+)
 from coding.core.analytics.volatility_surface_calculator import VolatilitySurfaceCalculator
 from coding.core.database.repository import DatabaseRepository
 from coding.service.deribit.deribit_api_service import DeribitApiService
+from coding.service.on_chain.analysis_builder import OnChainAnalysisBuilder
 
 logger = logging.getLogger(__name__)
+
+_EXPECTED_FUNDING_RESOLUTION_MS = 3_600_000  # 1 hour
+
+
+def _warn_if_funding_resolution_unexpected(funding_data: Dict[str, Any]) -> None:
+    """
+    bugfix_spec.md Item 4 (F4.3): ``get_funding_chart_data(length="1m")`` is
+    expected to return hourly points. Log a warning (do not raise — the
+    trend classifier degrades gracefully to "N/A" on too few points) if the
+    median timestamp delta is not ~3,600,000 ms, so a future API resolution
+    change is loud rather than silently corrupting the trend window sizes.
+    """
+    if not isinstance(funding_data, dict):
+        return
+    points = funding_data.get("data")
+    if not isinstance(points, list) or len(points) < 2:
+        return
+    try:
+        timestamps = sorted(p["timestamp"] for p in points if isinstance(p, dict) and "timestamp" in p)
+    except (TypeError, KeyError):
+        return
+    if len(timestamps) < 2:
+        return
+    deltas = [b - a for a, b in zip(timestamps, timestamps[1:])]
+    deltas.sort()
+    median_delta = deltas[len(deltas) // 2]
+    if median_delta != _EXPECTED_FUNDING_RESOLUTION_MS:
+        logger.warning(
+            "Funding chart data median timestamp delta is %d ms, expected %d ms "
+            "(hourly) — trend window sizing assumes hourly resolution.",
+            median_delta, _EXPECTED_FUNDING_RESOLUTION_MS,
+        )
 
 
 class OnChainAnalysisService:
@@ -58,19 +110,31 @@ class OnChainAnalysisService:
         currency: str,
         progress_callback: Optional[Callable[[str], None]] = None,
         return_analyzer: bool = False,
+        return_result: bool = False,
     ):
         """
         Fetch and analyze on-chain data for a currency.
 
         Always includes GEX/DEX and buy/sell flow analysis.
 
+        T6 (refactor_design_spec.md): every phase now dual-writes — the
+        analyzer (the live report/synthesis/persistence path, unchanged)
+        and an ``OnChainAnalysisBuilder`` (the new typed aggregate path,
+        additive and currently unconsumed by anything but
+        ``return_result=True`` callers and its own parity test).
+
         Args:
             currency: Currency symbol (BTC, ETH).
             progress_callback: Optional callback for progress updates.
-            return_analyzer: If True, return (report, analyzer) tuple instead of just report.
+            return_analyzer: If True, include the analyzer in the return value.
+            return_result: If True, include the typed ``OnChainAnalysisResult``
+                in the return value (temporary — T6).
 
         Returns:
-            Analysis report text string, or (report, analyzer) tuple if return_analyzer=True.
+            Analysis report text string; or a tuple growing with
+            ``return_analyzer``/``return_result``, in that order
+            (``(report, analyzer)``, ``(report, result)``, or
+            ``(report, analyzer, result)`` when both are set).
         """
         def progress(message: str):
             """Send progress update if callback provided."""
@@ -95,50 +159,72 @@ class OnChainAnalysisService:
         expirations = analyzer.get_expirations()
         progress(f"Found {len(expirations)} expirations")
 
+        builder = OnChainAnalysisBuilder(currency, analyzer.underlying_price, analyzer.parsed_data)
+        for expiration in expirations:
+            analysis = analyzer.analyze_expiration(expiration)
+            if analysis:
+                builder.set_expiration_analysis(expiration, _to_expiration_analysis_result(analysis))
+
         # Fetch market metrics (DVOL, funding rate)
-        self._fetch_market_metrics(analyzer, progress)
+        self._fetch_market_metrics(analyzer, progress, builder)
 
         # Always fetch Greeks for GEX/DEX
-        self._fetch_greeks_and_store_gex_dex(analyzer, progress)
+        aggregate_gex_dex_result = self._fetch_greeks_and_store_gex_dex(analyzer, progress, builder)
 
         # Always fetch buy/sell flow
-        self._calculate_buy_sell_flow(analyzer, progress)
+        self._calculate_buy_sell_flow(analyzer, progress, builder)
 
         # Calculate volatility surface metrics (uses enriched instruments)
-        self._calculate_volatility_surface(analyzer, progress)
+        self._calculate_volatility_surface(analyzer, progress, builder)
 
         # Calculate DB-dependent metrics (OI changes, IV percentile per expiry)
-        self._calculate_oi_changes_and_iv_percentile(analyzer, progress)
+        self._calculate_oi_changes_and_iv_percentile(analyzer, progress, builder)
 
         # Calculate market-wide metrics (term structure, basis, RV, VRP, etc.)
-        self._calculate_market_wide_metrics(analyzer, currency, progress)
+        self._calculate_market_wide_metrics(
+            analyzer, currency, progress, builder, aggregate_gex_dex_result
+        )
 
         # Fetch previous DB snapshots for trend comparison
-        self._fetch_trend_data(analyzer, progress)
+        self._fetch_trend_data(analyzer, progress, builder)
 
         # Generate report (includes GEX/DEX and flow)
         progress("Generating analysis report...")
         report = analyzer.generate_report()
 
+        result = builder.build()
+
         # Save reports per expiration
         self._save_reports_per_expiration(report, currency, analyzer)
 
         progress("Analysis complete")
+        if return_analyzer and return_result:
+            return report, analyzer, result
         if return_analyzer:
             return report, analyzer
+        if return_result:
+            return report, result
         return report
 
     def _fetch_greeks_and_store_gex_dex(
         self,
         analyzer: OnChainAnalyzer,
-        progress_callback: Callable[[str], None]
-    ) -> None:
+        progress_callback: Callable[[str], None],
+        builder: Optional[OnChainAnalysisBuilder] = None,
+    ) -> Optional[Any]:
         """
         Fetch Greeks for all instruments and store GEX/DEX data in analyzer.
 
         Args:
             analyzer: OnChainAnalyzer with parsed data.
             progress_callback: Callback for progress updates.
+            builder: T6 dual-write target (typed aggregate result).
+
+        Returns:
+            The typed aggregate ``GexDexResult`` (or ``None`` if no
+            expiration produced enriched instruments) — the caller threads
+            it into ``_calculate_market_wide_metrics``, which needs it for
+            ``MarketWideResult.aggregate_gex_dex``.
         """
         gex_dex_typed_by_expiry: Dict[str, Any] = {}
 
@@ -175,6 +261,8 @@ class OnChainAnalysisService:
             # Store enriched instruments for downstream calculators
             if instruments_with_greeks:
                 analyzer.enriched_instruments[expiration] = instruments_with_greeks
+                if builder is not None:
+                    builder.set_enriched_instruments(expiration, instruments_with_greeks)
 
                 # Calculate GEX/DEX and store in analyzer
                 progress_callback(f"Calculating GEX/DEX for {expiration}...")
@@ -188,14 +276,18 @@ class OnChainAnalysisService:
                 # (SynthesisMapper still reads it as a dict until T7), so the
                 # legacy shape is produced here via .to_dict(); the typed
                 # object itself is kept only long enough to feed
-                # aggregate_across_expirations (also typed, T4) below.
+                # aggregate_across_expirations (also typed, T4) below and
+                # (T6) the builder.
                 gex_result = calculator.calculate()
                 gex_dex_typed_by_expiry[expiration] = gex_result
                 analyzer.set_gex_dex_structured(expiration, gex_result.to_dict())
                 gex_dex_report = calculator.generate_report_section(result=gex_result)
                 analyzer.set_gex_dex_data(expiration, gex_dex_report)
+                if builder is not None:
+                    builder.set_gex_dex(expiration, gex_result)
 
         # Aggregate GEX/DEX across all expirations after per-expiry loop
+        aggregate_result = None
         if gex_dex_typed_by_expiry:
             progress_callback("Calculating market-wide aggregate GEX/DEX...")
             aggregate_result = GexDexCalculator.aggregate_across_expirations(
@@ -207,10 +299,13 @@ class OnChainAnalysisService:
             )
             analyzer.set_market_wide_section("aggregate_gex_dex", aggregate_report)
 
+        return aggregate_result
+
     def _calculate_buy_sell_flow(
         self,
         analyzer: OnChainAnalyzer,
-        progress_callback: Callable[[str], None]
+        progress_callback: Callable[[str], None],
+        builder: Optional[OnChainAnalysisBuilder] = None,
     ) -> None:
         """
         Calculate buy/sell flow for all expirations and store in analyzer.
@@ -220,6 +315,7 @@ class OnChainAnalysisService:
         Args:
             analyzer: OnChainAnalyzer with parsed data.
             progress_callback: Callback for progress updates.
+            builder: T6 dual-write target (typed aggregate result).
         """
         if self.repository is None:
             logger.warning("Repository not available - skipping buy/sell flow analysis")
@@ -276,6 +372,7 @@ class OnChainAnalysisService:
                     logger.warning(f"Failed to save flow metrics for {expiration}: {save_error}")
 
                 # Save flow charts to output/charts/flow_analysis/<expiration>/
+                chart_paths: Dict[str, str] = {}
                 try:
                     subfolder = f"flow_analysis/{expiration}"
 
@@ -290,6 +387,7 @@ class OnChainAnalysisService:
                         subfolder=subfolder, save_png=False,
                     )
                     inject_hover_js(Path(dist_path))
+                    chart_paths["distribution"] = dist_path
 
                     fig_net = generate_net_flow_chart(
                         flow_data=flow_result_dict,
@@ -302,6 +400,7 @@ class OnChainAnalysisService:
                         subfolder=subfolder, save_png=False,
                     )
                     inject_hover_js(Path(net_path))
+                    chart_paths["net_flow"] = net_path
 
                     fig_trend = generate_flow_trend_chart(
                         repository=self.repository,
@@ -314,6 +413,7 @@ class OnChainAnalysisService:
                         subfolder=subfolder, save_png=False,
                     )
                     inject_hover_js(Path(trend_path))
+                    chart_paths["trend"] = trend_path
 
                     logger.info(f"Saved flow charts to output/charts/{subfolder}/")
                 except Exception as chart_error:
@@ -324,6 +424,9 @@ class OnChainAnalysisService:
                 analyzer.set_buy_sell_flow_structured(expiration, flow_result_dict)
                 flow_report = flow_analyzer.generate_report_section(result=flow_result)
                 analyzer.set_buy_sell_flow_data(expiration, flow_report)
+                if builder is not None:
+                    builder.set_flow(expiration, flow_result)
+                    builder.set_flow_charts(expiration, chart_paths)
 
             except Exception as e:
                 logger.warning(f"Failed to calculate buy/sell flow for {expiration}: {e}")
@@ -417,7 +520,8 @@ class OnChainAnalysisService:
     def _calculate_volatility_surface(
         self,
         analyzer: OnChainAnalyzer,
-        progress_callback: Callable[[str], None]
+        progress_callback: Callable[[str], None],
+        builder: Optional[OnChainAnalysisBuilder] = None,
     ) -> None:
         """
         Calculate volatility surface metrics for all expirations.
@@ -428,6 +532,7 @@ class OnChainAnalysisService:
         Args:
             analyzer: OnChainAnalyzer with enriched_instruments populated.
             progress_callback: Callback for progress updates.
+            builder: T6 dual-write target (typed aggregate result).
         """
         if not analyzer.enriched_instruments:
             logger.warning("No enriched instruments available - skipping volatility surface")
@@ -447,6 +552,8 @@ class OnChainAnalysisService:
 
             # Store all trades on analyzer for block trade detection in Phase 5
             analyzer.set_recent_trades(trades)
+            if builder is not None:
+                builder.set_recent_trades(trades)
 
             # Group trades by expiration
             for trade in trades:
@@ -461,6 +568,8 @@ class OnChainAnalysisService:
         except Exception as e:
             logger.warning(f"Failed to fetch recent trades for VWAP IV: {e}")
             analyzer.set_recent_trades([])
+            if builder is not None:
+                builder.set_recent_trades([])
 
         # Calculate per-expiration volatility surface
         for expiration, instruments in analyzer.enriched_instruments.items():
@@ -491,6 +600,8 @@ class OnChainAnalysisService:
                 analyzer.set_volatility_surface_structured(expiration, result_dict)
                 if result_dict["atm_iv"] is not None:
                     analyzer.set_atm_iv(expiration, result_dict["atm_iv"])
+                if builder is not None:
+                    builder.set_vol_surface(expiration, result)
 
             except Exception as e:
                 logger.warning(f"Failed to calculate volatility surface for {expiration}: {e}")
@@ -558,7 +669,9 @@ class OnChainAnalysisService:
         self,
         analyzer: OnChainAnalyzer,
         currency: str,
-        progress_callback: Callable[[str], None]
+        progress_callback: Callable[[str], None],
+        builder: Optional[OnChainAnalysisBuilder] = None,
+        aggregate_gex_dex_result: Optional[Any] = None,
     ) -> None:
         """
         Calculate all market-wide metrics and store in analyzer.
@@ -567,6 +680,11 @@ class OnChainAnalysisService:
             analyzer: OnChainAnalyzer to store results in.
             currency: Currency symbol.
             progress_callback: Callback for progress updates.
+            builder: T6 dual-write target (typed aggregate result).
+            aggregate_gex_dex_result: Typed aggregate GexDexResult from
+                ``_fetch_greeks_and_store_gex_dex`` — computed in a different
+                phase but a field of the same ``MarketWideResult`` this
+                method assembles.
         """
         dvol = analyzer.market_metrics.get("dvol")
         calc = MarketWideCalculator(
@@ -578,6 +696,17 @@ class OnChainAnalysisService:
         # Accumulate structured data across all market-wide sections
         market_wide_structured: Dict[str, Any] = {}
 
+        # T6 typed sub-results, dual-written alongside market_wide_structured
+        # (the dict SynthesisMapper still reads until T7).
+        term_structure_result: Optional[TermStructureResult] = None
+        basis_result = None
+        realized_volatility_result: Optional[RealizedVolatilityResult] = None
+        vrp_result: Optional[VarianceRiskPremiumResult] = None
+        volatility_cone_result: Optional[VolatilityConeResult] = None
+        funding_result: Optional[PerpetualFundingResult] = None
+        block_trades_result: Optional[BlockTradesResult] = None
+        correlation_result: Optional[CrossAssetCorrelationResult] = None
+
         # 1. IV Term Structure (uses ATM IVs collected during vol surface phase)
         atm_ivs = analyzer._atm_ivs
         if atm_ivs:
@@ -585,6 +714,25 @@ class OnChainAnalysisService:
             term_structure_text, term_struct = calc.calculate_iv_term_structure(atm_ivs)
             analyzer.set_market_wide_section("iv_term_structure", term_structure_text)
             market_wide_structured.update(term_struct)
+
+            # calculate_iv_term_structure is not migrated to a typed result in
+            # this task (out of A5 scope — only calculate_futures_basis was
+            # called out); reconstruct entries here to feed MarketWideResult.
+            # Not itself the source of truth for the report text above.
+            _now_for_term_structure = datetime.now(timezone.utc)
+            _ts_entries = []
+            for exp, iv in sorted(atm_ivs.items()):
+                dte = MarketWideCalculator._calculate_dte(exp, _now_for_term_structure)
+                if dte is not None:
+                    _ts_entries.append(TermStructureEntry(expiration=exp, dte=dte, atm_iv=iv))
+            _ts_entries.sort(key=lambda e: e.dte)
+            term_structure_result = TermStructureResult(
+                entries=tuple(_ts_entries),
+                shape=term_struct.get("shape", "FLAT"),
+                spread=term_struct.get("spread", 0.0),
+                spread_signed=term_struct.get("spread_signed", term_struct.get("spread", 0.0)),
+                iv_by_dte=dict(term_struct.get("iv_by_dte", {})),
+            )
 
         # 2. Futures Basis
         try:
@@ -610,9 +758,15 @@ class OnChainAnalysisService:
                     logger.warning(f"Failed to fetch future ticker {name}: {e}")
 
             if futures_data:
-                basis_text, basis_data = calc.calculate_futures_basis(futures_data)
+                # T6 (carried from A4 review): calculate_futures_basis returns
+                # the typed FuturesBasisResult; market_wide_formatter's
+                # (previously dormant) format_futures_basis_section is now the
+                # live rendering path. .to_dict() keeps market_wide_structured
+                # populated for SynthesisMapper.build_market_wide until T7.
+                basis_result = calc.calculate_futures_basis(futures_data)
+                basis_text = format_futures_basis_section(basis_result)
                 analyzer.set_market_wide_section("futures_basis", basis_text)
-                market_wide_structured.update(basis_data)
+                market_wide_structured.update(basis_result.to_dict())
 
         except Exception as e:
             logger.warning(f"Failed to calculate futures basis: {e}")
@@ -655,6 +809,8 @@ class OnChainAnalysisService:
                     "rv_30d": rv_values.get(30, 0.0),
                 }
                 market_wide_structured.update(rv_structured)
+                if rv_values:
+                    realized_volatility_result = RealizedVolatilityResult(rv_by_window=dict(rv_values))
 
                 # VRP
                 rv_30d = rv_values.get(30, 0)
@@ -662,11 +818,23 @@ class OnChainAnalysisService:
                     vrp_text, vrp_data = calc.calculate_vrp(rv_30d)
                     analyzer.set_market_wide_section("vrp", vrp_text)
                     market_wide_structured.update(vrp_data)
+                    if dvol is not None:
+                        vrp_result = VarianceRiskPremiumResult(
+                            vrp=vrp_data["vrp"], signal=vrp_data["signal"],
+                            dvol=dvol, rv_30d=rv_30d,
+                        )
 
                 # Vol Cone
                 cone_text, cone_data = calc.calculate_volatility_cone(price_history)
                 analyzer.set_market_wide_section("volatility_cone", cone_text)
                 market_wide_structured.update(cone_data)
+                volatility_cone_result = VolatilityConeResult(
+                    percentile_by_window={
+                        10: cone_data.get("cone_10d_pctile", 0.0),
+                        20: cone_data.get("cone_20d_pctile", 0.0),
+                        30: cone_data.get("cone_30d_pctile", 0.0),
+                    }
+                )
 
         except Exception as e:
             logger.warning(f"Failed to calculate RV/VRP/Vol Cone: {e}")
@@ -678,6 +846,10 @@ class OnChainAnalysisService:
                 instrument_name=f"{currency}-PERPETUAL",
                 length="1m",
             )
+            # bugfix_spec.md Item 4 (F4.3): "1m" is expected to return hourly
+            # points; assert that resolution rather than assuming it, so a
+            # future API change is a loud warning, not a silently-wrong trend.
+            _warn_if_funding_resolution_unexpected(funding_data)
             perp_ticker = self.api.get_ticker(f"{currency}-PERPETUAL")
 
             funding_text, funding_data_struct = calc.calculate_perpetual_funding_trend(
@@ -685,6 +857,14 @@ class OnChainAnalysisService:
             )
             analyzer.set_market_wide_section("perpetual_funding", funding_text)
             market_wide_structured.update(funding_data_struct)
+            if funding_data_struct.get("funding_8h") is not None or "funding_rate" in funding_data_struct:
+                funding_result = PerpetualFundingResult(
+                    perp_open_interest=funding_data_struct.get("perp_oi", 0.0),
+                    funding_rate=funding_data_struct.get("funding_rate"),
+                    funding_8h=funding_data_struct.get("funding_8h"),
+                    funding_trend=funding_data_struct.get("perp_funding_trend", "Stable"),
+                    history_points=len(calc._extract_funding_rates(funding_data)),
+                )
 
         except Exception as e:
             logger.warning(f"Failed to calculate perpetual funding trend: {e}")
@@ -696,6 +876,24 @@ class OnChainAnalysisService:
             block_text, block_data = calc.detect_block_trades(recent_trades)
             analyzer.set_market_wide_section("block_trades", block_text)
             market_wide_structured.update(block_data)
+            block_trades_tuple = tuple(
+                BlockTrade(
+                    timestamp=bt.get("timestamp"),
+                    instrument_name=bt.get("instrument", ""),
+                    amount=bt.get("amount", 0.0),
+                    direction=bt.get("direction", ""),
+                    notional=bt.get("notional", 0.0),
+                    implied_volatility=bt.get("iv"),
+                )
+                for bt in block_data.get("block_trades", [])
+            )
+            # notional_threshold matches detect_block_trades' default; total_detected
+            # approximates the (already top-10-truncated) displayed count — the
+            # calculator does not expose the pre-truncation total externally.
+            block_trades_result = BlockTradesResult(
+                trades=block_trades_tuple, notional_threshold=100_000.0,
+                total_detected=len(block_trades_tuple),
+            )
 
         # 8. Cross-Asset Correlation
         try:
@@ -757,6 +955,16 @@ class OnChainAnalysisService:
             )
             analyzer.set_market_wide_section("cross_asset_correlation", corr_text)
             market_wide_structured.update(corr_data)
+            # calculate_cross_asset_correlation's dict defaults both
+            # correlations to 0.0 on insufficient data, indistinguishable
+            # from a genuine zero correlation — a pre-existing ambiguity in
+            # the (unmigrated) calculator, not introduced here.
+            correlation_result = CrossAssetCorrelationResult(
+                other_currency=other_currency,
+                price_correlation=corr_data.get("btc_eth_price_corr"),
+                dvol_correlation=corr_data.get("btc_eth_dvol_corr"),
+                sample_size=min(len(own_prices_30d), len(other_prices)),
+            )
 
         except Exception as e:
             logger.warning(f"Failed to calculate cross-asset correlation: {e}")
@@ -778,10 +986,31 @@ class OnChainAnalysisService:
             )
         analyzer.set_market_wide_structured(market_wide_structured)
 
+        if builder is not None:
+            builder.set_market_wide(
+                MarketWideResult(
+                    spot_price=analyzer.underlying_price,
+                    currency=currency,
+                    dvol=analyzer.market_metrics.get("dvol"),
+                    iv_percentile_365d=analyzer.market_metrics.get("iv_percentile"),
+                    aggregate_gex_dex=aggregate_gex_dex_result,
+                    term_structure=term_structure_result,
+                    futures_basis=basis_result,
+                    realized_volatility=realized_volatility_result,
+                    variance_risk_premium=vrp_result,
+                    volatility_cone=volatility_cone_result,
+                    perpetual_funding=funding_result,
+                    block_trades=block_trades_result,
+                    cross_asset_correlation=correlation_result,
+                    failed_sections=(),
+                )
+            )
+
     def _calculate_oi_changes_and_iv_percentile(
         self,
         analyzer: OnChainAnalyzer,
-        progress_callback: Callable[[str], None]
+        progress_callback: Callable[[str], None],
+        builder: Optional[OnChainAnalysisBuilder] = None,
     ) -> None:
         """
         Calculate OI day-over-day changes and IV percentile per expiry.
@@ -792,6 +1021,7 @@ class OnChainAnalysisService:
         Args:
             analyzer: OnChainAnalyzer with enriched_instruments populated.
             progress_callback: Callback for progress updates.
+            builder: T6 dual-write target (typed aggregate result).
         """
         if self.repository is None:
             logger.warning("Repository not available - skipping OI changes and IV percentile")
@@ -817,11 +1047,13 @@ class OnChainAnalysisService:
                 )
 
                 # Calculate OI changes
-                oi_changes_report = self._format_oi_changes(
+                oi_changes_report, oi_changes_result = self._format_oi_changes(
                     instruments, prev_oi, expiration
                 )
                 if oi_changes_report:
                     analyzer.set_oi_changes_data(expiration, oi_changes_report)
+                if builder is not None:
+                    builder.set_oi_changes(expiration, oi_changes_result)
 
                 # Calculate IV percentile per expiry
                 # Find ATM strike (closest to spot)
@@ -869,6 +1101,14 @@ class OnChainAnalysisService:
                             expiration,
                             existing + iv_section if existing else iv_section
                         )
+                        if builder is not None:
+                            builder.set_iv_percentile(
+                                expiration,
+                                IvPercentileResult(
+                                    atm_strike=atm_strike, current_iv=current_iv,
+                                    percentile=percentile, history_days=len(historical_ivs),
+                                ),
+                            )
 
             except Exception as e:
                 logger.warning(f"Failed to calculate OI changes for {expiration}: {e}")
@@ -878,7 +1118,7 @@ class OnChainAnalysisService:
         instruments: List[Dict[str, Any]],
         prev_oi: Dict,
         expiration: str
-    ) -> Optional[str]:
+    ) -> Tuple[Optional[str], OiChangesResult]:
         """
         Format OI day-over-day changes report.
 
@@ -888,10 +1128,11 @@ class OnChainAnalysisService:
             expiration: Expiration date string.
 
         Returns:
-            Formatted report string, or None if no previous data.
+            (formatted report string or None if no previous data, the typed
+            OiChangesResult — T6 dual-write, one source of truth for both).
         """
         if not prev_oi:
-            return None
+            return None, OiChangesResult(rows=(), total_significant=0, has_previous_snapshot=False)
 
         lines = []
         sub_separator = "-" * 80
@@ -924,7 +1165,8 @@ class OnChainAnalysisService:
         if not significant_changes:
             lines.append("  No significant OI changes (>20%) detected")
             lines.append("")
-            return "\n".join(lines)
+            result = OiChangesResult(rows=(), total_significant=0, has_previous_snapshot=True)
+            return "\n".join(lines), result
 
         # Sort by absolute change percentage
         significant_changes.sort(key=lambda x: abs(x["change_pct"]), reverse=True)
@@ -947,12 +1189,25 @@ class OnChainAnalysisService:
             )
 
         lines.append("")
-        return "\n".join(lines)
+
+        rows = tuple(
+            OiChangeRow(
+                strike=c["strike"], option_type=c["type"],
+                previous_oi=c["prev_oi"], current_oi=c["current_oi"],
+                change=c["change"], change_pct=c["change_pct"],
+            )
+            for c in significant_changes[:15]
+        )
+        result = OiChangesResult(
+            rows=rows, total_significant=len(significant_changes), has_previous_snapshot=True,
+        )
+        return "\n".join(lines), result
 
     def _fetch_market_metrics(
         self,
         analyzer: OnChainAnalyzer,
-        progress_callback: Callable[[str], None]
+        progress_callback: Callable[[str], None],
+        builder: Optional[OnChainAnalysisBuilder] = None,
     ) -> None:
         """
         Fetch market-wide metrics (DVOL, funding rate) and store in analyzer.
@@ -960,6 +1215,7 @@ class OnChainAnalysisService:
         Args:
             analyzer: OnChainAnalyzer to store metrics in.
             progress_callback: Callback for progress updates.
+            builder: T6 dual-write target (typed aggregate result).
         """
         dvol = None
         iv_percentile = None
@@ -1038,11 +1294,14 @@ class OnChainAnalysisService:
             current_funding=current_funding,
             funding_8h=funding_8h
         )
+        if builder is not None:
+            builder.set_market_metrics(_to_market_metrics(analyzer.market_metrics))
 
     def _fetch_trend_data(
         self,
         analyzer: OnChainAnalyzer,
         progress_callback: Callable[[str], None],
+        builder: Optional[OnChainAnalysisBuilder] = None,
     ) -> None:
         """
         Fetch previous DB snapshots per expiration for trend comparison.
@@ -1055,6 +1314,7 @@ class OnChainAnalysisService:
         Args:
             analyzer: OnChainAnalyzer with parsed data.
             progress_callback: Callback for progress updates.
+            builder: T6 dual-write target (typed aggregate result).
         """
         if self.repository is None:
             return
@@ -1070,6 +1330,8 @@ class OnChainAnalysisService:
 
                 if prev is None:
                     analyzer.set_trend_data(expiration, None)
+                    if builder is not None:
+                        builder.set_trend(expiration, None)
                     continue
 
                 trend: Dict[str, Any] = {}
@@ -1086,11 +1348,16 @@ class OnChainAnalysisService:
                 vr = prev["put_call_ratio_volume"]
                 trend["volume_ratio"] = float(vr) if vr is not None else None
 
-                analyzer.set_trend_data(expiration, trend if trend else None)
+                trend_or_none = trend if trend else None
+                analyzer.set_trend_data(expiration, trend_or_none)
+                if builder is not None:
+                    builder.set_trend(expiration, _to_trend_snapshot(trend_or_none))
 
             except Exception as e:
                 logger.warning(f"Failed to fetch trend data for {expiration}: {e}")
                 analyzer.set_trend_data(expiration, None)
+                if builder is not None:
+                    builder.set_trend(expiration, None)
 
     def _save_reports_per_expiration(
         self,

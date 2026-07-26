@@ -149,12 +149,15 @@ def pipeline_result(fixture_dir, meta, module_monkeypatch, module_tmp_path):
     repo = FakeDatabaseRepository(fixture_dir)
     service = OnChainAnalysisService(api_service=api, repository=repo)
 
-    report, analyzer = service.fetch_and_analyze(meta["currency"], return_analyzer=True)
+    report, analyzer, result = service.fetch_and_analyze(
+        meta["currency"], return_analyzer=True, return_result=True
+    )
     synthesis = MorningNoteService(service).generate_from_analyzer(analyzer)
 
     return {
         "report": report,
         "analyzer": analyzer,
+        "result": result,
         "synthesis": synthesis,
         "output_root": module_tmp_path,
         "currency": meta["currency"],
@@ -278,3 +281,107 @@ def test_per_expiration_files_match_golden(pipeline_result):
 
     assert checked == len(exp_sections), "Not every expiration section was verified"
     assert checked > 0, "No expiration sections found — fixture may be empty"
+
+
+def test_builder_result_matches_analyzer_dicts(pipeline_result):
+    """
+    refactor_design_spec.md section T6 proof: run the pipeline against the
+    fixture (return_result=True dual-write) and assert every builder field
+    equals its analyzer-dict counterpart. This is the T6 safety net — the
+    builder must describe the SAME run the analyzer/report/golden-master
+    already describe, not a parallel computation that happens to agree on
+    a synthetic test case.
+    """
+    analyzer = pipeline_result["analyzer"]
+    result = pipeline_result["result"]
+
+    assert result.currency == analyzer.currency
+    assert result.underlying_price == analyzer.underlying_price
+    assert result.parsed_instruments == {
+        exp: tuple(instr) for exp, instr in analyzer.parsed_data.items()
+    }
+    assert result.recent_trades == tuple(analyzer._recent_trades)
+
+    # Market metrics
+    mm = result.market_metrics
+    assert mm.dvol == analyzer.market_metrics.get("dvol")
+    assert mm.iv_percentile == analyzer.market_metrics.get("iv_percentile")
+    assert mm.iv_rank == analyzer.market_metrics.get("iv_rank")
+    assert mm.current_funding == analyzer.market_metrics.get("current_funding")
+    assert mm.funding_8h == analyzer.market_metrics.get("funding_8h")
+
+    checked_expirations = 0
+    for expiration in result.expiration_names():
+        bundle = result.bundle(expiration)
+        assert bundle is not None
+        checked_expirations += 1
+
+        # ExpirationAnalysisResult must match analyze_expiration()'s own dict
+        # (analyze_expiration recomputes deterministically from parsed_data,
+        # so calling it again here reproduces the exact values the builder
+        # captured at the top of fetch_and_analyze).
+        assert bundle.analysis.to_dict() == analyzer.analyze_expiration(expiration)
+
+        expected_gex_dex = analyzer.gex_dex_structured.get(expiration)
+        if expected_gex_dex is not None:
+            assert bundle.gex_dex is not None
+            assert bundle.gex_dex.to_dict() == expected_gex_dex
+        else:
+            assert bundle.gex_dex is None
+
+        expected_flow = analyzer.buy_sell_flow_structured.get(expiration)
+        if expected_flow is not None:
+            assert bundle.flow is not None
+            assert bundle.flow.to_dict() == expected_flow
+        else:
+            assert bundle.flow is None
+
+        expected_vol_surface = analyzer.volatility_surface_structured.get(expiration)
+        if expected_vol_surface is not None:
+            assert bundle.vol_surface is not None
+            assert bundle.vol_surface.to_dict() == expected_vol_surface
+            if expected_vol_surface["atm_iv"] is not None:
+                assert result.atm_iv_by_expiration[expiration] == expected_vol_surface["atm_iv"]
+        else:
+            assert bundle.vol_surface is None
+
+        expected_trend = analyzer.trend_data.get(expiration)
+        if expected_trend:
+            assert bundle.trend is not None
+            assert bundle.trend.max_pain_strike == expected_trend.get("max_pain_strike")
+            assert bundle.trend.call_oi == expected_trend.get("call_oi")
+            assert bundle.trend.put_oi == expected_trend.get("put_oi")
+            assert bundle.trend.pc_ratio == expected_trend.get("pc_ratio")
+            assert bundle.trend.total_volume == expected_trend.get("total_volume")
+            assert bundle.trend.volume_ratio == expected_trend.get("volume_ratio")
+        else:
+            assert bundle.trend is None
+
+    assert checked_expirations > 0, "No expirations found — fixture may be empty"
+    assert result.expiration_names() == tuple(sorted(analyzer.get_expirations())), (
+        "Builder must only include expirations analyze_expiration() actually produced a result for"
+    )
+
+    # Market-wide: check the fields directly analogous to the legacy dict
+    # (market_wide_structured carries extra/renamed keys not on
+    # MarketWideResult.to_flat_dict() by design — e.g. funding_annualized_pct
+    # is new in the typed model's structured dict but not part of the
+    # to_flat_dict() shape synthesis reads today).
+    mw = result.market_wide
+    legacy_mw = analyzer.market_wide_structured
+    assert mw.spot_price == legacy_mw.get("spot_price")
+    assert mw.dvol == analyzer.market_metrics.get("dvol")
+    if mw.term_structure is not None:
+        assert mw.term_structure.shape == legacy_mw.get("shape")
+        assert mw.term_structure.spread == legacy_mw.get("spread")
+        assert mw.term_structure.iv_by_dte == legacy_mw.get("iv_by_dte")
+    if mw.futures_basis is not None:
+        assert mw.futures_basis.futures_basis == legacy_mw.get("futures_basis")
+    if mw.realized_volatility is not None:
+        assert mw.realized_volatility.rv_10d == legacy_mw.get("rv_10d")
+        assert mw.realized_volatility.rv_20d == legacy_mw.get("rv_20d")
+        assert mw.realized_volatility.rv_30d == legacy_mw.get("rv_30d")
+    if mw.perpetual_funding is not None:
+        assert mw.perpetual_funding.perp_open_interest == legacy_mw.get("perp_oi")
+        assert mw.perpetual_funding.funding_trend == legacy_mw.get("perp_funding_trend")
+        assert mw.perpetual_funding.funding_8h == legacy_mw.get("funding_8h")

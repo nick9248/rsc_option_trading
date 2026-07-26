@@ -69,8 +69,12 @@ def format_futures_basis_section(result: Optional[FuturesBasisResult]) -> str:
 
     Mirrors MarketWideCalculator.calculate_futures_basis exactly (must stay
     in lockstep — bugfix_spec.md Item 5): the convention header, and "n/a"
-    instead of a formatted percentage when annualized_premium_pct is None
-    (a suppressed sub-daily tenor or an already-expired one — Decision D12).
+    instead of a formatted percentage when annualized_premium_pct is None.
+    A suppressed tenor distinguishes "expired" (dte < 0) from "<1d"
+    (dte == 0), matching the legacy text-generation branch this function
+    replaces (T6, carried from A4 review) — the raw (unannualized) basis is
+    shown alongside the "<1d" case, reconstructed from mark_price/index_price
+    since it is not itself a stored field (Decision D12).
     """
     lines = ["FUTURES BASIS (annualized simple, ACT/365, to 08:00 UTC settlement)", _SUB_SEPARATOR]
 
@@ -83,13 +87,21 @@ def format_futures_basis_section(result: Optional[FuturesBasisResult]) -> str:
     lines.append(f"  {'------':>20}  {'-----':>12}  {'----':>12}  {'------------':>12}")
 
     for entry in result.entries:
+        raw_basis_note = ""
         if entry.annualized_premium_pct is None:
-            ann_display = "n/a"
+            if entry.dte is None:
+                ann_display = "n/a"
+            elif entry.dte < 0:
+                ann_display = "n/a (expired)"
+            else:
+                ann_display = "n/a (<1d)"
+                basis_pct = ((entry.mark_price - entry.index_price) / entry.index_price) * 100.0
+                raw_basis_note = f"  (raw basis: {basis_pct:.4f}%)"
         else:
-            ann_display = f"{entry.annualized_premium_pct:.1f}%"
+            ann_display = f"{entry.annualized_premium_pct:>.1f}%"
         lines.append(
             f"  {entry.instrument_name:>20}  ${entry.mark_price:>11,.0f}  "
-            f"${entry.index_price:>11,.0f}  {ann_display:>12}"
+            f"${entry.index_price:>11,.0f}  {ann_display:>12}{raw_basis_note}"
         )
 
     lines.append("")
