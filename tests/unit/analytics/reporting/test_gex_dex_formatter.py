@@ -21,10 +21,12 @@ def _make_result(**overrides) -> GexDexResult:
             GexDexStrikeRow(
                 strike=95000.0, call_gamma=1.0, put_gamma=0.5, call_delta=0.6, put_delta=-0.4,
                 call_oi=100.0, put_oi=50.0, net_gex=1_000_000.0, net_dex=0.2,
+                net_gamma=0.5, cumulative_gex=500_000.0, cumulative_dex=-0.2,
             ),
             GexDexStrikeRow(
                 strike=90000.0, call_gamma=0.2, put_gamma=1.5, call_delta=0.3, put_delta=-0.7,
                 call_oi=20.0, put_oi=150.0, net_gex=-500_000.0, net_dex=-0.4,
+                net_gamma=-1.3, cumulative_gex=-500_000.0, cumulative_dex=-0.4,
             ),
         ),
         cumulative_gex={90000.0: -500_000.0, 95000.0: 500_000.0},

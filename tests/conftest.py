@@ -49,6 +49,14 @@ _FROZEN_CLOCK_MODULES = (
     "coding.core.analytics.market_wide_calculator",
     "coding.service.on_chain.on_chain_analysis_service",
     "coding.core.analytics.synthesis",
+    # vrp_calculator.calculate_realized_volatility defaults reference_time to
+    # datetime.now() when the caller doesn't pass one
+    # (MarketWideCalculator.calculate_realized_volatility_multi_window doesn't) —
+    # an undocumented nondeterminism source discovered during Task A4: the
+    # golden master silently drifted (RV window boundaries shift) as real wall
+    # clock time moved away from the fixture's recorded_at_epoch. Same remedy
+    # this list already documents for the other 5 modules.
+    "coding.core.analytics.vrp_calculator",
 )
 
 

@@ -56,6 +56,7 @@ from coding.core.logging.logging_setup import init_logging
 from coding.core.database.repository import DatabaseRepository
 from coding.core.analytics.gex_dex_calculator import GexDexCalculator
 from coding.core.analytics.black_scholes_calculator import BlackScholesCalculator
+from coding.core.analytics.results.gex_dex_results import GexDexResult
 
 init_logging(level="INFO")
 logger = logging.getLogger(__name__)
@@ -159,32 +160,31 @@ def _apply_bs_fallback(
 
 
 def _extract_update_values(
-    gex_dex_data: Dict[str, Any]
+    gex_dex_result: GexDexResult
 ) -> Tuple[Optional[float], Optional[float], Optional[float], Optional[float], Optional[float]]:
     """
     Flatten GexDexCalculator.calculate() output into the five scalar columns
     onchain_analysis_snapshots stores. Mirrors the exact flattening convention
     already used in DatabaseRepository.save_onchain_snapshot (repository.py:1713-1716):
-    call_resistance/put_support are {"strike", "net_gex"} dicts (or None) — only the
-    strike scalar is persisted.
+    call_resistance/put_support are GexDexLevel(strike, net_gex) objects (or None) —
+    only the strike scalar is persisted.
 
     Args:
-        gex_dex_data: Return value of GexDexCalculator.calculate().
+        gex_dex_result: Return value of GexDexCalculator.calculate() (typed
+            GexDexResult per refactor_design_spec.md T4).
 
     Returns:
         Tuple of (total_net_gex, total_net_dex, call_resistance_strike,
         put_support_strike, hvl_level).
     """
-    key_levels = gex_dex_data.get("key_levels", {}) or {}
-    call_resistance = key_levels.get("call_resistance") or {}
-    put_support = key_levels.get("put_support") or {}
+    key_levels = gex_dex_result.key_levels
 
     return (
-        gex_dex_data.get("total_net_gex"),
-        gex_dex_data.get("total_net_dex"),
-        call_resistance.get("strike"),
-        put_support.get("strike"),
-        key_levels.get("hvl"),
+        gex_dex_result.total_net_gex,
+        gex_dex_result.total_net_dex,
+        key_levels.call_resistance.strike if key_levels.call_resistance else None,
+        key_levels.put_support.strike if key_levels.put_support else None,
+        key_levels.hvl,
     )
 
 

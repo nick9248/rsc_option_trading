@@ -140,6 +140,8 @@ class OnChainAnalysisService:
             analyzer: OnChainAnalyzer with parsed data.
             progress_callback: Callback for progress updates.
         """
+        gex_dex_typed_by_expiry: Dict[str, Any] = {}
+
         for expiration in analyzer.get_expirations():
             instruments = analyzer.parsed_data.get(expiration, [])
             if not instruments:
@@ -181,18 +183,25 @@ class OnChainAnalysisService:
                     analyzer.underlying_price,
                     currency=analyzer.currency
                 )
-                gex_structured = calculator.calculate()
-                analyzer.set_gex_dex_structured(expiration, gex_structured)
-                gex_dex_report = calculator.generate_report_section(result=gex_structured)
+                # T4 (refactor_design_spec.md): calculate() returns the typed
+                # GexDexResult. analyzer.gex_dex_structured stays dict-shaped
+                # (SynthesisMapper still reads it as a dict until T7), so the
+                # legacy shape is produced here via .to_dict(); the typed
+                # object itself is kept only long enough to feed
+                # aggregate_across_expirations (also typed, T4) below.
+                gex_result = calculator.calculate()
+                gex_dex_typed_by_expiry[expiration] = gex_result
+                analyzer.set_gex_dex_structured(expiration, gex_result.to_dict())
+                gex_dex_report = calculator.generate_report_section(result=gex_result)
                 analyzer.set_gex_dex_data(expiration, gex_dex_report)
 
         # Aggregate GEX/DEX across all expirations after per-expiry loop
-        if analyzer.gex_dex_structured:
+        if gex_dex_typed_by_expiry:
             progress_callback("Calculating market-wide aggregate GEX/DEX...")
             aggregate_result = GexDexCalculator.aggregate_across_expirations(
-                analyzer.gex_dex_structured, analyzer.underlying_price, analyzer.currency
+                gex_dex_typed_by_expiry, analyzer.underlying_price, analyzer.currency
             )
-            analyzer.set_gex_dex_structured("AGGREGATE", aggregate_result)
+            analyzer.set_gex_dex_structured("AGGREGATE", aggregate_result.to_dict())
             aggregate_report = GexDexCalculator.generate_aggregate_report_section(
                 aggregate_result, analyzer.underlying_price, analyzer.currency
             )

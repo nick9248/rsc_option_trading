@@ -253,6 +253,7 @@ def _make_gex_dex_result(expiration_count=None) -> GexDexResult:
             GexDexStrikeRow(
                 strike=95000.0, call_gamma=1.5, put_gamma=0.5, call_delta=0.6, put_delta=-0.4,
                 call_oi=100.0, put_oi=50.0, net_gex=1_000_000.0, net_dex=0.2,
+                net_gamma=1.0, cumulative_gex=1_000_000.0, cumulative_dex=0.2,
             ),
         ),
         cumulative_gex={95000.0: 1_000_000.0},
@@ -279,6 +280,7 @@ def test_gex_dex_result_to_dict_matches_legacy_shape():
         95000.0: {
             "call_gamma": 1.5, "put_gamma": 0.5, "call_delta": 0.6, "put_delta": -0.4,
             "call_oi": 100.0, "put_oi": 50.0, "net_gex": 1_000_000.0, "net_dex": 0.2,
+            "net_gamma": 1.0, "cumulative_gex": 1_000_000.0, "cumulative_dex": 0.2,
         }
     }
     assert d["cumulative_gex"] == {95000.0: 1_000_000.0}

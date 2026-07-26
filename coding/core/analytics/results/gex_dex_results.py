@@ -12,7 +12,15 @@ from typing import Any, Dict, Optional, Tuple
 
 @dataclass(frozen=True)
 class GexDexStrikeRow:
-    """Per-strike gamma/delta exposure and open interest."""
+    """
+    Per-strike gamma/delta exposure and open interest.
+
+    ``net_gamma``, ``cumulative_gex``, ``cumulative_dex`` duplicate data also
+    held at the ``GexDexResult`` level (``cumulative_gex``/``cumulative_dex``
+    dicts) — this mirrors the legacy ``GexDexCalculator.strike_data`` shape
+    exactly (it stores the running cumulative sums back onto each strike's
+    own entry as it iterates), which the golden-master fixture depends on.
+    """
 
     strike: float
     call_gamma: float
@@ -23,6 +31,9 @@ class GexDexStrikeRow:
     put_oi: float
     net_gex: float
     net_dex: float
+    net_gamma: float
+    cumulative_gex: float
+    cumulative_dex: float
 
 
 @dataclass(frozen=True)
@@ -74,6 +85,9 @@ class GexDexResult:
                 "put_oi": row.put_oi,
                 "net_gex": row.net_gex,
                 "net_dex": row.net_dex,
+                "net_gamma": row.net_gamma,
+                "cumulative_gex": row.cumulative_gex,
+                "cumulative_dex": row.cumulative_dex,
             }
             for row in self.strike_rows
         }

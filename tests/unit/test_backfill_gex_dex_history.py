@@ -17,6 +17,7 @@ import pytest
 from scripts.backfill_gex_dex_history import _apply_bs_fallback, _extract_update_values
 from coding.core.analytics.black_scholes_calculator import BlackScholesCalculator
 from coding.core.analytics.gex_dex_calculator import GexDexCalculator
+from coding.core.analytics.results.gex_dex_results import GexDexKeyLevels, GexDexLevel, GexDexResult
 
 
 @pytest.fixture
@@ -175,51 +176,48 @@ class TestApplyBsFallback:
         calc = GexDexCalculator(instruments=enriched, spot_price=70000.0, currency="BTC")
         result = calc.calculate()
 
-        assert "total_net_gex" in result
-        assert "total_net_dex" in result
-        assert isinstance(result["total_net_gex"], float)
+        assert isinstance(result, GexDexResult)
+        assert isinstance(result.total_net_gex, float)
+        assert isinstance(result.total_net_dex, float)
+
+
+def _make_result(total_net_gex, total_net_dex, call_resistance, put_support, hvl) -> GexDexResult:
+    """Build a minimal GexDexResult for _extract_update_values tests (T4: typed, not dict)."""
+    return GexDexResult(
+        strike_rows=(),
+        cumulative_gex={},
+        cumulative_dex={},
+        key_levels=GexDexKeyLevels(
+            call_resistance=call_resistance, put_support=put_support, hvl=hvl, gamma_flip=hvl,
+        ),
+        spot_price=70000.0,
+        total_net_gex=total_net_gex,
+        total_net_dex=total_net_dex,
+        currency="BTC",
+    )
 
 
 class TestExtractUpdateValues:
     """Tests for flattening GexDexCalculator output into DB column values."""
 
     def test_extracts_all_five_columns(self):
-        gex_dex_data = {
-            "total_net_gex": 1234567.89,
-            "total_net_dex": 12.3456,
-            "key_levels": {
-                "call_resistance": {"strike": 75000.0, "net_gex": 500000.0},
-                "put_support": {"strike": 65000.0, "net_gex": -300000.0},
-                "hvl": 70000.0,
-                "gamma_flip": 70000.0,
-            },
-        }
+        gex_dex_result = _make_result(
+            1234567.89, 12.3456,
+            call_resistance=GexDexLevel(strike=75000.0, net_gex=500000.0),
+            put_support=GexDexLevel(strike=65000.0, net_gex=-300000.0),
+            hvl=70000.0,
+        )
 
-        values = _extract_update_values(gex_dex_data)
+        values = _extract_update_values(gex_dex_result)
 
         assert values == (1234567.89, 12.3456, 75000.0, 65000.0, 70000.0)
 
     def test_handles_none_call_resistance_and_put_support(self):
         """Empty/degenerate strike books should not raise — strikes come back None."""
-        gex_dex_data = {
-            "total_net_gex": 0.0,
-            "total_net_dex": 0.0,
-            "key_levels": {
-                "call_resistance": None,
-                "put_support": None,
-                "hvl": None,
-                "gamma_flip": None,
-            },
-        }
+        gex_dex_result = _make_result(
+            0.0, 0.0, call_resistance=None, put_support=None, hvl=None,
+        )
 
-        values = _extract_update_values(gex_dex_data)
-
-        assert values == (0.0, 0.0, None, None, None)
-
-    def test_handles_missing_key_levels_key(self):
-        """Defensive: key_levels missing entirely should not raise."""
-        gex_dex_data = {"total_net_gex": 0.0, "total_net_dex": 0.0}
-
-        values = _extract_update_values(gex_dex_data)
+        values = _extract_update_values(gex_dex_result)
 
         assert values == (0.0, 0.0, None, None, None)

@@ -8,6 +8,13 @@ and identifies key levels (Call Resistance, Put Support, Zero Gamma Level).
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
+from coding.core.analytics.results.gex_dex_results import (
+    GexDexKeyLevels,
+    GexDexLevel,
+    GexDexResult,
+    GexDexStrikeRow,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -51,7 +58,7 @@ class GexDexCalculator:
         self.currency = currency
         self.strike_data: Dict[float, Dict[str, Any]] = {}
 
-    def calculate(self) -> Dict[str, Any]:
+    def calculate(self) -> GexDexResult:
         """
         Calculate all GEX/DEX metrics.
 
@@ -61,7 +68,8 @@ class GexDexCalculator:
         touched by a later recalculation.
 
         Returns:
-            Dict with per-strike data, cumulative profiles, and key levels.
+            GexDexResult with per-strike rows, cumulative profiles, and key
+            levels. Call ``.to_dict()`` for the legacy dict shape.
         """
         self.strike_data = {}
         self._aggregate_by_strike()
@@ -69,15 +77,57 @@ class GexDexCalculator:
         cumulative = self._calculate_cumulative_profiles()
         key_levels = self._detect_key_levels()
 
-        return {
-            "strike_data": self.strike_data,
-            "cumulative_gex": cumulative["cumulative_gex"],
-            "cumulative_dex": cumulative["cumulative_dex"],
-            "key_levels": key_levels,
-            "spot_price": self.spot_price,
-            "total_net_gex": sum(d["net_gex"] for d in self.strike_data.values()),
-            "total_net_dex": sum(d["net_dex"] for d in self.strike_data.values()),
-        }
+        return self._build_result(
+            self.strike_data, cumulative, key_levels, self.spot_price, self.currency
+        )
+
+    @staticmethod
+    def _build_result(
+        strike_data: Dict[float, Dict[str, Any]],
+        cumulative: Dict[str, Dict[float, float]],
+        key_levels: Dict[str, Any],
+        spot_price: float,
+        currency: str,
+        expiration_count: Optional[int] = None,
+    ) -> GexDexResult:
+        """Assemble a typed ``GexDexResult`` from the internal dict-based working state."""
+        strike_rows = tuple(
+            GexDexStrikeRow(
+                strike=strike,
+                call_gamma=data["call_gamma"],
+                put_gamma=data["put_gamma"],
+                call_delta=data["call_delta"],
+                put_delta=data["put_delta"],
+                call_oi=data["call_oi"],
+                put_oi=data["put_oi"],
+                net_gex=data["net_gex"],
+                net_dex=data["net_dex"],
+                net_gamma=data["net_gamma"],
+                cumulative_gex=data["cumulative_gex"],
+                cumulative_dex=data["cumulative_dex"],
+            )
+            for strike, data in sorted(strike_data.items())
+        )
+
+        cr = key_levels.get("call_resistance")
+        ps = key_levels.get("put_support")
+
+        return GexDexResult(
+            strike_rows=strike_rows,
+            cumulative_gex=dict(cumulative["cumulative_gex"]),
+            cumulative_dex=dict(cumulative["cumulative_dex"]),
+            key_levels=GexDexKeyLevels(
+                call_resistance=GexDexLevel(strike=cr["strike"], net_gex=cr["net_gex"]) if cr else None,
+                put_support=GexDexLevel(strike=ps["strike"], net_gex=ps["net_gex"]) if ps else None,
+                hvl=key_levels.get("hvl"),
+                gamma_flip=key_levels.get("gamma_flip"),
+            ),
+            spot_price=spot_price,
+            total_net_gex=sum(d["net_gex"] for d in strike_data.values()),
+            total_net_dex=sum(d["net_dex"] for d in strike_data.values()),
+            currency=currency,
+            expiration_count=expiration_count,
+        )
 
     def _aggregate_by_strike(self) -> None:
         """Aggregate instrument data by strike price."""
@@ -283,10 +333,10 @@ class GexDexCalculator:
 
     @staticmethod
     def aggregate_across_expirations(
-        gex_dex_by_expiry: Dict[str, Dict],
+        gex_dex_by_expiry: Dict[str, GexDexResult],
         spot_price: float,
         currency: str = "BTC",
-    ) -> Dict[str, Any]:
+    ) -> GexDexResult:
         """
         Aggregate GEX/DEX data across all expirations using equal-weight summation.
 
@@ -295,13 +345,14 @@ class GexDexCalculator:
         would double-count that effect.
 
         Args:
-            gex_dex_by_expiry: Dict mapping expiry → calculate() result dict.
-                               Keys named "AGGREGATE" are skipped.
+            gex_dex_by_expiry: Dict mapping expiry -> calculate() result
+                               (typed ``GexDexResult``). Keys named "AGGREGATE"
+                               are skipped.
             spot_price: Current underlying spot price (used for GEX formula).
             currency: Underlying currency symbol for unit labels.
 
         Returns:
-            Dict with same structure as calculate() plus expiration_count.
+            GexDexResult with same structure as calculate() plus expiration_count set.
         """
         merged_strike_data: Dict[float, Dict[str, Any]] = {}
         expiration_count = 0
@@ -311,9 +362,9 @@ class GexDexCalculator:
                 continue
             expiration_count += 1
 
-            for strike, data in result.get("strike_data", {}).items():
-                if strike not in merged_strike_data:
-                    merged_strike_data[strike] = {
+            for row in result.strike_rows:
+                if row.strike not in merged_strike_data:
+                    merged_strike_data[row.strike] = {
                         "call_gamma": 0.0,
                         "put_gamma": 0.0,
                         "call_delta": 0.0,
@@ -323,29 +374,19 @@ class GexDexCalculator:
                         "net_gex": 0.0,
                         "net_dex": 0.0,
                     }
-                merged_strike_data[strike]["call_gamma"] += data.get("call_gamma", 0.0)
-                merged_strike_data[strike]["put_gamma"] += data.get("put_gamma", 0.0)
-                merged_strike_data[strike]["call_delta"] += data.get("call_delta", 0.0)
-                merged_strike_data[strike]["put_delta"] += data.get("put_delta", 0.0)
-                merged_strike_data[strike]["call_oi"] += data.get("call_oi", 0.0)
-                merged_strike_data[strike]["put_oi"] += data.get("put_oi", 0.0)
+                merged_strike_data[row.strike]["call_gamma"] += row.call_gamma
+                merged_strike_data[row.strike]["put_gamma"] += row.put_gamma
+                merged_strike_data[row.strike]["call_delta"] += row.call_delta
+                merged_strike_data[row.strike]["put_delta"] += row.put_delta
+                merged_strike_data[row.strike]["call_oi"] += row.call_oi
+                merged_strike_data[row.strike]["put_oi"] += row.put_oi
 
         if not merged_strike_data:
-            return {
-                "strike_data": {},
-                "cumulative_gex": {},
-                "cumulative_dex": {},
-                "key_levels": {
-                    "call_resistance": None,
-                    "put_support": None,
-                    "hvl": None,
-                    "gamma_flip": None,
-                },
-                "spot_price": spot_price,
-                "total_net_gex": 0.0,
-                "total_net_dex": 0.0,
-                "expiration_count": expiration_count,
-            }
+            return GexDexCalculator._build_result(
+                {}, {"cumulative_gex": {}, "cumulative_dex": {}},
+                {"call_resistance": None, "put_support": None, "hvl": None, "gamma_flip": None},
+                spot_price, currency, expiration_count=expiration_count,
+            )
 
         # Inject merged strike data into a temporary calculator instance and re-run formulas
         agg_calc = GexDexCalculator([], spot_price=spot_price, currency=currency)
@@ -355,20 +396,14 @@ class GexDexCalculator:
         cumulative = agg_calc._calculate_cumulative_profiles()
         key_levels = agg_calc._detect_key_levels()
 
-        return {
-            "strike_data": agg_calc.strike_data,
-            "cumulative_gex": cumulative["cumulative_gex"],
-            "cumulative_dex": cumulative["cumulative_dex"],
-            "key_levels": key_levels,
-            "spot_price": spot_price,
-            "total_net_gex": sum(d["net_gex"] for d in agg_calc.strike_data.values()),
-            "total_net_dex": sum(d["net_dex"] for d in agg_calc.strike_data.values()),
-            "expiration_count": expiration_count,
-        }
+        return GexDexCalculator._build_result(
+            agg_calc.strike_data, cumulative, key_levels, spot_price, currency,
+            expiration_count=expiration_count,
+        )
 
     @staticmethod
     def generate_aggregate_report_section(
-        result: Dict[str, Any],
+        result: GexDexResult,
         spot_price: float,
         currency: str = "BTC",
     ) -> str:
@@ -376,7 +411,7 @@ class GexDexCalculator:
         Generate formatted text report for aggregate (market-wide) GEX/DEX.
 
         No per-strike table — with hundreds of strikes merged across expirations
-        it would be unreadable. Per-strike data remains in the structured dict
+        it would be unreadable. Per-strike data remains in the structured result
         for programmatic access.
 
         Args:
@@ -389,7 +424,8 @@ class GexDexCalculator:
         """
         lines = []
         separator = "-" * 80
-        expiration_count = result.get("expiration_count", 0)
+        expiration_count = result.expiration_count or 0
+        key_levels = result.key_levels
 
         lines.append(
             f"MARKET-WIDE GEX/DEX LEVELS (All {expiration_count} Expirations Aggregated)"
@@ -398,40 +434,39 @@ class GexDexCalculator:
         lines.append(f"Spot Price: ${spot_price:,.2f}")
         lines.append("")
 
-        key_levels = result["key_levels"]
         lines.append("KEY LEVELS:")
 
-        if key_levels["call_resistance"]:
-            cr = key_levels["call_resistance"]
+        if key_levels.call_resistance:
+            cr = key_levels.call_resistance
             lines.append(
-                f"  Call Resistance: ${cr['strike']:,.0f} "
-                f"(Net GEX: {cr['net_gex']:+,.2f} USD)"
+                f"  Call Resistance: ${cr.strike:,.0f} "
+                f"(Net GEX: {cr.net_gex:+,.2f} USD)"
             )
         else:
             lines.append("  Call Resistance: None found")
 
-        if key_levels["put_support"]:
-            ps = key_levels["put_support"]
+        if key_levels.put_support:
+            ps = key_levels.put_support
             lines.append(
-                f"  Put Support: ${ps['strike']:,.0f} "
-                f"(Net GEX: {ps['net_gex']:+,.2f} USD)"
+                f"  Put Support: ${ps.strike:,.0f} "
+                f"(Net GEX: {ps.net_gex:+,.2f} USD)"
             )
         else:
             lines.append("  Put Support: None found")
 
-        if key_levels["hvl"]:
-            lines.append(f"  Zero Gamma Level: ${key_levels['hvl']:,.0f}")
+        if key_levels.hvl:
+            lines.append(f"  Zero Gamma Level: ${key_levels.hvl:,.0f}")
         else:
             lines.append("  Zero Gamma Level: Not detected")
 
         lines.append("")
 
         lines.append("TOTALS:")
-        lines.append(f"  Total Net GEX: {result['total_net_gex']:+,.2f} USD")
-        lines.append(f"  Total Net DEX: {result['total_net_dex']:+,.4f} {currency}")
+        lines.append(f"  Total Net GEX: {result.total_net_gex:+,.2f} USD")
+        lines.append(f"  Total Net DEX: {result.total_net_dex:+,.4f} {currency}")
         lines.append("")
 
-        total_gex = result["total_net_gex"]
+        total_gex = result.total_net_gex
         if total_gex > 0:
             gex_interp = "Positive (Dealers long gamma - stabilizing, buy dips/sell rallies)"
         elif total_gex < 0:
@@ -440,7 +475,7 @@ class GexDexCalculator:
             gex_interp = "Neutral"
         lines.append(f"  GEX Environment: {gex_interp}")
 
-        total_dex = result["total_net_dex"]
+        total_dex = result.total_net_dex
         if total_dex > 0:
             dex_interp = "Positive (Net long delta - bullish pressure)"
         elif total_dex < 0:
@@ -452,7 +487,7 @@ class GexDexCalculator:
 
         return "\n".join(lines)
 
-    def generate_report_section(self, result: Optional[Dict[str, Any]] = None) -> str:
+    def generate_report_section(self, result: Optional[GexDexResult] = None) -> str:
         """
         Generate formatted text report section for GEX/DEX.
 
@@ -474,29 +509,29 @@ class GexDexCalculator:
         lines.append("")
 
         # Key Levels
-        key_levels = result["key_levels"]
+        key_levels = result.key_levels
         lines.append("KEY LEVELS:")
 
-        if key_levels["call_resistance"]:
-            cr = key_levels["call_resistance"]
+        if key_levels.call_resistance:
+            cr = key_levels.call_resistance
             lines.append(
-                f"  Call Resistance: ${cr['strike']:,.0f} "
-                f"(Net GEX: {cr['net_gex']:+,.2f} USD)"
+                f"  Call Resistance: ${cr.strike:,.0f} "
+                f"(Net GEX: {cr.net_gex:+,.2f} USD)"
             )
         else:
             lines.append("  Call Resistance: None found")
 
-        if key_levels["put_support"]:
-            ps = key_levels["put_support"]
+        if key_levels.put_support:
+            ps = key_levels.put_support
             lines.append(
-                f"  Put Support: ${ps['strike']:,.0f} "
-                f"(Net GEX: {ps['net_gex']:+,.2f} USD)"
+                f"  Put Support: ${ps.strike:,.0f} "
+                f"(Net GEX: {ps.net_gex:+,.2f} USD)"
             )
         else:
             lines.append("  Put Support: None found")
 
-        if key_levels["hvl"]:
-            lines.append(f"  Zero Gamma Level: ${key_levels['hvl']:,.0f}")
+        if key_levels.hvl:
+            lines.append(f"  Zero Gamma Level: ${key_levels.hvl:,.0f}")
         else:
             lines.append("  Zero Gamma Level: Not detected")
 
@@ -504,12 +539,12 @@ class GexDexCalculator:
 
         # Totals
         lines.append("TOTALS:")
-        lines.append(f"  Total Net GEX: {result['total_net_gex']:+,.2f} USD")
-        lines.append(f"  Total Net DEX: {result['total_net_dex']:+,.4f} {self.currency}")
+        lines.append(f"  Total Net GEX: {result.total_net_gex:+,.2f} USD")
+        lines.append(f"  Total Net DEX: {result.total_net_dex:+,.4f} {self.currency}")
         lines.append("")
 
         # Interpretation
-        total_gex = result["total_net_gex"]
+        total_gex = result.total_net_gex
         if total_gex > 0:
             gex_interp = "Positive (Dealers long gamma - stabilizing, buy dips/sell rallies)"
         elif total_gex < 0:
@@ -518,7 +553,7 @@ class GexDexCalculator:
             gex_interp = "Neutral"
         lines.append(f"  GEX Environment: {gex_interp}")
 
-        total_dex = result["total_net_dex"]
+        total_dex = result.total_net_dex
         if total_dex > 0:
             dex_interp = "Positive (Net long delta - bullish pressure)"
         elif total_dex < 0:
@@ -540,23 +575,20 @@ class GexDexCalculator:
             f"{'-------':>13}  {'-------':>12}  -----"
         )
 
-        sorted_strikes = sorted(result["strike_data"].keys())
-        for strike in sorted_strikes:
-            data = result["strike_data"][strike]
-
+        for row in result.strike_rows:
             notes = []
-            if key_levels["call_resistance"] and strike == key_levels["call_resistance"]["strike"]:
+            if key_levels.call_resistance and row.strike == key_levels.call_resistance.strike:
                 notes.append("Call Resistance")
-            if key_levels["put_support"] and strike == key_levels["put_support"]["strike"]:
+            if key_levels.put_support and row.strike == key_levels.put_support.strike:
                 notes.append("Put Support")
-            if key_levels["hvl"] and strike == key_levels["hvl"]:
+            if key_levels.hvl and row.strike == key_levels.hvl:
                 notes.append("Zero Gamma Level")
 
             notes_str = " | ".join(notes) if notes else ""
 
             lines.append(
-                f"{strike:>10,.0f}  {data['net_gex']:>+12,.2f}  {data['net_dex']:>+12,.4f}  "
-                f"{data['cumulative_gex']:>+12,.2f}  {data['cumulative_dex']:>+12,.4f}  {notes_str}"
+                f"{row.strike:>10,.0f}  {row.net_gex:>+12,.2f}  {row.net_dex:>+12,.4f}  "
+                f"{row.cumulative_gex:>+12,.2f}  {row.cumulative_dex:>+12,.4f}  {notes_str}"
             )
 
         lines.append("")
