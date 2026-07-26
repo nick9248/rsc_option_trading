@@ -149,7 +149,17 @@ def format_vrp_section(result: Optional[VarianceRiskPremiumResult]) -> str:
 
 
 def format_volatility_cone_section(result: Optional[VolatilityConeResult]) -> str:
-    """Render the VOLATILITY CONE section."""
+    """
+    Render the VOLATILITY CONE section.
+
+    T10 (refactor_design_spec.md): the legacy table has 6 columns (Window /
+    Current / 25th / Median / 75th / Pctile) -- rendered here when
+    ``result.stats_by_window`` is populated (the one production call site
+    always populates it). Falls back to the 2-column
+    (Window/Pctile)-only table when it is not (e.g. a caller/test that only
+    ever needed the percentile), matching this function's own prior
+    behavior for that case.
+    """
     lines = ["VOLATILITY CONE", _SUB_SEPARATOR]
 
     if result is None or not result.percentile_by_window:
@@ -157,12 +167,27 @@ def format_volatility_cone_section(result: Optional[VolatilityConeResult]) -> st
         lines.append("")
         return "\n".join(lines)
 
-    lines.append(f"  {'Window':>8}  {'Pctile':>8}")
-    lines.append(f"  {'------':>8}  {'------':>8}")
-
-    for window in sorted(result.percentile_by_window.keys()):
-        percentile = result.percentile_by_window[window]
-        lines.append(f"  {window:>6}d  {percentile:>6.0f}th")
+    if result.stats_by_window:
+        lines.append(
+            f"  {'Window':>8}  {'Current':>8}  {'25th':>8}  "
+            f"{'Median':>8}  {'75th':>8}  {'Pctile':>8}"
+        )
+        lines.append(
+            f"  {'------':>8}  {'-------':>8}  {'----':>8}  "
+            f"{'------':>8}  {'----':>8}  {'------':>8}"
+        )
+        for window in sorted(result.stats_by_window.keys()):
+            stats = result.stats_by_window[window]
+            lines.append(
+                f"  {window:>6}d  {stats.current_rv:>7.1f}%  {stats.p25:>7.1f}%  "
+                f"{stats.p50:>7.1f}%  {stats.p75:>7.1f}%  {stats.percentile:>6.0f}th"
+            )
+    else:
+        lines.append(f"  {'Window':>8}  {'Pctile':>8}")
+        lines.append(f"  {'------':>8}  {'------':>8}")
+        for window in sorted(result.percentile_by_window.keys()):
+            percentile = result.percentile_by_window[window]
+            lines.append(f"  {window:>6}d  {percentile:>6.0f}th")
 
     lines.append("")
     return "\n".join(lines)

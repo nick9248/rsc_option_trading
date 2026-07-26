@@ -397,6 +397,15 @@ class MarketWideCalculator:
             percentile = (below / len(rolling_rvs)) * 100
 
             structured[f"cone_{window}d_pctile"] = percentile
+            # T10 (refactor_design_spec.md): the other four columns of this
+            # window's table row, so on_chain_analysis_service.py can build
+            # a VolatilityConeWindowStats and the typed render path
+            # (render_market_wide_from_result) can reproduce the full table
+            # -- previously only the percentile was exposed here.
+            structured[f"cone_{window}d_current_rv"] = current_rv
+            structured[f"cone_{window}d_p25"] = p25
+            structured[f"cone_{window}d_p50"] = p50
+            structured[f"cone_{window}d_p75"] = p75
 
             lines.append(
                 f"  {window:>6}d  {current_rv:>7.1f}%  {p25:>7.1f}%  "

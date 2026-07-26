@@ -29,6 +29,7 @@ from coding.core.analytics.results.market_wide_results import (
     TermStructureResult,
     VarianceRiskPremiumResult,
     VolatilityConeResult,
+    VolatilityConeWindowStats,
 )
 
 
@@ -181,6 +182,26 @@ def test_volatility_cone_rendered():
     text = format_volatility_cone_section(result)
     assert "10d" in text and "25th" in text
     assert "30d" in text and "75th" in text
+
+
+def test_volatility_cone_rendered_with_full_stats_shows_six_column_table():
+    """
+    T10 (refactor_design_spec.md): found live wiring render_market_wide_from_result
+    into the main report path -- the legacy text table has 6 columns
+    (Window/Current/25th/Median/75th/Pctile), not 2. When stats_by_window
+    is populated (the one production call site always populates it), the
+    formatter must reproduce the full legacy table byte-for-byte.
+    """
+    result = VolatilityConeResult(
+        percentile_by_window={10: 40.0},
+        stats_by_window={
+            10: VolatilityConeWindowStats(current_rv=30.8, p25=26.4, p50=35.3, p75=44.7, percentile=40.0),
+        },
+    )
+    text = format_volatility_cone_section(result)
+    expected_row = "      10d     30.8%     26.4%     35.3%     44.7%      40th"
+    assert expected_row in text
+    assert "Current" in text and "Median" in text
 
 
 # ---------------------------------------------------------------------------

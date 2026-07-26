@@ -53,6 +53,7 @@ from coding.core.analytics.results.market_wide_results import (
     TermStructureResult,
     VarianceRiskPremiumResult,
     VolatilityConeResult,
+    VolatilityConeWindowStats,
 )
 from coding.core.analytics.results.vol_surface_results import (
     IvByStrikeRow,
@@ -99,6 +100,7 @@ __all__ = [
     "RealizedVolatilityResult",
     "VarianceRiskPremiumResult",
     "VolatilityConeResult",
+    "VolatilityConeWindowStats",
     "PerpetualFundingResult",
     "BlockTrade",
     "BlockTradesResult",

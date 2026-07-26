@@ -50,6 +50,7 @@ from coding.core.analytics.results.market_wide_results import (
     TermStructureResult,
     VarianceRiskPremiumResult,
     VolatilityConeResult,
+    VolatilityConeWindowStats,
 )
 from coding.core.analytics.volatility_surface_calculator import VolatilitySurfaceCalculator
 from coding.core.database.repository import DatabaseRepository
@@ -197,11 +198,16 @@ class OnChainAnalysisService:
         # Fetch previous DB snapshots for trend comparison
         self._fetch_trend_data(analyzer, progress, builder)
 
-        # Generate report (includes GEX/DEX and flow)
-        progress("Generating analysis report...")
-        report = analyzer.generate_report()
-
         result = builder.build()
+
+        # Generate report (includes GEX/DEX and flow) — rendered directly
+        # from the typed result (T10). analyzer.generate_report() (a pure
+        # delegator to OnChainReportFormatter.render_full as of T3) is
+        # deleted; render_full_from_result is the sole full-report render
+        # path now, and the first live call site for
+        # render_market_wide_from_result (dead code before this task).
+        progress("Generating analysis report...")
+        report = OnChainReportFormatter().render_full_from_result(result)
 
         # Save reports per expiration — rendered from the typed result (T8),
         # not the report text (no string scanning).
@@ -906,12 +912,31 @@ class OnChainAnalysisService:
                 # typed result is None exactly when the legacy text says
                 # "Insufficient".
                 if len(price_history) >= MINIMUM_PRICE_HISTORY_DAYS_FOR_VOL_CONE:
+                    # T10: also carry the full per-window row (current RV,
+                    # 25th/median/75th, percentile) the legacy 6-column
+                    # table shows -- percentile_by_window alone can only
+                    # reproduce a 2-column table (see
+                    # format_volatility_cone_section), which is what a live
+                    # characterization run against the recorded fixture
+                    # caught once render_market_wide_from_result went live.
+                    stats_by_window = {
+                        window: VolatilityConeWindowStats(
+                            current_rv=cone_data[f"cone_{window}d_current_rv"],
+                            p25=cone_data[f"cone_{window}d_p25"],
+                            p50=cone_data[f"cone_{window}d_p50"],
+                            p75=cone_data[f"cone_{window}d_p75"],
+                            percentile=cone_data.get(f"cone_{window}d_pctile", 0.0),
+                        )
+                        for window in (10, 20, 30)
+                        if f"cone_{window}d_current_rv" in cone_data
+                    }
                     volatility_cone_result = VolatilityConeResult(
                         percentile_by_window={
                             10: cone_data.get("cone_10d_pctile", 0.0),
                             20: cone_data.get("cone_20d_pctile", 0.0),
                             30: cone_data.get("cone_30d_pctile", 0.0),
-                        }
+                        },
+                        stats_by_window=stats_by_window,
                     )
 
         except Exception as e:

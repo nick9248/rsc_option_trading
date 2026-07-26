@@ -6,7 +6,7 @@ shapes historically produced by ``MarketWideCalculator``'s ``calculate_*``
 methods and assembled into ``OnChainAnalyzer.market_wide_structured``.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Tuple
 
 from coding.core.analytics.results.gex_dex_results import GexDexResult
@@ -100,10 +100,33 @@ class VarianceRiskPremiumResult:
 
 
 @dataclass(frozen=True)
+class VolatilityConeWindowStats:
+    """
+    One window's full row in the legacy VOLATILITY CONE table
+    (refactor_design_spec.md T10 -- added when wiring
+    ``render_market_wide_from_result`` live surfaced that
+    ``VolatilityConeResult`` carried only the percentile, not the
+    current/25th/median/75th realized-vol figures the legacy text table
+    shows in the same row).
+    """
+
+    current_rv: float
+    p25: float
+    p50: float
+    p75: float
+    percentile: float
+
+
+@dataclass(frozen=True)
 class VolatilityConeResult:
     """Percentile of current realized volatility vs its historical range, per window."""
 
     percentile_by_window: Dict[int, float]
+    # Optional / additive: populated by the one production call site
+    # (on_chain_analysis_service.py) so the formatter can render the full
+    # 6-column legacy table; callers that only ever needed the percentile
+    # (SynthesisMapper, existing tests) are unaffected by its absence.
+    stats_by_window: Dict[int, VolatilityConeWindowStats] = field(default_factory=dict)
 
     @property
     def cone_10d_pctile(self) -> float:

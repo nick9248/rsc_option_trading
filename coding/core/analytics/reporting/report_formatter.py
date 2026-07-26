@@ -407,3 +407,29 @@ class OnChainReportFormatter:
             blocks.append(market_wide_text)
 
         return "\n".join(blocks)
+
+    def render_full_from_result(self, result: OnChainAnalysisResult) -> str:
+        """
+        Render the complete report directly from the typed
+        ``OnChainAnalysisResult`` (refactor_design_spec.md section T10).
+
+        The result-based counterpart to ``render_full`` -- used by
+        ``OnChainAnalysisService.fetch_and_analyze`` once
+        ``OnChainAnalyzer.generate_report()`` (a pure delegator to
+        ``render_full`` as of T3) is deleted. Composes
+        ``render_header_from_result`` + ``render_expiration_from_result``
+        per expiration (both already proven byte-identical to the legacy
+        per-argument renderers by T8's per-expiration characterization
+        test) + ``render_market_wide_from_result`` (dead code before this
+        task -- going live here for the first time), joined exactly as
+        ``render_full`` joins its pieces.
+        """
+        blocks = [self.render_header_from_result(result)]
+        for expiration in result.expiration_names():
+            blocks.append(self.render_expiration_from_result(result, expiration))
+
+        market_wide_text = self.render_market_wide_from_result(result)
+        if market_wide_text:
+            blocks.append(market_wide_text)
+
+        return "\n".join(blocks)

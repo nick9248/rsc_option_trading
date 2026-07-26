@@ -343,3 +343,71 @@ def test_render_market_wide_from_result_includes_present_sections_only():
     assert "PERPETUAL FUNDING & OI" in text
     assert "FUTURES BASIS" not in text
     assert "IV TERM STRUCTURE" not in text
+
+
+# ---------------------------------------------------------------------------
+# T10: render_full_from_result -- flips render_market_wide_from_result live
+# (composes header + expirations + market-wide, all from the typed result).
+# ---------------------------------------------------------------------------
+
+def test_render_full_from_result_matches_manual_composition():
+    formatter = OnChainReportFormatter()
+    funding = PerpetualFundingResult(
+        perp_open_interest=1_000_000.0, funding_rate=0.0001, funding_8h=0.0002,
+        funding_trend="Stable", history_points=10,
+    )
+    mw = MarketWideResult(
+        spot_price=95000.0, currency="BTC", dvol=None, iv_percentile_365d=None,
+        aggregate_gex_dex=None, term_structure=None, futures_basis=None,
+        realized_volatility=None, variance_risk_premium=None, volatility_cone=None,
+        perpetual_funding=funding, block_trades=None, cross_asset_correlation=None,
+        failed_sections=(),
+    )
+    metrics = MarketMetricsResult(dvol=75.0, iv_percentile=90.0, iv_rank=80.0, current_funding=0.0001, funding_8h=0.0001)
+    result = _make_result(market_metrics=metrics, market_wide=mw)
+
+    full_text = formatter.render_full_from_result(result)
+
+    expected_blocks = [formatter.render_header_from_result(result)]
+    for expiration in result.expiration_names():
+        expected_blocks.append(formatter.render_expiration_from_result(result, expiration))
+    expected_blocks.append(formatter.render_market_wide_from_result(result))
+    expected = "\n".join(expected_blocks)
+
+    assert full_text == expected
+    assert "ON CHAIN ANALYSIS REPORT" in full_text
+    assert "EXPIRATION: 10MAR26" in full_text
+    assert "MARKET-WIDE METRICS" in full_text
+    assert "PERPETUAL FUNDING & OI" in full_text
+
+
+def test_render_full_from_result_omits_market_wide_block_when_empty():
+    formatter = OnChainReportFormatter()
+    result = _make_result()  # _make_empty_market_wide() -> every sub-result None
+
+    text = formatter.render_full_from_result(result)
+
+    assert "MARKET-WIDE METRICS" not in text
+    assert text.endswith("=" * 80 + "\n")
+    assert not text.endswith("=" * 80 + "\n\n")
+
+
+def test_render_full_from_result_renders_multiple_expirations_in_order():
+    formatter = OnChainReportFormatter()
+    bundle_a = ExpirationBundle(
+        expiration="10MAR26", analysis=_make_analysis("10MAR26"), gex_dex=None, flow=None,
+        vol_surface=None, oi_changes=None, iv_percentile=None, trend=None,
+        flow_chart_paths={}, enriched_instruments=(),
+    )
+    bundle_b = ExpirationBundle(
+        expiration="27JUN26", analysis=_make_analysis("27JUN26"), gex_dex=None, flow=None,
+        vol_surface=None, oi_changes=None, iv_percentile=None, trend=None,
+        flow_chart_paths={}, enriched_instruments=(),
+    )
+    result = _make_result(expirations=(bundle_a, bundle_b))
+
+    text = formatter.render_full_from_result(result)
+
+    idx_a = text.index("EXPIRATION: 10MAR26")
+    idx_b = text.index("EXPIRATION: 27JUN26")
+    assert idx_a < idx_b
