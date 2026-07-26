@@ -441,13 +441,19 @@ class OnChainAnalysisService:
                 vwap_iv, mark_iv_avg = self._calculate_vwap_iv(exp_trades, instruments)
                 calculator.set_vwap_iv_data(vwap_iv, mark_iv_avg)
 
-                # Calculate once — pass result to both structured storage and report formatter
+                # Calculate once — pass result to both structured storage and report formatter.
+                # T4: calculate() returns the typed VolSurfaceResult; the
+                # report formatter takes it directly (attribute access), but
+                # analyzer.volatility_surface_structured stays dict-shaped
+                # (SynthesisMapper still reads it as a dict until T7), so
+                # .to_dict() converts at this boundary.
                 result = calculator.calculate()
                 surface_report = calculator.generate_report_section(result=result)
+                result_dict = result.to_dict()
                 analyzer.set_volatility_surface_data(expiration, surface_report)
-                analyzer.set_volatility_surface_structured(expiration, result)
-                if result["atm_iv"] is not None:
-                    analyzer.set_atm_iv(expiration, result["atm_iv"])
+                analyzer.set_volatility_surface_structured(expiration, result_dict)
+                if result_dict["atm_iv"] is not None:
+                    analyzer.set_atm_iv(expiration, result_dict["atm_iv"])
 
             except Exception as e:
                 logger.warning(f"Failed to calculate volatility surface for {expiration}: {e}")

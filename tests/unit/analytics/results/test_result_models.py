@@ -394,6 +394,7 @@ def _make_vol_surface_result() -> VolSurfaceResult:
         spot_price=1900.0,
         iv_by_strike=(
             IvByStrikeRow(strike=1900.0, option_type="C", mark_iv=80.0, delta=0.5, moneyness_pct=0.0),
+            IvByStrikeRow(strike=1900.0, option_type="P", mark_iv=82.0, delta=-0.5, moneyness_pct=0.0),
         ),
         skew_25d=SkewResult(
             put_25d_iv=85.0, call_25d_iv=78.0, put_25d_strike=1800.0, call_25d_strike=2000.0,
@@ -413,14 +414,33 @@ def _make_vol_surface_result() -> VolSurfaceResult:
         atm_iv=81.5,
         vwap_iv=82.0,
         mark_iv_average=81.0,
+        traded_instrument_count=2,
     )
+
+
+def test_vol_surface_result_merged_iv_by_strike_groups_call_and_put():
+    """Carried A3-review finding: the calculator/model layer owns the
+    per-strike {call_iv, put_iv} merge, not the formatter."""
+    result = _make_vol_surface_result()
+    merged = result.merged_iv_by_strike()
+    assert merged == {1900.0: {"call_iv": 80.0, "put_iv": 82.0}}
 
 
 def test_vol_surface_result_to_dict_matches_legacy_reader_keys():
     """volatility_reconstruction_service reads skew_25d, second_order_greeks,
-    pc_by_moneyness, atm_iv — these must match the legacy nested shape exactly."""
+    pc_by_moneyness, atm_iv — these must match the legacy nested shape exactly.
+    to_dict() must also reproduce iv_by_strike merged (legacy shape) and must
+    NOT leak the typed-only fields (vwap_iv, mark_iv_average, expiration,
+    spot_price, skipped_instruments) that the legacy calculate() dict never had."""
     result = _make_vol_surface_result()
     d = result.to_dict()
+
+    assert d["iv_by_strike"] == [{"strike": 1900.0, "call_iv": 80.0, "put_iv": 82.0}]
+    assert "vwap_iv" not in d
+    assert "mark_iv_average" not in d
+    assert "expiration" not in d
+    assert "spot_price" not in d
+    assert "skipped_instruments" not in d["second_order_greeks"]
 
     assert d["skew_25d"] == {
         "put_25d_iv": 85.0, "call_25d_iv": 78.0, "put_25d_strike": 1800.0, "call_25d_strike": 2000.0,

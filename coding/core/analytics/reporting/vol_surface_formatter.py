@@ -4,22 +4,13 @@ Text formatting for the per-expiry volatility surface section.
 Extracted verbatim (behavior-preserving) from
 ``VolatilitySurfaceCalculator.generate_report_section()`` per
 refactor_design_spec.md section T3, operating on the typed
-``VolSurfaceResult`` (section T2) instead of the calculator's internal dict.
+``VolSurfaceResult`` (section T2), now wired in at T4.
 
-Not yet wired into ``VolatilitySurfaceCalculator`` — ``calculate()`` still
-returns a dict until T4 replaces it with ``VolSurfaceResult``. Until then,
-``OnChainAnalyzer`` keeps consuming the calculator's own
-``generate_report_section()`` text verbatim (T3's "temporary adapter").
-
-Note: ``VolSurfaceResult.iv_by_strike`` holds one row per *instrument*
-(``IvByStrikeRow``: strike, option_type, mark_iv, ...), unlike the legacy
-calculator's merged ``{strike: {call_iv, put_iv}}`` dict. The "IV BY STRIKE"
-table re-derives that per-strike merge here so the rendered text is
-unchanged; this is the T3 formatter doing the adaptation the T4 calculator
-rewrite will eventually make unnecessary.
+The "IV BY STRIKE" table uses ``VolSurfaceResult.merged_iv_by_strike()`` for
+the legacy per-strike ``{call_iv, put_iv}`` view — that grouping used to be
+re-derived here (A3-review carried finding); it now lives on the model,
+making this formatter a pure consumer.
 """
-
-from typing import Dict, Optional
 
 from coding.core.analytics.results.vol_surface_results import VolSurfaceResult
 
@@ -79,15 +70,10 @@ def format_vol_surface_section(result: VolSurfaceResult, expiration: str) -> str
         lines.append(f"  {aggression}")
         lines.append("")
 
-    # IV by Strike (show most relevant strikes around spot) — re-merge the
-    # per-instrument rows into the legacy per-strike {call_iv, put_iv} shape.
-    merged: Dict[float, Dict[str, Optional[float]]] = {}
-    for row in result.iv_by_strike:
-        entry = merged.setdefault(row.strike, {"call_iv": None, "put_iv": None})
-        if row.option_type == "C":
-            entry["call_iv"] = row.mark_iv
-        else:
-            entry["put_iv"] = row.mark_iv
+    # IV by Strike (show most relevant strikes around spot). The per-strike
+    # {call_iv, put_iv} merge lives on the model (carried finding) —
+    # this formatter is a pure consumer of merged_iv_by_strike().
+    merged = result.merged_iv_by_strike()
 
     if merged:
         lines.append("IV BY STRIKE:")
@@ -95,13 +81,12 @@ def format_vol_surface_section(result: VolSurfaceResult, expiration: str) -> str
         lines.append(f"  {'------':>10}  {'-------':>10}  {'------':>10}")
 
         # Filter to ±30% of spot for readability
-        for strike in sorted(merged.keys()):
+        for strike, entry in merged.items():
             if result.spot_price > 0:
                 distance = abs(strike - result.spot_price) / result.spot_price
                 if distance > 0.30:
                     continue
 
-            entry = merged[strike]
             call_iv = f"{entry['call_iv']:.1f}%" if entry["call_iv"] is not None else "   -"
             put_iv = f"{entry['put_iv']:.1f}%" if entry["put_iv"] is not None else "   -"
             lines.append(f"  {strike:>10,.0f}  {call_iv:>10}  {put_iv:>10}")

@@ -106,27 +106,29 @@ class VolatilityReconstructionService:
             expiration=expiration,
         )
         surface_calc.set_vwap_iv_data(vwap_iv, mark_iv_avg)
+        # T4 (refactor_design_spec.md, compatibility-map consumer row #11):
+        # calculate() returns the typed VolSurfaceResult — attribute access.
         surface = surface_calc.calculate()
 
-        skew = surface["skew_25d"]
-        second_order = surface["second_order_greeks"]
-        pc_moneyness = surface["pc_by_moneyness"]
+        skew = surface.skew_25d
+        second_order = surface.second_order_greeks
+        pc_moneyness = surface.pc_by_moneyness
 
         vrp_metrics = self._reconstruct_vrp(currency, snapshot_hour, instruments, underlying_price)
         market_metrics = self._reconstruct_market_metrics(currency, snapshot_hour, underlying_price)
 
         metrics = {
-            "atm_iv": surface["atm_iv"],
-            "skew_25d": skew.get("skew"),
-            "put_25d_iv": skew.get("put_25d_iv"),
-            "call_25d_iv": skew.get("call_25d_iv"),
-            "net_vanna": second_order.get("net_vanna"),
-            "net_charm": second_order.get("net_charm"),
+            "atm_iv": surface.atm_iv,
+            "skew_25d": skew.skew,
+            "put_25d_iv": skew.put_25d_iv,
+            "call_25d_iv": skew.call_25d_iv,
+            "net_vanna": second_order.net_vanna,
+            "net_charm": second_order.net_charm,
             "vwap_iv": vwap_iv,
             "mark_iv_avg": mark_iv_avg,
-            "pc_atm_ratio": self._sanitize_decimal(pc_moneyness.get("atm", {}).get("ratio")),
-            "pc_near_otm_ratio": self._sanitize_decimal(pc_moneyness.get("near_otm", {}).get("ratio")),
-            "pc_far_otm_ratio": self._sanitize_decimal(pc_moneyness.get("far_otm", {}).get("ratio")),
+            "pc_atm_ratio": self._sanitize_decimal(pc_moneyness.atm.ratio),
+            "pc_near_otm_ratio": self._sanitize_decimal(pc_moneyness.near_otm.ratio),
+            "pc_far_otm_ratio": self._sanitize_decimal(pc_moneyness.far_otm.ratio),
             "iv_percentile_expiry": None,  # filled in by pass 2
             **vrp_metrics,
             **market_metrics,

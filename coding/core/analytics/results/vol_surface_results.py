@@ -65,23 +65,57 @@ class SecondOrderGreeks:
 
 @dataclass(frozen=True)
 class VolSurfaceResult:
-    """Full volatility surface result for one expiration."""
+    """
+    Full volatility surface result for one expiration.
+
+    ``vwap_iv``, ``mark_iv_average`` (bugfix_spec.md Item 3: the volume-
+    weighted MATCHED mark-IV baseline, not a chain-wide average — see the
+    calculator's docstring), and ``traded_instrument_count`` are typed-only
+    fields: the legacy ``calculate()`` dict never carried VWAP data (it lived
+    only as ephemeral instance state consumed by ``generate_report_section``),
+    so ``to_dict()`` deliberately omits them to stay a byte-faithful legacy
+    shim. Read them as attributes.
+    """
 
     expiration: str
     spot_price: float
-    iv_by_strike: Tuple[IvByStrikeRow, ...]
+    iv_by_strike: Tuple[IvByStrikeRow, ...]  # one row per INSTRUMENT
     skew_25d: SkewResult
     pc_by_moneyness: PutCallByMoneyness
     second_order_greeks: SecondOrderGreeks
     atm_iv: Optional[float]
     vwap_iv: Optional[float]
     mark_iv_average: Optional[float]
+    traded_instrument_count: int
+
+    def merged_iv_by_strike(self) -> Dict[float, Dict[str, Optional[float]]]:
+        """
+        Group the per-instrument ``iv_by_strike`` rows into the legacy
+        per-strike ``{strike: {call_iv, put_iv}}`` shape (one call_iv/put_iv
+        pair per strike, not per instrument). Sorted by strike ascending.
+
+        Moved here from ``reporting/vol_surface_formatter.py`` (A3-review
+        carried finding): this grouping is calculator/model-layer logic, not
+        a formatting concern — the formatter is now a pure consumer of this
+        method.
+        """
+        merged: Dict[float, Dict[str, Optional[float]]] = {}
+        for row in self.iv_by_strike:
+            entry = merged.setdefault(row.strike, {"call_iv": None, "put_iv": None})
+            if row.option_type == "C":
+                entry["call_iv"] = row.mark_iv
+            else:
+                entry["put_iv"] = row.mark_iv
+        return dict(sorted(merged.items()))
 
     def to_dict(self) -> Dict[str, Any]:
         """
-        Reproduce the legacy keys read by
-        ``volatility_reconstruction_service``: ``skew_25d``,
-        ``second_order_greeks``, ``pc_by_moneyness``, ``atm_iv``.
+        Reproduce the legacy ``VolatilitySurfaceCalculator.calculate()`` dict
+        shape exactly: ``iv_by_strike`` (merged per-strike), ``skew_25d``,
+        ``pc_by_moneyness``, ``second_order_greeks`` (the original 4 keys —
+        no ``skipped_instruments``), ``atm_iv``. Consumed by
+        ``volatility_reconstruction_service`` and
+        ``on_chain_analysis_service`` (``analyzer.volatility_surface_structured``).
         """
 
         def _bucket_dict(bucket: MoneynessBucket) -> Dict[str, Any]:
@@ -94,8 +128,10 @@ class VolSurfaceResult:
             }
 
         return {
-            "expiration": self.expiration,
-            "spot_price": self.spot_price,
+            "iv_by_strike": [
+                {"strike": strike, "call_iv": ivs["call_iv"], "put_iv": ivs["put_iv"]}
+                for strike, ivs in self.merged_iv_by_strike().items()
+            ],
             "skew_25d": {
                 "put_25d_iv": self.skew_25d.put_25d_iv,
                 "call_25d_iv": self.skew_25d.call_25d_iv,
@@ -114,9 +150,6 @@ class VolSurfaceResult:
                 "net_charm": self.second_order_greeks.net_charm,
                 "vanna_signal": self.second_order_greeks.vanna_signal,
                 "charm_signal": self.second_order_greeks.charm_signal,
-                "skipped_instruments": self.second_order_greeks.skipped_instruments,
             },
             "atm_iv": self.atm_iv,
-            "vwap_iv": self.vwap_iv,
-            "mark_iv_average": self.mark_iv_average,
         }

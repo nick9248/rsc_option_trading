@@ -1,5 +1,11 @@
 """
 Unit tests for VolatilitySurfaceCalculator.
+
+T4 (refactor_design_spec.md): calculate() returns the typed VolSurfaceResult
+(coding/core/analytics/results/vol_surface_results.py) instead of a dict —
+assertions here use attribute access. ``iv_by_strike`` is now one row per
+INSTRUMENT; use ``result.merged_iv_by_strike()`` for the legacy per-strike
+{call_iv, put_iv} view.
 """
 
 import pytest
@@ -67,25 +73,28 @@ def sample_instruments():
 class TestVolatilitySurfaceCalculator:
     """Tests for VolatilitySurfaceCalculator."""
 
-    def test_calculate_returns_all_keys(self, sample_instruments):
+    def test_calculate_returns_all_fields(self, sample_instruments):
         calc = VolatilitySurfaceCalculator(sample_instruments, 90000, "28MAR26")
         result = calc.calculate()
 
-        assert "iv_by_strike" in result
-        assert "skew_25d" in result
-        assert "pc_by_moneyness" in result
-        assert "second_order_greeks" in result
-        assert "atm_iv" in result
+        assert result.iv_by_strike is not None
+        assert result.skew_25d is not None
+        assert result.pc_by_moneyness is not None
+        assert result.second_order_greeks is not None
+        assert result.atm_iv is not None
 
     def test_iv_by_strike(self, sample_instruments):
         calc = VolatilitySurfaceCalculator(sample_instruments, 90000, "28MAR26")
         result = calc.calculate()
 
-        iv_data = result["iv_by_strike"]
-        assert len(iv_data) == 5  # 5 unique strikes
+        # One row per instrument: 5 calls + 5 puts
+        assert len(result.iv_by_strike) == 10
+
+        merged = result.merged_iv_by_strike()
+        assert len(merged) == 5  # 5 unique strikes
 
         # Check ATM strike has both call and put IV
-        atm_entry = next(e for e in iv_data if e["strike"] == 90000)
+        atm_entry = merged[90000.0]
         assert atm_entry["call_iv"] == 65.0
         assert atm_entry["put_iv"] == 66.0
 
@@ -93,16 +102,16 @@ class TestVolatilitySurfaceCalculator:
         calc = VolatilitySurfaceCalculator(sample_instruments, 90000, "28MAR26")
         result = calc.calculate()
 
-        skew = result["skew_25d"]
-        assert skew["skew"] is not None
-        assert skew["put_25d_iv"] is not None
-        assert skew["call_25d_iv"] is not None
+        skew = result.skew_25d
+        assert skew.skew is not None
+        assert skew.put_25d_iv is not None
+        assert skew.call_25d_iv is not None
         # Put 25d should be at strike 80000 (delta -0.25)
-        assert skew["put_25d_strike"] == 80000
+        assert skew.put_25d_strike == 80000
         # Call 25d should be at strike 95000 (delta 0.25)
-        assert skew["call_25d_strike"] == 95000
+        assert skew.call_25d_strike == 95000
         # Skew = put IV - call IV = 88 - 68 = 20
-        assert skew["skew"] == pytest.approx(20.0)
+        assert skew.skew == pytest.approx(20.0)
 
     def test_25_delta_skew_insufficient_data(self):
         instruments = [
@@ -111,44 +120,38 @@ class TestVolatilitySurfaceCalculator:
         calc = VolatilitySurfaceCalculator(instruments, 90000, "28MAR26")
         result = calc.calculate()
 
-        skew = result["skew_25d"]
-        assert skew["skew"] is None
-        assert "Insufficient" in skew["interpretation"]
+        skew = result.skew_25d
+        assert skew.skew is None
+        assert "Insufficient" in skew.interpretation
 
     def test_pc_by_moneyness(self, sample_instruments):
         calc = VolatilitySurfaceCalculator(sample_instruments, 90000, "28MAR26")
         result = calc.calculate()
 
-        pc = result["pc_by_moneyness"]
-        assert "atm" in pc
-        assert "near_otm" in pc
-        assert "far_otm" in pc
+        pc = result.pc_by_moneyness
 
         # ATM bucket (±5%) should contain 90000 strike
-        atm = pc["atm"]
-        assert atm["call_oi"] > 0
-        assert atm["put_oi"] > 0
-        assert "ratio" in atm
-        assert "bias" in atm
+        atm = pc.atm
+        assert atm.call_oi > 0
+        assert atm.put_oi > 0
+        assert atm.ratio is not None
+        assert atm.bias is not None
 
     def test_second_order_greeks(self, sample_instruments):
         calc = VolatilitySurfaceCalculator(sample_instruments, 90000, "28MAR26")
         result = calc.calculate()
 
-        greeks = result["second_order_greeks"]
-        assert "net_vanna" in greeks
-        assert "net_charm" in greeks
-        assert "vanna_signal" in greeks
-        assert "charm_signal" in greeks
+        greeks = result.second_order_greeks
         # Values should be non-zero with our test data
-        assert greeks["net_vanna"] != 0
-        assert greeks["net_charm"] != 0
+        assert greeks.net_vanna != 0
+        assert greeks.net_charm != 0
+        assert greeks.skipped_instruments >= 0
 
     def test_atm_iv(self, sample_instruments):
         calc = VolatilitySurfaceCalculator(sample_instruments, 90000, "28MAR26")
         result = calc.calculate()
 
-        atm_iv = result["atm_iv"]
+        atm_iv = result.atm_iv
         assert atm_iv is not None
         # ATM IV should be average of call (65) and put (66) at strike 90000
         assert atm_iv == pytest.approx(65.5)
@@ -159,7 +162,7 @@ class TestVolatilitySurfaceCalculator:
         ]
         calc = VolatilitySurfaceCalculator(instruments, 90000, "28MAR26")
         result = calc.calculate()
-        assert result["atm_iv"] is None
+        assert result.atm_iv is None
 
     def test_generate_report_section(self, sample_instruments):
         calc = VolatilitySurfaceCalculator(sample_instruments, 90000, "28MAR26")
@@ -173,7 +176,7 @@ class TestVolatilitySurfaceCalculator:
 
     def test_vwap_iv_in_report(self, sample_instruments):
         calc = VolatilitySurfaceCalculator(sample_instruments, 90000, "28MAR26")
-        calc.set_vwap_iv_data(vwap_iv=67.5, mark_iv_avg=65.0)
+        calc.set_vwap_iv_data(vwap_iv=67.5, mark_iv_baseline=65.0)
         report = calc.generate_report_section()
 
         assert "VWAP IV:" in report
@@ -190,6 +193,10 @@ class TestVolatilitySurfaceCalculator:
         bugfix_spec.md H2: the spot<=0 early return in _calculate_pc_by_moneyness()
         must populate ratio/bias on every bucket, not just call_oi/put_oi/range,
         otherwise generate_report_section() KeyErrors on bucket["ratio"].
+
+        _calculate_pc_by_moneyness() stays a dict-returning internal helper
+        (not part of the T4 public typed API) — calculate() wraps its output
+        into PutCallByMoneyness/MoneynessBucket.
         """
         calc = VolatilitySurfaceCalculator(sample_instruments, 0, "28MAR26")
         buckets = calc._calculate_pc_by_moneyness()
@@ -212,9 +219,9 @@ class TestVolatilitySurfaceCalculator:
         calc = VolatilitySurfaceCalculator([], 90000, "28MAR26")
         result = calc.calculate()
 
-        assert result["iv_by_strike"] == []
-        assert result["skew_25d"]["skew"] is None
-        assert result["atm_iv"] is None
+        assert result.iv_by_strike == ()
+        assert result.skew_25d.skew is None
+        assert result.atm_iv is None
 
     def test_pc_ratio_interpretation(self):
         assert VolatilitySurfaceCalculator._interpret_pc_ratio(0.5) == "Bullish"

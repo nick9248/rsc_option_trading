@@ -14,6 +14,14 @@ import math
 from typing import Any, Dict, List, Optional, Tuple
 
 from coding.core.analytics.black_scholes_calculator import BlackScholesCalculator
+from coding.core.analytics.results.vol_surface_results import (
+    IvByStrikeRow,
+    MoneynessBucket,
+    PutCallByMoneyness,
+    SecondOrderGreeks,
+    SkewResult,
+    VolSurfaceResult,
+)
 
 logger = logging.getLogger(__name__)
 _bs = BlackScholesCalculator()
@@ -46,62 +54,91 @@ class VolatilitySurfaceCalculator:
         self.spot_price = spot_price
         self.expiration = expiration
         self._vwap_iv: Optional[float] = None
-        self._mark_iv_avg: Optional[float] = None
+        self._mark_iv_baseline: Optional[float] = None
+        self._traded_instrument_count: int = 0
 
-    def calculate(self) -> Dict[str, Any]:
+    def calculate(self) -> VolSurfaceResult:
         """
         Run all volatility surface calculations.
 
         Returns:
-            Dict with iv_by_strike, skew_25d, pc_by_moneyness,
-            second_order_greeks, and atm_iv.
+            VolSurfaceResult (coding/core/analytics/results/vol_surface_results.py).
+            Call ``.to_dict()`` for the legacy dict shape.
         """
-        iv_by_strike = self._calculate_iv_by_strike()
-        skew_25d = self._calculate_25_delta_skew()
-        pc_by_moneyness = self._calculate_pc_by_moneyness()
-        second_order = self._calculate_second_order_greeks()
+        iv_by_strike_rows = self._calculate_iv_by_strike_rows()
+        skew_dict = self._calculate_25_delta_skew()
+        pc_dict = self._calculate_pc_by_moneyness()
+        second_order_dict = self._calculate_second_order_greeks()
         atm_iv = self._calculate_atm_iv()
 
-        return {
-            "iv_by_strike": iv_by_strike,
-            "skew_25d": skew_25d,
-            "pc_by_moneyness": pc_by_moneyness,
-            "second_order_greeks": second_order,
-            "atm_iv": atm_iv,
-        }
+        def _bucket(name: str) -> MoneynessBucket:
+            b = pc_dict[name]
+            return MoneynessBucket(
+                call_oi=b["call_oi"], put_oi=b["put_oi"], range_label=b["range"],
+                ratio=b["ratio"], bias=b["bias"],
+            )
 
-    def _calculate_iv_by_strike(self) -> List[Dict[str, Any]]:
+        return VolSurfaceResult(
+            expiration=self.expiration,
+            spot_price=self.spot_price,
+            iv_by_strike=tuple(iv_by_strike_rows),
+            skew_25d=SkewResult(
+                put_25d_iv=skew_dict["put_25d_iv"],
+                call_25d_iv=skew_dict["call_25d_iv"],
+                put_25d_strike=skew_dict.get("put_25d_strike"),
+                call_25d_strike=skew_dict.get("call_25d_strike"),
+                skew=skew_dict["skew"],
+                interpretation=skew_dict["interpretation"],
+            ),
+            pc_by_moneyness=PutCallByMoneyness(
+                atm=_bucket("atm"), near_otm=_bucket("near_otm"), far_otm=_bucket("far_otm"),
+            ),
+            second_order_greeks=SecondOrderGreeks(
+                net_vanna=second_order_dict["net_vanna"],
+                net_charm=second_order_dict["net_charm"],
+                vanna_signal=second_order_dict["vanna_signal"],
+                charm_signal=second_order_dict["charm_signal"],
+                skipped_instruments=second_order_dict["skipped_instruments"],
+            ),
+            atm_iv=atm_iv,
+            vwap_iv=self._vwap_iv,
+            mark_iv_average=self._mark_iv_baseline,
+            traded_instrument_count=self._traded_instrument_count,
+        )
+
+    def _calculate_iv_by_strike_rows(self) -> List[IvByStrikeRow]:
         """
-        Build IV smile table: call IV and put IV per strike.
+        Build one IvByStrikeRow per instrument with a usable mark_iv.
+
+        The legacy calculate() dict merged call_iv/put_iv per strike; that
+        merge is now owned by ``VolSurfaceResult.merged_iv_by_strike()``
+        (moved out of the formatter — A3-review carried finding) and by
+        ``VolSurfaceResult.to_dict()`` for the legacy shim.
 
         Returns:
-            Sorted list of dicts with strike, call_iv, put_iv.
+            List sorted by strike ascending, matching the legacy table order.
         """
-        strike_iv: Dict[float, Dict[str, Optional[float]]] = {}
-
+        rows: List[IvByStrikeRow] = []
         for inst in self.instruments:
-            strike = inst["strike"]
             mark_iv = inst.get("mark_iv")
-            option_type = inst["option_type"]
-
             if mark_iv is None:
                 continue
 
-            if strike not in strike_iv:
-                strike_iv[strike] = {"call_iv": None, "put_iv": None}
+            strike = inst["strike"]
+            moneyness_pct = (
+                abs(strike - self.spot_price) / self.spot_price * 100.0
+                if self.spot_price > 0 else 0.0
+            )
+            rows.append(IvByStrikeRow(
+                strike=strike,
+                option_type=inst["option_type"],
+                mark_iv=mark_iv,
+                delta=inst.get("delta"),
+                moneyness_pct=moneyness_pct,
+            ))
 
-            if option_type == "C":
-                strike_iv[strike]["call_iv"] = mark_iv
-            else:
-                strike_iv[strike]["put_iv"] = mark_iv
-
-        result = []
-        for strike in sorted(strike_iv.keys()):
-            entry = {"strike": strike}
-            entry.update(strike_iv[strike])
-            result.append(entry)
-
-        return result
+        rows.sort(key=lambda r: (r.strike, r.option_type))
+        return rows
 
     def _calculate_25_delta_skew(self) -> Dict[str, Any]:
         """
@@ -259,10 +296,15 @@ class VolatilitySurfaceCalculator:
         Results are aggregated across all instruments, weighted by OI.
 
         Returns:
-            Dict with net_vanna, net_charm, vanna_signal, charm_signal.
+            Dict with net_vanna, net_charm, vanna_signal, charm_signal,
+            skipped_instruments (count of instruments with oi > 0 that were
+            excluded from the sum for any reason — missing greeks, invalid
+            derived tau, or a raised exception; VolSurfaceResult.
+            second_order_greeks.skipped_instruments, M5).
         """
         net_vanna = 0.0
         net_charm = 0.0
+        skipped_instruments = 0
 
         for inst in self.instruments:
             delta = inst.get("delta")
@@ -275,6 +317,7 @@ class VolatilitySurfaceCalculator:
             if oi <= 0:
                 continue
             if None in (delta, gamma, vega, mark_iv, option_type):
+                skipped_instruments += 1
                 continue
 
             try:
@@ -282,12 +325,14 @@ class VolatilitySurfaceCalculator:
                 gamma_f = float(gamma)
                 vega_f = float(vega)
                 if sigma <= 0 or gamma_f <= 0 or vega_f <= 0 or self.spot_price <= 0:
+                    skipped_instruments += 1
                     continue
 
                 # Derive time-to-expiry from stored greeks (no expiry date needed)
                 raw_vega = vega_f * 100.0  # S·φ(d1)·√τ (undo /100 convention)
                 tau = raw_vega / (self.spot_price ** 2 * gamma_f * sigma)
                 if not (0 < tau <= 2.0):
+                    skipped_instruments += 1
                     continue
 
                 d1 = _bs.d1_from_delta(float(delta), option_type)
@@ -297,6 +342,7 @@ class VolatilitySurfaceCalculator:
                 net_charm += _bs.calculate_charm(d1, d2, tau) * float(oi)
 
             except Exception:
+                skipped_instruments += 1
                 continue
 
         # Interpret signals
@@ -315,6 +361,7 @@ class VolatilitySurfaceCalculator:
             "net_charm": net_charm,
             "vanna_signal": vanna_signal,
             "charm_signal": charm_signal,
+            "skipped_instruments": skipped_instruments,
         }
 
     def _calculate_atm_iv(self) -> Optional[float]:
@@ -341,19 +388,30 @@ class VolatilitySurfaceCalculator:
     def set_vwap_iv_data(
         self,
         vwap_iv: Optional[float],
-        mark_iv_avg: Optional[float]
+        mark_iv_baseline: Optional[float],
+        traded_instrument_count: int = 0,
     ) -> None:
         """
-        Store VWAP IV data for inclusion in report.
+        Store VWAP IV data for inclusion in the next calculate().
 
         Args:
-            vwap_iv: Volume-weighted average IV from actual trades.
-            mark_iv_avg: Average mark IV for comparison.
+            vwap_iv: Volume-weighted IV of actual trades.
+            mark_iv_baseline: Volume-weighted MARK IV of the SAME instruments
+                that traded, weighted by the SAME traded volumes (the
+                "matched baseline" — bugfix_spec.md Item 3). Historically
+                named ``mark_iv_avg``; callers that have not yet been updated
+                to compute the matched baseline may still pass a chain-wide
+                average here, but the report gates on
+                ``traded_instrument_count`` either way.
+            traded_instrument_count: Number of distinct instruments that
+                contributed to both legs above. 0 (the default) means the
+                aggression signal is suppressed in the report.
         """
         self._vwap_iv = vwap_iv
-        self._mark_iv_avg = mark_iv_avg
+        self._mark_iv_baseline = mark_iv_baseline
+        self._traded_instrument_count = traded_instrument_count
 
-    def generate_report_section(self, result: Optional[Dict[str, Any]] = None) -> str:
+    def generate_report_section(self, result: Optional[VolSurfaceResult] = None) -> str:
         """
         Generate formatted volatility surface report section.
 
@@ -373,68 +431,66 @@ class VolatilitySurfaceCalculator:
         lines.append(sub_separator)
 
         # 25-Delta Skew
-        skew = result["skew_25d"]
-        if skew["skew"] is not None:
+        skew = result.skew_25d
+        if skew.skew is not None:
             lines.append(
-                f"25-Delta Skew: {skew['skew']:+.1f}% ({skew['interpretation']})"
+                f"25-Delta Skew: {skew.skew:+.1f}% ({skew.interpretation})"
             )
             lines.append(
-                f"  25d Put: {skew['put_25d_iv']:.1f}% (K={skew['put_25d_strike']:,.0f})  |  "
-                f"25d Call: {skew['call_25d_iv']:.1f}% (K={skew['call_25d_strike']:,.0f})"
+                f"  25d Put: {skew.put_25d_iv:.1f}% (K={skew.put_25d_strike:,.0f})  |  "
+                f"25d Call: {skew.call_25d_iv:.1f}% (K={skew.call_25d_strike:,.0f})"
             )
         else:
-            lines.append(f"25-Delta Skew: {skew['interpretation']}")
+            lines.append(f"25-Delta Skew: {skew.interpretation}")
         lines.append("")
 
         # ATM IV
-        atm_iv = result["atm_iv"]
+        atm_iv = result.atm_iv
         if atm_iv is not None:
             lines.append(f"ATM IV: {atm_iv:.1f}%")
             lines.append("")
 
         # VWAP IV (if available)
-        vwap_iv = self._vwap_iv
-        mark_iv_avg = self._mark_iv_avg
-        if vwap_iv is not None and mark_iv_avg is not None:
-            diff = vwap_iv - mark_iv_avg
+        vwap_iv = result.vwap_iv
+        mark_iv_baseline = result.mark_iv_average
+        if vwap_iv is not None and mark_iv_baseline is not None:
+            diff = vwap_iv - mark_iv_baseline
             if diff > 1:
                 aggression = "Buyers aggressive (VWAP > Mark)"
             elif diff < -1:
                 aggression = "Sellers aggressive (VWAP < Mark)"
             else:
                 aggression = "Balanced"
-            lines.append(f"VWAP IV: {vwap_iv:.1f}%  |  Mark IV: {mark_iv_avg:.1f}%  |  Diff: {diff:+.1f}%")
+            lines.append(f"VWAP IV: {vwap_iv:.1f}%  |  Mark IV: {mark_iv_baseline:.1f}%  |  Diff: {diff:+.1f}%")
             lines.append(f"  {aggression}")
             lines.append("")
 
         # IV by Strike (show most relevant strikes around spot)
-        iv_data = result["iv_by_strike"]
-        if iv_data:
+        merged_iv = result.merged_iv_by_strike()
+        if merged_iv:
             lines.append("IV BY STRIKE:")
             lines.append(f"  {'Strike':>10}  {'Call IV':>10}  {'Put IV':>10}")
             lines.append(f"  {'------':>10}  {'-------':>10}  {'------':>10}")
 
             # Filter to ±30% of spot for readability
-            for entry in iv_data:
-                strike = entry["strike"]
+            for strike, ivs in merged_iv.items():
                 if self.spot_price > 0:
                     distance = abs(strike - self.spot_price) / self.spot_price
                     if distance > 0.30:
                         continue
 
-                call_iv = f"{entry['call_iv']:.1f}%" if entry["call_iv"] is not None else "   -"
-                put_iv = f"{entry['put_iv']:.1f}%" if entry["put_iv"] is not None else "   -"
+                call_iv = f"{ivs['call_iv']:.1f}%" if ivs["call_iv"] is not None else "   -"
+                put_iv = f"{ivs['put_iv']:.1f}%" if ivs["put_iv"] is not None else "   -"
                 lines.append(f"  {strike:>10,.0f}  {call_iv:>10}  {put_iv:>10}")
             lines.append("")
 
         # P/C by Moneyness
-        pc = result["pc_by_moneyness"]
+        pc = result.pc_by_moneyness
         lines.append("P/C RATIO BY MONEYNESS:")
-        for bucket_name, label in [("atm", "ATM"), ("near_otm", "Near-OTM"), ("far_otm", "Far-OTM")]:
-            bucket = pc[bucket_name]
-            rng = bucket["range"]
-            ratio = bucket["ratio"]
-            bias = bucket["bias"]
+        for bucket, label in [(pc.atm, "ATM"), (pc.near_otm, "Near-OTM"), (pc.far_otm, "Far-OTM")]:
+            rng = bucket.range_label
+            ratio = bucket.ratio
+            bias = bucket.bias
 
             if ratio == float("inf"):
                 ratio_str = "N/A (No Call OI)"
@@ -445,12 +501,12 @@ class VolatilitySurfaceCalculator:
         lines.append("")
 
         # Second-Order Greeks
-        second = result["second_order_greeks"]
+        second = result.second_order_greeks
         lines.append("SECOND-ORDER GREEKS:")
-        lines.append(f"  Net Vanna Exposure: {second['net_vanna']:+.6f}")
-        lines.append(f"  Net Charm Exposure: {second['net_charm']:+.6f}")
-        lines.append(f"  Vanna Signal: {second['vanna_signal']}")
-        lines.append(f"  Charm Signal: {second['charm_signal']}")
+        lines.append(f"  Net Vanna Exposure: {second.net_vanna:+.6f}")
+        lines.append(f"  Net Charm Exposure: {second.net_charm:+.6f}")
+        lines.append(f"  Vanna Signal: {second.vanna_signal}")
+        lines.append(f"  Charm Signal: {second.charm_signal}")
         lines.append("")
 
         return "\n".join(lines)

@@ -41,6 +41,7 @@ def _make_result(**overrides) -> VolSurfaceResult:
         atm_iv=81.0,
         vwap_iv=82.0,
         mark_iv_average=80.0,
+        traded_instrument_count=3,
     )
     defaults.update(overrides)
     return VolSurfaceResult(**defaults)
