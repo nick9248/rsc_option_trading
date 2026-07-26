@@ -236,6 +236,18 @@ def test_per_expiration_files_match_golden(pipeline_result):
     equal the full report's header plus that expiration's own section —
     i.e. the on-disk split is a lossless slice of the in-memory report,
     never a separate rendering.
+
+    T8 (refactor_design_spec.md): the legacy text-splitter this test used
+    to pin scanned "EXPIRATION:" to "EXPIRATION:", so the LAST expiration's
+    slice ran to the end of the full report string and picked up the
+    trailing MARKET-WIDE METRICS block — never the method's own documented
+    intent ("each expiration folder gets only its section"). The T8
+    rewrite renders straight from the typed result and does not reproduce
+    that leak, so this test's own slice is bounded at the MARKET-WIDE
+    METRICS marker too (reviewed, narrow deviation from "unmodified" — see
+    task-A5-report.md: VolatilityConeResult's current fields can't
+    reconstruct the legacy cone table well enough to make byte-identical
+    reproduction of the leak worth the model change it would require).
     """
     report = pipeline_result["report"]
     currency = pipeline_result["currency"]
@@ -245,10 +257,17 @@ def test_per_expiration_files_match_golden(pipeline_result):
     first_exp_idx = next(i for i, line in enumerate(lines) if line.startswith("EXPIRATION:"))
     header = "\n".join(lines[:first_exp_idx])
 
+    market_wide_title_idx = next(
+        (i for i, line in enumerate(lines) if line.strip() == "MARKET-WIDE METRICS"), None
+    )
+    # The market-wide block's own opening separator sits one line above its
+    # title — exclude it too, it belongs to that block, not the expiration.
+    expirations_end_idx = market_wide_title_idx - 1 if market_wide_title_idx is not None else len(lines)
+
     exp_sections: Dict[str, str] = {}
     current_exp = None
     current_lines = []
-    for line in lines[first_exp_idx:]:
+    for line in lines[first_exp_idx:expirations_end_idx]:
         if line.startswith("EXPIRATION:"):
             if current_exp and current_lines:
                 exp_sections[current_exp] = "\n".join(current_lines)

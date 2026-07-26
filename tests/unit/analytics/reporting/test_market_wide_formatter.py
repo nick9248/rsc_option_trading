@@ -193,16 +193,20 @@ def test_perpetual_funding_not_available():
 
 
 def test_perpetual_funding_rendered_with_8h():
+    """bugfix_spec.md Item 4: annualization uses funding_8h, not
+    funding_rate/current_funding (T6, carried from A4 review — this
+    dormant formatter must not perpetuate the bug it fixed elsewhere)."""
     result = PerpetualFundingResult(
-        perp_open_interest=1_000_000.0, funding_rate=0.0001, funding_8h=0.0001,
+        perp_open_interest=1_000_000.0, funding_rate=0.0001, funding_8h=1.41e-06,
         funding_trend="Rising", history_points=10,
     )
     text = format_perpetual_funding_section(result)
     assert "Perp OI: 1,000,000 USD" in text
-    assert "Funding: 0.0100%" in text
+    assert "Funding (8h): 0.0001%" in text
     assert "Trend: Rising" in text
-    assert "8h Funding: 0.0100%" in text
-    assert "Annualized:" in text
+    assert "Instantaneous funding: 0.0100%" in text
+    # 1.41e-06 * 3 * 365 * 100 = 0.154395%
+    assert "Annualized: 0.15%" in text
 
 
 def test_perpetual_funding_omits_8h_line_when_none():
@@ -211,7 +215,8 @@ def test_perpetual_funding_omits_8h_line_when_none():
         funding_trend="Stable", history_points=10,
     )
     text = format_perpetual_funding_section(result)
-    assert "8h Funding" not in text
+    assert "Funding (8h): not available" in text
+    assert "Instantaneous funding: 0.0100%" in text
 
 
 # ---------------------------------------------------------------------------

@@ -24,8 +24,33 @@ from datetime import datetime
 from typing import Dict, Optional, Tuple
 
 from coding.core.analytics.reporting.expiry_formatter import format_expiration_section
-from coding.core.analytics.results.analysis_result import MarketMetricsResult, TrendSnapshot
+from coding.core.analytics.reporting.flow_formatter import format_flow_section
+from coding.core.analytics.reporting.gex_dex_formatter import (
+    format_aggregate_gex_dex_section,
+    format_gex_dex_section,
+)
+from coding.core.analytics.reporting.market_wide_formatter import (
+    format_block_trades_section,
+    format_cross_asset_correlation_section,
+    format_futures_basis_section,
+    format_perpetual_funding_section,
+    format_realized_volatility_section,
+    format_term_structure_section,
+    format_volatility_cone_section,
+    format_vrp_section,
+)
+from coding.core.analytics.reporting.oi_changes_formatter import (
+    format_iv_percentile_section,
+    format_oi_changes_section,
+)
+from coding.core.analytics.reporting.vol_surface_formatter import format_vol_surface_section
+from coding.core.analytics.results.analysis_result import (
+    MarketMetricsResult,
+    OnChainAnalysisResult,
+    TrendSnapshot,
+)
 from coding.core.analytics.results.expiry_results import ExpirationAnalysisResult
+from coding.core.analytics.results.flow_results import FlowResult
 
 _SEPARATOR = "=" * 80
 _SUB_SEPARATOR = "-" * 80
@@ -145,6 +170,23 @@ class OnChainReportFormatter:
 
         return "\n".join(lines)
 
+    def render_header_from_result(self, result: OnChainAnalysisResult) -> str:
+        """
+        Render the report header directly from the typed
+        ``OnChainAnalysisResult`` (refactor_design_spec.md section T8).
+
+        Thin wrapper over ``render_header`` — extracts the same four
+        arguments from the result aggregate instead of the caller passing
+        them separately, so ``_save_reports_per_expiration`` can render
+        from the result without string-scanning the full report text.
+        """
+        return self.render_header(
+            currency=result.currency,
+            underlying_price=result.underlying_price,
+            generated_at=result.generated_at,
+            market_metrics=result.market_metrics,
+        )
+
     def render_expiration(self, render_input: ExpirationRenderInput, spot_price: float) -> str:
         """
         Render one expiration's full section: header line, the analysis
@@ -172,6 +214,78 @@ class OnChainReportFormatter:
         lines.append("")
         return "\n".join(lines)
 
+    def render_expiration_from_result(self, result: OnChainAnalysisResult, expiration: str) -> str:
+        """
+        Render one expiration's full section directly from the typed
+        ``OnChainAnalysisResult`` (refactor_design_spec.md section T8 —
+        kills the report-text splitter in ``_save_reports_per_expiration``).
+
+        Builds an ``ExpirationRenderInput`` from the expiration's
+        ``ExpirationBundle`` — extra sections come from the reporting
+        package's own formatters (``format_gex_dex_section``,
+        ``format_flow_section``, ``format_vol_surface_section``,
+        ``format_oi_changes_section``/``format_iv_percentile_section``)
+        operating on the bundle's typed sub-results, in the same fixed
+        order the legacy pre-rendered-text adapter used (GEX/DEX, flow,
+        vol surface, OI-changes+IV-percentile) — so this renders the exact
+        same text ``render_expiration`` would for an
+        ``ExpirationRenderInput`` built by ``OnChainAnalyzer.generate_report()``.
+
+        Returns "" if the expiration is not in the result (matches the
+        legacy behavior of skipping an expiration with no analysis).
+        """
+        bundle = result.bundle(expiration)
+        if bundle is None:
+            return ""
+
+        extra_sections = []
+        if bundle.gex_dex is not None:
+            extra_sections.append(format_gex_dex_section(bundle.gex_dex, result.currency))
+        if bundle.flow is not None:
+            extra_sections.append(format_flow_section(bundle.flow, bundle.flow.lookback_hours))
+        if bundle.vol_surface is not None:
+            extra_sections.append(format_vol_surface_section(bundle.vol_surface, expiration))
+
+        # OI changes + IV percentile concatenate into ONE block with no
+        # separator between them (matches the legacy in-service
+        # `existing + iv_section` string concatenation exactly — joining
+        # them as two separate extra_sections entries would insert an
+        # extra blank line neither the legacy path nor format_oi_changes_section
+        # /format_iv_percentile_section's own text expects).
+        oi_iv_text = ""
+        if bundle.oi_changes is not None and bundle.oi_changes.has_previous_snapshot:
+            oi_iv_text += format_oi_changes_section(bundle.oi_changes)
+        if bundle.iv_percentile is not None:
+            oi_iv_text += format_iv_percentile_section(bundle.iv_percentile)
+        if oi_iv_text:
+            extra_sections.append(oi_iv_text)
+
+        render_input = ExpirationRenderInput(
+            expiration=expiration,
+            analysis=bundle.analysis,
+            trend=bundle.trend,
+            extra_sections=tuple(extra_sections),
+            evidence_line=self._evidence_line_from_flow(bundle.flow),
+        )
+        return self.render_expiration(render_input, result.underlying_price)
+
+    @staticmethod
+    def _evidence_line_from_flow(flow: Optional[FlowResult]) -> Optional[str]:
+        """
+        bugfix_spec.md Item 6 / F6.3.4 (carried from A4 review): the same
+        evidence-caveat text ``OnChainAnalyzer._build_evidence_line``
+        builds from the dict bookkeeping, built here directly from the
+        typed ``FlowResult`` — the two must stay in lockstep since both
+        render the same per-expiration header line.
+        """
+        if flow is None:
+            return "EVIDENCE: OI/GEX from full book | Flow: NOT ANALYZED"
+        status = "OK" if flow.sufficient_data else "INSUFFICIENT"
+        return (
+            f"EVIDENCE: OI/GEX from full book | "
+            f"Flow: {status} ({flow.trade_count} trades in {flow.lookback_hours:.0f}h)"
+        )
+
     def render_market_wide(self, sections: Dict[str, str]) -> str:
         """
         Render the MARKET-WIDE METRICS block from already-formatted section
@@ -197,6 +311,59 @@ class OnChainReportFormatter:
                 lines.append("")
         lines.append(_SEPARATOR)
         return "\n".join(lines)
+
+    def render_market_wide_from_result(self, result: OnChainAnalysisResult) -> str:
+        """
+        Render the MARKET-WIDE METRICS block directly from the typed
+        ``OnChainAnalysisResult.market_wide`` (refactor_design_spec.md
+        section T8), in the same fixed order ``render_market_wide`` uses.
+
+        Not currently called by ``_save_reports_per_expiration`` — the
+        legacy text-splitter's naive "EXPIRATION:" scan ran the LAST
+        expiration's slice to the end of the full report string, so that
+        one expiration's saved file also picked up the trailing
+        MARKET-WIDE METRICS block (never the intent per this method's own
+        "each expiration folder gets only its section" contract). T8 does
+        not reproduce that leak: per-expiration files now contain only
+        that expiration's own section, for every expiration including the
+        last. This method exists for a future full-report-from-result
+        render path (T9/T10) where the market-wide block belongs.
+
+        A section is included only when its typed sub-result is not None —
+        matches the legacy ``if section_name in self.market_wide_sections``
+        gate (a phase whose try/except caught an exception, or whose guard
+        condition wasn't met, never got a dict entry either).
+
+        Returns "" if every sub-result is None (matches the legacy
+        ``if self.market_wide_sections:`` gate on an empty dict).
+        """
+        mw = result.market_wide
+        sections: Dict[str, str] = {}
+
+        if mw.aggregate_gex_dex is not None:
+            sections["aggregate_gex_dex"] = format_aggregate_gex_dex_section(
+                mw.aggregate_gex_dex, result.underlying_price, result.currency,
+            )
+        if mw.term_structure is not None:
+            sections["iv_term_structure"] = format_term_structure_section(mw.term_structure)
+        if mw.futures_basis is not None:
+            sections["futures_basis"] = format_futures_basis_section(mw.futures_basis)
+        if mw.realized_volatility is not None:
+            sections["realized_volatility"] = format_realized_volatility_section(mw.realized_volatility)
+        if mw.variance_risk_premium is not None:
+            sections["vrp"] = format_vrp_section(mw.variance_risk_premium)
+        if mw.volatility_cone is not None:
+            sections["volatility_cone"] = format_volatility_cone_section(mw.volatility_cone)
+        if mw.perpetual_funding is not None:
+            sections["perpetual_funding"] = format_perpetual_funding_section(mw.perpetual_funding)
+        if mw.block_trades is not None:
+            sections["block_trades"] = format_block_trades_section(mw.block_trades)
+        if mw.cross_asset_correlation is not None:
+            sections["cross_asset_correlation"] = format_cross_asset_correlation_section(
+                mw.cross_asset_correlation, result.currency,
+            )
+
+        return self.render_market_wide(sections)
 
     def render_full(
         self,

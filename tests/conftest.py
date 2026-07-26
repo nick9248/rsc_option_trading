@@ -57,6 +57,12 @@ _FROZEN_CLOCK_MODULES = (
     # clock time moved away from the fixture's recorded_at_epoch. Same remedy
     # this list already documents for the other 5 modules.
     "coding.core.analytics.vrp_calculator",
+    # OnChainAnalysisBuilder.build() stamps OnChainAnalysisResult.generated_at
+    # via its own datetime.now() call (T6) — a second, independently-computed
+    # "now" alongside OnChainAnalyzer.generate_report()'s, discovered via the
+    # T8 per-expiration-file characterization test failing on a timestamp
+    # mismatch. Same remedy as the other entries in this list.
+    "coding.service.on_chain.analysis_builder",
 )
 
 

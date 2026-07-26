@@ -14,7 +14,11 @@ from coding.core.analytics.reporting.report_formatter import (
     ExpirationRenderInput,
     OnChainReportFormatter,
 )
-from coding.core.analytics.results.analysis_result import MarketMetricsResult
+from coding.core.analytics.results.analysis_result import (
+    ExpirationBundle,
+    MarketMetricsResult,
+    OnChainAnalysisResult,
+)
 from coding.core.analytics.results.expiry_results import (
     ExpirationAnalysisResult,
     MaxPainResult,
@@ -24,6 +28,9 @@ from coding.core.analytics.results.expiry_results import (
     SupportResistanceResult,
     VolumeStatsResult,
 )
+from coding.core.analytics.results.flow_results import FlowResult, FlowTotals
+from coding.core.analytics.results.gex_dex_results import GexDexKeyLevels, GexDexResult
+from coding.core.analytics.results.market_wide_results import MarketWideResult, PerpetualFundingResult
 
 GENERATED_AT = datetime(2026, 7, 25, 12, 0, 0)
 
@@ -183,3 +190,114 @@ def test_render_full_without_market_wide_sections_omits_the_block():
     # Report ends with the last expiration's own closing separator, one trailing \n.
     assert text.endswith("=" * 80 + "\n")
     assert not text.endswith("=" * 80 + "\n\n")
+
+
+# ---------------------------------------------------------------------------
+# T8: render_header_from_result / render_expiration_from_result /
+# render_market_wide_from_result — render directly from the typed
+# OnChainAnalysisResult, no string scanning (refactor_design_spec.md T8).
+# ---------------------------------------------------------------------------
+
+def _make_empty_market_wide(spot_price: float = 95000.0) -> MarketWideResult:
+    return MarketWideResult(
+        spot_price=spot_price, currency="BTC", dvol=None, iv_percentile_365d=None,
+        aggregate_gex_dex=None, term_structure=None, futures_basis=None,
+        realized_volatility=None, variance_risk_premium=None, volatility_cone=None,
+        perpetual_funding=None, block_trades=None, cross_asset_correlation=None,
+        failed_sections=(),
+    )
+
+
+def _make_result(expiration: str = "10MAR26", **overrides) -> OnChainAnalysisResult:
+    bundle = ExpirationBundle(
+        expiration=expiration, analysis=_make_analysis(expiration), gex_dex=None,
+        flow=None, vol_surface=None, oi_changes=None, iv_percentile=None, trend=None,
+        flow_chart_paths={}, enriched_instruments=(),
+    )
+    defaults = dict(
+        currency="BTC", underlying_price=95000.0, generated_at=GENERATED_AT,
+        market_metrics=None, expirations=(bundle,), market_wide=_make_empty_market_wide(),
+        parsed_instruments={expiration: ()}, atm_iv_by_expiration={}, recent_trades=(),
+    )
+    defaults.update(overrides)
+    return OnChainAnalysisResult(**defaults)
+
+
+def test_render_header_from_result_matches_render_header():
+    formatter = OnChainReportFormatter()
+    metrics = MarketMetricsResult(dvol=75.0, iv_percentile=90.0, iv_rank=80.0, current_funding=0.0001, funding_8h=0.0001)
+    result = _make_result(market_metrics=metrics)
+
+    from_result = formatter.render_header_from_result(result)
+    from_args = formatter.render_header("BTC", 95000.0, GENERATED_AT, metrics)
+    assert from_result == from_args
+
+
+def test_render_expiration_from_result_unknown_expiration_returns_empty():
+    formatter = OnChainReportFormatter()
+    result = _make_result("10MAR26")
+    assert formatter.render_expiration_from_result(result, "NOTFOUND") == ""
+
+
+def test_render_expiration_from_result_includes_evidence_line_when_flow_present():
+    formatter = OnChainReportFormatter()
+    flow = FlowResult(
+        flow_data={}, expiration_totals=FlowTotals(0.0, 0.0, 0.0, 0.0),
+        bias_interpretation="Insufficient flow data", flow_trend="Insufficient flow data",
+        top_buy_strikes=(), top_sell_strikes=(), trade_count=3, spot_price=95000.0,
+        window_start_ms=0, window_end_ms=86_400_000, lookback_hours=24.0,
+        sufficient_data=False, low_confidence=False,
+    )
+    bundle = ExpirationBundle(
+        expiration="10MAR26", analysis=_make_analysis("10MAR26"), gex_dex=None, flow=flow,
+        vol_surface=None, oi_changes=None, iv_percentile=None, trend=None,
+        flow_chart_paths={}, enriched_instruments=(),
+    )
+    result = _make_result(expirations=(bundle,))
+    text = formatter.render_expiration_from_result(result, "10MAR26")
+    assert "EVIDENCE: OI/GEX from full book | Flow: INSUFFICIENT (3 trades in 24h)" in text
+
+
+def test_render_expiration_from_result_includes_gex_dex_section_when_present():
+    formatter = OnChainReportFormatter()
+    gex_dex = GexDexResult(
+        strike_rows=(), cumulative_gex={}, cumulative_dex={},
+        key_levels=GexDexKeyLevels(call_resistance=None, put_support=None, hvl=None, gamma_flip=None),
+        spot_price=95000.0, total_net_gex=1234.5, total_net_dex=6.7, currency="BTC",
+    )
+    bundle = ExpirationBundle(
+        expiration="10MAR26", analysis=_make_analysis("10MAR26"), gex_dex=gex_dex, flow=None,
+        vol_surface=None, oi_changes=None, iv_percentile=None, trend=None,
+        flow_chart_paths={}, enriched_instruments=(),
+    )
+    result = _make_result(expirations=(bundle,))
+    text = formatter.render_expiration_from_result(result, "10MAR26")
+    assert "GEX/DEX ANALYSIS" in text
+    assert "+1,234.50" in text
+
+
+def test_render_market_wide_from_result_empty_returns_empty_string():
+    formatter = OnChainReportFormatter()
+    result = _make_result()
+    assert formatter.render_market_wide_from_result(result) == ""
+
+
+def test_render_market_wide_from_result_includes_present_sections_only():
+    formatter = OnChainReportFormatter()
+    funding = PerpetualFundingResult(
+        perp_open_interest=1_000_000.0, funding_rate=0.0001, funding_8h=0.0002,
+        funding_trend="Stable", history_points=10,
+    )
+    mw = MarketWideResult(
+        spot_price=95000.0, currency="BTC", dvol=None, iv_percentile_365d=None,
+        aggregate_gex_dex=None, term_structure=None, futures_basis=None,
+        realized_volatility=None, variance_risk_premium=None, volatility_cone=None,
+        perpetual_funding=funding, block_trades=None, cross_asset_correlation=None,
+        failed_sections=(),
+    )
+    result = _make_result(market_wide=mw)
+    text = formatter.render_market_wide_from_result(result)
+    assert "MARKET-WIDE METRICS" in text
+    assert "PERPETUAL FUNDING & OI" in text
+    assert "FUTURES BASIS" not in text
+    assert "IV TERM STRUCTURE" not in text

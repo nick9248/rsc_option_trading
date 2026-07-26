@@ -29,7 +29,13 @@ from coding.core.analytics.on_chain_analyzer import (
 )
 from coding.core.analytics.market_wide_calculator import MarketWideCalculator
 from coding.core.analytics.reporting.market_wide_formatter import format_futures_basis_section
-from coding.core.analytics.results.analysis_result import IvPercentileResult, OiChangesResult, OiChangeRow
+from coding.core.analytics.reporting.report_formatter import OnChainReportFormatter
+from coding.core.analytics.results.analysis_result import (
+    IvPercentileResult,
+    OiChangeRow,
+    OiChangesResult,
+    OnChainAnalysisResult,
+)
 from coding.core.analytics.results.market_wide_results import (
     BlockTrade,
     BlockTradesResult,
@@ -194,8 +200,9 @@ class OnChainAnalysisService:
 
         result = builder.build()
 
-        # Save reports per expiration
-        self._save_reports_per_expiration(report, currency, analyzer)
+        # Save reports per expiration — rendered from the typed result (T8),
+        # not the report text (no string scanning).
+        self._save_reports_per_expiration(result, currency)
 
         progress("Analysis complete")
         if return_analyzer and return_result:
@@ -1369,23 +1376,25 @@ class OnChainAnalysisService:
 
     def _save_reports_per_expiration(
         self,
-        full_report: str,
+        result: OnChainAnalysisResult,
         currency: str,
-        analyzer: OnChainAnalyzer
     ) -> None:
         """
-        Parse full report and save per-expiration sections.
+        Render and save one report file per expiration, directly from the
+        typed ``OnChainAnalysisResult`` (refactor_design_spec.md section T8
+        — kills the report-text splitter; fixes M2).
 
-        Each expiration folder gets only its section (header + expiration data).
-        Full report remains in GUI only.
+        Each expiration folder gets header + that expiration's own section,
+        rendered via ``OnChainReportFormatter`` — no string scanning of a
+        full report text; the on-disk file is built from the same typed
+        aggregate the rest of the pipeline (T6/T7) already produced.
 
         Directory: output/data/onchain_analysis/{currency}/{expiration}/
         Filename: report_{timestamp}.txt
 
         Args:
-            full_report: Full analysis report text.
+            result: The typed aggregate from ``OnChainAnalysisBuilder.build()``.
             currency: Currency symbol (BTC, ETH).
-            analyzer: OnChainAnalyzer instance with parsed data.
         """
         try:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1393,56 +1402,18 @@ class OnChainAnalysisService:
             # Get project root (3 levels up from this file)
             project_root = Path(__file__).parent.parent.parent.parent
 
-            # Split report into lines for parsing
-            lines = full_report.split('\n')
+            formatter = OnChainReportFormatter()
+            header = formatter.render_header_from_result(result)
 
-            # Find header (everything before first "EXPIRATION:")
-            header_lines = []
-            first_exp_idx = None
-            for i, line in enumerate(lines):
-                if line.startswith("EXPIRATION:"):
-                    first_exp_idx = i
-                    break
-                header_lines.append(line)
+            saved = 0
+            for expiration in result.expiration_names():
+                section_content = formatter.render_expiration_from_result(result, expiration)
+                if not section_content:
+                    continue
 
-            if first_exp_idx is None:
-                logger.warning("No EXPIRATION sections found in report")
-                return
-
-            header = '\n'.join(header_lines)
-
-            # Find all expiration sections
-            exp_sections = {}
-            current_exp = None
-            current_lines = []
-
-            for i in range(first_exp_idx, len(lines)):
-                line = lines[i]
-
-                if line.startswith("EXPIRATION:"):
-                    # Save previous section if exists
-                    if current_exp and current_lines:
-                        exp_sections[current_exp] = '\n'.join(current_lines)
-
-                    # Start new section
-                    current_exp = line.split(":", 1)[1].strip()
-                    current_lines = [line]
-                elif current_exp:
-                    current_lines.append(line)
-
-            # Save last section
-            if current_exp and current_lines:
-                exp_sections[current_exp] = '\n'.join(current_lines)
-
-            logger.info(f"Parsed {len(exp_sections)} expiration sections")
-
-            # Save each section to its folder
-            for expiration, section_content in exp_sections.items():
-                # Create directory structure
                 output_dir = project_root / "output" / "data" / "onchain_analysis" / currency / expiration
                 output_dir.mkdir(parents=True, exist_ok=True)
 
-                # Save header + section (not full report)
                 report_path = output_dir / f"report_{timestamp}.txt"
                 with open(report_path, "w", encoding="utf-8") as f:
                     f.write(header)
@@ -1452,6 +1423,9 @@ class OnChainAnalysisService:
                     f.write(section_content)
 
                 logger.info(f"Saved report for {expiration} to {report_path}")
+                saved += 1
+
+            logger.info(f"Saved {saved} per-expiration report(s)")
 
         except Exception as e:
             logger.error(f"Failed to save per-expiration reports: {e}", exc_info=True)

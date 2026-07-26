@@ -20,6 +20,7 @@ early-return case when the corresponding phase produced no result.
 from datetime import datetime
 from typing import Optional
 
+from coding.core.analytics.market_wide_calculator import FUNDING_PERIODS_PER_YEAR
 from coding.core.analytics.results.market_wide_results import (
     BlockTradesResult,
     CrossAssetCorrelationResult,
@@ -168,26 +169,35 @@ def format_volatility_cone_section(result: Optional[VolatilityConeResult]) -> st
 
 
 def format_perpetual_funding_section(result: Optional[PerpetualFundingResult]) -> str:
-    """Render the PERPETUAL FUNDING & OI section."""
+    """
+    Render the PERPETUAL FUNDING & OI section.
+
+    Mirrors MarketWideCalculator.calculate_perpetual_funding_trend exactly
+    (must stay in lockstep — bugfix_spec.md Item 4): annualization uses
+    funding_8h (the realised 8h rate), never funding_rate/current_funding
+    (the instantaneous accruing rate) — a 61x divergence was observed live
+    between the two. Gates on funding_8h OR funding_rate being present, not
+    funding_rate alone, so a missing instantaneous reading doesn't suppress
+    a present 8h reading (or vice versa).
+    """
     lines = ["PERPETUAL FUNDING & OI", _SUB_SEPARATOR]
 
-    if result is None or result.funding_rate is None:
+    if result is None or (result.funding_8h is None and result.funding_rate is None):
         lines.append("  Funding data not available")
         lines.append("")
         return "\n".join(lines)
 
-    funding_pct = result.funding_rate * 100
-    lines.append(
-        f"  Perp OI: {result.perp_open_interest:,.0f} USD  |  "
-        f"Funding: {funding_pct:.4f}%  |  Trend: {result.funding_trend}"
-    )
-
+    lines.append(f"  Perp OI: {result.perp_open_interest:,.0f} USD")
     if result.funding_8h is not None:
-        ann_funding = result.funding_rate * 3 * 365 * 100
+        ann_funding = result.funding_8h * FUNDING_PERIODS_PER_YEAR * 100
         lines.append(
-            f"  8h Funding: {result.funding_8h * 100:.4f}%  |  "
-            f"Annualized: {ann_funding:.1f}%"
+            f"  Funding (8h): {result.funding_8h * 100:.4f}%  |  "
+            f"Annualized: {ann_funding:.2f}%  |  Trend: {result.funding_trend}"
         )
+    else:
+        lines.append("  Funding (8h): not available")
+    if result.funding_rate is not None:
+        lines.append(f"  Instantaneous funding: {result.funding_rate * 100:.4f}%")
 
     lines.append("")
     return "\n".join(lines)
