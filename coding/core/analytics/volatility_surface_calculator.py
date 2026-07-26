@@ -26,6 +26,24 @@ from coding.core.analytics.results.vol_surface_results import (
 logger = logging.getLogger(__name__)
 _bs = BlackScholesCalculator()
 
+# bugfix_spec.md Item 3 — the aggression residual (VWAP - matched mark IV
+# baseline) is now correctly ~±1 vol point (previously it conflated smile
+# shape with aggression and swung ±10-15 points), so this label threshold is
+# doing real work. Named per F3.3.
+VWAP_AGGRESSION_THRESHOLD_POINTS = 1.0
+
+# Below this many distinct traded instruments, the matched baseline is
+# computed from too thin a sample to support a directional aggression label
+# (a single traded instrument sets VWAP == baseline mix trivially). The raw
+# numbers are still shown; only the label is suppressed.
+# bugfix_spec.md Item 3 F3.3's illustrative code snippet shows this constant
+# as 3, but its own acceptance tests (T3.2 vs T3.4, section 3.5) require 2:
+# n=2 must render the normal label ("Balanced"), n=1 must suppress it. The
+# acceptance tests' hand-computed expectations govern (task brief: used
+# verbatim) over the snippet, so this is 2, not 3 — noted as a spec
+# inconsistency in the Task A4 report.
+MINIMUM_TRADED_INSTRUMENTS_FOR_AGGRESSION = 2
+
 
 class VolatilitySurfaceCalculator:
     """
@@ -450,19 +468,30 @@ class VolatilitySurfaceCalculator:
             lines.append(f"ATM IV: {atm_iv:.1f}%")
             lines.append("")
 
-        # VWAP IV (if available)
+        # VWAP IV vs the matched (volume-weighted, same-instruments) mark IV
+        # baseline (if available) — bugfix_spec.md Item 3.
         vwap_iv = result.vwap_iv
         mark_iv_baseline = result.mark_iv_average
         if vwap_iv is not None and mark_iv_baseline is not None:
-            diff = vwap_iv - mark_iv_baseline
-            if diff > 1:
-                aggression = "Buyers aggressive (VWAP > Mark)"
-            elif diff < -1:
-                aggression = "Sellers aggressive (VWAP < Mark)"
+            if result.traded_instrument_count < MINIMUM_TRADED_INSTRUMENTS_FOR_AGGRESSION:
+                lines.append(
+                    f"VWAP IV: {vwap_iv:.1f}%  |  Matched Mark IV: {mark_iv_baseline:.1f}%  "
+                    f"(only {result.traded_instrument_count} instrument(s) traded - "
+                    f"aggression signal suppressed)"
+                )
             else:
-                aggression = "Balanced"
-            lines.append(f"VWAP IV: {vwap_iv:.1f}%  |  Mark IV: {mark_iv_baseline:.1f}%  |  Diff: {diff:+.1f}%")
-            lines.append(f"  {aggression}")
+                diff = vwap_iv - mark_iv_baseline
+                if diff > VWAP_AGGRESSION_THRESHOLD_POINTS:
+                    aggression = "Buyers aggressive (VWAP > Mark)"
+                elif diff < -VWAP_AGGRESSION_THRESHOLD_POINTS:
+                    aggression = "Sellers aggressive (VWAP < Mark)"
+                else:
+                    aggression = "Balanced"
+                lines.append(
+                    f"VWAP IV: {vwap_iv:.1f}%  |  Matched Mark IV: {mark_iv_baseline:.1f}%  "
+                    f"|  Diff: {diff:+.1f}%  ({result.traded_instrument_count} instruments)"
+                )
+                lines.append(f"  {aggression}")
             lines.append("")
 
         # IV by Strike (show most relevant strikes around spot)

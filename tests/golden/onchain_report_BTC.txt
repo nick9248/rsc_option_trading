@@ -162,8 +162,8 @@ VOLATILITY SURFACE ANALYSIS
 
 ATM IV: 35.7%
 
-VWAP IV: 39.2%  |  Mark IV: 37.3%  |  Diff: +1.8%
-  Buyers aggressive (VWAP > Mark)
+VWAP IV: 39.2%  |  Matched Mark IV: 39.2%  |  Diff: -0.1%  (11 instruments)
+  Balanced
 
 IV BY STRIKE:
       Strike     Call IV      Put IV
@@ -434,8 +434,8 @@ VOLATILITY SURFACE ANALYSIS
 
 ATM IV: 41.1%
 
-VWAP IV: 40.4%  |  Mark IV: 45.9%  |  Diff: -5.5%
-  Sellers aggressive (VWAP < Mark)
+VWAP IV: 40.4%  |  Matched Mark IV: 40.3%  |  Diff: +0.1%  (7 instruments)
+  Balanced
 
 IV BY STRIKE:
       Strike     Call IV      Put IV
@@ -673,7 +673,7 @@ VOLATILITY SURFACE ANALYSIS
 
 ATM IV: 43.5%
 
-VWAP IV: 43.4%  |  Mark IV: 43.9%  |  Diff: -0.5%
+VWAP IV: 43.4%  |  Matched Mark IV: 44.0%  |  Diff: -0.6%  (7 instruments)
   Balanced
 
 IV BY STRIKE:
@@ -956,8 +956,8 @@ VOLATILITY SURFACE ANALYSIS
 
 ATM IV: 37.0%
 
-VWAP IV: 38.6%  |  Mark IV: 53.4%  |  Diff: -14.8%
-  Sellers aggressive (VWAP < Mark)
+VWAP IV: 38.6%  |  Matched Mark IV: 38.7%  |  Diff: -0.0%  (13 instruments)
+  Balanced
 
 IV BY STRIKE:
       Strike     Call IV      Put IV
@@ -1167,8 +1167,8 @@ VOLATILITY SURFACE ANALYSIS
 
 ATM IV: 14.8%
 
-VWAP IV: 24.4%  |  Mark IV: 34.9%  |  Diff: -10.4%
-  Sellers aggressive (VWAP < Mark)
+VWAP IV: 24.4%  |  Matched Mark IV: 23.0%  |  Diff: +1.5%  (13 instruments)
+  Buyers aggressive (VWAP > Mark)
 
 IV BY STRIKE:
       Strike     Call IV      Put IV
@@ -1442,8 +1442,8 @@ VOLATILITY SURFACE ANALYSIS
 
 ATM IV: 42.4%
 
-VWAP IV: 42.3%  |  Mark IV: 43.3%  |  Diff: -1.0%
-  Sellers aggressive (VWAP < Mark)
+VWAP IV: 42.3%  |  Matched Mark IV: 42.7%  |  Diff: -0.4%  (2 instruments)
+  Balanced
 
 IV BY STRIKE:
       Strike     Call IV      Put IV
@@ -1650,7 +1650,7 @@ VOLATILITY SURFACE ANALYSIS
 
 ATM IV: 24.5%
 
-VWAP IV: 24.5%  |  Mark IV: 36.0%  |  Diff: -11.5%
+VWAP IV: 24.5%  |  Matched Mark IV: 25.5%  |  Diff: -1.1%  (14 instruments)
   Sellers aggressive (VWAP < Mark)
 
 IV BY STRIKE:
@@ -1916,8 +1916,8 @@ VOLATILITY SURFACE ANALYSIS
 
 ATM IV: 35.9%
 
-VWAP IV: 39.6%  |  Mark IV: 43.6%  |  Diff: -4.0%
-  Sellers aggressive (VWAP < Mark)
+VWAP IV: 39.6%  |  Matched Mark IV: 39.7%  |  Diff: -0.1%  (19 instruments)
+  Balanced
 
 IV BY STRIKE:
       Strike     Call IV      Put IV
@@ -2143,8 +2143,8 @@ VOLATILITY SURFACE ANALYSIS
 
 ATM IV: 29.2%
 
-VWAP IV: 32.9%  |  Mark IV: 37.9%  |  Diff: -5.0%
-  Sellers aggressive (VWAP < Mark)
+VWAP IV: 32.9%  |  Matched Mark IV: 33.8%  |  Diff: -0.9%  (19 instruments)
+  Balanced
 
 IV BY STRIKE:
       Strike     Call IV      Put IV
@@ -2349,8 +2349,8 @@ VOLATILITY SURFACE ANALYSIS
 
 ATM IV: 32.2%
 
-VWAP IV: 35.6%  |  Mark IV: 37.1%  |  Diff: -1.4%
-  Sellers aggressive (VWAP < Mark)
+VWAP IV: 35.6%  |  Matched Mark IV: 34.7%  |  Diff: +1.0%  (16 instruments)
+  Balanced
 
 IV BY STRIKE:
       Strike     Call IV      Put IV
@@ -2622,7 +2622,7 @@ VOLATILITY SURFACE ANALYSIS
 
 ATM IV: 36.2%
 
-VWAP IV: 47.2%  |  Mark IV: 57.2%  |  Diff: -10.0%
+VWAP IV: 47.2%  |  Matched Mark IV: 48.4%  |  Diff: -1.3%  (26 instruments)
   Sellers aggressive (VWAP < Mark)
 
 IV BY STRIKE:
@@ -2839,7 +2839,7 @@ VOLATILITY SURFACE ANALYSIS
 
 ATM IV: 35.8%
 
-VWAP IV: 40.2%  |  Mark IV: 39.7%  |  Diff: +0.5%
+VWAP IV: 40.2%  |  Matched Mark IV: 40.8%  |  Diff: -0.6%  (17 instruments)
   Balanced
 
 IV BY STRIKE:

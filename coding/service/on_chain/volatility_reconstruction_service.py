@@ -158,10 +158,20 @@ class VolatilityReconstructionService:
         instruments: List[Dict[str, Any]]
     ) -> tuple:
         """
-        VWAP IV vs mark IV — mirrors OnChainAnalysisService._calculate_vwap_iv
-        (on_chain_analysis_service.py:446-481). Reimplemented here as plain
-        arithmetic (not a calculator class) because the live version is a
-        private instance method on a service tied to a live API session.
+        VWAP IV vs an UNWEIGHTED chain-average mark IV.
+
+        bugfix_spec.md Item 3 fixed the live path
+        (OnChainAnalysisService._calculate_vwap_iv) to compare VWAP against a
+        volume-weighted "matched baseline" over only the instruments that
+        traded. This reconstruction path deliberately still uses the old,
+        chain-wide average: DatabaseRepository.get_trades_for_hour_and_expiration
+        (repository.py) returns only ``{iv, amount}`` per historical trade —
+        no ``instrument_name`` — so there is no way to attribute a historical
+        trade to a specific instrument's mark_iv and compute the matched
+        baseline. This is a genuine historical-schema constraint (adding
+        instrument_name to that query is a separate, out-of-scope change),
+        not a shortcut: the persisted ``mark_iv_avg`` column for
+        reconstructed rows therefore keeps the pre-fix (biased) semantics.
         """
         weighted_iv_sum = 0.0
         total_volume = 0.0

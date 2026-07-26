@@ -261,8 +261,15 @@ class DatabaseRepository:
         """
         Fetch trades for a specific hour bucket and expiration (for VWAP IV reconstruction).
 
-        Mirrors the {iv, amount} shape OnChainAnalysisService._calculate_vwap_iv
-        (on_chain_analysis_service.py:446) consumes for its VWAP leg.
+        Mirrors the {iv, amount} shape VolatilityReconstructionService._calculate_vwap_iv
+        consumes for its VWAP leg. Note: unlike
+        OnChainAnalysisService._calculate_vwap_iv (on_chain_analysis_service.py:461,
+        fixed per bugfix_spec.md Item 3 to use a volume-weighted "matched"
+        mark-IV baseline), this query does not select instrument_name, so
+        the reconstruction path cannot attribute a trade to a specific
+        instrument's mark_iv and still uses the older, unweighted chain
+        average as its second leg — see
+        VolatilityReconstructionService._calculate_vwap_iv's docstring.
 
         Args:
             currency: Currency symbol.

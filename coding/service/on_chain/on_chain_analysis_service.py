@@ -10,7 +10,7 @@ import time
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from coding.core.analytics.buy_sell_flow_analyzer import BuySellFlowAnalyzer
 from coding.core.analytics.chart_generator import (
@@ -438,8 +438,8 @@ class OnChainAnalysisService:
 
                 # Calculate VWAP IV for this expiration
                 exp_trades = trades_by_expiration.get(expiration, [])
-                vwap_iv, mark_iv_avg = self._calculate_vwap_iv(exp_trades, instruments)
-                calculator.set_vwap_iv_data(vwap_iv, mark_iv_avg)
+                vwap_iv, mark_iv_baseline, traded_count = self._calculate_vwap_iv(exp_trades, instruments)
+                calculator.set_vwap_iv_data(vwap_iv, mark_iv_baseline, traded_count)
 
                 # Calculate once — pass result to both structured storage and report formatter.
                 # T4: calculate() returns the typed VolSurfaceResult; the
@@ -461,39 +461,61 @@ class OnChainAnalysisService:
     def _calculate_vwap_iv(
         self,
         trades: List[Dict[str, Any]],
-        instruments: List[Dict[str, Any]]
-    ) -> tuple:
+        instruments: List[Dict[str, Any]],
+    ) -> Tuple[Optional[float], Optional[float], int]:
         """
-        Calculate VWAP IV from recent trades and compare with mark IV.
+        Volume-weighted traded IV vs. the volume-weighted MARK IV of the SAME
+        instruments, weighted by the SAME traded volumes (bugfix_spec.md
+        Item 3 — the "matched baseline" fix).
+
+        The prior implementation compared VWAP against an unweighted
+        arithmetic mean of every instrument's mark_iv in the whole chain,
+        which measures the smile (ATM vs wings), not trading aggression.
+        This compares like with like: the same instruments, the same
+        weights, so the residual is attributable to execution side.
 
         Args:
             trades: Recent trade records for one expiration.
             instruments: Enriched instrument data for the same expiration.
 
         Returns:
-            Tuple of (vwap_iv, mark_iv_avg), both as percentages or None.
+            (vwap_iv, matched_mark_iv_baseline, traded_instrument_count),
+            all None/0 when there is no usable trade data.
         """
         if not trades:
-            return None, None
+            return None, None, 0
 
-        # VWAP IV = Sum(IV × volume) / Sum(volume)
-        weighted_iv_sum = 0.0
-        total_volume = 0.0
+        mark_iv_by_instrument = {
+            i["instrument_name"]: i["mark_iv"]
+            for i in instruments
+            if i.get("instrument_name") and i.get("mark_iv") is not None and i["mark_iv"] > 0
+        }
+
+        weighted_traded_iv = 0.0
+        volume_by_instrument: Dict[str, float] = defaultdict(float)
 
         for trade in trades:
             iv = trade.get("iv")
-            amount = trade.get("amount", 0)
-            if iv is not None and iv > 0 and amount > 0:
-                weighted_iv_sum += iv * amount
-                total_volume += amount
+            amount = trade.get("amount") or 0.0
+            name = trade.get("instrument_name")
+            if iv is None or iv <= 0 or amount <= 0:
+                continue
+            if name not in mark_iv_by_instrument:  # no mark IV -> excluded from BOTH legs
+                continue
+            weighted_traded_iv += iv * amount
+            volume_by_instrument[name] += amount
 
-        vwap_iv = (weighted_iv_sum / total_volume) if total_volume > 0 else None
+        total_volume = sum(volume_by_instrument.values())
+        if total_volume <= 0:
+            return None, None, 0
 
-        # Average mark IV from instruments
-        mark_ivs = [i["mark_iv"] for i in instruments if i.get("mark_iv") is not None and i["mark_iv"] > 0]
-        mark_iv_avg = (sum(mark_ivs) / len(mark_ivs)) if mark_ivs else None
+        vwap_iv = weighted_traded_iv / total_volume
+        baseline = sum(
+            mark_iv_by_instrument[name] * volume
+            for name, volume in volume_by_instrument.items()
+        ) / total_volume
 
-        return vwap_iv, mark_iv_avg
+        return vwap_iv, baseline, len(volume_by_instrument)
 
     def _calculate_market_wide_metrics(
         self,
