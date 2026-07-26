@@ -75,7 +75,7 @@ class VarianceRiskPremiumResult:
     """Variance risk premium (DVOL vs realized volatility)."""
 
     vrp: float  # points
-    signal: str  # "RICH" | "FAIR" | "CHEAP"
+    signal: str  # "VERY_EXPENSIVE" | "EXPENSIVE" | "FAIR" | "CHEAP" | "VERY_CHEAP"
     dvol: Optional[float]
     rv_30d: float
 
