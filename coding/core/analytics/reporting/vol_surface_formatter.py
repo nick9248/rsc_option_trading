@@ -13,6 +13,10 @@ making this formatter a pure consumer.
 """
 
 from coding.core.analytics.results.vol_surface_results import VolSurfaceResult
+from coding.core.analytics.volatility_surface_calculator import (
+    MINIMUM_TRADED_INSTRUMENTS_FOR_AGGRESSION,
+    VWAP_AGGRESSION_THRESHOLD_POINTS,
+)
 
 _SUB_SEPARATOR = "-" * 80
 
@@ -55,19 +59,32 @@ def format_vol_surface_section(result: VolSurfaceResult, expiration: str) -> str
         lines.append(f"ATM IV: {atm_iv:.1f}%")
         lines.append("")
 
-    # VWAP IV (if available)
+    # VWAP IV vs the matched (volume-weighted, same-instruments) mark IV
+    # baseline (if available) — bugfix_spec.md Item 3. Mirrors
+    # VolatilitySurfaceCalculator.generate_report_section exactly (must stay
+    # in lockstep — see that method's docstring).
     vwap_iv = result.vwap_iv
-    mark_iv_avg = result.mark_iv_average
-    if vwap_iv is not None and mark_iv_avg is not None:
-        diff = vwap_iv - mark_iv_avg
-        if diff > 1:
-            aggression = "Buyers aggressive (VWAP > Mark)"
-        elif diff < -1:
-            aggression = "Sellers aggressive (VWAP < Mark)"
+    mark_iv_baseline = result.mark_iv_average
+    if vwap_iv is not None and mark_iv_baseline is not None:
+        if result.traded_instrument_count < MINIMUM_TRADED_INSTRUMENTS_FOR_AGGRESSION:
+            lines.append(
+                f"VWAP IV: {vwap_iv:.1f}%  |  Matched Mark IV: {mark_iv_baseline:.1f}%  "
+                f"(only {result.traded_instrument_count} instrument(s) traded - "
+                f"aggression signal suppressed)"
+            )
         else:
-            aggression = "Balanced"
-        lines.append(f"VWAP IV: {vwap_iv:.1f}%  |  Mark IV: {mark_iv_avg:.1f}%  |  Diff: {diff:+.1f}%")
-        lines.append(f"  {aggression}")
+            diff = vwap_iv - mark_iv_baseline
+            if diff > VWAP_AGGRESSION_THRESHOLD_POINTS:
+                aggression = "Buyers aggressive (VWAP > Mark)"
+            elif diff < -VWAP_AGGRESSION_THRESHOLD_POINTS:
+                aggression = "Sellers aggressive (VWAP < Mark)"
+            else:
+                aggression = "Balanced"
+            lines.append(
+                f"VWAP IV: {vwap_iv:.1f}%  |  Matched Mark IV: {mark_iv_baseline:.1f}%  "
+                f"|  Diff: {diff:+.1f}%  ({result.traded_instrument_count} instruments)"
+            )
+            lines.append(f"  {aggression}")
         lines.append("")
 
     # IV by Strike (show most relevant strikes around spot). The per-strike

@@ -97,6 +97,24 @@ def test_futures_basis_rendered():
     text = format_futures_basis_section(result)
     assert "BTC-28FEB26" in text
     assert "12.5%" in text
+    assert "annualized simple, ACT/365, to 08:00 UTC settlement" in text
+
+
+def test_futures_basis_none_annualized_premium_renders_na_not_crash():
+    """bugfix_spec.md Item 5 / Decision D12: annualized_premium_pct may be
+    None (suppressed sub-daily tenor) — must not TypeError on the format spec."""
+    result = FuturesBasisResult(
+        entries=(
+            FuturesBasisEntry(
+                instrument_name="BTC-26JUL26", dte=0, mark_price=100_200.0,
+                index_price=100_000.0, annualized_premium_pct=None,
+            ),
+        ),
+        futures_basis={"26JUL26": None},
+    )
+    text = format_futures_basis_section(result)
+    assert "BTC-26JUL26" in text
+    assert "n/a" in text
 
 
 # ---------------------------------------------------------------------------

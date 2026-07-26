@@ -37,10 +37,28 @@ def test_flow_section_header_and_totals():
     text = format_flow_section(_make_result(), lookback_hours=24)
     assert "BUY/SELL FLOW ANALYSIS (Trade Direction-Based)" in text
     assert "Spot Price: $95,000.00" in text
-    assert "Lookback Window: 24 hours" in text
+    assert "Window:" in text and "UTC" in text
     assert "Trades Analyzed: 6" in text
     assert "Bias: Heavy Buying" in text
     assert "Trend: Steady Buy Pressure" in text
+    assert "LOW CONFIDENCE" not in text  # sufficient_data=True, low_confidence=False
+
+
+def test_flow_section_suppressed_below_sufficiency_floor():
+    """bugfix_spec.md Item 6 / Decision D5: <5 trades suppresses the whole section."""
+    result = _make_result(trade_count=3, sufficient_data=False, low_confidence=False)
+    text = format_flow_section(result, lookback_hours=24)
+    assert "** INSUFFICIENT FLOW DATA **" in text
+    assert "3 trade(s) in window, 5 required" in text
+    assert "EXPIRATION-LEVEL FLOW:" not in text
+    assert "Heavy Buying" not in text
+
+
+def test_flow_section_low_confidence_tag_rendered():
+    result = _make_result(sufficient_data=True, low_confidence=True)
+    text = format_flow_section(result, lookback_hours=24)
+    assert "Bias: Heavy Buying (LOW CONFIDENCE)" in text
+    assert "Trend: Steady Buy Pressure (LOW CONFIDENCE)" in text
 
 
 def test_flow_section_top_buy_and_sell_tables():

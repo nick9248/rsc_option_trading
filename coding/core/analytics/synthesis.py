@@ -127,8 +127,11 @@ class MarketWideMetrics:
     cone_20d_pctile: float = 0.0
     cone_30d_pctile: float = 0.0
 
-    # Futures basis
-    futures_basis: Dict[str, float] = field(default_factory=dict)
+    # Futures basis. Optional[float] values (Decision D12, bugfix_spec.md
+    # Item 5): None for a suppressed sub-daily/expired tenor. See the
+    # basis_values filter at score_futures_basis's call site below, which
+    # already relies on this being possible at runtime.
+    futures_basis: Dict[str, Optional[float]] = field(default_factory=dict)
 
     # Perp
     perp_oi: float = 0.0

@@ -620,7 +620,13 @@ class ProspectiveCollector:
                         instruments=gex_instruments,
                         spot_price=underlying_price
                     )
-                    gex_dex_data = gex_calc.calculate()
+                    # T4 (refactor_design_spec.md): calculate() returns the
+                    # typed GexDexResult. save_onchain_snapshot (compat-map
+                    # row #9) is a T10-scoped consumer that still reads a
+                    # legacy dict (repository.py's gex_dex_data.get(...)
+                    # calls) — .to_dict() shim keeps it working unchanged
+                    # until T10 migrates it to attribute access.
+                    gex_dex_data = gex_calc.calculate().to_dict()  # T10: switch to typed attribute access
 
                     # Save to database
                     self.repo.save_onchain_snapshot(

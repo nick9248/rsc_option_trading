@@ -68,8 +68,15 @@ def test_skew_insufficient_data_when_skew_none():
 
 def test_vwap_iv_buyers_aggressive():
     text = format_vol_surface_section(_make_result(), expiration="10MAR26")
-    assert "VWAP IV: 82.0%  |  Mark IV: 80.0%  |  Diff: +2.0%" in text
+    assert "VWAP IV: 82.0%  |  Matched Mark IV: 80.0%  |  Diff: +2.0%" in text
     assert "Buyers aggressive (VWAP > Mark)" in text
+
+
+def test_vwap_iv_aggression_suppressed_below_instrument_floor():
+    result = _make_result(traded_instrument_count=1)
+    text = format_vol_surface_section(result, expiration="10MAR26")
+    assert "aggression signal suppressed" in text
+    assert "Buyers aggressive" not in text
 
 
 def test_vwap_iv_omitted_when_none():

@@ -4,14 +4,21 @@ Text formatting for the buy/sell trade-flow section.
 Extracted verbatim (behavior-preserving) from
 ``BuySellFlowAnalyzer.generate_report_section()`` per
 refactor_design_spec.md section T3, operating on the typed ``FlowResult``
-(section T2) instead of the analyzer's internal dict.
-
-Not yet wired into ``BuySellFlowAnalyzer`` — ``calculate()`` still returns a
-dict until T5 replaces it with ``FlowResult``. Until then, ``OnChainAnalyzer``
-keeps consuming the analyzer's own ``generate_report_section()`` text
-verbatim (T3's "temporary adapter").
+(section T2), wired in at T5 to match
+BuySellFlowAnalyzer.generate_report_section exactly — including the
+bugfix_spec.md Item 6 / Decision D5 data-sufficiency quality gate. This
+formatter has no production callers yet (T8 wires it in when the text
+splitter is deleted); it must still track the live path in lockstep so T8's
+wiring is a no-op rather than a silent regression.
 """
 
+from datetime import datetime, timezone
+
+from coding.core.analytics.buy_sell_flow_analyzer import (
+    INSUFFICIENT_DATA_LABEL,
+    LOW_CONFIDENCE_SUFFIX,
+    MINIMUM_TRADES_FOR_SECTION,
+)
 from coding.core.analytics.results.flow_results import FlowResult
 
 _SEPARATOR = "-" * 80
@@ -23,27 +30,47 @@ def format_flow_section(result: FlowResult, lookback_hours: float) -> str:
 
     Args:
         result: Buy/sell flow result for one expiration.
-        lookback_hours: Hours the flow window covers (display only — the
-            result itself already carries ``window_start_ms``/``window_end_ms``).
+        lookback_hours: Unused — kept for signature parity with older
+            callers; the window is rendered from
+            ``result.window_start_ms``/``window_end_ms`` (the actual
+            fetched window), not this display-only hint.
 
     Returns:
         Formatted string for inclusion in the analysis report.
     """
+    del lookback_hours  # not rendered — see docstring; result carries the real window
     lines = []
+
+    start_str = datetime.fromtimestamp(result.window_start_ms / 1000.0, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
+    end_str = datetime.fromtimestamp(result.window_end_ms / 1000.0, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
 
     lines.append("BUY/SELL FLOW ANALYSIS (Trade Direction-Based)")
     lines.append(_SEPARATOR)
     lines.append(f"Spot Price: ${result.spot_price:,.2f}")
-    lines.append(f"Lookback Window: {lookback_hours} hours")
+    lines.append(f"Window: {start_str} -> {end_str} UTC")
     lines.append(f"Trades Analyzed: {result.trade_count}")
     lines.append("")
 
+    if not result.sufficient_data:
+        lines.append(
+            f"  ** INSUFFICIENT FLOW DATA ** - {result.trade_count} trade(s) in window, "
+            f"{MINIMUM_TRADES_FOR_SECTION} required. Flow section suppressed."
+        )
+        lines.append("")
+        return "\n".join(lines)
+
     totals = result.expiration_totals
+    confidence_tag = LOW_CONFIDENCE_SUFFIX if result.low_confidence else ""
+    trend_tag = (
+        LOW_CONFIDENCE_SUFFIX
+        if result.low_confidence and result.flow_trend != INSUFFICIENT_DATA_LABEL
+        else ""
+    )
     lines.append("EXPIRATION-LEVEL FLOW:")
     lines.append(f"  Calls:  Buy: {totals.call_buy_volume:>10,.1f}  Sell: {totals.call_sell_volume:>10,.1f}")
     lines.append(f"  Puts:   Buy: {totals.put_buy_volume:>10,.1f}  Sell: {totals.put_sell_volume:>10,.1f}")
-    lines.append(f"  Bias: {result.bias_interpretation}")
-    lines.append(f"  Trend: {result.flow_trend}")
+    lines.append(f"  Bias: {result.bias_interpretation}{confidence_tag}")
+    lines.append(f"  Trend: {result.flow_trend}{trend_tag}")
     lines.append("")
 
     lines.append("TOP 5 STRIKES BY BUYING PRESSURE:")

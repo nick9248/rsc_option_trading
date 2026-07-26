@@ -40,7 +40,12 @@ class FuturesBasisEntry:
     dte: Optional[int]
     mark_price: float
     index_price: float
-    annualized_premium_pct: float
+    # Optional[float]: None when annualization is suppressed for a
+    # sub-daily tenor, or the tenor is already expired (bugfix_spec.md
+    # Item 5; Decision D12 — None means weight-zero downstream, never
+    # "neutral"). The raw (unannualized) basis is still computable from
+    # mark_price/index_price even when this is None.
+    annualized_premium_pct: Optional[float]
 
 
 @dataclass(frozen=True)
@@ -48,7 +53,11 @@ class FuturesBasisResult:
     """Futures basis across all future instruments."""
 
     entries: Tuple[FuturesBasisEntry, ...]
-    futures_basis: Dict[str, float]  # {expiry_label: annualized_pct} — synthesis reads this
+    # {expiry_label: annualized_pct} — synthesis reads this. Values are
+    # Optional[float] (Decision D12): None for a suppressed/expired tenor,
+    # filtered out (weight-zero) rather than treated as neutral by every
+    # consumer (see synthesis.py's basis_values list-comprehension filter).
+    futures_basis: Dict[str, Optional[float]]
 
 
 @dataclass(frozen=True)
