@@ -31,7 +31,6 @@ from coding.core.analytics.chart_generator import (
     generate_net_flow_chart,
     generate_flow_trend_chart,
 )
-from coding.core.database.repository import DatabaseRepository
 from coding.gui.theme.colors import Colors
 from coding.service.on_chain.on_chain_analysis_service import OnChainAnalysisService
 
@@ -52,21 +51,33 @@ class FlowChartsWindow(QDialog):
     def __init__(
         self,
         currency: str,
-        repository: DatabaseRepository,
+        service: OnChainAnalysisService,
         parent: Optional[QWidget] = None
     ):
         """
         Initialize flow charts window.
 
+        H3 (refactor_design_spec.md section T9): takes an
+        ``OnChainAnalysisService`` instead of a raw ``DatabaseRepository`` --
+        ``get_flow_metrics``/``get_aggregated_flow_metrics``/
+        ``get_filtered_aggregate_flow`` all go through the injected service.
+        ``self.repository`` is kept as the service's own repository (not a
+        second independently-constructed instance) for the handful of
+        lower-level read calls (``get_active_expirations_with_flow``, and
+        the ``generate_flow_trend_chart`` chart-generator call) that this
+        dialog still needs directly and that are not part of the
+        compatibility map's three named passthrough calls.
+
         Args:
             currency: Currency symbol (BTC, ETH).
-            repository: Database repository for querying flow metrics.
+            service: On-chain analysis service (owns the repository this
+                dialog reads flow data through).
             parent: Parent widget.
         """
         super().__init__(parent)
         self.currency = currency
-        self.repository = repository
-        self._flow_service = OnChainAnalysisService(repository=self.repository)
+        self.service = service
+        self.repository = service.repository
         self.current_expiration = None
         self.current_filter: str = "all"
         self._setup_ui()
@@ -318,7 +329,7 @@ class FlowChartsWindow(QDialog):
         try:
             # Get metrics from database
             logger.info(f"Fetching flow metrics for {self.currency} {expiration}")
-            metrics = self.repository.get_flow_metrics(self.currency, expiration)
+            metrics = self.service.get_flow_metrics(self.currency, expiration)
 
             if not metrics or not metrics.get("flow_data"):
                 logger.warning(f"No flow data found for {self.currency} {expiration}")
@@ -415,13 +426,13 @@ class FlowChartsWindow(QDialog):
             if self.current_filter == "all":
                 # Fast path: use pre-aggregated metrics table
                 logger.info(f"Fetching aggregated flow metrics for {self.currency}")
-                metrics = self.repository.get_aggregated_flow_metrics(self.currency)
+                metrics = self.service.get_aggregated_flow_metrics(self.currency)
             else:
                 # Filtered path: service layer aggregates per-expiration with block filter
                 logger.info(
                     f"Fetching per-expiration flow with filter={self.current_filter} for {self.currency}"
                 )
-                metrics = self._flow_service.get_filtered_aggregate_flow(
+                metrics = self.service.get_filtered_aggregate_flow(
                     self.currency, self.current_filter
                 )
 

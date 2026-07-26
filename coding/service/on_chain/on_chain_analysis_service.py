@@ -447,6 +447,45 @@ class OnChainAnalysisService:
                 logger.warning(f"Failed to calculate buy/sell flow for {expiration}: {e}")
                 progress_callback(f"Warning: Failed to calculate flow for {expiration}")
 
+    def get_flow_metrics(self, currency: str, expiration: str) -> Dict[str, Any]:
+        """
+        T9 (refactor_design_spec.md): passthrough so GUI callers (e.g.
+        ``FlowChartsWindow``) go through this service instead of holding a
+        raw ``DatabaseRepository`` reference directly.
+
+        Args:
+            currency: Currency symbol (BTC, ETH).
+            expiration: Expiration date string.
+
+        Returns:
+            Dict with flow_data structure and metadata (see
+            ``DatabaseRepository.get_flow_metrics``), or an empty-shaped
+            dict when no repository is configured.
+        """
+        if self.repository is None:
+            logger.warning("Repository not available for get_flow_metrics")
+            return {"flow_data": {}, "spot_price": 0.0}
+        return self.repository.get_flow_metrics(currency, expiration)
+
+    def get_aggregated_flow_metrics(self, currency: str) -> Dict[str, Any]:
+        """
+        T9 (refactor_design_spec.md): passthrough so GUI callers (e.g.
+        ``FlowChartsWindow``) go through this service instead of holding a
+        raw ``DatabaseRepository`` reference directly.
+
+        Args:
+            currency: Currency symbol (BTC, ETH).
+
+        Returns:
+            Dict with flow_data structure and metadata (see
+            ``DatabaseRepository.get_aggregated_flow_metrics``), or an
+            empty-shaped dict when no repository is configured.
+        """
+        if self.repository is None:
+            logger.warning("Repository not available for get_aggregated_flow_metrics")
+            return {"flow_data": {}, "spot_price": 0.0}
+        return self.repository.get_aggregated_flow_metrics(currency)
+
     def get_filtered_aggregate_flow(
         self,
         currency: str,

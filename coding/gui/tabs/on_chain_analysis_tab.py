@@ -31,12 +31,18 @@ from coding.gui.components.log_viewer import LogViewer, GuiLogHandler
 from coding.gui.dialogs.flow_charts_window import FlowChartsWindow
 from coding.gui.theme.colors import Colors
 from coding.core.database.repository import DatabaseRepository
-from coding.service.deribit.deribit_api_service import DeribitApiService
 from coding.service.on_chain.on_chain_analysis_service import OnChainAnalysisService
-from coding.service.morning_note.morning_note_service import MorningNoteService
+from coding.service.on_chain.on_chain_workflow_service import OnChainWorkflowService
 
 
 logger = logging.getLogger(__name__)
+
+# M9 (refactor_design_spec.md section T9): the logger the GUI's log-viewer
+# handler attaches to. Scoped to this subsystem's logger (not the root
+# logger) so the handler only sees on-chain-analysis-relevant records and so
+# it can be removed cleanly on tab close instead of accumulating on the root
+# logger across tab instances.
+_GUI_LOG_LOGGER_NAME = "coding.service.on_chain"
 
 
 class OnChainAnalysisWorker(QThread):
@@ -63,23 +69,20 @@ class OnChainAnalysisWorker(QThread):
         self.currency = currency
 
     def run(self) -> None:
-        """Execute data fetch and analysis, then save report bundle."""
+        """
+        Execute the full analyze -> synthesize -> save workflow.
+
+        H3 (refactor_design_spec.md section T9): one call into
+        ``OnChainWorkflowService`` replaces the worker's previous manual
+        3-step orchestration (construct ``DatabaseRepository``/
+        ``DeribitApiService``/``OnChainAnalysisService``/``MorningNoteService``
+        and drive each step itself). This module no longer constructs or
+        calls either service/repository directly.
+        """
         try:
-            repository = DatabaseRepository()
-
-            with DeribitApiService(timeout=90) as api_service:
-                service = OnChainAnalysisService(api_service, repository=repository)
-                report, result = service.fetch_and_analyze(
-                    currency=self.currency,
-                    progress_callback=lambda msg: self.progress.emit(msg),
-                    return_result=True,
-                )
-
-                morning_service = MorningNoteService(service)
-                synthesis = morning_service.generate(result)
-                morning_service.save_report_bundle(self.currency, report, synthesis)
-
-                self.finished.emit(report)
+            workflow = OnChainWorkflowService(self.currency)
+            output = workflow.run(progress_callback=lambda msg: self.progress.emit(msg))
+            self.finished.emit(output.report_text)
 
         except Exception as error:
             logger.exception("Error during on-chain analysis")
@@ -282,10 +285,30 @@ class OnChainAnalysisTab(QWidget):
         return controls_frame
 
     def _setup_logging(self) -> None:
-        """Set up logging to the GUI log viewer."""
+        """
+        Set up logging to the GUI log viewer.
+
+        M9 (refactor_design_spec.md section T9): attaches to this
+        subsystem's own logger (``coding.service.on_chain``, which every
+        on-chain service module logs under and which propagates up from
+        ``coding.service.on_chain.on_chain_analysis_service`` etc.), not the
+        root logger -- and removed on close (see ``closeEvent``). Attaching
+        to the root logger leaked one handler per tab instance for the
+        lifetime of the process; scoping to this subsystem's logger plus a
+        dedup guard (never add the same handler object twice) fixes it.
+        """
+        self._log_target_logger = logging.getLogger(_GUI_LOG_LOGGER_NAME)
         self.gui_handler = GuiLogHandler(self.log_viewer)
-        root_logger = logging.getLogger()
-        root_logger.addHandler(self.gui_handler)
+        if self.gui_handler not in self._log_target_logger.handlers:
+            self._log_target_logger.addHandler(self.gui_handler)
+
+    def closeEvent(self, event) -> None:
+        """Remove the GUI log handler on close so it does not leak (M9)."""
+        log_target_logger = getattr(self, "_log_target_logger", None)
+        gui_handler = getattr(self, "gui_handler", None)
+        if log_target_logger is not None and gui_handler is not None:
+            log_target_logger.removeHandler(gui_handler)
+        super().closeEvent(event)
 
     def _connect_signals(self) -> None:
         """Connect widget signals to slots."""
@@ -378,9 +401,16 @@ class OnChainAnalysisTab(QWidget):
         self._start_next_in_queue()
 
     def _open_flow_charts(self) -> None:
-        """Open fullscreen flow charts window for the last analyzed currency."""
+        """
+        Open fullscreen flow charts window for the last analyzed currency.
+
+        H3 (refactor_design_spec.md section T9): hands ``FlowChartsWindow`` a
+        service, not a raw ``DatabaseRepository`` -- the dialog's own read
+        calls go through the service (see ``FlowChartsWindow``).
+        """
         currency = self._last_analyzed_currency or ("BTC" if self.btc_checkbox.isChecked() else "ETH")
         repository = DatabaseRepository()
+        service = OnChainAnalysisService(repository=repository)
 
-        dialog = FlowChartsWindow(currency, repository, parent=self)
+        dialog = FlowChartsWindow(currency, service, parent=self)
         dialog.exec()

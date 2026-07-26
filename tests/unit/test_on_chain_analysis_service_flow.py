@@ -284,3 +284,38 @@ class TestCalculateBuySellFlowSingleFetch:
         # generate_report_section must be given the precomputed result
         _, report_kwargs = instance.generate_report_section.call_args
         assert report_kwargs["result"] is instance.calculate.return_value
+
+
+# ---------------------------------------------------------------------------
+# T9 (refactor_design_spec.md): get_flow_metrics / get_aggregated_flow_metrics
+# passthroughs -- so GUI callers (FlowChartsWindow) go through the service
+# instead of holding a raw DatabaseRepository reference directly.
+# ---------------------------------------------------------------------------
+
+
+def test_get_flow_metrics_delegates_to_repository(service, mock_repo):
+    mock_repo.get_flow_metrics.return_value = {"flow_data": {"x": 1}, "spot_price": 90000.0}
+
+    result = service.get_flow_metrics("BTC", "28MAR26")
+
+    mock_repo.get_flow_metrics.assert_called_once_with("BTC", "28MAR26")
+    assert result == {"flow_data": {"x": 1}, "spot_price": 90000.0}
+
+
+def test_get_flow_metrics_without_repository_returns_empty_shape():
+    service = OnChainAnalysisService(repository=None)
+    assert service.get_flow_metrics("BTC", "28MAR26") == {"flow_data": {}, "spot_price": 0.0}
+
+
+def test_get_aggregated_flow_metrics_delegates_to_repository(service, mock_repo):
+    mock_repo.get_aggregated_flow_metrics.return_value = {"flow_data": {"y": 2}, "spot_price": 91000.0}
+
+    result = service.get_aggregated_flow_metrics("BTC")
+
+    mock_repo.get_aggregated_flow_metrics.assert_called_once_with("BTC")
+    assert result == {"flow_data": {"y": 2}, "spot_price": 91000.0}
+
+
+def test_get_aggregated_flow_metrics_without_repository_returns_empty_shape():
+    service = OnChainAnalysisService(repository=None)
+    assert service.get_aggregated_flow_metrics("BTC") == {"flow_data": {}, "spot_price": 0.0}
