@@ -1194,8 +1194,13 @@ class SynthesisEngine:
             self.scorer.score_funding(market.funding_8h)
         )
 
-        # Futures basis (front only)
-        basis_values = list(market.futures_basis.values())
+        # Futures basis (front only). bugfix_spec.md Item 5 / Decision D12:
+        # basis is now Optional[float] (None when annualization is
+        # suppressed for a sub-daily tenor) — None must weight-zero here,
+        # never be treated as a neutral score. Ordering is preserved (dict
+        # insertion order == DTE-ascending, per synthesis_logic.md:112);
+        # filtering keeps that order, it just skips suppressed entries.
+        basis_values = [v for v in market.futures_basis.values() if v is not None]
         if basis_values:
             all_direction_scores.append(
                 self.scorer.score_futures_basis(basis_values[0])

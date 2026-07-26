@@ -82,6 +82,13 @@ def apply_frozen_clock(monkeypatch_obj, epoch: float) -> _real_datetime:
     class _FrozenDateTime(_real_datetime):
         @classmethod
         def now(cls, tz=None):
+            # bugfix_spec.md Item 5 (F5.3.1) has production code call
+            # datetime.now(timezone.utc) explicitly. Honor a requested tz by
+            # returning the correct aware instant for the same epoch, rather
+            # than silently handing back the naive local frozen_dt (which
+            # would crash any tz-aware-minus-naive subtraction downstream).
+            if tz is not None:
+                return _real_datetime.fromtimestamp(epoch, tz=tz)
             return frozen_dt
 
     for module_name in _FROZEN_CLOCK_MODULES:

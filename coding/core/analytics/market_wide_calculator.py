@@ -15,7 +15,7 @@ Computes metrics that span across all expirations:
 import logging
 import math
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -23,6 +23,15 @@ import numpy as np
 from coding.core.analytics.vrp_calculator import VRPCalculator
 
 logger = logging.getLogger(__name__)
+
+# bugfix_spec.md Item 5 (F5.3.1/F5.3.2) — futures settle at 08:00 UTC, not
+# local midnight; annualization uses simple (not compound) ACT/365, the
+# crypto-market/CME convention for quoted "annualized basis"; sub-daily
+# tenors are suppressed rather than annualized (multiplying noise by up to
+# ~1000x is worse than showing nothing).
+DERIBIT_SETTLEMENT_HOUR_UTC = 8
+DAYS_PER_YEAR = 365.0
+MINIMUM_DAYS_FOR_ANNUALIZATION = 1.0
 
 
 class MarketWideCalculator:
@@ -79,7 +88,7 @@ class MarketWideCalculator:
 
         # Calculate DTE for each expiration
         entries = []
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
 
         for exp, iv in sorted(atm_ivs.items()):
             dte = self._calculate_dte(exp, now)
@@ -127,28 +136,50 @@ class MarketWideCalculator:
     def calculate_futures_basis(
         self,
         futures_data: List[Dict[str, Any]],
+        now_utc: Optional[datetime] = None,
     ) -> Tuple[str, Dict]:
         """
         Generate futures basis report.
 
+        Annualized simple (not compounded) basis on ACT/365 to 08:00 UTC
+        settlement (bugfix_spec.md Item 5). Simple annualization is the
+        crypto-market/CME convention for a quoted "annualized basis" and is
+        what a cash-and-carry desk can actually lock on a single trade;
+        empirically it differs from compound by <=0.11pt at every observed
+        tenor, so the choice is immaterial next to the ~1-2pt bug being
+        fixed here (F5.2 confirmation evidence).
+
+        Sub-daily tenors (< 1 day to settlement) suppress annualization
+        entirely (``None``) rather than showing a number scaled by up to
+        ~1000x noise; the raw basis is still computed and shown.
+
         Args:
             futures_data: List of dicts with instrument_name, mark_price,
                          index_price, and expiration info.
+            now_utc: Current instant, timezone-aware UTC. Defaults to
+                ``datetime.now(timezone.utc)`` — pass explicitly in tests for
+                a frozen, reproducible clock.
 
         Returns:
-            Tuple of (formatted report string, dict mapping expiry -> annualized premium).
+            Tuple of (formatted report string, dict with "futures_basis"
+            mapping expiry -> Optional[float] annualized premium; ``None``
+            when annualization is suppressed — Decision D12: weight-zero in
+            every downstream consumer, never "neutral").
         """
         lines = []
         sub_separator = "-" * 80
-        basis_dict: Dict[str, float] = {}
+        basis_dict: Dict[str, Optional[float]] = {}
 
-        lines.append("FUTURES BASIS")
+        lines.append("FUTURES BASIS (annualized simple, ACT/365, to 08:00 UTC settlement)")
         lines.append(sub_separator)
 
         if not futures_data:
             lines.append("  No futures data available")
             lines.append("")
             return "\n".join(lines), {"futures_basis": basis_dict}
+
+        if now_utc is None:
+            now_utc = datetime.now(timezone.utc)
 
         lines.append(
             f"  {'Future':>20}  {'Price':>12}  {'Spot':>12}  {'Ann. Premium':>12}"
@@ -165,27 +196,33 @@ class MarketWideCalculator:
             if spot <= 0 or price <= 0:
                 continue
 
-            # Calculate DTE
+            # Expiry label + exact fractional days to 08:00 UTC settlement
             parts = name.split("-")
             if len(parts) >= 2:
-                dte = self._calculate_dte(parts[1], datetime.now())
                 expiry_label = parts[1]
             else:
-                dte = None
                 expiry_label = name
+            days = self._calculate_days_to_expiry(expiry_label, now_utc)
 
-            # Annualized basis
-            basis_pct = ((price - spot) / spot) * 100
-            if dte and dte > 0:
-                ann_premium = basis_pct * (365 / dte)
+            basis_pct = ((price - spot) / spot) * 100.0
+            raw_basis_note = ""
+
+            if days is None or days <= 0:
+                annualized: Optional[float] = None
+                ann_display = "n/a (expired)" if days is not None else "n/a"
+            elif days < MINIMUM_DAYS_FOR_ANNUALIZATION:
+                annualized = None
+                ann_display = "n/a (<1d)"
+                raw_basis_note = f"  (raw basis: {basis_pct:.4f}%)"
             else:
-                ann_premium = basis_pct
+                annualized = basis_pct * (DAYS_PER_YEAR / days)
+                ann_display = f"{annualized:>.1f}%"
 
-            basis_dict[expiry_label] = ann_premium
+            basis_dict[expiry_label] = annualized
 
             lines.append(
                 f"  {name:>20}  ${price:>11,.0f}  ${spot:>11,.0f}  "
-                f"{ann_premium:>11.1f}%"
+                f"{ann_display:>12}{raw_basis_note}"
             )
 
         lines.append("")
@@ -614,20 +651,54 @@ class MarketWideCalculator:
         return float(np.corrcoef(a_returns, b_returns)[0, 1])
 
     @staticmethod
-    def _calculate_dte(expiration: str, now: datetime) -> Optional[int]:
+    def _parse_expiry_datetime(expiration: str) -> Optional[datetime]:
         """
-        Calculate days to expiration from expiration string.
+        Parse a Deribit expiry label ('28MAR26') to its settlement instant:
+        08:00 UTC on that date, timezone-aware.
+
+        bugfix_spec.md Item 5 (F5.3.1): Deribit options and dated futures
+        settle at 08:00 UTC, not local midnight.
+        """
+        try:
+            return datetime.strptime(expiration, "%d%b%y").replace(
+                hour=DERIBIT_SETTLEMENT_HOUR_UTC, minute=0, second=0,
+                microsecond=0, tzinfo=timezone.utc,
+            )
+        except ValueError:
+            return None
+
+    @classmethod
+    def _calculate_days_to_expiry(cls, expiration: str, now_utc: datetime) -> Optional[float]:
+        """
+        Exact fractional days to 08:00 UTC settlement. May be negative
+        (already expired). ``now_utc`` must be timezone-aware.
+
+        bugfix_spec.md Item 5 (F5.3.1) — replaces integer, local-midnight,
+        truncated-toward-negative-infinity DTE with an exact value.
+        """
+        expiry = cls._parse_expiry_datetime(expiration)
+        if expiry is None:
+            return None
+        return (expiry - now_utc).total_seconds() / 86400.0
+
+    @classmethod
+    def _calculate_dte(cls, expiration: str, now: datetime) -> Optional[int]:
+        """
+        Calculate (non-negative) integer days to expiration from expiration
+        string, for the DTE display column only
+        (calculate_iv_term_structure).
 
         Args:
             expiration: Expiration string like "28MAR26" or "27DEC24".
-            now: Current datetime.
+            now: Current datetime. Must be timezone-aware UTC
+                (bugfix_spec.md Item 5 F5.3.1) — callers must pass
+                ``datetime.now(timezone.utc)``, never ``datetime.now()``.
 
         Returns:
-            Days to expiration, or None if parse fails.
+            Days to expiration (floor of the exact fractional value, clamped
+            to 0 for past expirations), or None if parse fails.
         """
-        try:
-            exp_date = datetime.strptime(expiration, "%d%b%y")
-            dte = (exp_date - now).days
-            return max(dte, 0)
-        except ValueError:
+        exact = cls._calculate_days_to_expiry(expiration, now)
+        if exact is None:
             return None
+        return max(int(math.floor(exact)), 0)

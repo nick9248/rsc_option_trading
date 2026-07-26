@@ -5,7 +5,7 @@ Unit tests for MarketWideCalculator.
 import math
 import time
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from coding.core.analytics.market_wide_calculator import MarketWideCalculator
 
@@ -206,17 +206,101 @@ class TestMarketWideCalculator:
         assert "btc_eth_dvol_corr" in structured
 
     def test_dte_calculation(self):
-        # Test a known future date
-        now = datetime(2026, 2, 26)
+        # Test a known future date. now must be timezone-aware UTC per
+        # bugfix_spec.md Item 5 F5.3.1 (settlement is 08:00 UTC, not local
+        # midnight) — the integer _calculate_dte is now floor(exact fractional
+        # days), which floors 30.3333 -> 30, matching the pre-fix value here.
+        now = datetime(2026, 2, 26, tzinfo=timezone.utc)
         dte = MarketWideCalculator._calculate_dte("28MAR26", now)
         assert dte == 30
 
     def test_dte_invalid(self):
-        dte = MarketWideCalculator._calculate_dte("INVALID", datetime.now())
+        dte = MarketWideCalculator._calculate_dte("INVALID", datetime.now(timezone.utc))
         assert dte is None
 
     def test_dte_past(self):
-        # Past expiration should return 0
-        now = datetime(2026, 4, 1)
+        # Past expiration should return 0 (floor(-3.667) = -4, clamped to 0)
+        now = datetime(2026, 4, 1, tzinfo=timezone.utc)
         dte = MarketWideCalculator._calculate_dte("28MAR26", now)
         assert dte == 0
+
+
+class TestExactFractionalDaysToExpiry:
+    """
+    bugfix_spec.md Item 5 (F5.3.1): exact fractional DTE to 08:00 UTC
+    settlement, replacing the naive-datetime/local-midnight/integer-truncation
+    triple bug. Hand-computed numbers verbatim from section 5.5, T5.1.
+    """
+
+    def test_exact_fractional_dte_at_settlement_hour(self):
+        now = datetime(2026, 7, 25, 8, 0, 0, tzinfo=timezone.utc)
+        assert MarketWideCalculator._calculate_days_to_expiry("27JUL26", now) == pytest.approx(2.0)
+        assert MarketWideCalculator._calculate_days_to_expiry("26JUL26", now) == pytest.approx(1.0)
+        assert MarketWideCalculator._calculate_days_to_expiry("25JUL26", now) == pytest.approx(0.0)
+
+    def test_exact_fractional_dte_mid_day(self):
+        now2 = datetime(2026, 7, 25, 20, 0, 0, tzinfo=timezone.utc)
+        assert MarketWideCalculator._calculate_days_to_expiry("26JUL26", now2) == pytest.approx(0.5)
+
+    def test_invalid_expiration_returns_none(self):
+        now = datetime(2026, 7, 25, 8, 0, 0, tzinfo=timezone.utc)
+        assert MarketWideCalculator._calculate_days_to_expiry("INVALID", now) is None
+
+
+class TestFuturesBasisAnnualization:
+    """
+    bugfix_spec.md Item 5 (F5.3.2): annualized simple basis to 08:00 UTC
+    settlement, with sub-daily suppression. Hand-computed numbers verbatim
+    from section 5.5, T5.2-T5.4.
+    """
+
+    def test_annualized_basis_at_two_days(self, calculator):
+        """T5.2 - old code: dte=1 (naive local-midnight truncation) -> 73.00%
+        (exactly 2x wrong). Fixed: T=2.0 exact days -> 36.50%."""
+        report, structured = calculator.calculate_futures_basis(
+            [{"instrument_name": "BTC-27JUL26", "mark_price": 100_200.0, "index_price": 100_000.0}],
+            now_utc=datetime(2026, 7, 25, 8, 0, tzinfo=timezone.utc),
+        )
+        assert structured["futures_basis"]["27JUL26"] == pytest.approx(36.50, rel=1e-6)
+        assert "36.5" in report
+
+    def test_sub_daily_basis_is_suppressed(self, calculator):
+        """T5.3 - T=8h=0.33333 days; annualizing would give a meaningless
+        219.00%. Must suppress to None and print 'n/a (<1d)', while still
+        showing the raw (unannualized) basis."""
+        report, structured = calculator.calculate_futures_basis(
+            [{"instrument_name": "BTC-26JUL26", "mark_price": 100_200.0, "index_price": 100_000.0}],
+            now_utc=datetime(2026, 7, 26, 0, 0, tzinfo=timezone.utc),
+        )
+        assert structured["futures_basis"]["26JUL26"] is None
+        assert "n/a (<1d)" in report
+        assert "0.2000" in report or "0.20" in report  # raw basis still shown
+
+    def test_long_tenor_unchanged_by_the_fix(self, calculator):
+        """T5.4 - regression guard: at 152.5992 days the naive-vs-exact
+        difference is negligible (~0.036 pt); the fix must not disturb it.
+
+        bugfix_spec.md section 5.1's live confirmation-evidence sweep was
+        recorded 2026-07-25 17:37 UTC (front contract DTE 0.5992d to 26JUL26
+        08:00 UTC settlement); 2026-07-25 17:37:09.12 UTC reproduces the
+        spec's exact T=152.5992d for the 25DEC26 tenor bit-for-bit — the
+        spec's T5.4 snippet doesn't show its now_utc explicitly, so this is
+        derived rather than guessed.
+        """
+        now_utc = datetime(2026, 7, 25, 17, 37, 9, 120_000, tzinfo=timezone.utc)
+        assert MarketWideCalculator._calculate_days_to_expiry("25DEC26", now_utc) == pytest.approx(152.5992, abs=1e-4)
+
+        report, structured = calculator.calculate_futures_basis(
+            [{"instrument_name": "BTC-25DEC26", "mark_price": 103_876.1, "index_price": 100_000.0}],
+            now_utc=now_utc,
+        )
+        assert structured["futures_basis"]["25DEC26"] == pytest.approx(9.271192, rel=1e-6)
+
+    def test_expired_future_still_listed_reports_none_annualized(self, calculator):
+        """Edge case: days <= 0 (expired but still returned by the API) ->
+        annualized None, raw basis still computed/persisted, no crash."""
+        report, structured = calculator.calculate_futures_basis(
+            [{"instrument_name": "BTC-20JUL26", "mark_price": 100_100.0, "index_price": 100_000.0}],
+            now_utc=datetime(2026, 7, 25, 8, 0, tzinfo=timezone.utc),
+        )
+        assert structured["futures_basis"]["20JUL26"] is None
