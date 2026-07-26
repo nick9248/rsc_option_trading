@@ -14,16 +14,16 @@ Perp Funding: 0.0000%  | 8h: 0.0003%
 RANGE-BOUND (NEUTRAL) regime. Positive gamma (+76.0M GEX) is dampening volatility — dealers buy dips and sell rallies. Expect price to oscillate between put support at $60,000 and call resistance at $70,000. Priority: sell premium via symmetric iron condors/strangles, harvest theta decay.
 
 NEAR-TERM (0-7 DTE): NEUTRAL bias | GEX +80.0M (dampening) | OI: 154,865 contracts
-  31JUL26 (5d): MaxPain $64,000 (-0.6%) | P/C 0.29 | ATM IV 36.2% | Skew +4.3% | Flow: No Data
-  26JUL26 (0d): MaxPain $64,000 (-0.6%) | P/C 0.72 | ATM IV 14.8% | Skew +1.6% | Flow: No Data
+  31JUL26 (5d): MaxPain $64,000 (-0.6%) | P/C 0.29 | ATM IV 36.2% | Skew +4.3% | Flow: Insufficient flow data
+  26JUL26 (0d): MaxPain $64,000 (-0.6%) | P/C 0.72 | ATM IV 14.8% | Skew +1.6% | Flow: Insufficient flow data
 
 MID-TERM (7-30 DTE): NEUTRAL bias | GEX +25.3M (dampening) | OI: 24,185 contracts
-  7AUG26 (12d): MaxPain $64,000 (-0.6%) | P/C 0.13 | ATM IV 35.8% | Skew +3.7% | Flow: No Data
-  14AUG26 (19d): MaxPain $65,000 (+0.9%) | P/C 0.30 | ATM IV 35.7% | Skew +4.2% | Flow: No Data
+  7AUG26 (12d): MaxPain $64,000 (-0.6%) | P/C 0.13 | ATM IV 35.8% | Skew +3.7% | Flow: Insufficient flow data
+  14AUG26 (19d): MaxPain $65,000 (+0.9%) | P/C 0.30 | ATM IV 35.7% | Skew +4.2% | Flow: Insufficient flow data
 
 FAR-TERM (30+ DTE): BULLISH bias | GEX +25.8M (dampening) | OI: 257,391 contracts
-  25SEP26 (61d): MaxPain $70,000 (+8.7%) | P/C 0.58 | ATM IV 37.0% | Skew +5.0% | Flow: No Data
-  25DEC26 (152d): MaxPain $70,000 (+8.7%) | P/C 0.56 | ATM IV 41.1% | Skew +4.7% | Flow: No Data
+  25SEP26 (61d): MaxPain $70,000 (+8.7%) | P/C 0.58 | ATM IV 37.0% | Skew +5.0% | Flow: Insufficient flow data
+  25DEC26 (152d): MaxPain $70,000 (+8.7%) | P/C 0.56 | ATM IV 41.1% | Skew +4.7% | Flow: Insufficient flow data
 
 VOL ASSESSMENT: Volatility is expensive (IV at 20th percentile, VRP +10.4pts). NOTE: 30d RV at 11th pctile — unusually calm period. VRP may compress further if realized vol reverts to mean. Sell premium in 31JUL26 where ATM IV is 36.2%. Skew at +4.3% makes Skew is normal — no clear rich/cheap side puts the higher-edge side to sell.
 

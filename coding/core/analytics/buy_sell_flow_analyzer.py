@@ -8,18 +8,59 @@ the direction of recent market activity.
 Metrics:
 - Per-strike buy/sell volume, notional, and counts
 - Net flow and buy/sell ratios
-- Multi-window trend detection (1h, 4h, 24h)
+- Multi-window trend detection (1h, 4h, full window)
 - Top strikes by buying/selling pressure
+
+Core purity (refactor_design_spec.md T5): this analyzer takes already-fetched
+trades and an explicit time window — it does NOT import DatabaseRepository or
+query the database. The caller (service layer) fetches once and injects the
+trades and window; this closes bugfix_spec.md Item 6a (the analyzer's own
+calculate() + generate_report_section() used to each issue their own DB query
+with independently-computed "now" instants, so the stored and reported flow
+data were provably drawn from two different windows).
 """
 
 import logging
 from collections import defaultdict
-from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
-from coding.core.database.repository import DatabaseRepository
+from coding.core.analytics.results.flow_results import (
+    FlowResult,
+    FlowTotals,
+    StrikeFlowEntry,
+    TopStrikeEntry,
+)
 
 logger = logging.getLogger(__name__)
+
+# bugfix_spec.md Item 6 / Decision D5 — two-tier data-sufficiency QUALITY gate
+# (not a single suppress-everything-below-N gate: a thin-but-nonzero sample is
+# shown with a confidence caveat, not hidden).
+MINIMUM_TRADES_FOR_SECTION = 5
+"""Below this trade count, the entire flow section is suppressed and replaced
+with an explicit "insufficient flow data" message (Decision D5). Calibrated
+2026-07-25 against 30d of production (currency, expiration, hour) windows:
+<5-trade windows are ~1.9-2.0% of cases (bugfix_spec.md Item 6b confirmation
+evidence) — the audit's original "26% zero-flow" claim was stale (0.0% since
+April) and is not the basis for this threshold; it is a deliberately small
+floor that only suppresses genuinely uninformative samples."""
+
+MINIMUM_TRADES_FOR_CONFIDENCE = 20
+"""Below this trade count (but >= MINIMUM_TRADES_FOR_SECTION), the section
+renders normally but the bias/trend labels carry a LOW CONFIDENCE tag
+(Decision D5) rather than being suppressed outright. Calibrated 2026-07-25:
+a 20-trade floor gates 5.5% of (expiration, hour) cases over 30d of
+production data (bugfix_spec.md Item 6, F6.3.2)."""
+
+MINIMUM_TRADES_1H_FOR_TREND = 5
+"""Minimum trades within the 1-hour sub-window before a trend label is
+emitted. The trend calculation slices the sample further than the overall
+bias (1h/4h/full-window comparison), so it needs its own, stricter floor —
+independent of MINIMUM_TRADES_FOR_CONFIDENCE (bugfix_spec.md Item 6, F6.3.2)."""
+
+INSUFFICIENT_DATA_LABEL = "Insufficient flow data"
+LOW_CONFIDENCE_SUFFIX = " (LOW CONFIDENCE)"
 
 
 class BuySellFlowAnalyzer:
@@ -28,35 +69,42 @@ class BuySellFlowAnalyzer:
 
     Uses actual trade direction to identify directional conviction,
     detect regime changes, and track large participant activity.
+
+    Trades and the analysis window are injected by the caller (single fetch,
+    single source of truth) — this class does no I/O.
     """
 
     def __init__(
         self,
-        repository: DatabaseRepository,
+        trades: List[Dict[str, Any]],
         currency: str,
         expiration: str,
         spot_price: float,
-        lookback_hours: int = 24,
-        trade_filter: str = "all",
+        window_start_ms: int,
+        window_end_ms: int,
     ):
         """
         Initialize buy/sell flow analyzer.
 
         Args:
-            repository: Database repository for querying trades.
+            trades: Trade records already fetched by the caller for
+                [window_start_ms, window_end_ms). Each dict shape matches
+                DatabaseRepository.get_trades_for_flow_analysis's rows.
             currency: Currency symbol (BTC or ETH).
             expiration: Expiration date string (e.g., "27MAR26").
             spot_price: Current underlying spot price.
-            lookback_hours: Hours to look back for trade data (default: 24).
-            trade_filter: Trade size filter — "all" (no filter), "block"
-                (notional >= $100k), or "non_block" (notional < $100k).
+            window_start_ms: Start of the analysis window (epoch ms).
+            window_end_ms: End of the analysis window (epoch ms). Also used
+                as the trend detector's "now" reference, so trend windows
+                (1h/4h) anchor on the same instant the caller fetched
+                against — not a fresh, independently-computed "now".
         """
-        self.repository = repository
+        self.trades = trades
         self.currency = currency
         self.expiration = expiration
         self.spot_price = spot_price
-        self.lookback_hours = lookback_hours
-        self.trade_filter = trade_filter
+        self.window_start_ms = window_start_ms
+        self.window_end_ms = window_end_ms
 
         # Per-strike flow data: {strike: {option_type: {buy_count, sell_count, ...}}}
         self.flow_data: Dict[float, Dict[str, Dict[str, float]]] = defaultdict(
@@ -78,14 +126,25 @@ class BuySellFlowAnalyzer:
             "put_sell_volume": 0.0,
         }
 
-    def calculate(self) -> Dict[str, Any]:
+    @property
+    def lookback_hours(self) -> float:
+        """Window length in hours, derived from the injected window (not
+        assumed to be 24h — fixes M6's hardcoded divisors)."""
+        return (self.window_end_ms - self.window_start_ms) / 3_600_000.0
+
+    def calculate(self) -> FlowResult:
         """
-        Calculate all buy/sell flow metrics.
+        Calculate all buy/sell flow metrics from the injected trades.
+
+        Idempotent: repeated calls reset flow_data/expiration_totals before
+        recomputing, so calling calculate() more than once on the same
+        instance yields identical results (mirrors the GEX/DEX fix,
+        bugfix_spec.md Item 1).
 
         Returns:
-            Dict with per-strike data, expiration totals, and top strikes.
+            FlowResult (coding/core/analytics/results/flow_results.py).
+            Call ``.to_dict()`` for the legacy dict shape.
         """
-        # Reset data structures
         self.flow_data = defaultdict(
             lambda: defaultdict(lambda: {
                 "buy_count": 0.0,
@@ -103,73 +162,91 @@ class BuySellFlowAnalyzer:
             "put_sell_volume": 0.0,
         }
 
-        # Fetch trades from database
-        trades = self._fetch_trades(self.lookback_hours)
+        trades = self.trades
+        trade_count = len(trades)
 
-        if not trades:
+        if trade_count == 0:
             logger.warning(f"No trades found for {self.currency} {self.expiration}")
             return self._empty_result()
 
-        # Process each trade
         for trade in trades:
             self._process_trade(trade)
 
-        # Calculate derived metrics (net flow, ratios)
         self._calculate_derived_metrics()
 
-        # Detect flow trends (multi-window comparison)
-        # Pass already-fetched trades — sub-windows are filtered client-side (no extra DB queries)
         flow_trend = self._detect_flow_trend(trades)
-
-        # Find top strikes by buying/selling pressure
         top_buy_strikes = self._find_top_strikes_by_buying()
         top_sell_strikes = self._find_top_strikes_by_selling()
 
-        # Determine expiration-level bias
-        bias_interpretation = self._interpret_flow_bias()
+        sufficient_data = trade_count >= MINIMUM_TRADES_FOR_SECTION
+        low_confidence = sufficient_data and trade_count < MINIMUM_TRADES_FOR_CONFIDENCE
+        bias_interpretation = self._interpret_flow_bias() if sufficient_data else INSUFFICIENT_DATA_LABEL
 
-        return {
-            "flow_data": dict(self.flow_data),
-            "expiration_totals": self.expiration_totals,
-            "bias_interpretation": bias_interpretation,
-            "flow_trend": flow_trend,
-            "top_buy_strikes": top_buy_strikes,
-            "top_sell_strikes": top_sell_strikes,
-            "trade_count": len(trades),
-            "spot_price": self.spot_price,
+        return self._build_result(
+            bias_interpretation=bias_interpretation,
+            flow_trend=flow_trend,
+            top_buy_strikes=top_buy_strikes,
+            top_sell_strikes=top_sell_strikes,
+            trade_count=trade_count,
+            sufficient_data=sufficient_data,
+            low_confidence=low_confidence,
+        )
+
+    def _build_result(
+        self,
+        bias_interpretation: str,
+        flow_trend: str,
+        top_buy_strikes: List[Dict[str, Any]],
+        top_sell_strikes: List[Dict[str, Any]],
+        trade_count: int,
+        sufficient_data: bool,
+        low_confidence: bool,
+    ) -> FlowResult:
+        """Wrap the dict-based working state (self.flow_data, self.expiration_totals) into FlowResult."""
+        flow_data: Dict[float, Dict[str, StrikeFlowEntry]] = {
+            strike: {
+                option_type: StrikeFlowEntry(
+                    buy_count=data["buy_count"],
+                    sell_count=data["sell_count"],
+                    buy_volume=data["buy_volume"],
+                    sell_volume=data["sell_volume"],
+                    buy_notional=data["buy_notional"],
+                    sell_notional=data["sell_notional"],
+                    net_flow=data["net_flow"],
+                    buy_sell_ratio=data["buy_sell_ratio"],
+                )
+                for option_type, data in by_type.items()
+            }
+            for strike, by_type in self.flow_data.items()
         }
 
-    def _fetch_trades(self, lookback_hours: int) -> List[Dict[str, Any]]:
-        """
-        Fetch trades from database for the specified time window.
-
-        Args:
-            lookback_hours: Hours to look back for trade data.
-
-        Returns:
-            List of trade dictionaries.
-        """
-        # Calculate time window
-        end_time = datetime.now()
-        start_time = end_time - timedelta(hours=lookback_hours)
-
-        start_ts = int(start_time.timestamp() * 1000)
-        end_ts = int(end_time.timestamp() * 1000)
-
-        trades = self.repository.get_trades_for_flow_analysis(
-            currency=self.currency,
-            expiration=self.expiration,
-            start_ts=start_ts,
-            end_ts=end_ts,
-            trade_filter=self.trade_filter,
+        return FlowResult(
+            flow_data=flow_data,
+            expiration_totals=FlowTotals(**self.expiration_totals),
+            bias_interpretation=bias_interpretation,
+            flow_trend=flow_trend,
+            top_buy_strikes=tuple(
+                TopStrikeEntry(
+                    strike=e["strike"], option_type=e["option_type"], net_flow=e["net_flow"],
+                    volume=e["buy_volume"], notional=e["buy_notional"],
+                )
+                for e in top_buy_strikes
+            ),
+            top_sell_strikes=tuple(
+                TopStrikeEntry(
+                    strike=e["strike"], option_type=e["option_type"], net_flow=e["net_flow"],
+                    volume=e["sell_volume"], notional=e["sell_notional"],
+                )
+                for e in top_sell_strikes
+            ),
+            trade_count=trade_count,
+            spot_price=self.spot_price,
+            window_start_ms=self.window_start_ms,
+            window_end_ms=self.window_end_ms,
+            lookback_hours=self.lookback_hours,
+            sufficient_data=sufficient_data,
+            low_confidence=low_confidence,
         )
-
-        logger.info(
-            f"Fetched {len(trades)} trades for {self.currency} {self.expiration} "
-            f"from {start_time} to {end_time} ({lookback_hours}h window)"
-        )
-
-        return trades
 
     def _process_trade(self, trade: Dict[str, Any]) -> None:
         """
@@ -225,32 +302,42 @@ class BuySellFlowAnalyzer:
                 # Net flow: positive = net buying, negative = net selling
                 data["net_flow"] = buy_vol - sell_vol
 
-                # Buy/sell ratio: avoid division by zero
-                if sell_vol > 0:
-                    data["buy_sell_ratio"] = buy_vol / sell_vol
-                else:
-                    data["buy_sell_ratio"] = float("inf") if buy_vol > 0 else 0.0
+                # Buy/sell ratio: a single None sentinel for "undefined"
+                # (M7 — replaces the legacy float("inf"), which could not be
+                # persisted to a DECIMAL column and had two competing
+                # "undefined" values (inf vs 0.0) depending on buy_vol).
+                data["buy_sell_ratio"] = (buy_vol / sell_vol) if sell_vol > 0 else None
 
     def _detect_flow_trend(self, all_trades: List[Dict[str, Any]]) -> str:
         """
         Detect flow trend by comparing rates across multiple time windows.
 
-        Compares 1h, 4h, and 24h windows to identify acceleration/deceleration.
-        Filters the already-fetched trades client-side to avoid extra DB queries.
+        Compares 1h, 4h, and the full injected window to identify
+        acceleration/deceleration. Anchors "now" on window_end_ms (the same
+        instant the caller fetched against), not a fresh datetime.now() call
+        — closes bugfix_spec.md Item 6a's two-instants defect for the trend
+        calculation specifically.
 
         Args:
-            all_trades: Trades already fetched by calculate() for the full window.
+            all_trades: Trades for the full window (already injected).
 
         Returns:
-            Trend label string.
+            Trend label string, or INSUFFICIENT_DATA_LABEL when the 1h
+            sub-window or the overall sample is too thin to support a trend
+            claim (bugfix_spec.md Item 6, F6.3.2).
         """
-        now_ms = int(datetime.now().timestamp() * 1000)
+        now_ms = self.window_end_ms
         cutoff_1h = now_ms - 1 * 3600 * 1000
-        cutoff_4h = now_ms - 4 * 3600 * 1000
+        # Clamp the 4h lookback to the actual window start so a window
+        # shorter than 4h (lookback_hours < 4) can never make trades_4h
+        # exceed all_trades (bugfix_spec.md Item 6, F6.3.2 edge case).
+        cutoff_4h = max(self.window_start_ms, now_ms - 4 * 3600 * 1000)
 
         trades_1h = [t for t in all_trades if t["trade_timestamp"] >= cutoff_1h]
         trades_4h = [t for t in all_trades if t["trade_timestamp"] >= cutoff_4h]
-        trades_24h = all_trades
+
+        if len(trades_1h) < MINIMUM_TRADES_1H_FOR_TREND or len(all_trades) < MINIMUM_TRADES_FOR_SECTION:
+            return INSUFFICIENT_DATA_LABEL
 
         # Calculate net flow for each window
         def calc_net_flow(trades: List[Dict[str, Any]]) -> float:
@@ -267,38 +354,40 @@ class BuySellFlowAnalyzer:
 
         net_1h = calc_net_flow(trades_1h)
         net_4h = calc_net_flow(trades_4h)
-        net_24h = calc_net_flow(trades_24h)
+        net_full = calc_net_flow(all_trades)
 
-        # Normalize to per-hour rates
-        rate_1h = net_1h / 1 if len(trades_1h) > 0 else 0.0
-        rate_4h = net_4h / 4 if len(trades_4h) > 0 else 0.0
-        rate_24h = net_24h / 24 if len(trades_24h) > 0 else 0.0
+        # Normalize to per-hour rates. rate_full divides by the ACTUAL
+        # window length (M6 fix — was a hardcoded /24).
+        lookback_hours = self.lookback_hours
+        rate_1h = net_1h / 1.0
+        rate_4h = net_4h / 4.0 if trades_4h else 0.0
+        rate_full = (net_full / lookback_hours) if lookback_hours > 0 else 0.0
 
         # Detect trend patterns
-        # Accelerating buy: 1h >> 4h >> 24h (all positive, increasing rate)
-        if rate_1h > 0 and rate_4h > 0 and rate_24h > 0:
-            if rate_1h > rate_4h * 1.5 and rate_4h > rate_24h * 1.2:
+        # Accelerating buy: 1h >> 4h >> full (all positive, increasing rate)
+        if rate_1h > 0 and rate_4h > 0 and rate_full > 0:
+            if rate_1h > rate_4h * 1.5 and rate_4h > rate_full * 1.2:
                 return "Accelerating Buy Pressure"
             elif rate_1h < rate_4h * 0.7:
                 return "Decelerating Buy Pressure"
             else:
                 return "Steady Buy Pressure"
 
-        # Accelerating sell: 1h << 4h << 24h (all negative, increasing magnitude)
-        elif rate_1h < 0 and rate_4h < 0 and rate_24h < 0:
-            if abs(rate_1h) > abs(rate_4h) * 1.5 and abs(rate_4h) > abs(rate_24h) * 1.2:
+        # Accelerating sell: 1h << 4h << full (all negative, increasing magnitude)
+        elif rate_1h < 0 and rate_4h < 0 and rate_full < 0:
+            if abs(rate_1h) > abs(rate_4h) * 1.5 and abs(rate_4h) > abs(rate_full) * 1.2:
                 return "Accelerating Sell Pressure"
             elif abs(rate_1h) < abs(rate_4h) * 0.7:
                 return "Decelerating Sell Pressure"
             else:
                 return "Steady Sell Pressure"
 
-        # Reversing to sell: 1h negative but 24h positive
-        elif rate_1h < 0 < rate_24h:
+        # Reversing to sell: 1h negative but full-window positive
+        elif rate_1h < 0 < rate_full:
             return "Reversing to Sell Pressure"
 
-        # Reversing to buy: 1h positive but 24h negative
-        elif rate_1h > 0 > rate_24h:
+        # Reversing to buy: 1h positive but full-window negative
+        elif rate_1h > 0 > rate_full:
             return "Reversing to Buy Pressure"
 
         # Mixed or neutral
@@ -361,6 +450,11 @@ class BuySellFlowAnalyzer:
         """
         Interpret expiration-level flow bias.
 
+        Only called when the data-sufficiency gate has already passed
+        (calculate() gates this before calling); the ratio's own
+        inf-vs-1.0 tie-breaking is a local implementation detail of the
+        classification, unrelated to the storage-level None sentinel (M7).
+
         Returns:
             Bias interpretation string.
         """
@@ -372,8 +466,6 @@ class BuySellFlowAnalyzer:
             self.expiration_totals["call_sell_volume"] +
             self.expiration_totals["put_sell_volume"]
         )
-
-        net_flow = total_buy - total_sell
 
         # Thresholds based on ratio
         if total_sell > 0:
@@ -392,66 +484,93 @@ class BuySellFlowAnalyzer:
         else:
             return "Heavy Selling"
 
-    def _empty_result(self) -> Dict[str, Any]:
-        """Return empty result structure."""
-        return {
-            "flow_data": {},
-            "expiration_totals": {
-                "call_buy_volume": 0.0,
-                "call_sell_volume": 0.0,
-                "put_buy_volume": 0.0,
-                "put_sell_volume": 0.0,
-            },
-            "bias_interpretation": "No Data",
-            "flow_trend": "No Data",
-            "top_buy_strikes": [],
-            "top_sell_strikes": [],
-            "trade_count": 0,
-            "spot_price": self.spot_price,
-        }
+    def _empty_result(self) -> FlowResult:
+        """Return the result for zero injected trades (one sentinel, not two — M7/D5)."""
+        return FlowResult(
+            flow_data={},
+            expiration_totals=FlowTotals(
+                call_buy_volume=0.0, call_sell_volume=0.0, put_buy_volume=0.0, put_sell_volume=0.0,
+            ),
+            bias_interpretation=INSUFFICIENT_DATA_LABEL,
+            flow_trend=INSUFFICIENT_DATA_LABEL,
+            top_buy_strikes=(),
+            top_sell_strikes=(),
+            trade_count=0,
+            spot_price=self.spot_price,
+            window_start_ms=self.window_start_ms,
+            window_end_ms=self.window_end_ms,
+            lookback_hours=self.lookback_hours,
+            sufficient_data=False,
+            low_confidence=False,
+        )
 
-    def generate_report_section(self) -> str:
+    def generate_report_section(self, result: Optional[FlowResult] = None) -> str:
         """
         Generate formatted text report section for buy/sell flow.
+
+        Args:
+            result: Pre-computed result from calculate(). If None, calculate()
+                is called. Pass a pre-computed result so the report and the
+                stored/persisted data describe one instant (bugfix_spec.md
+                Item 6a's result-passing fix, mirrors
+                VolatilitySurfaceCalculator.generate_report_section).
 
         Returns:
             Formatted string for inclusion in analysis report.
         """
-        result = self.calculate()
+        if result is None:
+            result = self.calculate()
         lines = []
         separator = "-" * 80
 
+        start_str = datetime.fromtimestamp(result.window_start_ms / 1000.0, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
+        end_str = datetime.fromtimestamp(result.window_end_ms / 1000.0, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
+
         lines.append("BUY/SELL FLOW ANALYSIS (Trade Direction-Based)")
         lines.append(separator)
-        lines.append(f"Spot Price: ${self.spot_price:,.2f}")
-        lines.append(f"Lookback Window: {self.lookback_hours} hours")
-        lines.append(f"Trades Analyzed: {result['trade_count']}")
+        lines.append(f"Spot Price: ${result.spot_price:,.2f}")
+        lines.append(f"Window: {start_str} -> {end_str} UTC")
+        lines.append(f"Trades Analyzed: {result.trade_count}")
         lines.append("")
 
+        if not result.sufficient_data:
+            lines.append(
+                f"  ** INSUFFICIENT FLOW DATA ** - {result.trade_count} trade(s) in window, "
+                f"{MINIMUM_TRADES_FOR_SECTION} required. Flow section suppressed."
+            )
+            lines.append("")
+            return "\n".join(lines)
+
         # Expiration-level summary
-        totals = result["expiration_totals"]
+        totals = result.expiration_totals
+        confidence_tag = LOW_CONFIDENCE_SUFFIX if result.low_confidence else ""
+        trend_tag = (
+            LOW_CONFIDENCE_SUFFIX
+            if result.low_confidence and result.flow_trend != INSUFFICIENT_DATA_LABEL
+            else ""
+        )
         lines.append("EXPIRATION-LEVEL FLOW:")
-        lines.append(f"  Calls:  Buy: {totals['call_buy_volume']:>10,.1f}  Sell: {totals['call_sell_volume']:>10,.1f}")
-        lines.append(f"  Puts:   Buy: {totals['put_buy_volume']:>10,.1f}  Sell: {totals['put_sell_volume']:>10,.1f}")
-        lines.append(f"  Bias: {result['bias_interpretation']}")
-        lines.append(f"  Trend: {result['flow_trend']}")
+        lines.append(f"  Calls:  Buy: {totals.call_buy_volume:>10,.1f}  Sell: {totals.call_sell_volume:>10,.1f}")
+        lines.append(f"  Puts:   Buy: {totals.put_buy_volume:>10,.1f}  Sell: {totals.put_sell_volume:>10,.1f}")
+        lines.append(f"  Bias: {result.bias_interpretation}{confidence_tag}")
+        lines.append(f"  Trend: {result.flow_trend}{trend_tag}")
         lines.append("")
 
         # Top buying pressure strikes
         lines.append("TOP 5 STRIKES BY BUYING PRESSURE:")
         lines.append(separator)
-        if result["top_buy_strikes"]:
+        if result.top_buy_strikes:
             lines.append(
                 f"{'Strike':>10}  {'Type':>6}  {'Net Flow':>12}  {'Buy Vol':>12}  {'Buy Notional':>15}"
             )
             lines.append(
                 f"{'------':>10}  {'----':>6}  {'---------':>12}  {'--------':>12}  {'-------------':>15}"
             )
-            for item in result["top_buy_strikes"]:
+            for item in result.top_buy_strikes:
                 lines.append(
-                    f"{item['strike']:>10,.0f}  {item['option_type']:>6}  "
-                    f"{item['net_flow']:>+12,.1f}  {item['buy_volume']:>12,.1f}  "
-                    f"${item['buy_notional']:>14,.2f}"
+                    f"{item.strike:>10,.0f}  {item.option_type:>6}  "
+                    f"{item.net_flow:>+12,.1f}  {item.volume:>12,.1f}  "
+                    f"${item.notional:>14,.2f}"
                 )
         else:
             lines.append("  No net buying detected")
@@ -460,18 +579,18 @@ class BuySellFlowAnalyzer:
         # Top selling pressure strikes
         lines.append("TOP 5 STRIKES BY SELLING PRESSURE:")
         lines.append(separator)
-        if result["top_sell_strikes"]:
+        if result.top_sell_strikes:
             lines.append(
                 f"{'Strike':>10}  {'Type':>6}  {'Net Flow':>12}  {'Sell Vol':>12}  {'Sell Notional':>15}"
             )
             lines.append(
                 f"{'------':>10}  {'----':>6}  {'---------':>12}  {'---------':>12}  {'--------------':>15}"
             )
-            for item in result["top_sell_strikes"]:
+            for item in result.top_sell_strikes:
                 lines.append(
-                    f"{item['strike']:>10,.0f}  {item['option_type']:>6}  "
-                    f"{item['net_flow']:>+12,.1f}  {item['sell_volume']:>12,.1f}  "
-                    f"${item['sell_notional']:>14,.2f}"
+                    f"{item.strike:>10,.0f}  {item.option_type:>6}  "
+                    f"{item.net_flow:>+12,.1f}  {item.volume:>12,.1f}  "
+                    f"${item.notional:>14,.2f}"
                 )
         else:
             lines.append("  No net selling detected")

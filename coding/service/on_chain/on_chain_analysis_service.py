@@ -8,7 +8,7 @@ import logging
 import re
 import time
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -230,24 +230,44 @@ class OnChainAnalysisService:
             progress_callback(f"Calculating buy/sell flow for {expiration}...")
 
             try:
-                flow_analyzer = BuySellFlowAnalyzer(
-                    repository=self.repository,
+                # T5 (refactor_design_spec.md): a SINGLE fetch here, with an
+                # explicit window, replaces the analyzer's old self-fetching
+                # calculate() + generate_report_section() pair — closes
+                # bugfix_spec.md Item 6a (double DB query, two independently
+                # computed "now" instants).
+                window_end = datetime.now()
+                window_start = window_end - timedelta(hours=24)
+                window_start_ms = int(window_start.timestamp() * 1000)
+                window_end_ms = int(window_end.timestamp() * 1000)
+
+                trades = self.repository.get_trades_for_flow_analysis(
                     currency=analyzer.currency,
                     expiration=expiration,
-                    spot_price=analyzer.underlying_price,
-                    lookback_hours=24,
+                    start_ts=window_start_ms,
+                    end_ts=window_end_ms,
                     trade_filter="all",
                 )
 
-                # Calculate flow data
+                flow_analyzer = BuySellFlowAnalyzer(
+                    trades=trades,
+                    currency=analyzer.currency,
+                    expiration=expiration,
+                    spot_price=analyzer.underlying_price,
+                    window_start_ms=window_start_ms,
+                    window_end_ms=window_end_ms,
+                )
+
+                # Calculate once — pass result to storage, DB save, charts,
+                # and the report formatter, so all four describe one instant.
                 flow_result = flow_analyzer.calculate()
+                flow_result_dict = flow_result.to_dict()
 
                 # Save to database for chart queries
                 try:
                     self.repository.save_flow_metrics(
                         currency=analyzer.currency,
                         expiration=expiration,
-                        flow_data=flow_result["flow_data"],
+                        flow_data=flow_result_dict["flow_data"],
                         underlying_price=analyzer.underlying_price,
                         window_hours=24
                     )
@@ -260,7 +280,7 @@ class OnChainAnalysisService:
                     subfolder = f"flow_analysis/{expiration}"
 
                     fig_dist = generate_flow_distribution_chart(
-                        flow_data=flow_result,
+                        flow_data=flow_result_dict,
                         spot_price=analyzer.underlying_price,
                         currency=analyzer.currency,
                         expiration=expiration,
@@ -272,7 +292,7 @@ class OnChainAnalysisService:
                     inject_hover_js(Path(dist_path))
 
                     fig_net = generate_net_flow_chart(
-                        flow_data=flow_result,
+                        flow_data=flow_result_dict,
                         spot_price=analyzer.underlying_price,
                         currency=analyzer.currency,
                         expiration=expiration,
@@ -299,9 +319,10 @@ class OnChainAnalysisService:
                 except Exception as chart_error:
                     logger.warning(f"Failed to save flow charts for {expiration}: {chart_error}")
 
-                # Store structured flow data and generate text report
-                analyzer.set_buy_sell_flow_structured(expiration, flow_result)
-                flow_report = flow_analyzer.generate_report_section()
+                # Store structured flow data and generate text report from
+                # the SAME precomputed result (no second calculate() call).
+                analyzer.set_buy_sell_flow_structured(expiration, flow_result_dict)
+                flow_report = flow_analyzer.generate_report_section(result=flow_result)
                 analyzer.set_buy_sell_flow_data(expiration, flow_report)
 
             except Exception as e:
@@ -348,17 +369,33 @@ class OnChainAnalysisService:
                   "buy_notional": 0.0, "sell_notional": 0.0},
         })
 
+        # T5: this service method now owns the fetch (compatibility-map
+        # consumer row #16) — trades + window are injected into the
+        # analyzer instead of it querying the repository itself.
+        window_end = datetime.now()
+        window_start = window_end - timedelta(hours=24)
+        window_start_ms = int(window_start.timestamp() * 1000)
+        window_end_ms = int(window_end.timestamp() * 1000)
+
         for exp_info in expirations:
             exp = exp_info["expiration"]
             try:
+                trades = self.repository.get_trades_for_flow_analysis(
+                    currency=currency,
+                    expiration=exp,
+                    start_ts=window_start_ms,
+                    end_ts=window_end_ms,
+                    trade_filter=trade_filter,
+                )
                 analyzer = BuySellFlowAnalyzer(
-                    repository=self.repository,
+                    trades=trades,
                     currency=currency,
                     expiration=exp,
                     spot_price=spot_price,
-                    trade_filter=trade_filter,
+                    window_start_ms=window_start_ms,
+                    window_end_ms=window_end_ms,
                 )
-                result = analyzer.calculate()
+                result = analyzer.calculate().to_dict()
                 for strike, type_data in result.get("flow_data", {}).items():
                     for opt_type, vals in type_data.items():
                         target = agg_flow[strike][opt_type]

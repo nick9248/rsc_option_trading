@@ -26,6 +26,8 @@ def _make_result(**overrides) -> FlowResult:
         window_start_ms=1_000,
         window_end_ms=1_000_000,
         lookback_hours=24.0,
+        sufficient_data=True,
+        low_confidence=False,
     )
     defaults.update(overrides)
     return FlowResult(**defaults)

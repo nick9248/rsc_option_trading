@@ -341,6 +341,8 @@ def _make_flow_result() -> FlowResult:
         window_start_ms=1_000,
         window_end_ms=1_000_000,
         lookback_hours=24.0,
+        sufficient_data=False,
+        low_confidence=False,
     )
 
 

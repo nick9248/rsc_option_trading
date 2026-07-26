@@ -5,10 +5,10 @@ Frozen dataclasses per refactor_design_spec.md section 2.3. Mirror the dict
 shape historically produced by ``BuySellFlowAnalyzer.calculate()``.
 
 M7 note: ``buy_sell_ratio`` uses a single ``None`` sentinel for the
-"undefined" case (replacing the legacy ``float("inf")``). This is an
-intentional, gated behavior change scheduled for T5 — the model carries the
-new semantics from the start, but nothing in T2/T3 wires a calculator to
-produce it yet.
+"undefined" case (replacing the legacy ``float("inf")``) — wired in at T5.
+
+``sufficient_data``/``low_confidence`` implement bugfix_spec.md Item 6's
+data-sufficiency gate per Decision D5 (also wired at T5).
 """
 
 from dataclasses import dataclass
@@ -65,6 +65,8 @@ class FlowResult:
     window_start_ms: int
     window_end_ms: int
     lookback_hours: float  # derived from window, not assumed
+    sufficient_data: bool  # bugfix_spec.md Item 6 / Decision D5: trade_count >= MINIMUM_TRADES_FOR_SECTION
+    low_confidence: bool  # True when sufficient_data and trade_count < MINIMUM_TRADES_FOR_CONFIDENCE
 
     def to_dict(self) -> Dict[str, Any]:
         """

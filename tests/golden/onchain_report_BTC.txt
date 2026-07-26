@@ -138,22 +138,10 @@ GEX/DEX BY STRIKE:
 BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
 --------------------------------------------------------------------------------
 Spot Price: $64,405.02
-Lookback Window: 24 hours
+Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
 Trades Analyzed: 0
 
-EXPIRATION-LEVEL FLOW:
-  Calls:  Buy:        0.0  Sell:        0.0
-  Puts:   Buy:        0.0  Sell:        0.0
-  Bias: No Data
-  Trend: No Data
-
-TOP 5 STRIKES BY BUYING PRESSURE:
---------------------------------------------------------------------------------
-  No net buying detected
-
-TOP 5 STRIKES BY SELLING PRESSURE:
---------------------------------------------------------------------------------
-  No net selling detected
+  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
 
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
@@ -410,22 +398,10 @@ GEX/DEX BY STRIKE:
 BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
 --------------------------------------------------------------------------------
 Spot Price: $64,405.02
-Lookback Window: 24 hours
+Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
 Trades Analyzed: 0
 
-EXPIRATION-LEVEL FLOW:
-  Calls:  Buy:        0.0  Sell:        0.0
-  Puts:   Buy:        0.0  Sell:        0.0
-  Bias: No Data
-  Trend: No Data
-
-TOP 5 STRIKES BY BUYING PRESSURE:
---------------------------------------------------------------------------------
-  No net buying detected
-
-TOP 5 STRIKES BY SELLING PRESSURE:
---------------------------------------------------------------------------------
-  No net selling detected
+  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
 
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
@@ -649,22 +625,10 @@ GEX/DEX BY STRIKE:
 BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
 --------------------------------------------------------------------------------
 Spot Price: $64,405.02
-Lookback Window: 24 hours
+Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
 Trades Analyzed: 0
 
-EXPIRATION-LEVEL FLOW:
-  Calls:  Buy:        0.0  Sell:        0.0
-  Puts:   Buy:        0.0  Sell:        0.0
-  Bias: No Data
-  Trend: No Data
-
-TOP 5 STRIKES BY BUYING PRESSURE:
---------------------------------------------------------------------------------
-  No net buying detected
-
-TOP 5 STRIKES BY SELLING PRESSURE:
---------------------------------------------------------------------------------
-  No net selling detected
+  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
 
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
@@ -932,22 +896,10 @@ GEX/DEX BY STRIKE:
 BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
 --------------------------------------------------------------------------------
 Spot Price: $64,405.02
-Lookback Window: 24 hours
+Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
 Trades Analyzed: 0
 
-EXPIRATION-LEVEL FLOW:
-  Calls:  Buy:        0.0  Sell:        0.0
-  Puts:   Buy:        0.0  Sell:        0.0
-  Bias: No Data
-  Trend: No Data
-
-TOP 5 STRIKES BY BUYING PRESSURE:
---------------------------------------------------------------------------------
-  No net buying detected
-
-TOP 5 STRIKES BY SELLING PRESSURE:
---------------------------------------------------------------------------------
-  No net selling detected
+  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
 
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
@@ -1143,22 +1095,10 @@ GEX/DEX BY STRIKE:
 BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
 --------------------------------------------------------------------------------
 Spot Price: $64,405.02
-Lookback Window: 24 hours
+Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
 Trades Analyzed: 0
 
-EXPIRATION-LEVEL FLOW:
-  Calls:  Buy:        0.0  Sell:        0.0
-  Puts:   Buy:        0.0  Sell:        0.0
-  Bias: No Data
-  Trend: No Data
-
-TOP 5 STRIKES BY BUYING PRESSURE:
---------------------------------------------------------------------------------
-  No net buying detected
-
-TOP 5 STRIKES BY SELLING PRESSURE:
---------------------------------------------------------------------------------
-  No net selling detected
+  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
 
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
@@ -1418,22 +1358,10 @@ GEX/DEX BY STRIKE:
 BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
 --------------------------------------------------------------------------------
 Spot Price: $64,405.02
-Lookback Window: 24 hours
+Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
 Trades Analyzed: 0
 
-EXPIRATION-LEVEL FLOW:
-  Calls:  Buy:        0.0  Sell:        0.0
-  Puts:   Buy:        0.0  Sell:        0.0
-  Bias: No Data
-  Trend: No Data
-
-TOP 5 STRIKES BY BUYING PRESSURE:
---------------------------------------------------------------------------------
-  No net buying detected
-
-TOP 5 STRIKES BY SELLING PRESSURE:
---------------------------------------------------------------------------------
-  No net selling detected
+  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
 
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
@@ -1626,22 +1554,10 @@ GEX/DEX BY STRIKE:
 BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
 --------------------------------------------------------------------------------
 Spot Price: $64,405.02
-Lookback Window: 24 hours
+Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
 Trades Analyzed: 0
 
-EXPIRATION-LEVEL FLOW:
-  Calls:  Buy:        0.0  Sell:        0.0
-  Puts:   Buy:        0.0  Sell:        0.0
-  Bias: No Data
-  Trend: No Data
-
-TOP 5 STRIKES BY BUYING PRESSURE:
---------------------------------------------------------------------------------
-  No net buying detected
-
-TOP 5 STRIKES BY SELLING PRESSURE:
---------------------------------------------------------------------------------
-  No net selling detected
+  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
 
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
@@ -1892,22 +1808,10 @@ GEX/DEX BY STRIKE:
 BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
 --------------------------------------------------------------------------------
 Spot Price: $64,405.02
-Lookback Window: 24 hours
+Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
 Trades Analyzed: 0
 
-EXPIRATION-LEVEL FLOW:
-  Calls:  Buy:        0.0  Sell:        0.0
-  Puts:   Buy:        0.0  Sell:        0.0
-  Bias: No Data
-  Trend: No Data
-
-TOP 5 STRIKES BY BUYING PRESSURE:
---------------------------------------------------------------------------------
-  No net buying detected
-
-TOP 5 STRIKES BY SELLING PRESSURE:
---------------------------------------------------------------------------------
-  No net selling detected
+  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
 
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
@@ -2119,22 +2023,10 @@ GEX/DEX BY STRIKE:
 BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
 --------------------------------------------------------------------------------
 Spot Price: $64,405.02
-Lookback Window: 24 hours
+Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
 Trades Analyzed: 0
 
-EXPIRATION-LEVEL FLOW:
-  Calls:  Buy:        0.0  Sell:        0.0
-  Puts:   Buy:        0.0  Sell:        0.0
-  Bias: No Data
-  Trend: No Data
-
-TOP 5 STRIKES BY BUYING PRESSURE:
---------------------------------------------------------------------------------
-  No net buying detected
-
-TOP 5 STRIKES BY SELLING PRESSURE:
---------------------------------------------------------------------------------
-  No net selling detected
+  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
 
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
@@ -2325,22 +2217,10 @@ GEX/DEX BY STRIKE:
 BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
 --------------------------------------------------------------------------------
 Spot Price: $64,405.02
-Lookback Window: 24 hours
+Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
 Trades Analyzed: 0
 
-EXPIRATION-LEVEL FLOW:
-  Calls:  Buy:        0.0  Sell:        0.0
-  Puts:   Buy:        0.0  Sell:        0.0
-  Bias: No Data
-  Trend: No Data
-
-TOP 5 STRIKES BY BUYING PRESSURE:
---------------------------------------------------------------------------------
-  No net buying detected
-
-TOP 5 STRIKES BY SELLING PRESSURE:
---------------------------------------------------------------------------------
-  No net selling detected
+  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
 
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
@@ -2598,22 +2478,10 @@ GEX/DEX BY STRIKE:
 BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
 --------------------------------------------------------------------------------
 Spot Price: $64,405.02
-Lookback Window: 24 hours
+Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
 Trades Analyzed: 0
 
-EXPIRATION-LEVEL FLOW:
-  Calls:  Buy:        0.0  Sell:        0.0
-  Puts:   Buy:        0.0  Sell:        0.0
-  Bias: No Data
-  Trend: No Data
-
-TOP 5 STRIKES BY BUYING PRESSURE:
---------------------------------------------------------------------------------
-  No net buying detected
-
-TOP 5 STRIKES BY SELLING PRESSURE:
---------------------------------------------------------------------------------
-  No net selling detected
+  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
 
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
@@ -2815,22 +2683,10 @@ GEX/DEX BY STRIKE:
 BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
 --------------------------------------------------------------------------------
 Spot Price: $64,405.02
-Lookback Window: 24 hours
+Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
 Trades Analyzed: 0
 
-EXPIRATION-LEVEL FLOW:
-  Calls:  Buy:        0.0  Sell:        0.0
-  Puts:   Buy:        0.0  Sell:        0.0
-  Bias: No Data
-  Trend: No Data
-
-TOP 5 STRIKES BY BUYING PRESSURE:
---------------------------------------------------------------------------------
-  No net buying detected
-
-TOP 5 STRIKES BY SELLING PRESSURE:
---------------------------------------------------------------------------------
-  No net selling detected
+  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
 
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
