@@ -152,7 +152,7 @@ def pipeline_result(fixture_dir, meta, module_monkeypatch, module_tmp_path):
     report, analyzer, result = service.fetch_and_analyze(
         meta["currency"], return_analyzer=True, return_result=True
     )
-    synthesis = MorningNoteService(service).generate_from_analyzer(analyzer)
+    synthesis = MorningNoteService(service).generate(result)
 
     return {
         "report": report,
@@ -332,7 +332,17 @@ def test_builder_result_matches_analyzer_dicts(pipeline_result):
         expected_flow = analyzer.buy_sell_flow_structured.get(expiration)
         if expected_flow is not None:
             assert bundle.flow is not None
-            assert bundle.flow.to_dict() == expected_flow
+            # F6.3.4 (carried from A4 review): the service extends
+            # to_dict()'s legacy shim with sufficient_data/low_confidence/
+            # lookback_hours bookkeeping keys the typed FlowResult itself
+            # never included in to_dict() — compare those separately.
+            extra_keys = {"sufficient_data", "low_confidence", "lookback_hours"}
+            assert bundle.flow.to_dict() == {
+                k: v for k, v in expected_flow.items() if k not in extra_keys
+            }
+            assert bundle.flow.sufficient_data == expected_flow.get("sufficient_data")
+            assert bundle.flow.low_confidence == expected_flow.get("low_confidence")
+            assert bundle.flow.lookback_hours == expected_flow.get("lookback_hours")
         else:
             assert bundle.flow is None
 

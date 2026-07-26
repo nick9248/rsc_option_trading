@@ -3,6 +3,7 @@ Unit tests for SynthesisMapper, ScoringEngine, and SynthesisEngine v2.0.
 """
 
 import pytest
+from typing import Optional
 from unittest.mock import MagicMock
 from datetime import datetime, timedelta
 
@@ -17,6 +18,39 @@ from coding.core.analytics.synthesis import (
     VolRegime,
     Signal,
     build_from_current_data,
+)
+from coding.core.analytics.results.analysis_result import (
+    ExpirationBundle,
+    MarketMetricsResult,
+    OnChainAnalysisResult,
+)
+from coding.core.analytics.results.expiry_results import (
+    ExpirationAnalysisResult,
+    MaxPainResult,
+    MoneynessLeg,
+    MoneynessResult,
+    PutCallRatioResult,
+    SupportResistanceResult,
+    VolumeStatsResult,
+)
+from coding.core.analytics.results.flow_results import FlowResult, FlowTotals
+from coding.core.analytics.results.gex_dex_results import GexDexKeyLevels, GexDexLevel, GexDexResult
+from coding.core.analytics.results.market_wide_results import (
+    BlockTradesResult,
+    CrossAssetCorrelationResult,
+    FuturesBasisResult,
+    MarketWideResult,
+    PerpetualFundingResult,
+    RealizedVolatilityResult,
+    TermStructureResult,
+    VarianceRiskPremiumResult,
+)
+from coding.core.analytics.results.vol_surface_results import (
+    MoneynessBucket,
+    PutCallByMoneyness,
+    SecondOrderGreeks,
+    SkewResult,
+    VolSurfaceResult,
 )
 
 
@@ -86,90 +120,159 @@ def make_market_wide(**overrides) -> MarketWideMetrics:
     return MarketWideMetrics(**defaults)
 
 
-def make_analyzer_mock(expiration: str = "27MAR26") -> MagicMock:
-    """Create a mock OnChainAnalyzer with structured data populated."""
-    analyzer = MagicMock()
-    analyzer.underlying_price = 65000.0
-    analyzer.currency = "BTC"
-    analyzer.market_wide_structured = {
-        "spot_price": 65000.0,
-        "dvol": 52.0,
-        "iv_percentile_365d": 75.0,
-        "funding_rate": 0.000001,   # decimal: ×100 → 0.0001% in MarketWideMetrics
-        "funding_8h": -0.000015,    # decimal: ×100 → -0.0015% in MarketWideMetrics
-        "shape": "CONTANGO",
-        "spread": 5.0,
-        "iv_by_dte": {6: 49.0, 13: 49.5, 27: 49.2},
-        "rv_10d": 0.45,   # decimal: ×100 → 45.0% in MarketWideMetrics
-        "rv_20d": 0.42,   # decimal: ×100 → 42.0%
-        "rv_30d": 0.48,   # decimal: ×100 → 48.0%
-        "vrp": 4.0,
-        "cone_10d_pctile": 60.0,
-        "cone_20d_pctile": 55.0,
-        "cone_30d_pctile": 65.0,
-        "futures_basis": {"27MAR26": 1.5},
-        "perp_oi": 1_000_000_000,
-        "perp_funding_trend": "Stable",
-        "btc_eth_price_corr": 0.90,
-        "btc_eth_dvol_corr": 0.85,
-        "block_trades": [],
-    }
-    analyzer.gex_dex_structured = {
-        expiration: {
-            "total_net_gex": -5_000_000,
-            "total_net_dex": -200,
-            "key_levels": {
-                "call_resistance": {"strike": 75000, "net_gex": 2_000_000},
-                "put_support": {"strike": 60000, "net_gex": -3_000_000},
-                "hvl": 67000,
-                "gamma_flip": None,
-            },
-        }
-    }
-    analyzer.volatility_surface_structured = {
-        expiration: {
-            "atm_iv": 50.0,
-            "skew_25d": {
-                "skew": 8.0,
-                "put_25d_iv": 56.0,
-                "call_25d_iv": 48.0,
-            },
-            "pc_by_moneyness": {
-                "atm": {"ratio": 1.2},
-                "near_otm": {"ratio": 0.9},
-                "far_otm": {"ratio": 0.5},
-            },
-            "second_order_greeks": {
-                "net_vanna": 0.001,
-                "net_charm": 50.0,
-            },
-        }
-    }
-    analyzer.buy_sell_flow_structured = {
-        expiration: {
-            "bias_interpretation": "Moderate Buying",
-            "flow_trend": "Steady Buy Pressure",
-            "top_buy_strikes": [],
-            "top_sell_strikes": [],
-        }
-    }
-    analyzer.parsed_data = {
-        expiration: [
-            {"instrument_name": f"BTC-{expiration}-70000-C", "expiration": expiration,
-             "strike": 70000.0, "option_type": "C", "open_interest": 5000, "volume": 100},
-            {"instrument_name": f"BTC-{expiration}-70000-P", "expiration": expiration,
-             "strike": 70000.0, "option_type": "P", "open_interest": 4000, "volume": 80},
-        ]
-    }
-    analyzer.get_expirations.return_value = [expiration]
+_MONEYNESS_LEG = MoneynessLeg(
+    itm_oi=0.0, otm_oi=0.0, total_oi=0.0,
+    itm_notional=0.0, otm_notional=0.0, total_notional=0.0, itm_pct=0.0, otm_pct=0.0,
+)
 
-    analyzer.group_by_strike.return_value = {
-        70000.0: {"call_oi": 5000, "put_oi": 4000, "call_volume": 100, "put_volume": 80}
-    }
-    analyzer.calculate_max_pain.return_value = {"max_pain_strike": 70000.0}
-    analyzer.calculate_put_call_ratio.return_value = {"ratio": 0.80}
 
-    return analyzer
+def make_default_market_wide(underlying_price: float = 65000.0) -> MarketWideResult:
+    """Fully-populated MarketWideResult mirroring the old analyzer-mock's market_wide_structured."""
+    return MarketWideResult(
+        spot_price=underlying_price,
+        currency="BTC",
+        dvol=52.0,
+        iv_percentile_365d=75.0,
+        aggregate_gex_dex=None,
+        term_structure=TermStructureResult(
+            entries=(), shape="CONTANGO", spread=5.0, spread_signed=5.0,
+            iv_by_dte={6: 49.0, 13: 49.5, 27: 49.2},
+        ),
+        futures_basis=FuturesBasisResult(entries=(), futures_basis={"27MAR26": 1.5}),
+        realized_volatility=RealizedVolatilityResult(rv_by_window={10: 0.45, 20: 0.42, 30: 0.48}),
+        variance_risk_premium=VarianceRiskPremiumResult(
+            vrp=4.0, signal="FAIR", dvol=52.0, rv_30d=0.48,
+        ),
+        volatility_cone=None,
+        perpetual_funding=PerpetualFundingResult(
+            perp_open_interest=1_000_000_000, funding_rate=0.000001, funding_8h=-0.000015,
+            funding_trend="Stable", history_points=0,
+        ),
+        block_trades=BlockTradesResult(trades=(), notional_threshold=100_000.0, total_detected=0),
+        cross_asset_correlation=CrossAssetCorrelationResult(
+            other_currency="ETH", price_correlation=0.90, dvol_correlation=0.85, sample_size=30,
+        ),
+        failed_sections=(),
+    )
+
+
+def make_onchain_result(
+    expiration: str = "27MAR26",
+    *,
+    underlying_price: float = 65000.0,
+    include_gex_dex: bool = True,
+    include_flow: bool = True,
+    include_vol_surface: bool = True,
+    include_instruments: bool = True,
+    market_wide: Optional[MarketWideResult] = None,
+) -> OnChainAnalysisResult:
+    """
+    Create a minimal-but-typed OnChainAnalysisResult for testing SynthesisMapper
+    (refactor_design_spec.md section T7 — replaces the old MagicMock analyzer).
+    """
+    parsed_instruments = (
+        {
+            expiration: (
+                {"instrument_name": f"BTC-{expiration}-70000-C", "expiration": expiration,
+                 "strike": 70000.0, "option_type": "C", "open_interest": 5000, "volume": 100},
+                {"instrument_name": f"BTC-{expiration}-70000-P", "expiration": expiration,
+                 "strike": 70000.0, "option_type": "P", "open_interest": 4000, "volume": 80},
+            )
+        }
+        if include_instruments else {}
+    )
+
+    analysis = ExpirationAnalysisResult(
+        expiration=expiration, underlying_price=underlying_price,
+        total_instruments=2, call_count=1, put_count=1, strike_rows=(),
+        max_pain=MaxPainResult(max_pain_strike=70000.0, pain_by_strike={}, min_pain_value=0.0),
+        put_call_ratio=PutCallRatioResult(
+            total_call_oi=5000.0, total_put_oi=4000.0, ratio=0.80, bias="Neutral",
+        ),
+        volume_stats=VolumeStatsResult(
+            total_call_volume=100.0, total_put_volume=80.0, total_volume=180.0, volume_ratio=1.25,
+        ),
+        moneyness=MoneynessResult(
+            calls=_MONEYNESS_LEG, puts=_MONEYNESS_LEG, totals=_MONEYNESS_LEG, oi_skew="Neutral",
+        ),
+        support_resistance=SupportResistanceResult(
+            resistance_levels=(), support_levels=(),
+            short_term_resistance=None, short_term_support=None,
+        ),
+    )
+
+    gex_dex = None
+    if include_gex_dex:
+        gex_dex = GexDexResult(
+            strike_rows=(), cumulative_gex={}, cumulative_dex={},
+            key_levels=GexDexKeyLevels(
+                call_resistance=GexDexLevel(strike=75000.0, net_gex=2_000_000.0),
+                put_support=GexDexLevel(strike=60000.0, net_gex=-3_000_000.0),
+                hvl=67000.0, gamma_flip=None,
+            ),
+            spot_price=underlying_price, total_net_gex=-5_000_000.0, total_net_dex=-200.0,
+            currency="BTC",
+        )
+
+    flow = None
+    if include_flow:
+        flow = FlowResult(
+            flow_data={},
+            expiration_totals=FlowTotals(
+                call_buy_volume=0.0, call_sell_volume=0.0, put_buy_volume=0.0, put_sell_volume=0.0,
+            ),
+            bias_interpretation="Moderate Buying", flow_trend="Steady Buy Pressure",
+            top_buy_strikes=(), top_sell_strikes=(), trade_count=50, spot_price=underlying_price,
+            window_start_ms=0, window_end_ms=86_400_000, lookback_hours=24.0,
+            sufficient_data=True, low_confidence=False,
+        )
+
+    vol_surface = None
+    if include_vol_surface:
+        bucket = lambda label, ratio: MoneynessBucket(
+            call_oi=0.0, put_oi=0.0, range_label=label, ratio=ratio, bias="Neutral",
+        )
+        vol_surface = VolSurfaceResult(
+            expiration=expiration, spot_price=underlying_price, iv_by_strike=(),
+            skew_25d=SkewResult(
+                put_25d_iv=56.0, call_25d_iv=48.0, put_25d_strike=None, call_25d_strike=None,
+                skew=8.0, interpretation="Put skew",
+            ),
+            pc_by_moneyness=PutCallByMoneyness(
+                atm=bucket("ATM", 1.2), near_otm=bucket("Near-OTM", 0.9), far_otm=bucket("Far-OTM", 0.5),
+            ),
+            second_order_greeks=SecondOrderGreeks(
+                net_vanna=0.001, net_charm=50.0, vanna_signal="N/A", charm_signal="N/A",
+                skipped_instruments=0,
+            ),
+            atm_iv=50.0, vwap_iv=None, mark_iv_average=None, traded_instrument_count=0,
+        )
+
+    bundles = ()
+    if include_instruments:
+        bundles = (
+            ExpirationBundle(
+                expiration=expiration, analysis=analysis, gex_dex=gex_dex, flow=flow,
+                vol_surface=vol_surface, oi_changes=None, iv_percentile=None, trend=None,
+                flow_chart_paths={}, enriched_instruments=(),
+            ),
+        )
+
+    atm_iv_by_expiration = {expiration: 50.0} if (include_vol_surface and include_instruments) else {}
+
+    return OnChainAnalysisResult(
+        currency="BTC",
+        underlying_price=underlying_price,
+        generated_at=datetime.now(),
+        market_metrics=MarketMetricsResult(
+            dvol=52.0, iv_percentile=75.0, iv_rank=None, current_funding=None, funding_8h=None,
+        ),
+        expirations=bundles,
+        market_wide=market_wide if market_wide is not None else make_default_market_wide(underlying_price),
+        parsed_instruments=parsed_instruments,
+        atm_iv_by_expiration=atm_iv_by_expiration,
+        recent_trades=(),
+    )
 
 
 # =============================================================================
@@ -608,53 +711,71 @@ class TestTradeRecommendations:
 
 class TestBuildMarketWide:
     def test_returns_market_wide_metrics(self):
-        analyzer = make_analyzer_mock()
-        result = SynthesisMapper.build_market_wide(analyzer)
+        result = make_onchain_result()
+        market = SynthesisMapper.build_market_wide(result)
 
-        assert isinstance(result, MarketWideMetrics)
-        assert result.spot_price == 65000.0
-        assert result.dvol == 52.0
-        assert result.iv_percentile_365d == 75.0
-        assert result.funding_8h == -0.0015
-        assert result.term_structure_shape == "CONTANGO"
-        assert result.rv_10d == 45.0
-        assert result.vrp == 4.0
-        assert result.futures_basis == {"27MAR26": 1.5}
+        assert isinstance(market, MarketWideMetrics)
+        assert market.spot_price == 65000.0
+        assert market.dvol == 52.0
+        assert market.iv_percentile_365d == 75.0
+        assert market.funding_8h == -0.0015
+        assert market.term_structure_shape == "CONTANGO"
+        assert market.rv_10d == 45.0
+        assert market.vrp == 4.0
+        assert market.futures_basis == {"27MAR26": 1.5}
 
     def test_empty_structured_returns_defaults(self):
-        analyzer = MagicMock()
-        analyzer.underlying_price = 50000.0
-        analyzer.market_wide_structured = {}
+        empty_mw = MarketWideResult(
+            spot_price=50000.0, currency="BTC", dvol=None, iv_percentile_365d=None,
+            aggregate_gex_dex=None, term_structure=None, futures_basis=None,
+            realized_volatility=None, variance_risk_premium=None, volatility_cone=None,
+            perpetual_funding=None, block_trades=None, cross_asset_correlation=None,
+            failed_sections=(),
+        )
+        result = make_onchain_result(underlying_price=50000.0, market_wide=empty_mw)
 
-        result = SynthesisMapper.build_market_wide(analyzer)
-        assert result.spot_price == 50000.0
-        assert result.dvol == 0.0
+        market = SynthesisMapper.build_market_wide(result)
+        assert market.spot_price == 50000.0
+        assert market.dvol == 0.0
         # Empty shape normalizes to CONTANGO with spread=0 per v2.0 spec
-        assert result.term_structure_shape == "CONTANGO"
-        assert result.term_structure_spread == 0.0
-        assert result.futures_basis == {}
+        assert market.term_structure_shape == "CONTANGO"
+        assert market.term_structure_spread == 0.0
+        assert market.futures_basis == {}
 
     def test_flat_shape_normalized_to_contango(self):
         """Non-standard shape values must be normalized."""
-        analyzer = MagicMock()
-        analyzer.underlying_price = 65000.0
-        analyzer.market_wide_structured = {
-            "shape": "FLAT",  # invalid per spec
-            "spread": 0.3,   # < 0.5
-        }
-        result = SynthesisMapper.build_market_wide(analyzer)
-        assert result.term_structure_shape == "CONTANGO"
-        assert result.term_structure_spread == 0.0
+        mw = MarketWideResult(
+            spot_price=65000.0, currency="BTC", dvol=None, iv_percentile_365d=None,
+            aggregate_gex_dex=None,
+            term_structure=TermStructureResult(
+                entries=(), shape="FLAT", spread=0.3, spread_signed=0.3, iv_by_dte={},
+            ),
+            futures_basis=None, realized_volatility=None, variance_risk_premium=None,
+            volatility_cone=None, perpetual_funding=None, block_trades=None,
+            cross_asset_correlation=None, failed_sections=(),
+        )
+        result = make_onchain_result(market_wide=mw)
+        market = SynthesisMapper.build_market_wide(result)
+        assert market.term_structure_shape == "CONTANGO"
+        assert market.term_structure_spread == 0.0
 
     def test_valid_shapes_pass_through(self):
         """CONTANGO and BACKWARDATION pass through unchanged."""
         for shape in ("CONTANGO", "BACKWARDATION"):
-            analyzer = MagicMock()
-            analyzer.underlying_price = 65000.0
-            analyzer.market_wide_structured = {"shape": shape, "spread": 5.0}
-            result = SynthesisMapper.build_market_wide(analyzer)
-            assert result.term_structure_shape == shape
-            assert result.term_structure_spread == 5.0
+            mw = MarketWideResult(
+                spot_price=65000.0, currency="BTC", dvol=None, iv_percentile_365d=None,
+                aggregate_gex_dex=None,
+                term_structure=TermStructureResult(
+                    entries=(), shape=shape, spread=5.0, spread_signed=5.0, iv_by_dte={},
+                ),
+                futures_basis=None, realized_volatility=None, variance_risk_premium=None,
+                volatility_cone=None, perpetual_funding=None, block_trades=None,
+                cross_asset_correlation=None, failed_sections=(),
+            )
+            result = make_onchain_result(market_wide=mw)
+            market = SynthesisMapper.build_market_wide(result)
+            assert market.term_structure_shape == shape
+            assert market.term_structure_spread == 5.0
 
 
 # =============================================================================
@@ -663,8 +784,8 @@ class TestBuildMarketWide:
 
 class TestBuildExpiryMetrics:
     def test_complete_data_returns_expiry_metrics(self):
-        analyzer = make_analyzer_mock("27MAR26")
-        result = SynthesisMapper.build_expiry_metrics(analyzer, "27MAR26")
+        onchain_result = make_onchain_result("27MAR26")
+        result = SynthesisMapper.build_expiry_metrics(onchain_result, "27MAR26")
 
         assert result is not None
         assert isinstance(result, ExpiryMetrics)
@@ -678,49 +799,77 @@ class TestBuildExpiryMetrics:
         assert result.skew_25d == 8.0
         assert result.flow_bias == "Moderate Buying"
         assert result.pc_ratio == 0.80
+        assert result.flow_sufficient_data is True
 
     def test_total_volume_calculated(self):
         """total_volume should sum volume from all instruments."""
-        analyzer = make_analyzer_mock("27MAR26")
-        result = SynthesisMapper.build_expiry_metrics(analyzer, "27MAR26")
-        # Mock has volume=100 (call) + volume=80 (put) = 180
+        onchain_result = make_onchain_result("27MAR26")
+        result = SynthesisMapper.build_expiry_metrics(onchain_result, "27MAR26")
+        # Fixture has volume=100 (call) + volume=80 (put) = 180
         assert result.total_volume == 180
 
     def test_no_removed_fields_in_result(self):
         """Removed fields should not be on the result."""
-        analyzer = make_analyzer_mock("27MAR26")
-        result = SynthesisMapper.build_expiry_metrics(analyzer, "27MAR26")
+        onchain_result = make_onchain_result("27MAR26")
+        result = SynthesisMapper.build_expiry_metrics(onchain_result, "27MAR26")
         assert not hasattr(result, "volume_pc_ratio")
         assert not hasattr(result, "vwap_iv")
         assert not hasattr(result, "mark_iv")
 
     def test_missing_gex_data_returns_none(self):
-        analyzer = make_analyzer_mock("27MAR26")
-        analyzer.gex_dex_structured = {}
-        result = SynthesisMapper.build_expiry_metrics(analyzer, "27MAR26")
+        onchain_result = make_onchain_result("27MAR26", include_gex_dex=False)
+        result = SynthesisMapper.build_expiry_metrics(onchain_result, "27MAR26")
         assert result is None
 
     def test_missing_instruments_returns_none(self):
-        analyzer = make_analyzer_mock("27MAR26")
-        analyzer.parsed_data = {}
-        result = SynthesisMapper.build_expiry_metrics(analyzer, "27MAR26")
+        onchain_result = make_onchain_result("27MAR26", include_instruments=False)
+        result = SynthesisMapper.build_expiry_metrics(onchain_result, "27MAR26")
         assert result is None
 
     def test_missing_flow_data_uses_defaults(self):
-        analyzer = make_analyzer_mock("27MAR26")
-        analyzer.buy_sell_flow_structured = {}
-        result = SynthesisMapper.build_expiry_metrics(analyzer, "27MAR26")
+        onchain_result = make_onchain_result("27MAR26", include_flow=False)
+        result = SynthesisMapper.build_expiry_metrics(onchain_result, "27MAR26")
         assert result is not None
         assert result.flow_bias == "Mixed/Neutral"
         assert result.flow_trend == "Mixed/Neutral Flow"
+        assert result.flow_sufficient_data is False
 
     def test_missing_vol_surface_uses_defaults(self):
-        analyzer = make_analyzer_mock("27MAR26")
-        analyzer.volatility_surface_structured = {}
-        result = SynthesisMapper.build_expiry_metrics(analyzer, "27MAR26")
+        onchain_result = make_onchain_result("27MAR26", include_vol_surface=False)
+        result = SynthesisMapper.build_expiry_metrics(onchain_result, "27MAR26")
         assert result is not None
         assert result.atm_iv == 0.0
         assert result.skew_25d == 0.0
+
+    def test_insufficient_flow_data_propagates_gate(self):
+        """bugfix_spec.md Item 6 / F6.3.4 (carried from A4 review): the
+        FlowResult's sufficient_data flag must reach ExpiryMetrics so the
+        scoring engine can force weight 0."""
+        onchain_result = make_onchain_result("27MAR26")
+        bundle = onchain_result.bundle("27MAR26")
+        gated_flow = FlowResult(
+            flow_data={}, expiration_totals=bundle.flow.expiration_totals,
+            bias_interpretation="Insufficient flow data", flow_trend="Insufficient flow data",
+            top_buy_strikes=(), top_sell_strikes=(), trade_count=3,
+            spot_price=65000.0, window_start_ms=0, window_end_ms=86_400_000,
+            lookback_hours=24.0, sufficient_data=False, low_confidence=False,
+        )
+        gated_bundle = ExpirationBundle(
+            expiration=bundle.expiration, analysis=bundle.analysis, gex_dex=bundle.gex_dex,
+            flow=gated_flow, vol_surface=bundle.vol_surface, oi_changes=None,
+            iv_percentile=None, trend=None, flow_chart_paths={}, enriched_instruments=(),
+        )
+        gated_result = OnChainAnalysisResult(
+            currency=onchain_result.currency, underlying_price=onchain_result.underlying_price,
+            generated_at=onchain_result.generated_at, market_metrics=onchain_result.market_metrics,
+            expirations=(gated_bundle,), market_wide=onchain_result.market_wide,
+            parsed_instruments=onchain_result.parsed_instruments,
+            atm_iv_by_expiration=onchain_result.atm_iv_by_expiration,
+            recent_trades=onchain_result.recent_trades,
+        )
+        result = SynthesisMapper.build_expiry_metrics(gated_result, "27MAR26")
+        assert result.flow_bias == "Insufficient flow data"
+        assert result.flow_sufficient_data is False
 
 
 # =============================================================================
@@ -729,17 +878,16 @@ class TestBuildExpiryMetrics:
 
 class TestBuildAll:
     def test_returns_market_and_expiries(self):
-        analyzer = make_analyzer_mock("27MAR26")
-        market, expiries = SynthesisMapper.build_all(analyzer)
+        onchain_result = make_onchain_result("27MAR26")
+        market, expiries = SynthesisMapper.build_all(onchain_result)
 
         assert isinstance(market, MarketWideMetrics)
         assert len(expiries) == 1
         assert expiries[0].expiry == "27MAR26"
 
     def test_skips_expiries_with_missing_gex(self):
-        analyzer = make_analyzer_mock("27MAR26")
-        analyzer.gex_dex_structured = {}
-        market, expiries = SynthesisMapper.build_all(analyzer)
+        onchain_result = make_onchain_result("27MAR26", include_gex_dex=False)
+        market, expiries = SynthesisMapper.build_all(onchain_result)
         assert len(expiries) == 0
 
 

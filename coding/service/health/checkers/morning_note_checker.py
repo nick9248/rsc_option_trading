@@ -55,6 +55,6 @@ class MorningNoteSmokeTestCheck(HealthCheck):
     def _default_synthesis_runner(currency: str, repo) -> str:
         with DeribitApiService(timeout=90) as api_service:
             service = OnChainAnalysisService(api_service, repository=repo)
-            _, analyzer = service.fetch_and_analyze(currency=currency, return_analyzer=True)
+            _, result = service.fetch_and_analyze(currency=currency, return_result=True)
             morning_service = MorningNoteService(service)
-            return morning_service.generate_from_analyzer(analyzer)
+            return morning_service.generate(result)

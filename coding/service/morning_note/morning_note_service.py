@@ -9,6 +9,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
+from coding.core.analytics.results.analysis_result import OnChainAnalysisResult
 from coding.core.analytics.synthesis import SynthesisEngine, SynthesisMapper
 from coding.service.on_chain.on_chain_analysis_service import OnChainAnalysisService
 
@@ -33,19 +34,23 @@ class MorningNoteService:
         self.on_chain_service = on_chain_service
         self.engine = SynthesisEngine()
 
-    def generate_from_analyzer(self, analyzer) -> str:
+    def generate(self, result: OnChainAnalysisResult) -> str:
         """
-        Generate a morning note from an already-populated OnChainAnalyzer.
+        Generate a morning note from a typed OnChainAnalysisResult.
 
-        Skips the fetch step — use when the caller already holds the analyzer.
+        refactor_design_spec.md section T7: replaces
+        ``generate_from_analyzer(analyzer)`` — ``SynthesisMapper`` now reads
+        the pipeline's frozen result aggregate directly instead of an
+        analyzer's dict-shaped attributes.
 
         Args:
-            analyzer: Populated OnChainAnalyzer instance.
+            result: The typed aggregate from
+                ``OnChainAnalysisService.fetch_and_analyze(..., return_result=True)``.
 
         Returns:
             Formatted executive summary string.
         """
-        market, expiries = SynthesisMapper.build_all(analyzer)
+        market, expiries = SynthesisMapper.build_all(result)
 
         if not expiries:
             logger.warning("No expiry metrics could be built — synthesis may be incomplete")

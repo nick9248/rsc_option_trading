@@ -58,6 +58,12 @@ class ExpirationRenderInput:
     analysis: ExpirationAnalysisResult
     trend: Optional[TrendSnapshot] = None
     extra_sections: Tuple[str, ...] = field(default_factory=tuple)
+    # bugfix_spec.md Item 6 / F6.3.4 (carried from A4 review): a one-line
+    # evidence caveat ("EVIDENCE: OI/GEX from full book | Flow: ...")
+    # printed right under the per-expiration header, so PCR/GEX conclusions
+    # printed alongside an empty/insufficient flow section carry an
+    # explicit caveat. None when the analyzer has no flow bookkeeping yet.
+    evidence_line: Optional[str] = None
 
 
 class OnChainReportFormatter:
@@ -154,6 +160,9 @@ class OnChainReportFormatter:
             Formatted multi-line string.
         """
         lines = [f"EXPIRATION: {render_input.expiration}", _SUB_SEPARATOR]
+        if render_input.evidence_line is not None:
+            lines.append(render_input.evidence_line)
+            lines.append("")
         lines.append(
             format_expiration_section(render_input.analysis, spot_price, render_input.trend)
         )

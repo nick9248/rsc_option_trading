@@ -719,6 +719,7 @@ class OnChainAnalyzer:
                     analysis=_to_expiration_analysis_result(analysis),
                     trend=_to_trend_snapshot(self.trend_data.get(expiration)),
                     extra_sections=tuple(self._raw_extra_sections(expiration)),
+                    evidence_line=self._build_evidence_line(expiration),
                 )
             )
 
@@ -749,6 +750,40 @@ class OnChainAnalyzer:
         if expiration in self.oi_changes_data:
             texts.append(self.oi_changes_data[expiration])
         return texts
+
+    def _build_evidence_line(self, expiration: str) -> Optional[str]:
+        """
+        bugfix_spec.md Item 6 / F6.3.4 (carried from A4 review): propagate
+        the flow data-sufficiency gate to the report's directional
+        conclusions. The complaint that "the surrounding report still
+        asserts PCR bias and GEX environment labels around an empty flow
+        section" is fixed here, at the report level — PCR is an OI metric
+        and does not need trades, so it is not silenced; instead the
+        per-expiration header carries an explicit evidence caveat.
+
+        Returns None when there is no flow bookkeeping at all for this
+        expiration (e.g. the repository was unavailable and the whole flow
+        phase was skipped) — the header omits the line entirely rather than
+        guessing.
+        """
+        flow_data = self.buy_sell_flow_structured.get(expiration)
+        if not flow_data:
+            return "EVIDENCE: OI/GEX from full book | Flow: NOT ANALYZED"
+
+        sufficient = flow_data.get("sufficient_data")
+        if sufficient is None:
+            # Pre-fix bookkeeping absent (flow_result_dict without the
+            # sufficient_data key) — omit rather than assert a status we
+            # cannot actually verify.
+            return None
+
+        trade_count = flow_data.get("trade_count", 0)
+        lookback_hours = flow_data.get("lookback_hours", 24)
+        status = "OK" if sufficient else "INSUFFICIENT"
+        return (
+            f"EVIDENCE: OI/GEX from full book | "
+            f"Flow: {status} ({trade_count} trades in {lookback_hours:.0f}h)"
+        )
 
     def get_expirations(self) -> List[str]:
         """

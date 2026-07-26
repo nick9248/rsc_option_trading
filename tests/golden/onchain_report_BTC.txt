@@ -20,6 +20,8 @@ Current Funding Rate: 0.0000% (0.00% annualized)
 
 EXPIRATION: 14AUG26
 --------------------------------------------------------------------------------
+EVIDENCE: OI/GEX from full book | Flow: INSUFFICIENT (0 trades in 24h)
+
 Total Instruments: 28 (14 Calls, 14 Puts)
 
 MAX PAIN ANALYSIS
@@ -192,6 +194,8 @@ LARGE OI CHANGES (Day-over-Day)
 
 EXPIRATION: 25DEC26
 --------------------------------------------------------------------------------
+EVIDENCE: OI/GEX from full book | Flow: INSUFFICIENT (0 trades in 24h)
+
 Total Instruments: 116 (58 Calls, 58 Puts)
 
 MAX PAIN ANALYSIS
@@ -461,6 +465,8 @@ ATM Strike: $64,000  |  Current IV: 41.1%  |  Percentile: 3.4%
 
 EXPIRATION: 25JUN27
 --------------------------------------------------------------------------------
+EVIDENCE: OI/GEX from full book | Flow: INSUFFICIENT (0 trades in 24h)
+
 Total Instruments: 74 (37 Calls, 37 Puts)
 
 MAX PAIN ANALYSIS
@@ -686,6 +692,8 @@ ATM Strike: $64,000  |  Current IV: 43.5%  |  Percentile: 20.0%
 
 EXPIRATION: 25SEP26
 --------------------------------------------------------------------------------
+EVIDENCE: OI/GEX from full book | Flow: INSUFFICIENT (0 trades in 24h)
+
 Total Instruments: 120 (60 Calls, 60 Puts)
 
 MAX PAIN ANALYSIS
@@ -959,6 +967,8 @@ ATM Strike: $64,000  |  Current IV: 37.0%  |  Percentile: 5.6%
 
 EXPIRATION: 26JUL26
 --------------------------------------------------------------------------------
+EVIDENCE: OI/GEX from full book | Flow: INSUFFICIENT (0 trades in 24h)
+
 Total Instruments: 46 (23 Calls, 23 Puts)
 
 MAX PAIN ANALYSIS
@@ -1166,6 +1176,8 @@ LARGE OI CHANGES (Day-over-Day)
 
 EXPIRATION: 26MAR27
 --------------------------------------------------------------------------------
+EVIDENCE: OI/GEX from full book | Flow: INSUFFICIENT (0 trades in 24h)
+
 Total Instruments: 102 (51 Calls, 51 Puts)
 
 MAX PAIN ANALYSIS
@@ -1420,6 +1432,8 @@ ATM Strike: $64,000  |  Current IV: 42.4%  |  Percentile: 3.3%
 
 EXPIRATION: 27JUL26
 --------------------------------------------------------------------------------
+EVIDENCE: OI/GEX from full book | Flow: INSUFFICIENT (0 trades in 24h)
+
 Total Instruments: 44 (22 Calls, 22 Puts)
 
 MAX PAIN ANALYSIS
@@ -1620,6 +1634,8 @@ LARGE OI CHANGES (Day-over-Day)
 
 EXPIRATION: 28AUG26
 --------------------------------------------------------------------------------
+EVIDENCE: OI/GEX from full book | Flow: INSUFFICIENT (0 trades in 24h)
+
 Total Instruments: 98 (49 Calls, 49 Puts)
 
 MAX PAIN ANALYSIS
@@ -1887,6 +1903,8 @@ ATM Strike: $64,000  |  Current IV: 35.9%  |  Percentile: 45.5%
 
 EXPIRATION: 28JUL26
 --------------------------------------------------------------------------------
+EVIDENCE: OI/GEX from full book | Flow: INSUFFICIENT (0 trades in 24h)
+
 Total Instruments: 46 (23 Calls, 23 Puts)
 
 MAX PAIN ANALYSIS
@@ -2091,6 +2109,8 @@ LARGE OI CHANGES (Day-over-Day)
 
 EXPIRATION: 29JUL26
 --------------------------------------------------------------------------------
+EVIDENCE: OI/GEX from full book | Flow: INSUFFICIENT (0 trades in 24h)
+
 Total Instruments: 42 (21 Calls, 21 Puts)
 
 MAX PAIN ANALYSIS
@@ -2272,6 +2292,8 @@ SECOND-ORDER GREEKS:
 
 EXPIRATION: 31JUL26
 --------------------------------------------------------------------------------
+EVIDENCE: OI/GEX from full book | Flow: INSUFFICIENT (0 trades in 24h)
+
 Total Instruments: 116 (58 Calls, 58 Puts)
 
 MAX PAIN ANALYSIS
@@ -2555,6 +2577,8 @@ ATM Strike: $64,000  |  Current IV: 36.2%  |  Percentile: 15.2%
 
 EXPIRATION: 7AUG26
 --------------------------------------------------------------------------------
+EVIDENCE: OI/GEX from full book | Flow: INSUFFICIENT (0 trades in 24h)
+
 Total Instruments: 38 (19 Calls, 19 Puts)
 
 MAX PAIN ANALYSIS

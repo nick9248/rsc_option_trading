@@ -69,14 +69,14 @@ class OnChainAnalysisWorker(QThread):
 
             with DeribitApiService(timeout=90) as api_service:
                 service = OnChainAnalysisService(api_service, repository=repository)
-                report, analyzer = service.fetch_and_analyze(
+                report, result = service.fetch_and_analyze(
                     currency=self.currency,
                     progress_callback=lambda msg: self.progress.emit(msg),
-                    return_analyzer=True,
+                    return_result=True,
                 )
 
                 morning_service = MorningNoteService(service)
-                synthesis = morning_service.generate_from_analyzer(analyzer)
+                synthesis = morning_service.generate(result)
                 morning_service.save_report_bundle(self.currency, report, synthesis)
 
                 self.finished.emit(report)

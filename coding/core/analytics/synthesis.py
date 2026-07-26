@@ -17,6 +17,8 @@ from enum import Enum, IntEnum
 import logging
 from datetime import datetime, timedelta
 
+from coding.core.analytics.results.analysis_result import OnChainAnalysisResult
+
 logger = logging.getLogger(__name__)
 
 
@@ -97,6 +99,11 @@ class ExpiryMetrics:
     total_volume: int = 0
     top_buy_strikes: List[dict] = field(default_factory=list)
     top_sell_strikes: List[dict] = field(default_factory=list)
+    # bugfix_spec.md Item 6 / F6.3.4 (carried from A4 review): True unless the
+    # flow analyzer's data-sufficiency gate tripped for this expiry. When
+    # False, the scoring engine must contribute the flow score at weight 0,
+    # not a neutral score at full weight — a neutral score is itself a claim.
+    flow_sufficient_data: bool = True
 
 
 @dataclass
@@ -368,6 +375,28 @@ class ScoringEngine:
         score = max(-2.0, min(2.0, base + adjustment))
 
         return (score, 0.6, f"Flow: {flow_bias} + {flow_trend} → net {score:+.1f}")
+
+    @classmethod
+    def score_flow_gated(
+        cls, flow_bias: str, flow_trend: str, sufficient_data: bool
+    ) -> Tuple[float, float, str]:
+        """
+        score_flow, with the weight forced to 0 when the flow analyzer's
+        data-sufficiency gate tripped (bugfix_spec.md Item 6 / F6.3.4,
+        carried from A4 review).
+
+        An insufficient-data expiry's ``flow_bias``/``flow_trend`` are the
+        literal ``"Insufficient flow data"`` sentinel strings, which
+        ``score_flow`` doesn't recognize and scores as 0.0 (logging a
+        warning) — but at the *legacy* weight of 0.6 that "neutral" score
+        still dilutes the weighted average (denominator inflation) as if it
+        were a real, if uncertain, signal. Weight 0 removes it entirely —
+        a neutral score is itself a claim.
+        """
+        score, weight, description = cls.score_flow(flow_bias, flow_trend)
+        if not sufficient_data:
+            return (score, 0.0, f"{description} [insufficient data - weight zero]")
+        return (score, weight, description)
 
     @staticmethod
     def score_vanna_charm(net_vanna: float, net_charm: float,
@@ -1223,7 +1252,7 @@ class SynthesisEngine:
             all_direction_scores.append(
                 self.scorer.score_max_pain_gravity(exp.max_pain, spot, dte=exp.dte))
             all_direction_scores.append(
-                self.scorer.score_flow(exp.flow_bias, exp.flow_trend))
+                self.scorer.score_flow_gated(exp.flow_bias, exp.flow_trend, exp.flow_sufficient_data))
             all_direction_scores.append(
                 self.scorer.score_vanna_charm(
                     exp.net_vanna, exp.net_charm,
@@ -1240,7 +1269,7 @@ class SynthesisEngine:
             near_direction_scores.append(
                 self.scorer.score_max_pain_gravity(exp.max_pain, spot, dte=exp.dte))
             near_direction_scores.append(
-                self.scorer.score_flow(exp.flow_bias, exp.flow_trend))
+                self.scorer.score_flow_gated(exp.flow_bias, exp.flow_trend, exp.flow_sufficient_data))
             near_direction_scores.append(
                 self.scorer.score_vanna_charm(
                     exp.net_vanna, exp.net_charm,
@@ -1257,7 +1286,7 @@ class SynthesisEngine:
             far_direction_scores.append(
                 self.scorer.score_max_pain_gravity(exp.max_pain, spot, dte=exp.dte))
             far_direction_scores.append(
-                self.scorer.score_flow(exp.flow_bias, exp.flow_trend))
+                self.scorer.score_flow_gated(exp.flow_bias, exp.flow_trend, exp.flow_sufficient_data))
             far_direction_scores.append(
                 self.scorer.score_vanna_charm(
                     exp.net_vanna, exp.net_charm,
@@ -1593,10 +1622,12 @@ Perp Funding: {market.funding_rate:.4f}%  | 8h: {market.funding_8h:.4f}%
 
 class SynthesisMapper:
     """
-    Maps OnChainAnalyzer structured data to SynthesisEngine input dataclasses.
+    Maps a typed OnChainAnalysisResult to SynthesisEngine input dataclasses.
 
-    Bridges the gap between the analyzer's raw structured outputs and the
-    strongly-typed dataclasses that SynthesisEngine expects.
+    Bridges the gap between the pipeline's frozen result aggregate
+    (refactor_design_spec.md section T7) and the strongly-typed dataclasses
+    that SynthesisEngine expects. Reads typed attributes throughout — no
+    dict lookups, no calls back into an analyzer.
     """
 
     @staticmethod
@@ -1610,77 +1641,107 @@ class SynthesisMapper:
             return 0
 
     @classmethod
-    def build_expiry_metrics(cls, analyzer: Any, expiration: str) -> Optional[ExpiryMetrics]:
+    def build_expiry_metrics(
+        cls, result: OnChainAnalysisResult, expiration: str
+    ) -> Optional[ExpiryMetrics]:
         """
-        Build ExpiryMetrics for one expiration from analyzer structured data.
+        Build ExpiryMetrics for one expiration from the typed result.
 
-        Returns None if critical data (GEX or instruments) is missing.
+        Returns None if critical data (GEX or instruments) is missing —
+        mirrors the legacy dict-based gate exactly (T7: no behavior change).
         """
-        instruments = analyzer.parsed_data.get(expiration, [])
+        instruments = result.parsed_instruments.get(expiration, ())
         if not instruments:
             return None
 
-        # GEX/DEX structured data — must exist for meaningful synthesis
-        gex_data = analyzer.gex_dex_structured.get(expiration, {})
-        if not gex_data:
+        bundle = result.bundle(expiration)
+        if bundle is None or bundle.gex_dex is None:
             return None
 
-        vol_data = analyzer.volatility_surface_structured.get(expiration, {})
-        flow_data = analyzer.buy_sell_flow_structured.get(expiration, {})
+        gex = bundle.gex_dex
+        vol = bundle.vol_surface
+        flow = bundle.flow
 
         dte = cls._calculate_dte(expiration)
 
-        # Total OI and volume from parsed_data
+        # Total OI and volume from parsed instruments
         total_oi = sum(i.get("open_interest", 0) for i in instruments)
         total_volume = sum(i.get("volume", 0) for i in instruments)
-        notional = total_oi * analyzer.underlying_price
+        notional = total_oi * result.underlying_price
 
-        # Max pain and OI P/C ratio
-        strike_data = analyzer.group_by_strike(instruments)
-        max_pain_result = analyzer.calculate_max_pain(strike_data)
-        max_pain = max_pain_result.get("max_pain_strike") or analyzer.underlying_price
+        # Max pain and OI P/C ratio — read directly from the analysis result
+        # (T7: stops calling analyzer.group_by_strike/calculate_max_pain/
+        # calculate_put_call_ratio; the result already carries both).
+        analysis = bundle.analysis
+        max_pain = analysis.max_pain.max_pain_strike
+        if max_pain is None:
+            max_pain = result.underlying_price
 
-        pc_result = analyzer.calculate_put_call_ratio(strike_data)
-        pc_ratio = pc_result.get("ratio", 1.0)
+        pc_ratio = analysis.put_call_ratio.ratio
         if pc_ratio == float("inf"):
             pc_ratio = 99.0
 
         # GEX/DEX
-        total_gex = gex_data.get("total_net_gex", 0.0) or 0.0
-        total_dex = gex_data.get("total_net_dex", 0.0) or 0.0
+        total_gex = gex.total_net_gex or 0.0
+        total_dex = gex.total_net_dex or 0.0
         gex_environment = "Positive" if total_gex >= 0 else "Negative"
 
-        key_levels = gex_data.get("key_levels") or {}
-        call_res = key_levels.get("call_resistance") or {}
-        put_sup = key_levels.get("put_support") or {}
+        key_levels = gex.key_levels
+        call_res = key_levels.call_resistance
+        put_sup = key_levels.put_support
 
-        call_resistance_strike = call_res.get("strike") or 0.0
-        call_resistance_gex = call_res.get("net_gex") or 0.0
-        put_support_strike = put_sup.get("strike") or 0.0
-        put_support_gex = put_sup.get("net_gex") or 0.0
-        hvl_strike = key_levels.get("hvl") or 0.0
+        call_resistance_strike = call_res.strike if call_res is not None else 0.0
+        call_resistance_gex = call_res.net_gex if call_res is not None else 0.0
+        put_support_strike = put_sup.strike if put_sup is not None else 0.0
+        put_support_gex = put_sup.net_gex if put_sup is not None else 0.0
+        hvl_strike = key_levels.hvl or 0.0
 
         # Vol surface
-        atm_iv = vol_data.get("atm_iv") or 0.0
-        skew_data = vol_data.get("skew_25d") or {}
-        skew_25d = skew_data.get("skew") or 0.0
-        put_25d_iv = skew_data.get("put_25d_iv") or 0.0
-        call_25d_iv = skew_data.get("call_25d_iv") or 0.0
+        atm_iv = (vol.atm_iv if vol is not None and vol.atm_iv is not None else 0.0)
+        skew = vol.skew_25d if vol is not None else None
+        skew_25d = (skew.skew if skew is not None and skew.skew is not None else 0.0)
+        put_25d_iv = (
+            skew.put_25d_iv if skew is not None and skew.put_25d_iv is not None else 0.0
+        )
+        call_25d_iv = (
+            skew.call_25d_iv if skew is not None and skew.call_25d_iv is not None else 0.0
+        )
 
-        pc_moneyness = vol_data.get("pc_by_moneyness") or {}
-        pc_atm = (pc_moneyness.get("atm") or {}).get("ratio") or 0.0
-        pc_near_otm = (pc_moneyness.get("near_otm") or {}).get("ratio") or 0.0
-        pc_far_otm = (pc_moneyness.get("far_otm") or {}).get("ratio") or 0.0
+        pc_moneyness = vol.pc_by_moneyness if vol is not None else None
+        pc_atm = (pc_moneyness.atm.ratio if pc_moneyness is not None else 0.0)
+        pc_near_otm = (pc_moneyness.near_otm.ratio if pc_moneyness is not None else 0.0)
+        pc_far_otm = (pc_moneyness.far_otm.ratio if pc_moneyness is not None else 0.0)
 
-        second_order = vol_data.get("second_order_greeks") or {}
-        net_vanna = second_order.get("net_vanna") or 0.0
-        net_charm = second_order.get("net_charm") or 0.0
+        second_order = vol.second_order_greeks if vol is not None else None
+        net_vanna = (second_order.net_vanna if second_order is not None else 0.0)
+        net_charm = (second_order.net_charm if second_order is not None else 0.0)
 
-        # Flow
-        flow_bias = flow_data.get("bias_interpretation") or "Mixed/Neutral"
-        flow_trend = flow_data.get("flow_trend") or "Mixed/Neutral Flow"
-        top_buy_strikes = flow_data.get("top_buy_strikes") or []
-        top_sell_strikes = flow_data.get("top_sell_strikes") or []
+        # Flow. bugfix_spec.md Item 6 / F6.3.4 (carried from A4 review):
+        # flow_sufficient_data propagates the data-sufficiency gate so the
+        # scoring engine can force weight 0 instead of a neutral score.
+        flow_bias = flow.bias_interpretation if flow is not None else "Mixed/Neutral"
+        flow_trend = flow.flow_trend if flow is not None else "Mixed/Neutral Flow"
+        flow_sufficient_data = flow.sufficient_data if flow is not None else False
+        top_buy_strikes = (
+            [
+                {
+                    "strike": e.strike, "option_type": e.option_type,
+                    "net_flow": e.net_flow, "buy_volume": e.volume, "buy_notional": e.notional,
+                }
+                for e in flow.top_buy_strikes
+            ]
+            if flow is not None else []
+        )
+        top_sell_strikes = (
+            [
+                {
+                    "strike": e.strike, "option_type": e.option_type,
+                    "net_flow": e.net_flow, "sell_volume": e.volume, "sell_notional": e.notional,
+                }
+                for e in flow.top_sell_strikes
+            ]
+            if flow is not None else []
+        )
 
         return ExpiryMetrics(
             expiry=expiration,
@@ -1709,30 +1770,38 @@ class SynthesisMapper:
             net_charm=float(net_charm),
             flow_bias=flow_bias,
             flow_trend=flow_trend,
-            top_buy_strikes=list(top_buy_strikes),
-            top_sell_strikes=list(top_sell_strikes),
+            top_buy_strikes=top_buy_strikes,
+            top_sell_strikes=top_sell_strikes,
+            flow_sufficient_data=flow_sufficient_data,
         )
 
     @staticmethod
-    def build_market_wide(analyzer: Any) -> MarketWideMetrics:
-        """Build MarketWideMetrics from analyzer.market_wide_structured."""
-        mw = analyzer.market_wide_structured
+    def build_market_wide(result: OnChainAnalysisResult) -> MarketWideMetrics:
+        """Build MarketWideMetrics from the typed OnChainAnalysisResult.market_wide."""
+        mw = result.market_wide
 
         # RV values from calculator are decimals (e.g. 0.585 = 58.5%).
         # dvol and vrp are in percentage points (e.g. 58.7, -7.6).
         # Multiply RV by 100 here so all vol fields share the same scale.
-        rv_10d = (mw.get("rv_10d") or 0.0) * 100
-        rv_20d = (mw.get("rv_20d") or 0.0) * 100
-        rv_30d = (mw.get("rv_30d") or 0.0) * 100
+        rv = mw.realized_volatility
+        rv_10d = (rv.rv_10d if rv is not None else 0.0) * 100
+        rv_20d = (rv.rv_20d if rv is not None else 0.0) * 100
+        rv_30d = (rv.rv_30d if rv is not None else 0.0) * 100
 
         # API funding values are also decimals (e.g. -0.000201 = -0.0201%).
         # Multiply by 100 so score_funding thresholds (5/10/20%) work correctly.
-        funding_rate = (mw.get("funding_rate") or 0.0) * 100
-        funding_8h = (mw.get("funding_8h") or 0.0) * 100
+        funding = mw.perpetual_funding
+        funding_rate = (
+            (funding.funding_rate or 0.0) if funding is not None else 0.0
+        ) * 100
+        funding_8h = (
+            (funding.funding_8h or 0.0) if funding is not None else 0.0
+        ) * 100
 
         # Validate term_structure_shape: must be CONTANGO or BACKWARDATION only
-        raw_shape = mw.get("shape") or ""
-        raw_spread = mw.get("spread") or 0.0
+        ts = mw.term_structure
+        raw_shape = ts.shape if ts is not None else ""
+        raw_spread = (ts.spread if ts is not None else 0.0) or 0.0
         if raw_shape in ("CONTANGO", "BACKWARDATION"):
             ts_shape = raw_shape
             ts_spread = raw_spread
@@ -1745,53 +1814,96 @@ class SynthesisMapper:
                 ts_shape = "CONTANGO"
                 ts_spread = 0.0
 
-        # Ensure futures_basis is ordered by DTE ascending
-        raw_basis = mw.get("futures_basis") or {}
-        # Re-sort not possible by label alone, but the upstream should provide
-        # ordered data. We trust insertion order from the source.
-        futures_basis = raw_basis
+        # futures_basis: trust insertion order from the source (DTE-ascending,
+        # per synthesis_logic.md:112) — Optional[float] values pass through
+        # unchanged (Decision D12; score_futures_basis's caller filters None).
+        futures_basis = dict(mw.futures_basis.futures_basis) if mw.futures_basis is not None else {}
 
-        # Aggregate GEX/DEX from AGGREGATE key in gex_dex_structured
-        agg_gex = getattr(analyzer, "gex_dex_structured", {}).get("AGGREGATE", {})
-        agg_key_levels = agg_gex.get("key_levels", {})
+        # Aggregate GEX/DEX
+        agg_gex = mw.aggregate_gex_dex
+        if agg_gex is not None:
+            agg_key_levels = agg_gex.key_levels
+            aggregate_total_gex = agg_gex.total_net_gex or 0.0
+            aggregate_total_dex = agg_gex.total_net_dex or 0.0
+            aggregate_call_resistance = (
+                {"strike": agg_key_levels.call_resistance.strike,
+                 "net_gex": agg_key_levels.call_resistance.net_gex}
+                if agg_key_levels.call_resistance is not None else None
+            )
+            aggregate_put_support = (
+                {"strike": agg_key_levels.put_support.strike,
+                 "net_gex": agg_key_levels.put_support.net_gex}
+                if agg_key_levels.put_support is not None else None
+            )
+            aggregate_hvl = agg_key_levels.hvl
+        else:
+            aggregate_total_gex = 0.0
+            aggregate_total_dex = 0.0
+            aggregate_call_resistance = None
+            aggregate_put_support = None
+            aggregate_hvl = None
+
+        block_trades = [
+            {
+                "timestamp": t.timestamp, "instrument": t.instrument_name,
+                "size": t.amount, "amount": t.amount, "direction": t.direction,
+                "notional": t.notional, "iv": t.implied_volatility,
+            }
+            for t in (mw.block_trades.trades if mw.block_trades is not None else ())
+        ]
+
+        corr = mw.cross_asset_correlation
 
         return MarketWideMetrics(
-            spot_price=mw.get("spot_price") or analyzer.underlying_price,
-            dvol=mw.get("dvol") or 0.0,
-            iv_percentile_365d=mw.get("iv_percentile_365d") or 0.0,
+            spot_price=mw.spot_price or result.underlying_price,
+            dvol=mw.dvol or 0.0,
+            iv_percentile_365d=mw.iv_percentile_365d or 0.0,
             funding_rate=funding_rate,
             funding_8h=funding_8h,
             term_structure_shape=ts_shape,
             term_structure_spread=ts_spread,
-            term_structure_spread_signed=mw.get("spread_signed") or 0.0,
-            iv_by_dte=mw.get("iv_by_dte") or {},
+            term_structure_spread_signed=(ts.spread_signed if ts is not None else 0.0) or 0.0,
+            iv_by_dte=dict(ts.iv_by_dte) if ts is not None else {},
             rv_10d=rv_10d,
             rv_20d=rv_20d,
             rv_30d=rv_30d,
-            vrp=mw.get("vrp") or 0.0,
-            cone_10d_pctile=mw.get("cone_10d_pctile") or 0.0,
-            cone_20d_pctile=mw.get("cone_20d_pctile") or 0.0,
-            cone_30d_pctile=mw.get("cone_30d_pctile") or 0.0,
+            vrp=(mw.variance_risk_premium.vrp if mw.variance_risk_premium is not None else 0.0),
+            cone_10d_pctile=(
+                mw.volatility_cone.percentile_by_window.get(10, 0.0)
+                if mw.volatility_cone is not None else 0.0
+            ),
+            cone_20d_pctile=(
+                mw.volatility_cone.percentile_by_window.get(20, 0.0)
+                if mw.volatility_cone is not None else 0.0
+            ),
+            cone_30d_pctile=(
+                mw.volatility_cone.percentile_by_window.get(30, 0.0)
+                if mw.volatility_cone is not None else 0.0
+            ),
             futures_basis=futures_basis,
-            perp_oi=mw.get("perp_oi") or 0.0,
-            perp_funding_trend=mw.get("perp_funding_trend") or "Stable",
-            btc_eth_price_corr=mw.get("btc_eth_price_corr") or 0.0,
-            btc_eth_dvol_corr=mw.get("btc_eth_dvol_corr") or 0.0,
-            block_trades=mw.get("block_trades") or [],
-            aggregate_total_gex=agg_gex.get("total_net_gex") or 0.0,
-            aggregate_total_dex=agg_gex.get("total_net_dex") or 0.0,
-            aggregate_call_resistance=agg_key_levels.get("call_resistance"),
-            aggregate_put_support=agg_key_levels.get("put_support"),
-            aggregate_hvl=agg_key_levels.get("hvl"),
+            perp_oi=(funding.perp_open_interest if funding is not None else 0.0) or 0.0,
+            perp_funding_trend=(funding.funding_trend if funding is not None else "Stable"),
+            btc_eth_price_corr=(
+                (corr.price_correlation or 0.0) if corr is not None else 0.0
+            ),
+            btc_eth_dvol_corr=(
+                (corr.dvol_correlation or 0.0) if corr is not None else 0.0
+            ),
+            block_trades=block_trades,
+            aggregate_total_gex=aggregate_total_gex,
+            aggregate_total_dex=aggregate_total_dex,
+            aggregate_call_resistance=aggregate_call_resistance,
+            aggregate_put_support=aggregate_put_support,
+            aggregate_hvl=aggregate_hvl,
         )
 
     @classmethod
-    def build_all(cls, analyzer: Any) -> Tuple[MarketWideMetrics, List[ExpiryMetrics]]:
-        """Build complete input for SynthesisEngine from a fully-run analyzer."""
-        market = cls.build_market_wide(analyzer)
+    def build_all(cls, result: OnChainAnalysisResult) -> Tuple[MarketWideMetrics, List[ExpiryMetrics]]:
+        """Build complete input for SynthesisEngine from a typed OnChainAnalysisResult."""
+        market = cls.build_market_wide(result)
         expiries = [
-            m for exp in analyzer.get_expirations()
-            if (m := cls.build_expiry_metrics(analyzer, exp)) is not None
+            m for exp in result.expiration_names()
+            if (m := cls.build_expiry_metrics(result, exp)) is not None
         ]
         return market, expiries
 

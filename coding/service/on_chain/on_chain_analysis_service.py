@@ -357,6 +357,14 @@ class OnChainAnalysisService:
                 # and the report formatter, so all four describe one instant.
                 flow_result = flow_analyzer.calculate()
                 flow_result_dict = flow_result.to_dict()
+                # bugfix_spec.md Item 6 / F6.3.4 (carried from A4 review):
+                # to_dict()'s legacy shim doesn't carry the data-sufficiency
+                # gate. Add it so generate_report() can read sufficient_data
+                # per expiration for the EVIDENCE line — a one-line lookup,
+                # not a refactor.
+                flow_result_dict["sufficient_data"] = flow_result.sufficient_data
+                flow_result_dict["low_confidence"] = flow_result.low_confidence
+                flow_result_dict["lookback_hours"] = flow_result.lookback_hours
 
                 # Save to database for chart queries
                 try:
