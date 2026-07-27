@@ -6,8 +6,13 @@ and identifies key levels (Call Resistance, Put Support, Zero Gamma Level).
 """
 
 import logging
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from coding.core.analytics.gamma_profile_calculator import (
+    GammaLeg,
+    GammaProfileCalculator,
+)
 from coding.core.analytics.results.gex_dex_results import (
     GexDexKeyLevels,
     GexDexLevel,
@@ -16,6 +21,13 @@ from coding.core.analytics.results.gex_dex_results import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Deribit options settle at 08:00 UTC on the expiry date, never local midnight
+# (bugfix_spec.md Item 2, reusing the same convention already fixed for Item
+# 5 -- see MarketWideCalculator._parse_expiry_datetime).
+_DERIBIT_SETTLEMENT_HOUR_UTC = 8
+_MIN_LEG_OPEN_INTEREST = 0.0
+_MIN_LEG_IMPLIED_VOLATILITY = 0.0
 
 
 class GexDexCalculator:
@@ -76,10 +88,92 @@ class GexDexCalculator:
         self._calculate_gex_dex()
         cumulative = self._calculate_cumulative_profiles()
         key_levels = self._detect_key_levels()
+        gamma_profile = self._calculate_gamma_profile(self.instruments, self.spot_price)
 
         return self._build_result(
-            self.strike_data, cumulative, key_levels, self.spot_price, self.currency
+            self.strike_data, cumulative, key_levels, self.spot_price, self.currency,
+            gamma_profile=gamma_profile,
         )
+
+    @staticmethod
+    def _build_gamma_legs(instruments: List[Dict[str, Any]]) -> List[GammaLeg]:
+        """
+        Build ``GammaLeg`` inputs for ``GammaProfileCalculator`` from the same
+        instrument dicts ``GexDexCalculator`` already receives.
+
+        bugfix_spec.md Item 2 (F2.3.2 edge cases), applied here rather than in
+        the service layer (task B1 D3 keeps the daemon/service leg-building
+        and persistence paths untouched): a leg is skipped if its strike/
+        option_type are missing, ``open_interest <= 0``, ``mark_iv`` is
+        missing or `<= 0``, or its parsed expiry is unparseable/already
+        elapsed. Expiry is computed from the ``expiration`` label (e.g.
+        "31JUL26") at 08:00 UTC settlement -- the same convention already
+        fixed for bugfix_spec.md Item 5 (``MarketWideCalculator.
+        _parse_expiry_datetime``) -- never a local-midnight/integer-days
+        calculation.
+        """
+        now_utc = datetime.now(timezone.utc)
+        legs: List[GammaLeg] = []
+
+        for item in instruments:
+            strike = item.get("strike")
+            option_type = (item.get("option_type") or "").upper()
+            if strike is None or option_type not in ("C", "P"):
+                continue
+
+            open_interest = item.get("open_interest") or 0
+            if open_interest <= _MIN_LEG_OPEN_INTEREST:
+                continue
+
+            mark_iv = item.get("mark_iv")
+            if mark_iv is None or mark_iv <= _MIN_LEG_IMPLIED_VOLATILITY:
+                continue
+
+            expiration = item.get("expiration")
+            if not expiration:
+                continue
+            try:
+                expiry_dt = datetime.strptime(expiration, "%d%b%y").replace(
+                    hour=_DERIBIT_SETTLEMENT_HOUR_UTC, minute=0, second=0,
+                    microsecond=0, tzinfo=timezone.utc,
+                )
+            except ValueError:
+                continue
+
+            time_to_expiry_years = (expiry_dt - now_utc).total_seconds() / (365.0 * 86400.0)
+            if time_to_expiry_years <= 0:
+                continue
+
+            legs.append(GammaLeg(
+                strike=float(strike),
+                implied_volatility=float(mark_iv) / 100.0,
+                time_to_expiry_years=time_to_expiry_years,
+                open_interest=float(open_interest),
+                option_type=option_type,
+            ))
+
+        return legs
+
+    @staticmethod
+    def _calculate_gamma_profile(
+        instruments: List[Dict[str, Any]], spot_price: float
+    ) -> Dict[str, Any]:
+        """
+        Re-price total dealer gamma across a spot grid to locate the actual
+        zero-gamma level (bugfix_spec.md Item 2) via ``GammaProfileCalculator``.
+
+        Gracefully degrades to the "nothing to price" shape (``zero_gamma_level
+        = None``) when ``instruments`` lack the fields a leg needs (no
+        ``mark_iv``/``expiration``) -- this is the case for
+        ``aggregate_across_expirations``, which only has already strike-merged
+        gamma*OI with no per-leg IV/tau left to re-price (see that method's
+        docstring): concatenating raw per-expiry legs into a true cross-expiry
+        re-priced profile needs service-layer leg plumbing across expirations,
+        which is out of scope for task B1 (D3 restricts this task to
+        ``GexDexCalculator`` alone).
+        """
+        legs = GexDexCalculator._build_gamma_legs(instruments)
+        return GammaProfileCalculator(legs, spot_price).calculate()
 
     @staticmethod
     def _build_result(
@@ -89,8 +183,10 @@ class GexDexCalculator:
         spot_price: float,
         currency: str,
         expiration_count: Optional[int] = None,
+        gamma_profile: Optional[Dict[str, Any]] = None,
     ) -> GexDexResult:
         """Assemble a typed ``GexDexResult`` from the internal dict-based working state."""
+        gamma_profile = gamma_profile or {}
         strike_rows = tuple(
             GexDexStrikeRow(
                 strike=strike,
@@ -121,6 +217,12 @@ class GexDexCalculator:
                 put_support=GexDexLevel(strike=ps["strike"], net_gex=ps["net_gex"]) if ps else None,
                 hvl=key_levels.get("hvl"),
                 gamma_flip=key_levels.get("gamma_flip"),
+                cumulative_gex_zero_strike=key_levels.get("hvl"),
+                zero_gamma_level=gamma_profile.get("zero_gamma_level"),
+                zero_gamma_crossings=tuple(gamma_profile.get("zero_gamma_crossings", []) or []),
+                net_gex_at_spot=gamma_profile.get("net_gex_at_spot"),
+                gamma_regime=gamma_profile.get("regime"),
+                legs_skipped=gamma_profile.get("legs_skipped", 0),
             ),
             spot_price=spot_price,
             total_net_gex=sum(d["net_gex"] for d in strike_data.values()),
@@ -353,6 +455,19 @@ class GexDexCalculator:
 
         Returns:
             GexDexResult with same structure as calculate() plus expiration_count set.
+
+        Note (bugfix_spec.md Item 2 / task B1): the aggregate's
+        ``zero_gamma_level``/``zero_gamma_crossings``/``net_gex_at_spot`` are
+        always ``None``/``()``/``None`` here (``gamma_regime`` "UNKNOWN") --
+        this method only receives already strike-merged ``GexDexResult``
+        rows (``call_gamma``/``put_gamma`` = sum of gamma*OI at the ORIGINAL
+        spot each expiry was computed at), which discards each leg's own IV
+        and time-to-expiry. There is no data here from which to re-price a
+        true cross-expiry gamma profile; doing so needs the daemon/service to
+        concatenate raw per-expiry legs (bugfix_spec.md F2.3.2), which is out
+        of scope for task B1 (D3 restricts this task to ``GexDexCalculator``
+        alone). Each expiration's own ``calculate()`` result still carries a
+        correctly re-priced per-expiry ``zero_gamma_level``.
         """
         merged_strike_data: Dict[float, Dict[str, Any]] = {}
         expiration_count = 0
@@ -381,11 +496,17 @@ class GexDexCalculator:
                 merged_strike_data[row.strike]["call_oi"] += row.call_oi
                 merged_strike_data[row.strike]["put_oi"] += row.put_oi
 
+        # No raw instruments are available at this level (only already
+        # strike-merged GexDexResult rows) -- see the gamma-profile note
+        # above. Always the "insufficient data" shape (regime "UNKNOWN").
+        no_data_gamma_profile = GexDexCalculator._calculate_gamma_profile([], spot_price)
+
         if not merged_strike_data:
             return GexDexCalculator._build_result(
                 {}, {"cumulative_gex": {}, "cumulative_dex": {}},
                 {"call_resistance": None, "put_support": None, "hvl": None, "gamma_flip": None},
                 spot_price, currency, expiration_count=expiration_count,
+                gamma_profile=no_data_gamma_profile,
             )
 
         # Inject merged strike data into a temporary calculator instance and re-run formulas
@@ -399,5 +520,6 @@ class GexDexCalculator:
         return GexDexCalculator._build_result(
             agg_calc.strike_data, cumulative, key_levels, spot_price, currency,
             expiration_count=expiration_count,
+            gamma_profile=no_data_gamma_profile,
         )
 

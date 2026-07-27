@@ -290,6 +290,12 @@ def test_gex_dex_result_to_dict_matches_legacy_shape():
         "put_support": None,
         "hvl": 94000.0,
         "gamma_flip": 94000.0,
+        "cumulative_gex_zero_strike": None,
+        "zero_gamma_level": None,
+        "zero_gamma_crossings": [],
+        "net_gex_at_spot": None,
+        "gamma_regime": None,
+        "legs_skipped": 0,
     }
     assert d["spot_price"] == 94500.0
     assert d["total_net_gex"] == 1_000_000.0

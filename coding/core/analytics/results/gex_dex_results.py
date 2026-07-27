@@ -46,12 +46,65 @@ class GexDexLevel:
 
 @dataclass(frozen=True)
 class GexDexKeyLevels:
-    """Key trading levels detected from the GEX/DEX profile."""
+    """
+    Key trading levels detected from the GEX/DEX profile.
+
+    bugfix_spec.md Item 2 / task B1: ``hvl``/``gamma_flip`` are a strike-axis
+    cumulative-net-GEX sign-crossing artifact -- a property of how open
+    interest happens to be distributed along the strike axis, not of how
+    dealer gamma actually responds to the underlying moving. They were
+    historically mislabeled "Zero Gamma Level"; the correctly-labeled,
+    identical value is exposed as ``cumulative_gex_zero_strike`` below.
+    ``hvl``/``gamma_flip`` are kept (not renamed/deleted) because
+    ``repository.save_onchain_snapshot`` persists ``key_levels.hvl`` into the
+    LIVE ``hvl_level`` DB column read by the straddle regime gate and IC/BF
+    scanners, and ``synthesis.py`` (morning-note rendering) also reads
+    ``key_levels.hvl`` directly -- decision D3 (task-B1-brief.md) keeps both
+    that column and every attribute name any persistence/synthesis path
+    already reads unchanged in this task.
+
+    The actual re-priced dealer-gamma flip (SpotGamma's "Zero Gamma Level"
+    definition) is ``zero_gamma_level``, computed by
+    ``GammaProfileCalculator`` re-pricing Black-Scholes gamma across a grid
+    of hypothetical spot levels (sticky-strike). It is NOT wired into any
+    persisted/regime-gate-reading column in this task.
+    """
 
     call_resistance: Optional[GexDexLevel]
     put_support: Optional[GexDexLevel]
-    hvl: Optional[float]  # zero-gamma level (ZGL)
-    gamma_flip: Optional[float]
+    hvl: Optional[float]  # DEPRECATED name -- see cumulative_gex_zero_strike above
+    gamma_flip: Optional[float]  # DEPRECATED name -- historically always equal to hvl
+
+    # --- Additive fields (task B1 / bugfix_spec.md Item 2) ---
+    cumulative_gex_zero_strike: Optional[float] = None
+    """Renamed, correctly-documented alias of ``hvl``/``gamma_flip``: the
+    strike where CUMULATIVE net GEX (summed strike-by-strike) changes sign.
+    Same value as ``hvl``. NOT a re-priced gamma flip -- see
+    ``zero_gamma_level``."""
+
+    zero_gamma_level: Optional[float] = None
+    """NEW, correct: the hypothetical spot price at which re-priced total
+    dealer gamma changes sign (the actual gamma flip). ``None`` if the
+    re-priced profile never crosses zero within +-50% of spot, if the book
+    is FLAT (net dealer gamma identically zero), or if inputs were
+    insufficient (e.g. no legs, non-positive spot)."""
+
+    zero_gamma_crossings: Tuple[float, ...] = ()
+    """All zero-gamma crossings found on the re-pricing grid, ascending. A
+    book can legitimately have more than one; ``zero_gamma_level`` is
+    whichever of these sits nearest current spot."""
+
+    net_gex_at_spot: Optional[float] = None
+    """NetGEX(spot) from the re-priced profile (NOT the strike-axis
+    ``total_net_gex``, which can differ due to Deribit gamma rounding). This,
+    not the ZGL location, is what determines the current gamma regime."""
+
+    gamma_regime: Optional[str] = None
+    """"POSITIVE" | "NEGATIVE" | "FLAT" | "UNKNOWN" (re-priced profile)."""
+
+    legs_skipped: int = 0
+    """Legs excluded from the re-pricing grid (expiring within 1 hour, or
+    otherwise gated) -- see GammaProfileCalculator.calculate()."""
 
 
 @dataclass(frozen=True)
@@ -110,6 +163,12 @@ class GexDexResult:
                 ),
                 "hvl": kl.hvl,
                 "gamma_flip": kl.gamma_flip,
+                "cumulative_gex_zero_strike": kl.cumulative_gex_zero_strike,
+                "zero_gamma_level": kl.zero_gamma_level,
+                "zero_gamma_crossings": list(kl.zero_gamma_crossings),
+                "net_gex_at_spot": kl.net_gex_at_spot,
+                "gamma_regime": kl.gamma_regime,
+                "legs_skipped": kl.legs_skipped,
             },
             "spot_price": self.spot_price,
             "total_net_gex": self.total_net_gex,

@@ -199,12 +199,18 @@
         "net_gex": 46090533.86917223,
         "strike": 70000.0
       },
+      "cumulative_gex_zero_strike": 68000.0,
       "gamma_flip": 68000.0,
+      "gamma_regime": "UNKNOWN",
       "hvl": 68000.0,
+      "legs_skipped": 0,
+      "net_gex_at_spot": null,
       "put_support": {
         "net_gex": -17166732.719397917,
         "strike": 60000.0
-      }
+      },
+      "zero_gamma_crossings": [],
+      "zero_gamma_level": null
     },
     "spot_price": 64405.02,
     "strike_data": {
@@ -1642,12 +1648,20 @@
             "net_gex": 1179070.8763912136,
             "strike": 70000.0
           },
+          "cumulative_gex_zero_strike": 68000.0,
           "gamma_flip": 68000.0,
+          "gamma_regime": "POSITIVE",
           "hvl": 68000.0,
+          "legs_skipped": 0,
+          "net_gex_at_spot": 1954161.7724890895,
           "put_support": {
             "net_gex": -503568.0013857286,
             "strike": 60000.0
-          }
+          },
+          "zero_gamma_crossings": [
+            60844.95136456428
+          ],
+          "zero_gamma_level": 60844.95136456428
         },
         "spot_price": 64405.02,
         "strike_data": {
@@ -2210,12 +2224,20 @@
             "net_gex": 5589936.655909683,
             "strike": 80000.0
           },
+          "cumulative_gex_zero_strike": 100000.0,
           "gamma_flip": 100000.0,
+          "gamma_regime": "POSITIVE",
           "hvl": 100000.0,
+          "legs_skipped": 0,
+          "net_gex_at_spot": 3068745.703809136,
           "put_support": {
             "net_gex": -4698944.837971837,
             "strike": 60000.0
-          }
+          },
+          "zero_gamma_crossings": [
+            62163.86269315652
+          ],
+          "zero_gamma_level": 62163.86269315652
         },
         "spot_price": 64405.02,
         "strike_data": {
@@ -3572,12 +3594,20 @@
             "net_gex": 258171.93085871288,
             "strike": 60000.0
           },
+          "cumulative_gex_zero_strike": 70000.0,
           "gamma_flip": 70000.0,
+          "gamma_regime": "POSITIVE",
           "hvl": 70000.0,
+          "legs_skipped": 0,
+          "net_gex_at_spot": 510442.39048099756,
           "put_support": {
             "net_gex": -197528.07434916307,
             "strike": 40000.0
-          }
+          },
+          "zero_gamma_crossings": [
+            42198.42034477595
+          ],
+          "zero_gamma_level": 42198.42034477595
         },
         "spot_price": 64405.02,
         "strike_data": {
@@ -4581,12 +4611,20 @@
             "net_gex": 2977936.899133791,
             "strike": 78000.0
           },
+          "cumulative_gex_zero_strike": 80000.0,
           "gamma_flip": 80000.0,
+          "gamma_regime": "POSITIVE",
           "hvl": 80000.0,
+          "legs_skipped": 0,
+          "net_gex_at_spot": 2768289.759749183,
           "put_support": {
             "net_gex": -4255232.571841431,
             "strike": 60000.0
-          }
+          },
+          "zero_gamma_crossings": [
+            63452.64420374388
+          ],
+          "zero_gamma_level": 63452.64420374388
         },
         "spot_price": 64405.02,
         "strike_data": {
@@ -5953,12 +5991,20 @@
             "net_gex": 10787928.16807194,
             "strike": 64500.0
           },
+          "cumulative_gex_zero_strike": 64500.0,
           "gamma_flip": 64500.0,
+          "gamma_regime": "POSITIVE",
           "hvl": 64500.0,
+          "legs_skipped": 0,
+          "net_gex_at_spot": 9069065.793712342,
           "put_support": {
             "net_gex": -2856483.2658506436,
             "strike": 64000.0
-          }
+          },
+          "zero_gamma_crossings": [
+            64156.33636767439
+          ],
+          "zero_gamma_level": 64156.33636767439
         },
         "spot_price": 64405.02,
         "strike_data": {
@@ -6678,12 +6724,20 @@
             "net_gex": 641696.6212057018,
             "strike": 80000.0
           },
+          "cumulative_gex_zero_strike": 98000.0,
           "gamma_flip": 98000.0,
+          "gamma_regime": "POSITIVE",
           "hvl": 98000.0,
+          "legs_skipped": 0,
+          "net_gex_at_spot": 881444.4953805585,
           "put_support": {
             "net_gex": -830804.242154428,
             "strike": 50000.0
-          }
+          },
+          "zero_gamma_crossings": [
+            60632.366147556386
+          ],
+          "zero_gamma_level": 60632.366147556386
         },
         "spot_price": 64405.02,
         "strike_data": {
@@ -7877,12 +7931,20 @@
             "net_gex": 1284720.6045237877,
             "strike": 66000.0
           },
+          "cumulative_gex_zero_strike": 64500.0,
           "gamma_flip": null,
+          "gamma_regime": "NEGATIVE",
           "hvl": 64500.0,
+          "legs_skipped": 0,
+          "net_gex_at_spot": -3966690.0922979973,
           "put_support": {
             "net_gex": -2615857.402915008,
             "strike": 65000.0
-          }
+          },
+          "zero_gamma_crossings": [
+            64950.39629080366
+          ],
+          "zero_gamma_level": 64950.39629080366
         },
         "spot_price": 64405.02,
         "strike_data": {
@@ -8579,12 +8641,20 @@
             "net_gex": 4349101.961226595,
             "strike": 72000.0
           },
+          "cumulative_gex_zero_strike": 69000.0,
           "gamma_flip": 69000.0,
+          "gamma_regime": "POSITIVE",
           "hvl": 69000.0,
+          "legs_skipped": 0,
+          "net_gex_at_spot": 17662355.282622658,
           "put_support": {
             "net_gex": -2150658.4625903834,
             "strike": 60000.0
-          }
+          },
+          "zero_gamma_crossings": [
+            60152.383955800324
+          ],
+          "zero_gamma_level": 60152.383955800324
         },
         "spot_price": 64405.02,
         "strike_data": {
@@ -9742,12 +9812,20 @@
             "net_gex": 275842.4389798266,
             "strike": 64500.0
           },
+          "cumulative_gex_zero_strike": 66500.0,
           "gamma_flip": 66500.0,
+          "gamma_regime": "POSITIVE",
           "hvl": 66500.0,
+          "legs_skipped": 0,
+          "net_gex_at_spot": 259181.83326962308,
           "put_support": {
             "net_gex": -283101.4505319273,
             "strike": 61000.0
-          }
+          },
+          "zero_gamma_crossings": [
+            64140.76705720865
+          ],
+          "zero_gamma_level": 64140.76705720865
         },
         "spot_price": 64405.02,
         "strike_data": {
@@ -10407,12 +10485,20 @@
             "net_gex": 76406.28159411137,
             "strike": 69000.0
           },
+          "cumulative_gex_zero_strike": 57000.0,
           "gamma_flip": null,
+          "gamma_regime": "NEGATIVE",
           "hvl": 57000.0,
+          "legs_skipped": 0,
+          "net_gex_at_spot": -60218.82730192929,
           "put_support": {
             "net_gex": -84370.45426841611,
             "strike": 61000.0
-          }
+          },
+          "zero_gamma_crossings": [
+            64668.42223556782
+          ],
+          "zero_gamma_level": 64668.42223556782
         },
         "spot_price": 64405.02,
         "strike_data": {
@@ -11101,12 +11187,20 @@
             "net_gex": 30527296.061600354,
             "strike": 70000.0
           },
+          "cumulative_gex_zero_strike": 66000.0,
           "gamma_flip": 66000.0,
+          "gamma_regime": "POSITIVE",
           "hvl": 66000.0,
+          "legs_skipped": 0,
+          "net_gex_at_spot": 81449107.78012021,
           "put_support": {
             "net_gex": -3371914.566115805,
             "strike": 60000.0
-          }
+          },
+          "zero_gamma_crossings": [
+            62043.0906229361
+          ],
+          "zero_gamma_level": 62043.0906229361
         },
         "spot_price": 64405.02,
         "strike_data": {
@@ -12427,12 +12521,20 @@
             "net_gex": 11005491.1143049,
             "strike": 70000.0
           },
+          "cumulative_gex_zero_strike": 68000.0,
           "gamma_flip": 68000.0,
+          "gamma_regime": "POSITIVE",
           "hvl": 68000.0,
+          "legs_skipped": 0,
+          "net_gex_at_spot": 23467148.738982167,
           "put_support": {
             "net_gex": -2444420.2900873953,
             "strike": 60000.0
-          }
+          },
+          "zero_gamma_crossings": [
+            60825.65847177881
+          ],
+          "zero_gamma_level": 60825.65847177881
         },
         "spot_price": 64405.02,
         "strike_data": {

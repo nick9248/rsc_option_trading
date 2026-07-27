@@ -83,6 +83,16 @@ _FROZEN_CLOCK_MODULES = (
     # T8 per-expiration-file characterization test failing on a timestamp
     # mismatch. Same remedy as the other entries in this list.
     "coding.service.on_chain.analysis_builder",
+    # bugfix_spec.md Item 2 / task B1: GexDexCalculator._build_gamma_legs()
+    # calls datetime.now(timezone.utc) to compute each leg's time-to-expiry
+    # for GammaProfileCalculator's grid re-pricing. Same nondeterminism class
+    # as vrp_calculator above, discovered the same way: the golden master
+    # silently drifted (an expiration whose 08:00 UTC settlement is between
+    # the fixture's recorded_at_epoch and real wall-clock "now" flips from a
+    # priceable book to every leg gated as "already expired", changing
+    # zero_gamma_level/regime for that expiration from run to run depending
+    # on which day the suite executes). Same remedy as the other entries.
+    "coding.core.analytics.gex_dex_calculator",
 )
 
 

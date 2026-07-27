@@ -11,15 +11,29 @@ Not yet wired into ``GexDexCalculator`` — ``calculate()`` still returns a
 dict until T4 replaces it with ``GexDexResult``. Until then,
 ``OnChainAnalyzer`` keeps consuming the calculator's own
 ``generate_report_section()`` text verbatim (T3's "temporary adapter").
+
+bugfix_spec.md Item 2 / task B1: the old "Zero Gamma Level" line (a
+strike-axis cumulative-GEX sign-crossing artifact) is renamed to
+"Cumulative GEX Zero Strike" and no longer labeled a gamma flip. A new
+"GAMMA PROFILE" block reports the actual re-priced dealer-gamma flip
+(``zero_gamma_level``) so a reader can tell the two apart -- see
+``GexDexKeyLevels``'s docstring for why both are kept.
 """
 
 from coding.core.analytics.results.gex_dex_results import GexDexResult
 
 _SEPARATOR = "-" * 80
 
+_REGIME_LABELS = {
+    "POSITIVE": "POSITIVE - dealers long gamma (stabilizing)",
+    "NEGATIVE": "NEGATIVE - dealers short gamma (amplifying volatility)",
+    "FLAT": "FLAT - net dealer gamma ~0 across the book",
+    "UNKNOWN": "UNKNOWN - insufficient data to re-price",
+}
+
 
 def _key_levels_and_totals_lines(result: GexDexResult, dex_unit: str) -> list:
-    """Shared KEY LEVELS / TOTALS / interpretation block for both sections."""
+    """Shared KEY LEVELS / TOTALS / interpretation / GAMMA PROFILE block for both sections."""
     lines = []
     key_levels = result.key_levels
     lines.append("KEY LEVELS:")
@@ -36,10 +50,14 @@ def _key_levels_and_totals_lines(result: GexDexResult, dex_unit: str) -> list:
     else:
         lines.append("  Put Support: None found")
 
-    if key_levels.hvl:
-        lines.append(f"  Zero Gamma Level: ${key_levels.hvl:,.0f}")
+    if key_levels.cumulative_gex_zero_strike:
+        lines.append(
+            f"  Cumulative GEX Zero Strike: ${key_levels.cumulative_gex_zero_strike:,.0f} "
+            "(strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; "
+            "see GAMMA PROFILE below)"
+        )
     else:
-        lines.append("  Zero Gamma Level: Not detected")
+        lines.append("  Cumulative GEX Zero Strike: Not detected")
 
     lines.append("")
 
@@ -67,6 +85,66 @@ def _key_levels_and_totals_lines(result: GexDexResult, dex_unit: str) -> list:
     lines.append(f"  DEX Environment: {dex_interp}")
     lines.append("")
 
+    lines.extend(_gamma_profile_lines(result))
+
+    return lines
+
+
+def _gamma_profile_lines(result: GexDexResult) -> list:
+    """
+    GAMMA PROFILE block (bugfix_spec.md Item 2 / F2.3.3): the re-priced,
+    sticky-strike dealer-gamma flip, distinct from the strike-axis
+    "Cumulative GEX Zero Strike" above.
+    """
+    key_levels = result.key_levels
+    spot_price = result.spot_price
+
+    lines = ["GAMMA PROFILE (re-priced, sticky-strike):"]
+
+    net_gex_at_spot = key_levels.net_gex_at_spot
+    regime = key_levels.gamma_regime
+    regime_label = _REGIME_LABELS.get(regime, _REGIME_LABELS["UNKNOWN"])
+    if net_gex_at_spot is not None:
+        lines.append(
+            f"  Net GEX at spot ${spot_price:,.0f}: {net_gex_at_spot:+,.2f} USD ({regime_label})"
+        )
+    else:
+        lines.append(f"  Net GEX at spot ${spot_price:,.0f}: not available ({regime_label})")
+
+    zero_gamma_level = key_levels.zero_gamma_level
+    if zero_gamma_level is not None:
+        pct_from_spot = (
+            (zero_gamma_level - spot_price) / spot_price * 100 if spot_price else 0.0
+        )
+        lines.append(
+            f"  Zero Gamma Level:         ${zero_gamma_level:,.0f}  ({pct_from_spot:+.1f}% from spot)"
+        )
+    elif regime == "POSITIVE":
+        lines.append(
+            "  Zero Gamma Level:         none within ±50% of spot "
+            "(net GEX positive across the whole range)"
+        )
+    elif regime == "NEGATIVE":
+        lines.append(
+            "  Zero Gamma Level:         none within ±50% of spot "
+            "(net GEX negative across the whole range)"
+        )
+    elif regime == "FLAT":
+        lines.append(
+            "  Zero Gamma Level:         none (net dealer gamma is ~0 across the whole book)"
+        )
+    else:
+        lines.append("  Zero Gamma Level:         not available (insufficient data to re-price)")
+
+    crossings = list(key_levels.zero_gamma_crossings)
+    other_crossings = [c for c in crossings if c != zero_gamma_level]
+    if other_crossings:
+        other_str = ", ".join(f"${c:,.0f}" for c in sorted(other_crossings))
+        lines.append(f"  Other crossings:          {other_str}")
+    else:
+        lines.append("  Other crossings:          none")
+
+    lines.append("")
     return lines
 
 
@@ -113,8 +191,8 @@ def format_gex_dex_section(result: GexDexResult, currency: str) -> str:
             notes.append("Call Resistance")
         if key_levels.put_support and strike == key_levels.put_support.strike:
             notes.append("Put Support")
-        if key_levels.hvl and strike == key_levels.hvl:
-            notes.append("Zero Gamma Level")
+        if key_levels.cumulative_gex_zero_strike and strike == key_levels.cumulative_gex_zero_strike:
+            notes.append("Cumulative GEX Zero Strike")
 
         notes_str = " | ".join(notes) if notes else ""
 

@@ -109,7 +109,7 @@ Spot Price: $64,405.02
 KEY LEVELS:
   Call Resistance: $70,000 (Net GEX: +1,179,070.88 USD)
   Put Support: $60,000 (Net GEX: -503,568.00 USD)
-  Zero Gamma Level: $68,000
+  Cumulative GEX Zero Strike: $68,000 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
 
 TOTALS:
   Total Net GEX: +1,966,030.69 USD
@@ -117,6 +117,11 @@ TOTALS:
 
   GEX Environment: Positive (Dealers long gamma - stabilizing, buy dips/sell rallies)
   DEX Environment: Positive (Net long delta - bullish pressure)
+
+GAMMA PROFILE (re-priced, sticky-strike):
+  Net GEX at spot $64,405: +1,954,161.77 USD (POSITIVE - dealers long gamma (stabilizing))
+  Zero Gamma Level:         $60,845  (-5.5% from spot)
+  Other crossings:          none
 
 GEX/DEX BY STRIKE:
 --------------------------------------------------------------------------------
@@ -132,7 +137,7 @@ GEX/DEX BY STRIKE:
     65,000    -60,063.14       -9.4674   -915,133.22      -97.9778  
     66,000    +90,302.10      +11.9861   -824,831.11      -85.9918  
     67,000   +216,318.54      +24.6371   -608,512.57      -61.3546  
-    68,000   +692,385.26      +73.5950    +83,872.69      +12.2404  Zero Gamma Level
+    68,000   +692,385.26      +73.5950    +83,872.69      +12.2404  Cumulative GEX Zero Strike
     70,000  +1,179,070.88      +92.2675  +1,262,943.57     +104.5080  Call Resistance
     72,000   +529,866.36      +41.5325  +1,792,809.93     +146.0405  
     75,000   +173,220.76      +10.1352  +1,966,030.69     +156.1756  
@@ -327,7 +332,7 @@ Spot Price: $64,405.02
 KEY LEVELS:
   Call Resistance: $80,000 (Net GEX: +5,589,936.66 USD)
   Put Support: $60,000 (Net GEX: -4,698,944.84 USD)
-  Zero Gamma Level: $100,000
+  Cumulative GEX Zero Strike: $100,000 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
 
 TOTALS:
   Total Net GEX: +1,503,942.75 USD
@@ -335,6 +340,11 @@ TOTALS:
 
   GEX Environment: Positive (Dealers long gamma - stabilizing, buy dips/sell rallies)
   DEX Environment: Negative (Net short delta - bearish pressure)
+
+GAMMA PROFILE (re-priced, sticky-strike):
+  Net GEX at spot $64,405: +3,068,745.70 USD (POSITIVE - dealers long gamma (stabilizing))
+  Zero Gamma Level:         $62,164  (-3.5% from spot)
+  Other crossings:          none
 
 GEX/DEX BY STRIKE:
 --------------------------------------------------------------------------------
@@ -374,7 +384,7 @@ GEX/DEX BY STRIKE:
     95,000   +502,862.84      +46.8767   -643,646.18   -1,121.9640  
     96,000   +123,776.52      +17.8934   -519,869.67   -1,104.0707  
     98,000    +85,324.50      +15.4322   -434,545.17   -1,088.6385  
-   100,000  +1,353,370.11      -30.6938   +918,824.94   -1,119.3323  Zero Gamma Level
+   100,000  +1,353,370.11      -30.6938   +918,824.94   -1,119.3323  Cumulative GEX Zero Strike
    102,000    +66,990.31       +3.3509   +985,815.25   -1,115.9813  
    104,000    +34,718.82       +4.5357  +1,020,534.06   -1,111.4456  
    105,000   +300,564.56      -59.1451  +1,321,098.62   -1,170.5907  
@@ -577,7 +587,7 @@ Spot Price: $64,405.02
 KEY LEVELS:
   Call Resistance: $60,000 (Net GEX: +258,171.93 USD)
   Put Support: $40,000 (Net GEX: -197,528.07 USD)
-  Zero Gamma Level: $70,000
+  Cumulative GEX Zero Strike: $70,000 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
 
 TOTALS:
   Total Net GEX: +229,467.73 USD
@@ -585,6 +595,11 @@ TOTALS:
 
   GEX Environment: Positive (Dealers long gamma - stabilizing, buy dips/sell rallies)
   DEX Environment: Positive (Net long delta - bullish pressure)
+
+GAMMA PROFILE (re-priced, sticky-strike):
+  Net GEX at spot $64,405: +510,442.39 USD (POSITIVE - dealers long gamma (stabilizing))
+  Zero Gamma Level:         $42,198  (-34.5% from spot)
+  Other crossings:          none
 
 GEX/DEX BY STRIKE:
 --------------------------------------------------------------------------------
@@ -604,7 +619,7 @@ GEX/DEX BY STRIKE:
     64,000     +1,078.48       +5.0428    -43,097.79     +506.9267  
     66,000     -3,816.17       +0.5788    -46,913.95     +507.5055  
     68,000        +82.96       +1.1149    -46,830.99     +508.6205  
-    70,000    +72,880.48      +94.8828    +26,049.48     +603.5032  Zero Gamma Level
+    70,000    +72,880.48      +94.8828    +26,049.48     +603.5032  Cumulative GEX Zero Strike
     72,000     +5,185.01       +6.3667    +31,234.49     +609.8699  
     74,000     +5,309.45       +6.1393    +36,543.94     +616.0093  
     76,000     +5,558.33       +6.0558    +42,102.27     +622.0650  
@@ -827,7 +842,7 @@ Spot Price: $64,405.02
 KEY LEVELS:
   Call Resistance: $78,000 (Net GEX: +2,977,936.90 USD)
   Put Support: $60,000 (Net GEX: -4,255,232.57 USD)
-  Zero Gamma Level: $80,000
+  Cumulative GEX Zero Strike: $80,000 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
 
 TOTALS:
   Total Net GEX: +4,176,130.09 USD
@@ -835,6 +850,11 @@ TOTALS:
 
   GEX Environment: Positive (Dealers long gamma - stabilizing, buy dips/sell rallies)
   DEX Environment: Negative (Net short delta - bearish pressure)
+
+GAMMA PROFILE (re-priced, sticky-strike):
+  Net GEX at spot $64,405: +2,768,289.76 USD (POSITIVE - dealers long gamma (stabilizing))
+  Zero Gamma Level:         $63,453  (-1.5% from spot)
+  Other crossings:          none
 
 GEX/DEX BY STRIKE:
 --------------------------------------------------------------------------------
@@ -862,7 +882,7 @@ GEX/DEX BY STRIKE:
     75,000    +36,958.74   -1,920.9285  -6,905,518.43   -2,938.1650  
     76,000  +2,062,845.16     -157.6270  -4,842,673.27   -3,095.7919  
     78,000  +2,977,936.90      -60.9251  -1,864,736.37   -3,156.7170  Call Resistance
-    80,000  +2,432,474.03     -240.3449   +567,737.66   -3,397.0620  Zero Gamma Level
+    80,000  +2,432,474.03     -240.3449   +567,737.66   -3,397.0620  Cumulative GEX Zero Strike
     82,000   +951,137.91       -1.6703  +1,518,875.58   -3,398.7323  
     84,000   +589,888.02      +51.9263  +2,108,763.60   -3,346.8059  
     85,000   +319,479.47     -368.3280  +2,428,243.06   -3,715.1339  
@@ -1065,7 +1085,7 @@ Spot Price: $64,405.02
 KEY LEVELS:
   Call Resistance: $64,500 (Net GEX: +10,787,928.17 USD)
   Put Support: $64,000 (Net GEX: -2,856,483.27 USD)
-  Zero Gamma Level: $64,500
+  Cumulative GEX Zero Strike: $64,500 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
 
 TOTALS:
   Total Net GEX: +8,008,390.42 USD
@@ -1073,6 +1093,11 @@ TOTALS:
 
   GEX Environment: Positive (Dealers long gamma - stabilizing, buy dips/sell rallies)
   DEX Environment: Positive (Net long delta - bullish pressure)
+
+GAMMA PROFILE (re-priced, sticky-strike):
+  Net GEX at spot $64,405: +9,069,065.79 USD (POSITIVE - dealers long gamma (stabilizing))
+  Zero Gamma Level:         $64,156  (-0.4% from spot)
+  Other crossings:          none
 
 GEX/DEX BY STRIKE:
 --------------------------------------------------------------------------------
@@ -1087,7 +1112,7 @@ GEX/DEX BY STRIKE:
     63,000   -871,496.19       -6.9123   -993,903.86       -8.0192  
     63,500  -1,821,431.18      -12.1961  -2,815,335.04      -20.2153  
     64,000  -2,856,483.27      +21.0462  -5,671,818.31       +0.8309  Put Support
-    64,500  +10,787,928.17      +92.1421  +5,116,109.86      +92.9730  Call Resistance | Zero Gamma Level
+    64,500  +10,787,928.17      +92.1421  +5,116,109.86      +92.9730  Call Resistance | Cumulative GEX Zero Strike
     65,000  +2,472,875.62       +2.2542  +7,588,985.48      +95.2272  
     65,500   +273,768.44      -18.9106  +7,862,753.91      +76.3166  
     66,000    +96,565.59      -12.8099  +7,959,319.51      +63.5067  
@@ -1302,7 +1327,7 @@ Spot Price: $64,405.02
 KEY LEVELS:
   Call Resistance: $80,000 (Net GEX: +641,696.62 USD)
   Put Support: $50,000 (Net GEX: -830,804.24 USD)
-  Zero Gamma Level: $98,000
+  Cumulative GEX Zero Strike: $98,000 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
 
 TOTALS:
   Total Net GEX: +1,140,618.86 USD
@@ -1310,6 +1335,11 @@ TOTALS:
 
   GEX Environment: Positive (Dealers long gamma - stabilizing, buy dips/sell rallies)
   DEX Environment: Positive (Net long delta - bullish pressure)
+
+GAMMA PROFILE (re-priced, sticky-strike):
+  Net GEX at spot $64,405: +881,444.50 USD (POSITIVE - dealers long gamma (stabilizing))
+  Zero Gamma Level:         $60,632  (-5.9% from spot)
+  Other crossings:          none
 
 GEX/DEX BY STRIKE:
 --------------------------------------------------------------------------------
@@ -1346,7 +1376,7 @@ GEX/DEX BY STRIKE:
     94,000    +47,494.68      +15.3575   -148,291.24     +191.6669  
     95,000    +72,921.96      +30.5042    -75,369.28     +222.1711  
     96,000    +51,808.60      +19.9629    -23,560.68     +242.1340  
-    98,000    +39,447.54      +14.3934    +15,886.87     +256.5274  Zero Gamma Level
+    98,000    +39,447.54      +14.3934    +15,886.87     +256.5274  Cumulative GEX Zero Strike
    100,000   +225,776.00      +67.2455   +241,662.86     +323.7729  
    102,000    +43,885.91      +13.4504   +285,548.77     +337.2233  
    104,000    +41,977.83      +11.8708   +327,526.60     +349.0940  
@@ -1529,7 +1559,7 @@ Spot Price: $64,405.02
 KEY LEVELS:
   Call Resistance: $66,000 (Net GEX: +1,284,720.60 USD)
   Put Support: $65,000 (Net GEX: -2,615,857.40 USD)
-  Zero Gamma Level: $64,500
+  Cumulative GEX Zero Strike: $64,500 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
 
 TOTALS:
   Total Net GEX: -4,142,157.91 USD
@@ -1537,6 +1567,11 @@ TOTALS:
 
   GEX Environment: Negative (Dealers short gamma - amplifying volatility)
   DEX Environment: Negative (Net short delta - bearish pressure)
+
+GAMMA PROFILE (re-priced, sticky-strike):
+  Net GEX at spot $64,405: -3,966,690.09 USD (NEGATIVE - dealers short gamma (amplifying volatility))
+  Zero Gamma Level:         $64,950  (+0.8% from spot)
+  Other crossings:          none
 
 GEX/DEX BY STRIKE:
 --------------------------------------------------------------------------------
@@ -1551,7 +1586,7 @@ GEX/DEX BY STRIKE:
     63,000  -2,122,534.98      -40.7524  -3,756,310.34      -71.7648  
     63,500   -139,124.14       -2.7622  -3,895,434.48      -74.5270  
     64,000   -660,570.05      -11.5160  -4,556,004.53      -86.0430  
-    64,500    +77,235.88       -1.7043  -4,478,768.65      -87.7473  Zero Gamma Level
+    64,500    +77,235.88       -1.7043  -4,478,768.65      -87.7473  Cumulative GEX Zero Strike
     65,000  -2,615,857.40     -151.9756  -7,094,626.05     -239.7229  Put Support
     65,500  +1,244,775.30      +17.5683  -5,849,850.75     -222.1546  
     66,000  +1,284,720.60      +15.1846  -4,565,130.15     -206.9700  Call Resistance
@@ -1758,7 +1793,7 @@ Spot Price: $64,405.02
 KEY LEVELS:
   Call Resistance: $72,000 (Net GEX: +4,349,101.96 USD)
   Put Support: $60,000 (Net GEX: -2,150,658.46 USD)
-  Zero Gamma Level: $69,000
+  Cumulative GEX Zero Strike: $69,000 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
 
 TOTALS:
   Total Net GEX: +18,744,178.15 USD
@@ -1766,6 +1801,11 @@ TOTALS:
 
   GEX Environment: Positive (Dealers long gamma - stabilizing, buy dips/sell rallies)
   DEX Environment: Positive (Net long delta - bullish pressure)
+
+GAMMA PROFILE (re-priced, sticky-strike):
+  Net GEX at spot $64,405: +17,662,355.28 USD (POSITIVE - dealers long gamma (stabilizing))
+  Zero Gamma Level:         $60,152  (-6.6% from spot)
+  Other crossings:          none
 
 GEX/DEX BY STRIKE:
 --------------------------------------------------------------------------------
@@ -1792,7 +1832,7 @@ GEX/DEX BY STRIKE:
     66,000  +2,224,741.86     +365.9586  -4,268,340.27   +1,168.6229  
     67,000  +1,967,399.53     +276.7491  -2,300,940.74   +1,445.3720  
     68,000  +1,178,656.08     +157.1286  -1,122,284.67   +1,602.5006  
-    69,000  +1,174,508.07     +136.5798    +52,223.40   +1,739.0804  Zero Gamma Level
+    69,000  +1,174,508.07     +136.5798    +52,223.40   +1,739.0804  Cumulative GEX Zero Strike
     70,000  +2,074,003.30     +178.5999  +2,126,226.70   +1,917.6803  
     71,000  +1,843,042.29     +211.7898  +3,969,269.00   +2,129.4701  
     72,000  +4,349,101.96     +368.5662  +8,318,370.96   +2,498.0363  Call Resistance
@@ -2001,7 +2041,7 @@ Spot Price: $64,405.02
 KEY LEVELS:
   Call Resistance: $64,500 (Net GEX: +275,842.44 USD)
   Put Support: $61,000 (Net GEX: -283,101.45 USD)
-  Zero Gamma Level: $66,500
+  Cumulative GEX Zero Strike: $66,500 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
 
 TOTALS:
   Total Net GEX: +225,900.44 USD
@@ -2009,6 +2049,11 @@ TOTALS:
 
   GEX Environment: Positive (Dealers long gamma - stabilizing, buy dips/sell rallies)
   DEX Environment: Negative (Net short delta - bearish pressure)
+
+GAMMA PROFILE (re-priced, sticky-strike):
+  Net GEX at spot $64,405: +259,181.83 USD (POSITIVE - dealers long gamma (stabilizing))
+  Zero Gamma Level:         $64,141  (-0.4% from spot)
+  Other crossings:          none
 
 GEX/DEX BY STRIKE:
 --------------------------------------------------------------------------------
@@ -2028,7 +2073,7 @@ GEX/DEX BY STRIKE:
     65,000   +141,364.06      -44.3460   -291,604.86      -50.6339  
     65,500    +89,596.94       +2.5248   -202,007.92      -48.1091  
     66,000    +53,509.29       +1.2645   -148,498.64      -46.8446  
-    66,500   +171,727.47       +3.5939    +23,228.84      -43.2506  Zero Gamma Level
+    66,500   +171,727.47       +3.5939    +23,228.84      -43.2506  Cumulative GEX Zero Strike
     67,000    +54,007.05       +0.9512    +77,235.88      -42.2994  
     67,500    +69,188.75       +1.2839   +146,424.63      -41.0155  
     68,000    +67,446.59       +0.9019   +213,871.22      -40.1136  
@@ -2199,7 +2244,7 @@ Spot Price: $64,405.02
 KEY LEVELS:
   Call Resistance: $69,000 (Net GEX: +76,406.28 USD)
   Put Support: $61,000 (Net GEX: -84,370.45 USD)
-  Zero Gamma Level: $57,000
+  Cumulative GEX Zero Strike: $57,000 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
 
 TOTALS:
   Total Net GEX: -61,017.18 USD
@@ -2208,11 +2253,16 @@ TOTALS:
   GEX Environment: Negative (Dealers short gamma - amplifying volatility)
   DEX Environment: Negative (Net short delta - bearish pressure)
 
+GAMMA PROFILE (re-priced, sticky-strike):
+  Net GEX at spot $64,405: -60,218.83 USD (NEGATIVE - dealers short gamma (amplifying volatility))
+  Zero Gamma Level:         $64,668  (+0.4% from spot)
+  Other crossings:          none
+
 GEX/DEX BY STRIKE:
 --------------------------------------------------------------------------------
     Strike   Net GEX(USD)  Net DEX(BTC)   Cum GEX(USD)  Cum DEX(BTC)  Notes
     ------        -------       -------        -------       -------  -----
-    57,000     -3,318.41       -0.1118     -3,318.41       -0.1118  Zero Gamma Level
+    57,000     -3,318.41       -0.1118     -3,318.41       -0.1118  Cumulative GEX Zero Strike
     58,000         +0.00       +0.0000     -3,318.41       -0.1118  
     59,000    -13,688.42       -0.5128    -17,006.83       -0.6246  
     60,000    -64,708.90       -1.9496    -81,715.73       -2.5742  
@@ -2425,7 +2475,7 @@ Spot Price: $64,405.02
 KEY LEVELS:
   Call Resistance: $70,000 (Net GEX: +30,527,296.06 USD)
   Put Support: $60,000 (Net GEX: -3,371,914.57 USD)
-  Zero Gamma Level: $66,000
+  Cumulative GEX Zero Strike: $66,000 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
 
 TOTALS:
   Total Net GEX: +75,992,144.62 USD
@@ -2433,6 +2483,11 @@ TOTALS:
 
   GEX Environment: Positive (Dealers long gamma - stabilizing, buy dips/sell rallies)
   DEX Environment: Positive (Net long delta - bullish pressure)
+
+GAMMA PROFILE (re-priced, sticky-strike):
+  Net GEX at spot $64,405: +81,449,107.78 USD (POSITIVE - dealers long gamma (stabilizing))
+  Zero Gamma Level:         $62,043  (-3.7% from spot)
+  Other crossings:          none
 
 GEX/DEX BY STRIKE:
 --------------------------------------------------------------------------------
@@ -2455,7 +2510,7 @@ GEX/DEX BY STRIKE:
     63,000  +1,405,676.48     +546.8738  -10,811,032.56   +2,923.6684  
     64,000   +772,358.83     +185.4151  -10,038,673.74   +3,109.0835  
     65,000  +8,836,249.58     +554.2091  -1,202,424.15   +3,663.2926  
-    66,000  +6,228,480.79     +100.1005  +5,026,056.64   +3,763.3931  Zero Gamma Level
+    66,000  +6,228,480.79     +100.1005  +5,026,056.64   +3,763.3931  Cumulative GEX Zero Strike
     67,000  +7,960,024.67     +198.6393  +12,986,081.31   +3,962.0323  
     68,000  +12,481,144.46     +142.5178  +25,467,225.77   +4,104.5501  
     69,000  +4,399,043.96       -7.2709  +29,866,269.73   +4,097.2792  
@@ -2671,7 +2726,7 @@ Spot Price: $64,405.02
 KEY LEVELS:
   Call Resistance: $70,000 (Net GEX: +11,005,491.11 USD)
   Put Support: $60,000 (Net GEX: -2,444,420.29 USD)
-  Zero Gamma Level: $68,000
+  Cumulative GEX Zero Strike: $68,000 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
 
 TOTALS:
   Total Net GEX: +23,364,103.46 USD
@@ -2679,6 +2734,11 @@ TOTALS:
 
   GEX Environment: Positive (Dealers long gamma - stabilizing, buy dips/sell rallies)
   DEX Environment: Positive (Net long delta - bullish pressure)
+
+GAMMA PROFILE (re-priced, sticky-strike):
+  Net GEX at spot $64,405: +23,467,148.74 USD (POSITIVE - dealers long gamma (stabilizing))
+  Zero Gamma Level:         $60,826  (-5.6% from spot)
+  Other crossings:          none
 
 GEX/DEX BY STRIKE:
 --------------------------------------------------------------------------------
@@ -2695,7 +2755,7 @@ GEX/DEX BY STRIKE:
     65,000   +217,272.59      +21.2044  -4,177,789.29     -259.6203  
     66,000   +529,368.60      +36.7485  -3,648,420.69     -222.8718  
     67,000  +1,480,340.60     +107.7004  -2,168,080.09     -115.1714  
-    68,000  +3,344,081.44     +240.5089  +1,176,001.35     +125.3374  Zero Gamma Level
+    68,000  +3,344,081.44     +240.5089  +1,176,001.35     +125.3374  Cumulative GEX Zero Strike
     69,000  +1,729,469.87     +104.5477  +2,905,471.22     +229.8851  
     70,000  +11,005,491.11     +713.3792  +13,910,962.34     +943.2643  Call Resistance
     71,000  +1,056,746.16      +67.8341  +14,967,708.50   +1,011.0984  
@@ -2777,7 +2837,7 @@ Spot Price: $64,405.02
 KEY LEVELS:
   Call Resistance: $70,000 (Net GEX: +46,090,533.87 USD)
   Put Support: $60,000 (Net GEX: -17,166,732.72 USD)
-  Zero Gamma Level: $68,000
+  Cumulative GEX Zero Strike: $68,000 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
 
 TOTALS:
   Total Net GEX: +131,147,732.11 USD
@@ -2785,6 +2845,11 @@ TOTALS:
 
   GEX Environment: Positive (Dealers long gamma - stabilizing, buy dips/sell rallies)
   DEX Environment: Positive (Net long delta - bullish pressure)
+
+GAMMA PROFILE (re-priced, sticky-strike):
+  Net GEX at spot $64,405: not available (UNKNOWN - insufficient data to re-price)
+  Zero Gamma Level:         not available (insufficient data to re-price)
+  Other crossings:          none
 
 
 IV TERM STRUCTURE
