@@ -34,6 +34,10 @@ def test_default_synthesis_runner_uses_one_call_workflow_service_with_injected_r
     through the framework-injected repo (not a fresh one) -- this check
     must keep querying the exact repository instance the health-check
     framework gave it.
+
+    Carried finding #3 (A6 review): run() must be called with
+    save_bundle=False -- this is a read-only synthesis smoke test; it must
+    not write a timestamped report bundle to disk on every invocation.
     """
     from coding.service.health.checkers import morning_note_checker as checker_module
 
@@ -50,4 +54,4 @@ def test_default_synthesis_runner_uses_one_call_workflow_service_with_injected_r
 
     assert result == "BTC synthesis text"
     mock_workflow_cls.assert_called_once_with("BTC", repository=injected_repo)
-    mock_workflow_cls.return_value.run.assert_called_once_with()
+    mock_workflow_cls.return_value.run.assert_called_once_with(save_bundle=False)

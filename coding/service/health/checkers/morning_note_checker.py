@@ -60,6 +60,13 @@ class MorningNoteSmokeTestCheck(HealthCheck):
         gave it -- the workflow service otherwise defaults to constructing
         its own fresh ``DatabaseRepository()``, which is correct for the
         GUI's fire-and-forget usage but would be wrong here.
+
+        Carried finding #3 (A6 review): ``save_bundle=False`` -- this is a
+        read-only synthesis smoke test, not a report-generation request.
+        Without it, every health-check invocation wrote a timestamped
+        report bundle to output/data/onchain_analysis/, an unflagged side
+        effect and failure surface for a check that only needs the
+        synthesis text.
         """
-        output = OnChainWorkflowService(currency, repository=repo).run()
+        output = OnChainWorkflowService(currency, repository=repo).run(save_bundle=False)
         return output.synthesis_text

@@ -114,6 +114,33 @@ class TestSingleCallContract:
         assert mock_morning.generate.call_count == 1
         assert mock_morning.save_report_bundle.call_count == 1
 
+    def test_save_bundle_false_skips_save_report_bundle(self, patched_collaborators):
+        """
+        Carried finding #3 (A6 review): morning_note_checker.py's health
+        check runs the full workflow on every invocation, including
+        save_report_bundle -- an unflagged side effect (timestamped folders
+        under output/data/onchain_analysis/) and failure surface for what
+        should be a read-only synthesis check. save_bundle=False must skip
+        it entirely while still generating the synthesis.
+        """
+        workflow = OnChainWorkflowService("BTC")
+        output = workflow.run(save_bundle=False)
+
+        mock_morning = patched_collaborators["morning"]
+        assert mock_morning.generate.call_count == 1
+        assert mock_morning.save_report_bundle.call_count == 0
+        assert output.bundle_path is None
+
+    def test_save_bundle_default_true_preserves_existing_behavior(self, patched_collaborators):
+        """save_bundle defaults to True -- existing callers (GUI worker) are
+        unaffected by this parameter's addition."""
+        workflow = OnChainWorkflowService("BTC")
+        output = workflow.run()
+
+        mock_morning = patched_collaborators["morning"]
+        assert mock_morning.save_report_bundle.call_count == 1
+        assert output.bundle_path == Path("/tmp/bundle")
+
     def test_progress_callback_forwarded_to_fetch_and_analyze(self, patched_collaborators):
         workflow = OnChainWorkflowService("BTC")
         callback = MagicMock()

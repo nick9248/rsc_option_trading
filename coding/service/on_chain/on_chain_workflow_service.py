@@ -36,7 +36,11 @@ class OnChainWorkflowOutput:
     result: OnChainAnalysisResult
     report_text: str
     synthesis_text: str
-    bundle_path: Path
+    # Optional (carried finding #3, A6 review): None when run(save_bundle=
+    # False) skipped MorningNoteService.save_report_bundle entirely -- a
+    # read-only caller (the morning-note health checker) never gets a path
+    # that doesn't exist.
+    bundle_path: Optional[Path]
 
 
 class OnChainWorkflowService:
@@ -69,17 +73,28 @@ class OnChainWorkflowService:
     def run(
         self,
         progress_callback: Optional[Callable[[str], None]] = None,
+        save_bundle: bool = True,
     ) -> OnChainWorkflowOutput:
         """
-        Run the full analyze -> synthesize -> save pipeline for ``self.currency``.
+        Run the full analyze -> synthesize -> (optionally save) pipeline for
+        ``self.currency``.
 
         Args:
             progress_callback: Optional callback for progress updates,
                 forwarded to ``OnChainAnalysisService.fetch_and_analyze``.
+            save_bundle: When True (default), calls ``MorningNoteService.
+                save_report_bundle`` -- the GUI's use case. When False,
+                skips it entirely (carried finding #3, A6 review): the
+                morning-note health checker only needs the synthesis text
+                to prove the pipeline runs; writing a timestamped report
+                bundle to disk on every health-check invocation is an
+                unflagged side effect and an unnecessary failure surface
+                for what should be a read-only check.
 
         Returns:
             ``OnChainWorkflowOutput`` with the typed result, report text,
-            synthesis text, and the path the report bundle was saved to.
+            synthesis text, and the path the report bundle was saved to
+            (``None`` when ``save_bundle=False``).
 
         Raises:
             Whatever ``fetch_and_analyze``/``generate``/``save_report_bundle``
@@ -89,16 +104,17 @@ class OnChainWorkflowService:
         repository = self._repository if self._repository is not None else DatabaseRepository()
 
         if self._api_service is not None:
-            return self._run_with_api(self._api_service, repository, progress_callback)
+            return self._run_with_api(self._api_service, repository, progress_callback, save_bundle)
 
         with DeribitApiService(timeout=90) as api_service:
-            return self._run_with_api(api_service, repository, progress_callback)
+            return self._run_with_api(api_service, repository, progress_callback, save_bundle)
 
     def _run_with_api(
         self,
         api_service: DeribitApiService,
         repository: DatabaseRepository,
         progress_callback: Optional[Callable[[str], None]],
+        save_bundle: bool,
     ) -> OnChainWorkflowOutput:
         on_chain_service = OnChainAnalysisService(api_service, repository=repository)
 
@@ -110,7 +126,10 @@ class OnChainWorkflowService:
 
         morning_service = MorningNoteService(on_chain_service)
         synthesis = morning_service.generate(result)
-        bundle_path = morning_service.save_report_bundle(self.currency, report, synthesis)
+        bundle_path = (
+            morning_service.save_report_bundle(self.currency, report, synthesis)
+            if save_bundle else None
+        )
 
         return OnChainWorkflowOutput(
             result=result,
