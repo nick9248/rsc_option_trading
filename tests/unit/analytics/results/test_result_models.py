@@ -423,7 +423,7 @@ def _make_vol_surface_result() -> VolSurfaceResult:
         ),
         skew_25d=SkewResult(
             put_25d_iv=85.0, call_25d_iv=78.0, put_25d_strike=1800.0, call_25d_strike=2000.0,
-            skew=7.0, interpretation="Puts More Expensive - Hedging Demand",
+            risk_reversal_25d=-7.0, interpretation="Puts Richer - Downside Hedging Demand",
         ),
         pc_by_moneyness=PutCallByMoneyness(
             atm=MoneynessBucket(call_oi=100.0, put_oi=150.0, range_label="±5%", ratio=1.5, bias="Slightly Bearish"),
@@ -469,7 +469,8 @@ def test_vol_surface_result_to_dict_matches_legacy_reader_keys():
 
     assert d["skew_25d"] == {
         "put_25d_iv": 85.0, "call_25d_iv": 78.0, "put_25d_strike": 1800.0, "call_25d_strike": 2000.0,
-        "skew": 7.0, "interpretation": "Puts More Expensive - Hedging Demand",
+        "risk_reversal_25d": -7.0, "put_over_call_skew_25d": 7.0,
+        "interpretation": "Puts Richer - Downside Hedging Demand",
     }
     assert d["atm_iv"] == 81.5
     # bugfix_spec.md Item 8: net_vanna/net_charm renamed to

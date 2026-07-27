@@ -41,16 +41,25 @@ def format_vol_surface_section(result: VolSurfaceResult, expiration: str) -> str
     lines.append("VOLATILITY SURFACE ANALYSIS")
     lines.append(_SUB_SEPARATOR)
 
-    # 25-Delta Skew
+    # bugfix_spec.md Item 9: 25-delta RISK REVERSAL (call - put, market
+    # convention -- SpotGamma/MenthorQ/Glassnode), not the old unqualified
+    # "skew" (put - call, opposite sign). Prints the actual selected deltas
+    # too (9.4 edge case: a thin book's "closest to +-0.25" pick may not be
+    # close at all).
     skew = result.skew_25d
-    if skew.skew is not None:
-        lines.append(f"25-Delta Skew: {skew.skew:+.1f}% ({skew.interpretation})")
+    if skew.risk_reversal_25d is not None:
         lines.append(
-            f"  25d Put: {skew.put_25d_iv:.1f}% (K={skew.put_25d_strike:,.0f})  |  "
-            f"25d Call: {skew.call_25d_iv:.1f}% (K={skew.call_25d_strike:,.0f})"
+            f"25Δ Risk Reversal (call − put): {skew.risk_reversal_25d:+.1f}% "
+            f"({skew.interpretation})"
+        )
+        put_delta_str = f", Δ={skew.put_25d_delta:+.3f}" if skew.put_25d_delta is not None else ""
+        call_delta_str = f", Δ={skew.call_25d_delta:+.3f}" if skew.call_25d_delta is not None else ""
+        lines.append(
+            f"  25d Put: {skew.put_25d_iv:.1f}% (K={skew.put_25d_strike:,.0f}{put_delta_str})  |  "
+            f"25d Call: {skew.call_25d_iv:.1f}% (K={skew.call_25d_strike:,.0f}{call_delta_str})"
         )
     else:
-        lines.append(f"25-Delta Skew: {skew.interpretation}")
+        lines.append(f"25Δ Risk Reversal: {skew.interpretation}")
     lines.append("")
 
     # ATM IV

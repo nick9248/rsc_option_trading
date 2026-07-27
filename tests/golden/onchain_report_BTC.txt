@@ -160,8 +160,8 @@ Trades Analyzed: 0
 
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
-25-Delta Skew: +4.2% (Puts More Expensive - Hedging Demand)
-  25d Put: 38.3% (K=61,000)  |  25d Call: 34.1% (K=68,000)
+25Δ Risk Reversal (call − put): -4.2% (Puts Richer - Downside Hedging Demand)
+  25d Put: 38.3% (K=61,000, Δ=-0.250)  |  25d Call: 34.1% (K=68,000, Δ=+0.265)
 
 ATM IV: 35.1%
 
@@ -439,8 +439,8 @@ Trades Analyzed: 0
 
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
-25-Delta Skew: +4.7% (Puts More Expensive - Hedging Demand)
-  25d Put: 44.0% (K=56,000)  |  25d Call: 39.3% (K=80,000)
+25Δ Risk Reversal (call − put): -4.7% (Puts Richer - Downside Hedging Demand)
+  25d Put: 44.0% (K=56,000, Δ=-0.244)  |  25d Call: 39.3% (K=80,000, Δ=+0.254)
 
 ATM IV: 40.8%
 
@@ -682,8 +682,8 @@ Trades Analyzed: 0
 
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
-25-Delta Skew: +4.6% (Puts More Expensive - Hedging Demand)
-  25d Put: 45.8% (K=55,000)  |  25d Call: 41.1% (K=95,000)
+25Δ Risk Reversal (call − put): -4.6% (Puts Richer - Downside Hedging Demand)
+  25d Put: 45.8% (K=55,000, Δ=-0.253)  |  25d Call: 41.1% (K=95,000, Δ=+0.244)
 
 ATM IV: 43.1%
 
@@ -970,8 +970,8 @@ Trades Analyzed: 0
 
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
-25-Delta Skew: +5.0% (Puts More Expensive - Strong Hedging Demand)
-  25d Put: 40.4% (K=58,000)  |  25d Call: 35.3% (K=72,000)
+25Δ Risk Reversal (call − put): -5.0% (Puts Much Richer - Strong Downside Hedging Demand)
+  25d Put: 40.4% (K=58,000, Δ=-0.226)  |  25d Call: 35.3% (K=72,000, Δ=+0.257)
 
 ATM IV: 36.7%
 
@@ -1184,8 +1184,8 @@ Trades Analyzed: 0
 
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
-25-Delta Skew: +1.6% (Puts More Expensive - Hedging Demand)
-  25d Put: 16.4% (K=64,000)  |  25d Call: 14.8% (K=64,500)
+25Δ Risk Reversal (call − put): -1.6% (Puts Richer - Downside Hedging Demand)
+  25d Put: 16.4% (K=64,000, Δ=-0.182)  |  25d Call: 14.8% (K=64,500, Δ=+0.368)
 
 ATM IV: 14.8%
 
@@ -1466,8 +1466,8 @@ Trades Analyzed: 0
 
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
-25-Delta Skew: +4.9% (Puts More Expensive - Hedging Demand)
-  25d Put: 45.2% (K=55,000)  |  25d Call: 40.3% (K=88,000)
+25Δ Risk Reversal (call − put): -4.9% (Puts Richer - Downside Hedging Demand)
+  25d Put: 45.2% (K=55,000, Δ=-0.247)  |  25d Call: 40.3% (K=88,000, Δ=+0.241)
 
 ATM IV: 42.1%
 
@@ -1678,8 +1678,8 @@ Trades Analyzed: 0
 
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
-25-Delta Skew: +4.2% (Puts More Expensive - Hedging Demand)
-  25d Put: 27.7% (K=63,500)  |  25d Call: 23.5% (K=65,000)
+25Δ Risk Reversal (call − put): -4.2% (Puts Richer - Downside Hedging Demand)
+  25d Put: 27.7% (K=63,500, Δ=-0.223)  |  25d Call: 23.5% (K=65,000, Δ=+0.266)
 
 ATM IV: 24.5%
 
@@ -1951,8 +1951,8 @@ Trades Analyzed: 0
 
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
-25-Delta Skew: +4.7% (Puts More Expensive - Hedging Demand)
-  25d Put: 38.9% (K=60,000)  |  25d Call: 34.2% (K=70,000)
+25Δ Risk Reversal (call − put): -4.7% (Puts Richer - Downside Hedging Demand)
+  25d Put: 38.9% (K=60,000, Δ=-0.247)  |  25d Call: 34.2% (K=70,000, Δ=+0.235)
 
 ATM IV: 35.4%
 
@@ -2181,8 +2181,8 @@ Trades Analyzed: 0
 
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
-25-Delta Skew: +4.7% (Puts More Expensive - Hedging Demand)
-  25d Put: 32.8% (K=63,000)  |  25d Call: 28.1% (K=65,500)
+25Δ Risk Reversal (call − put): -4.7% (Puts Richer - Downside Hedging Demand)
+  25d Put: 32.8% (K=63,000, Δ=-0.212)  |  25d Call: 28.1% (K=65,500, Δ=+0.234)
 
 ATM IV: 29.2%
 
@@ -2394,8 +2394,8 @@ Trades Analyzed: 0
 
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
-25-Delta Skew: +3.3% (Puts More Expensive - Hedging Demand)
-  25d Put: 34.3% (K=63,000)  |  25d Call: 31.0% (K=66,000)
+25Δ Risk Reversal (call − put): -3.3% (Puts Richer - Downside Hedging Demand)
+  25d Put: 34.3% (K=63,000, Δ=-0.257)  |  25d Call: 31.0% (K=66,000, Δ=+0.212)
 
 ATM IV: 32.2%
 
@@ -2674,8 +2674,8 @@ Trades Analyzed: 0
 
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
-25-Delta Skew: +4.3% (Puts More Expensive - Hedging Demand)
-  25d Put: 38.9% (K=62,000)  |  25d Call: 34.6% (K=66,000)
+25Δ Risk Reversal (call − put): -4.3% (Puts Richer - Downside Hedging Demand)
+  25d Put: 38.9% (K=62,000, Δ=-0.207)  |  25d Call: 34.6% (K=66,000, Δ=+0.291)
 
 ATM IV: 36.2%
 
@@ -2898,8 +2898,8 @@ Trades Analyzed: 0
 
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
-25-Delta Skew: +3.7% (Puts More Expensive - Hedging Demand)
-  25d Put: 37.8% (K=62,000)  |  25d Call: 34.1% (K=67,000)
+25Δ Risk Reversal (call − put): -3.7% (Puts Richer - Downside Hedging Demand)
+  25d Put: 37.8% (K=62,000, Δ=-0.278)  |  25d Call: 34.1% (K=67,000, Δ=+0.281)
 
 ATM IV: 35.8%
 

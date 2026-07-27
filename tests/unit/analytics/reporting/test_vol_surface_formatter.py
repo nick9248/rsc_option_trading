@@ -25,7 +25,8 @@ def _make_result(**overrides) -> VolSurfaceResult:
         ),
         skew_25d=SkewResult(
             put_25d_iv=85.0, call_25d_iv=78.0, put_25d_strike=1800.0, call_25d_strike=2000.0,
-            skew=7.0, interpretation="Puts More Expensive - Hedging Demand",
+            put_25d_delta=-0.25, call_25d_delta=0.25,
+            risk_reversal_25d=-7.0, interpretation="Puts Richer - Downside Hedging Demand",
         ),
         pc_by_moneyness=PutCallByMoneyness(
             atm=MoneynessBucket(call_oi=100.0, put_oi=150.0, range_label="±5%", ratio=1.5, bias="Slightly Bearish"),
@@ -49,9 +50,10 @@ def _make_result(**overrides) -> VolSurfaceResult:
 
 def test_skew_and_atm_iv_rendered():
     text = format_vol_surface_section(_make_result(), expiration="10MAR26")
-    assert "25-Delta Skew: +7.0% (Puts More Expensive - Hedging Demand)" in text
-    assert "25d Put: 85.0% (K=1,800)" in text
-    assert "25d Call: 78.0% (K=2,000)" in text
+    # bugfix_spec.md Item 9: market convention (call - put), explicit sign label.
+    assert "25Δ Risk Reversal (call − put): -7.0% (Puts Richer - Downside Hedging Demand)" in text
+    assert "25d Put: 85.0% (K=1,800, Δ=-0.250)" in text
+    assert "25d Call: 78.0% (K=2,000, Δ=+0.250)" in text
     assert "ATM IV: 81.0%" in text
 
 
@@ -59,11 +61,11 @@ def test_skew_insufficient_data_when_skew_none():
     result = _make_result(
         skew_25d=SkewResult(
             put_25d_iv=None, call_25d_iv=None, put_25d_strike=None, call_25d_strike=None,
-            skew=None, interpretation="Insufficient data",
+            risk_reversal_25d=None, interpretation="Insufficient data",
         )
     )
     text = format_vol_surface_section(result, expiration="10MAR26")
-    assert "25-Delta Skew: Insufficient data" in text
+    assert "25Δ Risk Reversal: Insufficient data" in text
 
 
 def test_vwap_iv_buyers_aggressive():

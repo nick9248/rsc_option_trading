@@ -119,6 +119,12 @@ class VolatilityReconstructionService:
 
         metrics = {
             "atm_iv": surface.atm_iv,
+            # bugfix_spec.md Item 9: skew.skew is now a deprecated read-only
+            # alias for put_over_call_skew_25d (same value, same sign this
+            # backfill's own onchain_volatility_snapshots.skew_25d column
+            # has always held) -- kept deliberately (not switched to
+            # risk_reversal_25d) so this historical column's meaning does
+            # not change out from under already-written rows.
             "skew_25d": skew.skew,
             "put_25d_iv": skew.put_25d_iv,
             "call_25d_iv": skew.call_25d_iv,

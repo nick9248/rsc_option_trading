@@ -2507,10 +2507,11 @@
         "skew_25d": {
           "call_25d_iv": 34.07,
           "call_25d_strike": 68000.0,
-          "interpretation": "Puts More Expensive - Hedging Demand",
+          "interpretation": "Puts Richer - Downside Hedging Demand",
           "put_25d_iv": 38.29,
           "put_25d_strike": 61000.0,
-          "skew": 4.219999999999999
+          "put_over_call_skew_25d": 4.219999999999999,
+          "risk_reversal_25d": -4.219999999999999
         }
       },
       "volume_stats": {
@@ -4157,10 +4158,11 @@
         "skew_25d": {
           "call_25d_iv": 39.32,
           "call_25d_strike": 80000.0,
-          "interpretation": "Puts More Expensive - Hedging Demand",
+          "interpretation": "Puts Richer - Downside Hedging Demand",
           "put_25d_iv": 44.0,
           "put_25d_strike": 56000.0,
-          "skew": 4.68
+          "put_over_call_skew_25d": 4.68,
+          "risk_reversal_25d": -4.68
         }
       },
       "volume_stats": {
@@ -5282,10 +5284,11 @@
         "skew_25d": {
           "call_25d_iv": 41.15,
           "call_25d_strike": 95000.0,
-          "interpretation": "Puts More Expensive - Hedging Demand",
+          "interpretation": "Puts Richer - Downside Hedging Demand",
           "put_25d_iv": 45.77,
           "put_25d_strike": 55000.0,
-          "skew": 4.6200000000000045
+          "put_over_call_skew_25d": 4.6200000000000045,
+          "risk_reversal_25d": -4.6200000000000045
         }
       },
       "volume_stats": {
@@ -6982,10 +6985,11 @@
         "skew_25d": {
           "call_25d_iv": 35.32,
           "call_25d_strike": 72000.0,
-          "interpretation": "Puts More Expensive - Strong Hedging Demand",
+          "interpretation": "Puts Much Richer - Strong Downside Hedging Demand",
           "put_25d_iv": 40.36,
           "put_25d_strike": 58000.0,
-          "skew": 5.039999999999999
+          "put_over_call_skew_25d": 5.039999999999999,
+          "risk_reversal_25d": -5.039999999999999
         }
       },
       "volume_stats": {
@@ -7757,10 +7761,11 @@
         "skew_25d": {
           "call_25d_iv": 14.84,
           "call_25d_strike": 64500.0,
-          "interpretation": "Puts More Expensive - Hedging Demand",
+          "interpretation": "Puts Richer - Downside Hedging Demand",
           "put_25d_iv": 16.4,
           "put_25d_strike": 64000.0,
-          "skew": 1.5599999999999987
+          "put_over_call_skew_25d": 1.5599999999999987,
+          "risk_reversal_25d": -1.5599999999999987
         }
       },
       "volume_stats": {
@@ -9232,10 +9237,11 @@
         "skew_25d": {
           "call_25d_iv": 40.3,
           "call_25d_strike": 88000.0,
-          "interpretation": "Puts More Expensive - Hedging Demand",
+          "interpretation": "Puts Richer - Downside Hedging Demand",
           "put_25d_iv": 45.21,
           "put_25d_strike": 55000.0,
-          "skew": 4.910000000000004
+          "put_over_call_skew_25d": 4.910000000000004,
+          "risk_reversal_25d": -4.910000000000004
         }
       },
       "volume_stats": {
@@ -9982,10 +9988,11 @@
         "skew_25d": {
           "call_25d_iv": 23.5,
           "call_25d_strike": 65000.0,
-          "interpretation": "Puts More Expensive - Hedging Demand",
+          "interpretation": "Puts Richer - Downside Hedging Demand",
           "put_25d_iv": 27.68,
           "put_25d_strike": 63500.0,
-          "skew": 4.18
+          "put_over_call_skew_25d": 4.18,
+          "risk_reversal_25d": -4.18
         }
       },
       "volume_stats": {
@@ -11407,10 +11414,11 @@
         "skew_25d": {
           "call_25d_iv": 34.16,
           "call_25d_strike": 70000.0,
-          "interpretation": "Puts More Expensive - Hedging Demand",
+          "interpretation": "Puts Richer - Downside Hedging Demand",
           "put_25d_iv": 38.88,
           "put_25d_strike": 60000.0,
-          "skew": 4.720000000000006
+          "put_over_call_skew_25d": 4.720000000000006,
+          "risk_reversal_25d": -4.720000000000006
         }
       },
       "volume_stats": {
@@ -12182,10 +12190,11 @@
         "skew_25d": {
           "call_25d_iv": 28.08,
           "call_25d_strike": 65500.0,
-          "interpretation": "Puts More Expensive - Hedging Demand",
+          "interpretation": "Puts Richer - Downside Hedging Demand",
           "put_25d_iv": 32.76,
           "put_25d_strike": 63000.0,
-          "skew": 4.68
+          "put_over_call_skew_25d": 4.68,
+          "risk_reversal_25d": -4.68
         }
       },
       "volume_stats": {
@@ -12900,10 +12909,11 @@
         "skew_25d": {
           "call_25d_iv": 30.97,
           "call_25d_strike": 66000.0,
-          "interpretation": "Puts More Expensive - Hedging Demand",
+          "interpretation": "Puts Richer - Downside Hedging Demand",
           "put_25d_iv": 34.3,
           "put_25d_strike": 63000.0,
-          "skew": 3.3299999999999983
+          "put_over_call_skew_25d": 3.3299999999999983,
+          "risk_reversal_25d": -3.3299999999999983
         }
       },
       "volume_stats": {
@@ -14550,10 +14560,11 @@
         "skew_25d": {
           "call_25d_iv": 34.65,
           "call_25d_strike": 66000.0,
-          "interpretation": "Puts More Expensive - Hedging Demand",
+          "interpretation": "Puts Richer - Downside Hedging Demand",
           "put_25d_iv": 38.92,
           "put_25d_strike": 62000.0,
-          "skew": 4.270000000000003
+          "put_over_call_skew_25d": 4.270000000000003,
+          "risk_reversal_25d": -4.270000000000003
         }
       },
       "volume_stats": {
@@ -15225,10 +15236,11 @@
         "skew_25d": {
           "call_25d_iv": 34.1,
           "call_25d_strike": 67000.0,
-          "interpretation": "Puts More Expensive - Hedging Demand",
+          "interpretation": "Puts Richer - Downside Hedging Demand",
           "put_25d_iv": 37.82,
           "put_25d_strike": 62000.0,
-          "skew": 3.719999999999999
+          "put_over_call_skew_25d": 3.719999999999999,
+          "risk_reversal_25d": -3.719999999999999
         }
       },
       "volume_stats": {

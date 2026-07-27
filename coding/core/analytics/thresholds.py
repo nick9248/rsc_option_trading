@@ -87,17 +87,23 @@ ADDITION to the percentage gate above -- guards against a 100% swing on a
 1-contract book being reported as "significant"."""
 
 
-# --- 25-delta skew interpretation (M8) -------------------------------------
+# --- 25-delta risk reversal interpretation (M8 / bugfix_spec.md Item 9) ---
 #
 # code_quality_review.md M8: volatility_surface_calculator.py's
-# _calculate_25_delta_skew used bare +-1/+-5 literals.
-SKEW_STRONG_THRESHOLD_POINTS = 5.0
-"""|25d put IV - 25d call IV| beyond this many vol points is labeled
-"Strong" hedging demand / upside speculation."""
+# _calculate_25_delta_skew (now _calculate_25_delta_risk_reversal, Item 9)
+# used bare +-1/+-5 literals. Item 9 re-signs the underlying metric to the
+# market "risk reversal" convention (call IV - put IV) -- these thresholds
+# are re-signed to match (same magnitudes, opposite sign meaning) and reused
+# by synthesis.ScoringEngine.score_skew for the same reason: one named
+# threshold, not two independently-tuned copies.
+RISK_REVERSAL_STRONG_POINTS = 5.0
+"""|25d call IV - 25d put IV| beyond this many vol points is labeled
+"Strong" (upside speculation if positive, downside hedging if negative)."""
 
-SKEW_MILD_THRESHOLD_POINTS = 1.0
-"""Below this many vol points either way, the skew is labeled "Balanced" --
-matches VWAP_AGGRESSION_THRESHOLD_POINTS's own +-1pt noise floor above."""
+RISK_REVERSAL_MILD_POINTS = 1.0
+"""Below this many vol points either way, the risk reversal is labeled
+"Balanced" -- matches VWAP_AGGRESSION_THRESHOLD_POINTS's own +-1pt noise
+floor above."""
 
 
 # --- IV percentile advice (M8) ---------------------------------------------

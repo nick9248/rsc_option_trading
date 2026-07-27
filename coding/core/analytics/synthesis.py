@@ -18,6 +18,7 @@ import logging
 from datetime import datetime, timedelta
 
 from coding.core.analytics.results.analysis_result import OnChainAnalysisResult
+from coding.core.analytics.thresholds import RISK_REVERSAL_MILD_POINTS, RISK_REVERSAL_STRONG_POINTS
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +79,12 @@ class ExpiryMetrics:
 
     # Volatility surface
     atm_iv: float
-    skew_25d: float  # put IV - call IV
+    # bugfix_spec.md Item 9: renamed from skew_25d (put IV - call IV, a
+    # non-standard sign) to risk_reversal_25d (call IV - put IV -- the
+    # market "25-delta risk reversal" convention). Positive = calls richer
+    # (bullish/upside speculation); negative = puts richer (bearish/
+    # downside hedging demand) -- the opposite sign from the old skew_25d.
+    risk_reversal_25d: float
     put_25d_iv: float
     call_25d_iv: float
 
@@ -546,24 +552,47 @@ class ScoringEngine:
             return (-2.0, 0.8, f"VRP {effective_vrp:+.1f}pts: Extreme mispricing — strong buy vol. {stale_note}")
 
     @staticmethod
-    def score_skew(skew_25d: float) -> Tuple[float, float, str]:
+    def score_skew(risk_reversal_25d: float) -> Tuple[float, float, str]:
         """
-        25-Delta Skew — FEAR INDICATOR axis (not buy/sell vol).
+        25-Delta Risk Reversal (bugfix_spec.md Item 9 / Decision D6).
 
-        +2 = extreme fear/hedging, -2 = extreme complacency.
-        Feeds into: vol regime classifier, risk factors, trade recs,
-        vol assessment narrative. Does NOT feed into directional scoring.
+        Re-signed from the old ``skew_25d`` (put IV - call IV, a magnitude-
+        of-fear axis where BOTH extremes scored positive-ish/negative-ish
+        independent of direction) to the market "risk reversal" convention
+        (call IV - put IV). This is now a genuinely DIRECTIONAL axis:
+        +2 = calls much richer (upside speculation), -2 = puts much richer
+        (downside hedging demand) -- a NEGATIVE risk reversal scores
+        NEGATIVE, a POSITIVE one scores POSITIVE (acceptance test T9.4).
+
+        Decision D6 (task-B2-brief.md, already ruled): correctness over
+        historical comparability, same as every other convention fix in
+        this campaign -- an intentional, reviewed break, not a bug.
+
+        KNOWN CONSEQUENCE flagged for review: ``classify_vol_regime``'s
+        EXPLOSIVE-regime trigger checks ``skew_score >= 1`` ("steep skew"
+        alongside negative GEX + high IV). Under the OLD magnitude-of-fear
+        axis this fired only for extreme PUT-side skew (the historically
+        more crash-correlated side). Under this directional re-sign it now
+        fires only for extreme CALL-side risk reversal instead -- the
+        EXPLOSIVE trigger's real-world polarity has flipped along with this
+        function's sign, not just its label. Not remediated here (D6 scopes
+        this task to the re-sign itself, not a redesign of
+        classify_vol_regime's own condition) -- flagged in the task report.
+
+        Feeds into: vol regime classifier, risk factors, trade recs, vol
+        assessment narrative. Does NOT feed into directional scoring
+        (``all_direction_scores``).
         """
-        if skew_25d > 12:
-            return (2.0, 0.6, f"Skew {skew_25d:+.1f}%: Extreme put demand — fear elevated")
-        elif skew_25d > 8:
-            return (1.0, 0.6, f"Skew {skew_25d:+.1f}%: Heavy hedging demand")
-        elif skew_25d > 4:
-            return (0.0, 0.4, f"Skew {skew_25d:+.1f}%: Normal")
-        elif skew_25d > 0:
-            return (-1.0, 0.5, f"Skew {skew_25d:+.1f}%: Complacent — puts relatively cheap")
+        if risk_reversal_25d < -RISK_REVERSAL_STRONG_POINTS:
+            return (-2.0, 0.6, f"RR25 {risk_reversal_25d:+.1f}%: Extreme put demand — fear elevated")
+        elif risk_reversal_25d < -RISK_REVERSAL_MILD_POINTS:
+            return (-1.0, 0.6, f"RR25 {risk_reversal_25d:+.1f}%: Heavy hedging demand")
+        elif risk_reversal_25d <= RISK_REVERSAL_MILD_POINTS:
+            return (0.0, 0.4, f"RR25 {risk_reversal_25d:+.1f}%: Normal")
+        elif risk_reversal_25d <= RISK_REVERSAL_STRONG_POINTS:
+            return (1.0, 0.5, f"RR25 {risk_reversal_25d:+.1f}%: Calls richer — upside speculation")
         else:
-            return (-2.0, 0.6, f"Skew {skew_25d:+.1f}%: Inverted — extremely unusual")
+            return (2.0, 0.6, f"RR25 {risk_reversal_25d:+.1f}%: Calls much richer — unusual")
 
     @staticmethod
     def score_term_structure(shape: str, spread: float,
@@ -1304,7 +1333,7 @@ class SynthesisEngine:
             market.cone_30d_pctile
         )
 
-        skew_score = self.scorer.score_skew(largest_expiry.skew_25d)
+        skew_score = self.scorer.score_skew(largest_expiry.risk_reversal_25d)
 
         term_score = self.scorer.score_term_structure(
             market.term_structure_shape,
@@ -1420,11 +1449,24 @@ class SynthesisEngine:
             sellable_near = [e for e in expiries_sorted if e.dte >= 1 and e.total_oi > 500]
         best_sell_expiry = max(sellable_near, key=lambda e: e.atm_iv) if sellable_near else meaningful_near
 
+        # bugfix_spec.md Item 9: NarrativeGenerator.generate_vol_narrative/
+        # generate_risk_factors/generate_trade_recommendations all have
+        # their OWN internal `skew` thresholds/branches (e.g. "skew > 8" =>
+        # "OTM puts are rich") written against the OLD put-call sign
+        # convention -- out of this item's scope (D6 mandates re-signing
+        # ScoringEngine.score_skew specifically, not rewriting every
+        # narrative branch that reads a skew-shaped number). Passing the
+        # negation of the new risk_reversal_25d reproduces the exact old
+        # put-call value these methods already expect, so their behavior
+        # and printed "Skew: ..." text (which never claims the RR25
+        # convention) are unchanged.
+        legacy_skew = -largest_expiry.risk_reversal_25d
+
         vol_narrative = self.narrator.generate_vol_narrative(
             iv_pctile=market.iv_percentile_365d,
             vrp=effective_vrp,
             vrp_adjustment=vrp_adjustment,
-            skew=largest_expiry.skew_25d,
+            skew=legacy_skew,
             sell_expiry=best_sell_expiry.expiry,
             sell_iv=best_sell_expiry.atm_iv,
             buy_expiry=meaningful_far.expiry,
@@ -1435,7 +1477,7 @@ class SynthesisEngine:
             gex_total=largest_expiry.total_gex,
             largest_expiry_dte=largest_expiry.dte,
             funding_8h=market.funding_8h,
-            skew=largest_expiry.skew_25d,
+            skew=legacy_skew,
             spot=spot,
             fragility_multiplier=fragility_multiplier,
             fragility_level=fragility_level,
@@ -1446,7 +1488,7 @@ class SynthesisEngine:
             regime=market_regime,
             vol_regime=vol_regime,
             iv_pctile=market.iv_percentile_365d,
-            skew=largest_expiry.skew_25d,
+            skew=legacy_skew,
             gex_total=largest_expiry.total_gex,
             near_term_expiry=best_sell_expiry.expiry,
             far_term_expiry=meaningful_far.expiry,
@@ -1485,7 +1527,7 @@ SCORING DETAIL:
   Near-term: {near_direction.name} | Far-term: {far_direction.name}
   Vol Regime: {vol_regime.value}
   Market Regime: {market_regime.value}
-  Effective VRP: {effective_vrp:+.1f}pts | Skew: {largest_expiry.skew_25d:+.1f}%
+  Effective VRP: {effective_vrp:+.1f}pts | Skew: {legacy_skew:+.1f}%
 """
 
         return synthesis
@@ -1556,10 +1598,14 @@ Perp Funding: {market.funding_rate:.4f}%  | 8h: {market.funding_8h:.4f}%
         top2 = sorted(expiries, key=lambda e: e.total_oi, reverse=True)[:2]
         for exp in top2:
             mp_dist = (exp.max_pain - spot) / spot * 100
+            # bugfix_spec.md Item 9: this "Skew" line predates the RR25
+            # convention and never claimed it -- negate risk_reversal_25d
+            # back to the legacy put-call sign so this text is unchanged.
+            legacy_skew = -exp.risk_reversal_25d
             lines.append(
                 f"  {exp.expiry} ({exp.dte}d): MaxPain ${exp.max_pain:,.0f} ({mp_dist:+.1f}%) | "
                 f"P/C {exp.pc_ratio:.2f} | ATM IV {exp.atm_iv:.1f}% | "
-                f"Skew {exp.skew_25d:+.1f}% | Flow: {exp.flow_bias}"
+                f"Skew {legacy_skew:+.1f}% | Flow: {exp.flow_bias}"
             )
 
         return "\n".join(lines)
@@ -1696,10 +1742,15 @@ class SynthesisMapper:
         put_support_gex = put_sup.net_gex if put_sup is not None else 0.0
         hvl_strike = key_levels.hvl or 0.0
 
-        # Vol surface
+        # Vol surface. bugfix_spec.md Item 9: risk_reversal_25d (call -
+        # put, market convention) replaces skew_25d (put - call).
         atm_iv = (vol.atm_iv if vol is not None and vol.atm_iv is not None else 0.0)
         skew = vol.skew_25d if vol is not None else None
-        skew_25d = (skew.skew if skew is not None and skew.skew is not None else 0.0)
+        risk_reversal_25d = (
+            skew.risk_reversal_25d
+            if skew is not None and skew.risk_reversal_25d is not None
+            else 0.0
+        )
         put_25d_iv = (
             skew.put_25d_iv if skew is not None and skew.put_25d_iv is not None else 0.0
         )
@@ -1770,7 +1821,7 @@ class SynthesisMapper:
             put_support_gex=float(put_support_gex),
             hvl_strike=float(hvl_strike),
             atm_iv=float(atm_iv),
-            skew_25d=float(skew_25d),
+            risk_reversal_25d=float(risk_reversal_25d),
             put_25d_iv=float(put_25d_iv),
             call_25d_iv=float(call_25d_iv),
             pc_atm=float(pc_atm),
@@ -1986,7 +2037,7 @@ def build_from_current_data():
             call_resistance_strike=66000, call_resistance_gex=265785,
             put_support_strike=65000, put_support_gex=-4_578_703,
             hvl_strike=66000,
-            atm_iv=30.3, skew_25d=11.7, put_25d_iv=37.3, call_25d_iv=25.6,
+            atm_iv=30.3, risk_reversal_25d=-11.7, put_25d_iv=37.3, call_25d_iv=25.6,
 
             pc_atm=2.60, pc_near_otm=2.37, pc_far_otm=0.0,
             net_vanna=0.000062, net_charm=59.96,
@@ -2001,7 +2052,7 @@ def build_from_current_data():
             call_resistance_strike=70000, call_resistance_gex=2_263_058,
             put_support_strike=58000, put_support_gex=-4_456_432,
             hvl_strike=65500,
-            atm_iv=49.1, skew_25d=8.9, put_25d_iv=55.3, call_25d_iv=46.5,
+            atm_iv=49.1, risk_reversal_25d=-8.9, put_25d_iv=55.3, call_25d_iv=46.5,
 
             pc_atm=2.45, pc_near_otm=0.82, pc_far_otm=1.72,
             net_vanna=0.000349, net_charm=93.19,
@@ -2016,7 +2067,7 @@ def build_from_current_data():
             call_resistance_strike=75000, call_resistance_gex=1_200_177,
             put_support_strike=55000, put_support_gex=-1_147_244,
             hvl_strike=66000,
-            atm_iv=49.0, skew_25d=10.4, put_25d_iv=57.2, call_25d_iv=46.8,
+            atm_iv=49.0, risk_reversal_25d=-10.4, put_25d_iv=57.2, call_25d_iv=46.8,
 
             pc_atm=1.44, pc_near_otm=0.60, pc_far_otm=1.75,
             net_vanna=0.000179, net_charm=22.69,
@@ -2031,7 +2082,7 @@ def build_from_current_data():
             call_resistance_strike=80000, call_resistance_gex=3_116_454,
             put_support_strike=60000, put_support_gex=-6_600_975,
             hvl_strike=67000,
-            atm_iv=49.2, skew_25d=9.2, put_25d_iv=55.8, call_25d_iv=46.7,
+            atm_iv=49.2, risk_reversal_25d=-9.2, put_25d_iv=55.8, call_25d_iv=46.7,
 
             pc_atm=1.38, pc_near_otm=1.81, pc_far_otm=0.51,
             net_vanna=0.001561, net_charm=94.23,
@@ -2046,7 +2097,7 @@ def build_from_current_data():
             call_resistance_strike=75000, call_resistance_gex=2_095_712,
             put_support_strike=60000, put_support_gex=-3_372_438,
             hvl_strike=84000,
-            atm_iv=48.0, skew_25d=8.6, put_25d_iv=53.9, call_25d_iv=45.3,
+            atm_iv=48.0, risk_reversal_25d=-8.6, put_25d_iv=53.9, call_25d_iv=45.3,
 
             pc_atm=2.00, pc_near_otm=0.95, pc_far_otm=0.41,
             net_vanna=0.000944, net_charm=27.06,
@@ -2061,7 +2112,7 @@ def build_from_current_data():
             call_resistance_strike=90000, call_resistance_gex=489_690,
             put_support_strike=60000, put_support_gex=-2_930_370,
             hvl_strike=72000,
-            atm_iv=48.7, skew_25d=7.4, put_25d_iv=53.7, call_25d_iv=46.3,
+            atm_iv=48.7, risk_reversal_25d=-7.4, put_25d_iv=53.7, call_25d_iv=46.3,
 
             pc_atm=1.54, pc_near_otm=3.37, pc_far_otm=0.64,
             net_vanna=0.001305, net_charm=17.56,
@@ -2076,7 +2127,7 @@ def build_from_current_data():
             call_resistance_strike=120000, call_resistance_gex=2_422_244,
             put_support_strike=60000, put_support_gex=-1_777_383,
             hvl_strike=120000,
-            atm_iv=50.3, skew_25d=4.8, put_25d_iv=52.8, call_25d_iv=48.0,
+            atm_iv=50.3, risk_reversal_25d=-4.8, put_25d_iv=52.8, call_25d_iv=48.0,
             pc_atm=1.01, pc_near_otm=5.94, pc_far_otm=0.41,
             net_vanna=0.000954, net_charm=5.22,
             flow_bias="Moderate Selling", flow_trend="Accelerating Sell Pressure",

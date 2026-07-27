@@ -105,14 +105,17 @@ class TestVolatilitySurfaceCalculator:
         result = calc.calculate()
 
         skew = result.skew_25d
-        assert skew.skew is not None
         assert skew.put_25d_iv is not None
         assert skew.call_25d_iv is not None
         # Put 25d should be at strike 80000 (delta -0.25)
         assert skew.put_25d_strike == 80000
         # Call 25d should be at strike 95000 (delta 0.25)
         assert skew.call_25d_strike == 95000
-        # Skew = put IV - call IV = 88 - 68 = 20
+        # bugfix_spec.md Item 9: risk_reversal_25d = call IV - put IV =
+        # 68 - 88 = -20 (market convention); put_over_call_skew_25d = +20
+        # (the legacy sign); skew (deprecated alias) == put_over_call_skew_25d.
+        assert skew.risk_reversal_25d == pytest.approx(-20.0)
+        assert skew.put_over_call_skew_25d == pytest.approx(20.0)
         assert skew.skew == pytest.approx(20.0)
 
     def test_25_delta_skew_insufficient_data(self):
@@ -123,6 +126,7 @@ class TestVolatilitySurfaceCalculator:
         result = calc.calculate()
 
         skew = result.skew_25d
+        assert skew.risk_reversal_25d is None
         assert skew.skew is None
         assert "Insufficient" in skew.interpretation
 
@@ -260,3 +264,59 @@ class TestVolatilitySurfaceCalculator:
             assert bucket["bias"] in (
                 "N/A", "Strong Bullish", "Bullish", "Neutral", "Bearish", "Strong Bearish",
             )
+
+
+class TestRiskReversalSignConvention:
+    """
+    bugfix_spec.md Item 9 acceptance tests (section 9.5), adapted to this
+    codebase's typed VolSurfaceResult/SkewResult (attribute access) and the
+    renamed ``_calculate_25_delta_risk_reversal`` method.
+    """
+
+    def test_t9_1_sign_matches_market_convention(self):
+        """Hand-computed from the live pair confirmed by the audit."""
+        instruments = [
+            _make_instrument(62_000, "P", mark_iv=39.02, delta=-0.228),
+            _make_instrument(66_000, "C", mark_iv=34.65, delta=0.265),
+        ]
+        calc = VolatilitySurfaceCalculator(instruments, 64_264.0, "31JUL26")
+        r = calc._calculate_25_delta_risk_reversal()
+
+        assert r["risk_reversal_25d"] == pytest.approx(-4.37, abs=1e-9)  # 34.65 - 39.02
+        assert r["put_over_call_skew_25d"] == pytest.approx(4.37, abs=1e-9)
+        assert r["interpretation"] == "Puts Richer - Downside Hedging Demand"
+
+    def test_t9_2_calls_richer_flips_the_label(self):
+        instruments = [
+            _make_instrument(62_000, "P", mark_iv=30.00, delta=-0.25),
+            _make_instrument(66_000, "C", mark_iv=37.00, delta=0.25),
+        ]
+        calc = VolatilitySurfaceCalculator(instruments, 64_000.0, "31JUL26")
+        r = calc._calculate_25_delta_risk_reversal()
+
+        assert r["risk_reversal_25d"] == pytest.approx(7.00)
+        assert r["interpretation"] == "Calls Much Richer - Strong Upside Speculation"
+
+    def test_t9_3_report_prints_the_convention_explicitly(self):
+        from coding.core.analytics.reporting.vol_surface_formatter import format_vol_surface_section
+
+        instruments = [
+            _make_instrument(62_000, "P", mark_iv=39.02, delta=-0.228),
+            _make_instrument(66_000, "C", mark_iv=34.65, delta=0.265),
+        ]
+        calc = VolatilitySurfaceCalculator(instruments, 64_264.0, "31JUL26")
+        result = calc.calculate()
+        report = format_vol_surface_section(result, expiration="31JUL26")
+
+        assert "25Δ Risk Reversal (call − put): -4.4%" in report
+        assert "Δ=+0.265" in report and "Δ=-0.228" in report
+
+    def test_exactly_zero_risk_reversal_is_balanced(self):
+        instruments = [
+            _make_instrument(62_000, "P", mark_iv=35.0, delta=-0.25),
+            _make_instrument(66_000, "C", mark_iv=35.0, delta=0.25),
+        ]
+        calc = VolatilitySurfaceCalculator(instruments, 64_000.0, "31JUL26")
+        r = calc._calculate_25_delta_risk_reversal()
+        assert r["risk_reversal_25d"] == pytest.approx(0.0)
+        assert r["interpretation"] == "Balanced"

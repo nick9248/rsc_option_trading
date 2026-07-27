@@ -23,8 +23,8 @@ from coding.core.analytics.results.vol_surface_results import (
     VolSurfaceResult,
 )
 from coding.core.analytics.thresholds import (
-    SKEW_MILD_THRESHOLD_POINTS,
-    SKEW_STRONG_THRESHOLD_POINTS,
+    RISK_REVERSAL_MILD_POINTS,
+    RISK_REVERSAL_STRONG_POINTS,
     interpret_put_call_ratio,
 )
 
@@ -89,7 +89,7 @@ class VolatilitySurfaceCalculator:
             Call ``.to_dict()`` for the legacy dict shape.
         """
         iv_by_strike_rows = self._calculate_iv_by_strike_rows()
-        skew_dict = self._calculate_25_delta_skew()
+        skew_dict = self._calculate_25_delta_risk_reversal()
         pc_dict = self._calculate_pc_by_moneyness()
         second_order_dict = self._calculate_second_order_greeks()
         atm_iv = self._calculate_atm_iv()
@@ -110,7 +110,10 @@ class VolatilitySurfaceCalculator:
                 call_25d_iv=skew_dict["call_25d_iv"],
                 put_25d_strike=skew_dict.get("put_25d_strike"),
                 call_25d_strike=skew_dict.get("call_25d_strike"),
-                skew=skew_dict["skew"],
+                put_25d_delta=skew_dict.get("put_25d_delta"),
+                call_25d_delta=skew_dict.get("call_25d_delta"),
+                risk_reversal_25d=skew_dict["risk_reversal_25d"],
+                put_over_call_skew_25d=skew_dict["put_over_call_skew_25d"],
                 interpretation=skew_dict["interpretation"],
             ),
             pc_by_moneyness=PutCallByMoneyness(
@@ -165,15 +168,27 @@ class VolatilitySurfaceCalculator:
         rows.sort(key=lambda r: (r.strike, r.option_type))
         return rows
 
-    def _calculate_25_delta_skew(self) -> Dict[str, Any]:
+    def _calculate_25_delta_risk_reversal(self) -> Dict[str, Any]:
         """
-        Calculate 25-delta skew: 25d Put IV - 25d Call IV.
+        Calculate the 25-delta risk reversal: 25d Call IV - 25d Put IV
+        (bugfix_spec.md Item 9 -- the market convention: SpotGamma, MenthorQ,
+        Glassnode's ``options.25DeltaSkewCallPutAll`` all define it this way).
 
-        Positive skew = puts more expensive (hedging demand).
-        Negative skew = calls more expensive (upside speculation).
+        Positive risk reversal = calls more expensive (upside speculation).
+        Negative risk reversal = puts more expensive (downside hedging demand).
+
+        The instrument selection and the IV numbers themselves were already
+        correct (confirmed by the audit) -- only the SIGN and the name
+        (previously "skew" = put IV - call IV, a non-standard, unqualified
+        convention that reads backwards against Deribit/Glassnode) changed.
 
         Returns:
-            Dict with put_25d_iv, call_25d_iv, skew, interpretation.
+            Dict with put_25d_iv, call_25d_iv, put_25d_strike,
+            call_25d_strike, put_25d_delta, call_25d_delta (the ACTUAL
+            selected deltas, so a thin book's "closest to ±0.25" pick is
+            visible to the reader -- bugfix_spec.md 9.4), risk_reversal_25d
+            (PRIMARY, market convention), put_over_call_skew_25d (legacy
+            sign, explicitly named), and interpretation.
         """
         # Find instruments closest to ±0.25 delta
         puts = [i for i in self.instruments if i["option_type"] == "P" and i.get("delta") is not None]
@@ -186,31 +201,37 @@ class VolatilitySurfaceCalculator:
             return {
                 "put_25d_iv": None,
                 "call_25d_iv": None,
-                "skew": None,
+                "put_25d_delta": None,
+                "call_25d_delta": None,
+                "risk_reversal_25d": None,
+                "put_over_call_skew_25d": None,
                 "interpretation": "Insufficient data",
             }
 
         put_iv = put_25d.get("mark_iv", 0)
         call_iv = call_25d.get("mark_iv", 0)
-        skew = put_iv - call_iv
+        risk_reversal = call_iv - put_iv
 
-        if skew > SKEW_STRONG_THRESHOLD_POINTS:
-            interpretation = "Puts More Expensive - Strong Hedging Demand"
-        elif skew > SKEW_MILD_THRESHOLD_POINTS:
-            interpretation = "Puts More Expensive - Hedging Demand"
-        elif skew > -SKEW_MILD_THRESHOLD_POINTS:
+        if risk_reversal < -RISK_REVERSAL_STRONG_POINTS:
+            interpretation = "Puts Much Richer - Strong Downside Hedging Demand"
+        elif risk_reversal < -RISK_REVERSAL_MILD_POINTS:
+            interpretation = "Puts Richer - Downside Hedging Demand"
+        elif risk_reversal <= RISK_REVERSAL_MILD_POINTS:
             interpretation = "Balanced"
-        elif skew > -SKEW_STRONG_THRESHOLD_POINTS:
-            interpretation = "Calls More Expensive - Upside Speculation"
+        elif risk_reversal <= RISK_REVERSAL_STRONG_POINTS:
+            interpretation = "Calls Richer - Upside Speculation"
         else:
-            interpretation = "Calls More Expensive - Strong Upside Speculation"
+            interpretation = "Calls Much Richer - Strong Upside Speculation"
 
         return {
             "put_25d_iv": put_iv,
             "call_25d_iv": call_iv,
             "put_25d_strike": put_25d["strike"],
             "call_25d_strike": call_25d["strike"],
-            "skew": skew,
+            "put_25d_delta": put_25d.get("delta"),
+            "call_25d_delta": call_25d.get("delta"),
+            "risk_reversal_25d": risk_reversal,
+            "put_over_call_skew_25d": -risk_reversal,
             "interpretation": interpretation,
         }
 

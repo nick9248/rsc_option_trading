@@ -196,7 +196,7 @@ class TestOnChainAnalysisBuilder:
         bucket = MoneynessBucket(call_oi=1.0, put_oi=1.0, range_label="ATM", ratio=1.0, bias="Neutral")
         vol_surface = VolSurfaceResult(
             expiration="28MAR26",
-            skew_25d=SkewResult(skew=None, interpretation="N/A", put_25d_iv=None,
+            skew_25d=SkewResult(risk_reversal_25d=None, interpretation="N/A", put_25d_iv=None,
                                  call_25d_iv=None, put_25d_strike=None, call_25d_strike=None),
             atm_iv=55.5,
             vwap_iv=None,

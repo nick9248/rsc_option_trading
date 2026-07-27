@@ -22,21 +22,59 @@ class IvByStrikeRow:
 
 @dataclass(frozen=True)
 class SkewResult:
-    """25-delta put/call skew.
+    """
+    25-delta risk reversal / put-call skew.
 
-    NOTE: bugfix_spec.md Item 9 (sub-task 3, a separate commit) re-signs
-    and renames this to the market "risk reversal" convention -- untouched
-    here (this commit is Item 8 / sign-convention unification for GEX/DEX
-    and vanna/charm, plus Item 12's charm docstring fix; scoped separately
-    per the task brief).
+    bugfix_spec.md Item 9: ``skew`` (put IV - call IV, a non-standard,
+    unqualified sign) is replaced by ``risk_reversal_25d`` (call IV -
+    put IV -- the market "25-delta risk reversal" convention: SpotGamma,
+    MenthorQ, Glassnode's ``options.25DeltaSkewCallPutAll``), the new
+    PRIMARY field, and ``put_over_call_skew_25d`` (the legacy sign, now
+    explicitly named instead of unqualified). Positive
+    ``risk_reversal_25d`` -> calls richer (bullish/upside speculation);
+    negative -> puts richer (bearish/downside hedging demand) -- the
+    opposite sign convention from the old ``skew``. ``skew`` is kept for
+    one release as a read-only alias of ``put_over_call_skew_25d`` (same
+    value, unchanged meaning) for any un-migrated reader.
     """
 
     put_25d_iv: Optional[float]
     call_25d_iv: Optional[float]
     put_25d_strike: Optional[float]
     call_25d_strike: Optional[float]
-    skew: Optional[float]
     interpretation: str
+
+    # --- Additive/renamed fields (bugfix_spec.md Item 9) ---
+    risk_reversal_25d: Optional[float] = None
+    """call_25d_iv - put_25d_iv -- PRIMARY, market convention."""
+
+    put_over_call_skew_25d: Optional[float] = None
+    """put_25d_iv - call_25d_iv -- legacy sign, explicitly named (was the
+    unqualified ``skew`` field)."""
+
+    put_25d_delta: Optional[float] = None
+    """The ACTUAL delta of the selected 25d put (bugfix_spec.md 9.4 edge
+    case: a thin book's "closest to -0.25" pick may not be close at all --
+    this makes that visible)."""
+
+    call_25d_delta: Optional[float] = None
+    """The ACTUAL delta of the selected 25d call (see put_25d_delta)."""
+
+    def __post_init__(self) -> None:
+        # Both None (insufficient data, bugfix_spec.md 9.4) stays as-is --
+        # no derivation possible or needed.
+        if self.risk_reversal_25d is None and self.put_over_call_skew_25d is not None:
+            object.__setattr__(self, "risk_reversal_25d", -self.put_over_call_skew_25d)
+        if self.put_over_call_skew_25d is None and self.risk_reversal_25d is not None:
+            object.__setattr__(self, "put_over_call_skew_25d", -self.risk_reversal_25d)
+
+    @property
+    def skew(self) -> Optional[float]:
+        """DEPRECATED (bugfix_spec.md Item 9): alias for
+        ``put_over_call_skew_25d`` -- kept for one release for any
+        un-migrated reader. Use ``risk_reversal_25d`` (market convention)
+        or ``put_over_call_skew_25d`` (explicit legacy sign) instead."""
+        return self.put_over_call_skew_25d
 
 
 @dataclass(frozen=True)
@@ -172,7 +210,12 @@ class VolSurfaceResult:
                 "call_25d_iv": self.skew_25d.call_25d_iv,
                 "put_25d_strike": self.skew_25d.put_25d_strike,
                 "call_25d_strike": self.skew_25d.call_25d_strike,
-                "skew": self.skew_25d.skew,
+                # bugfix_spec.md Item 9: "skew" (put - call, non-standard
+                # sign) replaced by "risk_reversal_25d" (call - put, market
+                # convention) and "put_over_call_skew_25d" (the legacy
+                # sign, explicitly named).
+                "risk_reversal_25d": self.skew_25d.risk_reversal_25d,
+                "put_over_call_skew_25d": self.skew_25d.put_over_call_skew_25d,
                 "interpretation": self.skew_25d.interpretation,
             },
             "pc_by_moneyness": {

@@ -76,7 +76,7 @@ def make_expiry_metrics(**overrides) -> ExpiryMetrics:
         put_support_gex=-3_000_000,
         hvl_strike=67000,
         atm_iv=50.0,
-        skew_25d=8.0,
+        risk_reversal_25d=-8.0,
         put_25d_iv=56.0,
         call_25d_iv=48.0,
         pc_atm=1.2,
@@ -236,7 +236,7 @@ def make_onchain_result(
             expiration=expiration, spot_price=underlying_price, iv_by_strike=(),
             skew_25d=SkewResult(
                 put_25d_iv=56.0, call_25d_iv=48.0, put_25d_strike=None, call_25d_strike=None,
-                skew=8.0, interpretation="Put skew",
+                risk_reversal_25d=-8.0, interpretation="Put skew",
             ),
             pc_by_moneyness=PutCallByMoneyness(
                 atm=bucket("ATM", 1.2), near_otm=bucket("Near-OTM", 0.9), far_otm=bucket("Far-OTM", 0.5),
@@ -500,6 +500,38 @@ class TestScoreVannaCharm:
 # =============================================================================
 # TESTS: score_futures_basis — no basis_back
 # =============================================================================
+
+class TestScoreSkew:
+    """
+    bugfix_spec.md Item 9 / Decision D6 acceptance test (T9.4 verbatim):
+    score_skew is re-signed to the market risk-reversal convention -- the
+    highest-risk part of this item, tested explicitly rather than assumed.
+    """
+
+    def test_t9_4_negative_risk_reversal_scores_bearish(self):
+        """A NEGATIVE risk reversal (puts richer) must score bearish."""
+        score, _, _ = ScoringEngine.score_skew(risk_reversal_25d=-4.37)
+        assert score < 0
+
+    def test_t9_4_positive_risk_reversal_scores_bullish(self):
+        score, _, _ = ScoringEngine.score_skew(risk_reversal_25d=4.37)
+        assert score > 0
+
+    def test_balanced_near_zero(self):
+        score, _, description = ScoringEngine.score_skew(risk_reversal_25d=0.5)
+        assert score == 0.0
+        assert "Normal" in description
+
+    def test_extreme_put_demand(self):
+        score, _, description = ScoringEngine.score_skew(risk_reversal_25d=-6.0)
+        assert score == -2.0
+        assert "Extreme put demand" in description
+
+    def test_extreme_call_demand(self):
+        score, _, description = ScoringEngine.score_skew(risk_reversal_25d=6.0)
+        assert score == 2.0
+        assert "Calls much richer" in description.lower() or "unusual" in description.lower()
+
 
 class TestScoreFuturesBasis:
     def test_signature_no_basis_back(self):
@@ -796,7 +828,9 @@ class TestBuildExpiryMetrics:
         assert result.call_resistance_strike == 75000
         assert result.put_support_strike == 60000
         assert result.atm_iv == 50.0
-        assert result.skew_25d == 8.0
+        # bugfix_spec.md Item 9: risk_reversal_25d (call - put) = -8.0,
+        # the sign-flip of the fixture's put_over_call_skew_25d = 8.0.
+        assert result.risk_reversal_25d == -8.0
         assert result.flow_bias == "Moderate Buying"
         assert result.pc_ratio == 0.80
         assert result.flow_sufficient_data is True
@@ -839,7 +873,7 @@ class TestBuildExpiryMetrics:
         result = SynthesisMapper.build_expiry_metrics(onchain_result, "27MAR26")
         assert result is not None
         assert result.atm_iv == 0.0
-        assert result.skew_25d == 0.0
+        assert result.risk_reversal_25d == 0.0
 
     def test_insufficient_flow_data_propagates_gate(self):
         """bugfix_spec.md Item 6 / F6.3.4 (carried from A4 review): the
@@ -900,12 +934,15 @@ class TestSynthesisEngineRun:
         result = build_from_current_data()
         assert isinstance(result, str)
         assert len(result) > 100
-        # Must contain a v2.0 regime classification
-        assert any(regime in result for regime in [
-            "RANGE_BOUND_NEUTRAL", "RANGE_BOUND_BULLISH", "RANGE_BOUND_BEARISH",
-            "RANGE_BOUND_ELEVATED", "TRENDING_UP", "TRENDING_DOWN",
-            "VOLATILE_BULLISH", "VOLATILE_BEARISH", "TRANSITION",
-        ])
+        # Must contain a v2.0 regime classification. bugfix_spec.md Item 9
+        # (Decision D6): score_skew's re-sign changes which regime this
+        # hardcoded example data classifies as (an accepted, documented
+        # consequence -- see score_skew's own docstring) -- check against
+        # the actual "Market Regime: <value>" line's rendering (lowercase,
+        # underscored, MarketRegime's own .value strings) rather than one
+        # specific hardcoded regime name, so this stays a genuine smoke
+        # test of "some valid regime was classified", not a pin on which one.
+        assert any(regime.value in result for regime in MarketRegime)
 
     def test_run_returns_regime_label(self):
         engine = SynthesisEngine()
