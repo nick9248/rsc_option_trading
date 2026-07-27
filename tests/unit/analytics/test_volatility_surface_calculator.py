@@ -170,10 +170,11 @@ class TestVolatilitySurfaceCalculator:
             greeks = calc._calculate_second_order_greeks()
 
         assert greeks["skipped_instruments"] == 1
-        assert any(
-            "BTC-28MAR26-90000-C" in record.message or "instrument" in record.message.lower()
-            for record in caplog.records
-        )
+        # task A7 review: the original assertion's "or 'instrument' in
+        # message.lower()" clause would pass even if the instrument name
+        # rendered as "<unknown>", since the log format string contains the
+        # word "instrument" unconditionally. Require the actual identifier.
+        assert any("BTC-28MAR26-90000-C" in record.message for record in caplog.records)
 
     def test_atm_iv(self, sample_instruments):
         calc = VolatilitySurfaceCalculator(sample_instruments, 90000, "28MAR26")

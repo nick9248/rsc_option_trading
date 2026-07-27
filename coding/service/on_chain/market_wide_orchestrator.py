@@ -127,7 +127,7 @@ class MarketWideOrchestrator:
             currency=currency, spot_price=analyzer.underlying_price, dvol=dvol,
         )
 
-        term_structure_result = self._calculate_term_structure(analyzer, calc)
+        term_structure_result = self._calculate_term_structure(analyzer, calc, progress_callback)
         basis_result = self._calculate_futures_basis(currency, analyzer, calc, progress_callback)
 
         price_history = self._fetch_price_history(currency, progress_callback)
@@ -162,11 +162,16 @@ class MarketWideOrchestrator:
 
     def _calculate_term_structure(
         self, analyzer: OnChainMetricsCalculator, calc: MarketWideCalculator,
+        progress_callback,
     ) -> Optional[TermStructureResult]:
         """Per-expiry ATM IVs collected during the vol-surface phase."""
         atm_ivs = analyzer._atm_ivs
         if not atm_ivs:
             return None
+
+        # task A7 review: this progress message was dropped during the T11
+        # split (the other 5 phases' messages survived the move) -- restored.
+        progress_callback("Calculating IV term structure...")
 
         # Text return value is unused -- render_market_wide_from_result
         # renders this section from the typed result now.

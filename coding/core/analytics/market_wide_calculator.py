@@ -658,7 +658,11 @@ class MarketWideCalculator:
             other_currency: Name of comparison currency.
 
         Returns:
-            Tuple of (formatted report string, dict with btc_eth_price_corr and btc_eth_dvol_corr).
+            Tuple of (formatted report string, dict with btc_eth_price_corr,
+            btc_eth_dvol_corr, and -- only when btc_eth_dvol_corr was
+            actually computed (bugfix_spec.md Item 11) -- btc_eth_dvol_corr_n,
+            the aligned log-change observation count the "(log changes,
+            Nd)" report label shows).
         """
         lines = []
         sub_separator = "-" * 80
@@ -703,13 +707,22 @@ class MarketWideCalculator:
                 )
             # 31 levels -> 30 changes, matching the price correlation's own
             # `window + 1` convention above so the reported n lines up.
+            # Both level windows are sliced to the SAME length from the
+            # right (same underlying dates), then their changes are built
+            # JOINTLY over aligned pairs (bugfix_spec.md section 11.4 edge
+            # case) -- a non-positive value at a given step drops that step
+            # from BOTH series, not just the one that had it, so the two
+            # change series can never desynchronize by index.
             window = min(len(own_dvol_history), len(other_dvol_history), 31)
-            own_changes = self._log_changes(own_dvol_history[-window:])
-            other_changes = self._log_changes(other_dvol_history[-window:])
-            n = min(len(own_changes), len(other_changes))
+            own_level_window = own_dvol_history[-window:]
+            other_level_window = other_dvol_history[-window:]
+            own_changes, other_changes = self._aligned_log_changes(
+                own_level_window, other_level_window
+            )
+            n = len(own_changes)
             if n >= MINIMUM_CORRELATION_OBSERVATIONS:
-                own_window = own_changes[-n:]
-                other_window = other_changes[-n:]
+                own_window = own_changes
+                other_window = other_changes
                 # Zero (or float64-noise-level) variance in either series --
                 # e.g. a perfectly steady log-linear trend -- makes the
                 # correlation mathematically undefined (0/0), not a
@@ -736,23 +749,52 @@ class MarketWideCalculator:
         return "\n".join(lines), structured
 
     @staticmethod
-    def _log_changes(series: List[float]) -> List[float]:
+    def _aligned_log_changes(
+        series_a: List[float], series_b: List[float],
+    ) -> Tuple[List[float], List[float]]:
         """
-        Log changes (first differences of ln) of a strictly-positive
-        series (bugfix_spec.md Item 11).
+        Log changes (first differences of ln) of two SAME-LENGTH,
+        date-aligned series, built JOINTLY over aligned pairs
+        (bugfix_spec.md Item 11, section 11.4 edge case table).
 
-        A non-positive value on either side of a step drops that step from
-        the output entirely -- callers must build both series' change
-        lists from the SAME aligned window so a dropped step desynchronizes
-        neither side (this method only guards a single series; the caller
-        is responsible for passing already-aligned slices).
+        A non-positive value (or ``None``) on EITHER side at a given step
+        drops that step from BOTH output series. Computing each series'
+        changes independently (dropping a step from only the side that had
+        the bad value) would desynchronize the two change series by index
+        -- the correlation would then silently pair up changes from
+        different dates. Building both series jointly here, rather than
+        pushing "pass pre-aligned slices" responsibility onto the caller,
+        is what task A7 review caught as unimplemented in the first cut of
+        this fix (the caller never actually honored that contract).
+
+        Args:
+            series_a: Raw levels for one asset, index-aligned with series_b
+                (same length, same underlying dates).
+            series_b: Raw levels for the other asset.
+
+        Returns:
+            ``(changes_a, changes_b)`` -- same length as each other,
+            possibly shorter than ``len(series_a) - 1`` if any steps were
+            dropped.
         """
-        changes = []
-        for i in range(1, len(series)):
-            previous, current = series[i - 1], series[i]
-            if previous > 0 and current > 0:
-                changes.append(math.log(current / previous))
-        return changes
+        if len(series_a) != len(series_b):
+            raise ValueError(
+                f"_aligned_log_changes requires same-length series, got "
+                f"{len(series_a)} vs {len(series_b)}"
+            )
+        changes_a: List[float] = []
+        changes_b: List[float] = []
+        for i in range(1, len(series_a)):
+            a_prev, a_curr = series_a[i - 1], series_a[i]
+            b_prev, b_curr = series_b[i - 1], series_b[i]
+            if (
+                a_prev is not None and a_curr is not None
+                and b_prev is not None and b_curr is not None
+                and a_prev > 0 and a_curr > 0 and b_prev > 0 and b_curr > 0
+            ):
+                changes_a.append(math.log(a_curr / a_prev))
+                changes_b.append(math.log(b_curr / b_prev))
+        return changes_a, changes_b
 
     def _calculate_return_correlation(
         self,

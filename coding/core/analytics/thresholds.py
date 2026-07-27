@@ -23,11 +23,14 @@ from typing import Optional
 # "Slightly Bearish"/"Bearish"). refactor_design_spec.md T12: unifying onto
 # one shared function is a PLANNED golden-master delta -- report text that
 # used to say "Slightly Bullish"/"Slightly Bearish" now reads "Bullish"/
-# "Bearish" (the 5-level vocabulary, matching interpret_put_call_ratio_
-# percentile's existing "Strong X"/"X"/"Neutral" naming scheme elsewhere in
-# the same report). An inf ratio (call_oi == 0, put_oi > 0) is "N/A" in
-# both call sites now -- it is a data-insufficiency case (nothing to divide
-# by), not a directional claim.
+# "Bearish" (the 5-level vocabulary). Chosen to align with
+# ``interpret_put_call_ratio_percentile``'s "Strong X"/"X"/"Neutral" naming
+# scheme -- NOT an existing function in this codebase (task A7 review
+# caught this comment, and the task's own report, falsely claiming it
+# already exists elsewhere in the report); it is specified in
+# bugfix_spec.md F10.3.1 for a future, not-yet-built task. An inf ratio
+# (call_oi == 0, put_oi > 0) is "N/A" in both call sites now -- it is a
+# data-insufficiency case (nothing to divide by), not a directional claim.
 PC_RATIO_STRONG_BULLISH_THRESHOLD = 0.7
 """ratio < this -> "Strong Bullish"."""
 

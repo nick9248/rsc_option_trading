@@ -247,9 +247,12 @@ class VolatilitySurfaceCalculator:
 
         if self.spot_price <= 0:
             # Distance-to-spot is undefined with no spot price, so no OI can be
-            # bucketed. Still populate ratio/bias on every bucket - the report
-            # path (generate_report_section) unconditionally reads both keys
-            # and would KeyError otherwise.
+            # bucketed. Still populate ratio/bias on every bucket -- calculate()'s
+            # _bucket() closure below unconditionally reads both keys to build
+            # the typed MoneynessBucket (results/vol_surface_results.py) and
+            # would KeyError otherwise (task A7 review: this comment previously
+            # named the deleted generate_report_section as the reason -- the
+            # real reason is calculate()'s typed-model construction).
             for bucket_data in buckets.values():
                 bucket_data["ratio"] = 0.0
                 bucket_data["bias"] = "N/A"

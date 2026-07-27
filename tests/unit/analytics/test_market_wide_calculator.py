@@ -419,6 +419,49 @@ class TestDvolCorrelationLogChanges:
         assert any("DVOL history length mismatch" in rec.message for rec in caplog.records)
         assert structured["btc_eth_dvol_corr"] is not None
 
+    def test_non_positive_value_on_one_side_drops_step_from_both_not_just_one(self, calculator):
+        """
+        bugfix_spec.md section 11.4 edge case 1 (task A7 review fix): a
+        non-positive DVOL reading on ONE side must drop that step from
+        BOTH change series, not just the corrupted one -- otherwise the
+        two change lists desynchronize by index and the correlation
+        silently pairs up changes from different dates.
+
+        Fixture: ``other[i] = other[i-1] * (own_true[i]/own_true[i-1])**2``
+        for every step, i.e. other's log return is exactly double own's at
+        every date -- a perfect (nonlinear but monotonic-in-rank) log-
+        linear relationship, corr == 1.0 when the two series are paired by
+        date. own[5] is corrupted to 0.0 (a bad reading), which must drop
+        exactly the two steps touching index 5 (i=5 and i=6) from BOTH
+        series before correlating.
+
+        Hand-verified (see task A7 fix-report): the CORRECT jointly-aligned
+        computation gives corr == 1.0 over the remaining 13 aligned points.
+        The bug this test guards against -- computing each series' log
+        changes independently, then slicing both to min(len) elements from
+        the right -- pairs mismatched dates and gives corr ~= 0.765 for
+        this exact fixture (own's change list is short two entries from the
+        MIDDLE, not the end, so a tail-aligned slice does not restore
+        alignment).
+        """
+        own = [
+            10.0, 10.5, 10.8, 11.5, 11.9, 0.0, 12.6, 13.3,
+            13.6, 14.1, 14.6, 14.9, 15.5, 15.8, 16.4, 16.9,
+        ]
+        other = [
+            20.0, 22.05, 23.328, 26.45, 28.322, 30.752, 31.752, 35.378,
+            36.992, 39.762, 42.632, 44.402, 48.05, 49.928, 53.792, 57.122,
+        ]
+
+        report, structured = calculator.calculate_cross_asset_correlation(
+            own_prices=[], other_prices=[], own_dvol_history=own,
+            other_dvol_history=other, other_currency="ETH",
+        )
+
+        assert structured["btc_eth_dvol_corr"] == pytest.approx(1.0, abs=1e-6)
+        assert structured["btc_eth_dvol_corr_n"] == 13
+        assert "log changes, 13d" in report
+
 
 class TestExactFractionalDaysToExpiry:
     """

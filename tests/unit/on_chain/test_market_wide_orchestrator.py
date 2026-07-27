@@ -6,11 +6,21 @@ One test per extracted phase method with a stubbed API, per the spec's T11
 proof requirement, plus a ``run()`` integration test wiring all 8 together.
 """
 
-import time
 from unittest.mock import MagicMock
 
 from coding.core.analytics.market_wide_calculator import MarketWideCalculator
 from coding.service.on_chain.market_wide_orchestrator import MarketWideOrchestrator
+
+# task A7 review: previously anchored to a live time.time() call at each
+# call site -- the same non-determinism anti-pattern carried finding #4
+# removed from tests/unit/test_on_chain_analysis_service_market_wide.py in
+# this same task. Every test below that needs synthetic price-history
+# timestamps now freezes the clock to this fixed instant (via the
+# frozen_clock fixture, tests/conftest.py -- covers both
+# coding.core.analytics.vrp_calculator's internal datetime.now() default
+# and this module's own time.time() calls) and anchors _price_points to
+# the same instant, so nothing here depends on real wall-clock time.
+FROZEN_EPOCH = 1_780_000_000.0
 
 
 class _FakeAnalyzer:
@@ -47,18 +57,46 @@ class TestCalculateTermStructure:
 
     def test_no_atm_ivs_returns_none(self):
         orchestrator = MarketWideOrchestrator(api=MagicMock())
-        result = orchestrator._calculate_term_structure(_FakeAnalyzer(atm_ivs={}), _calc())
+        result = orchestrator._calculate_term_structure(
+            _FakeAnalyzer(atm_ivs={}), _calc(), progress_callback=lambda m: None,
+        )
         assert result is None
 
     def test_atm_ivs_produce_sorted_entries_and_shape(self):
         orchestrator = MarketWideOrchestrator(api=MagicMock())
         analyzer = _FakeAnalyzer(atm_ivs={"28MAR30": 70.0, "27JUN30": 60.0})
-        result = orchestrator._calculate_term_structure(analyzer, _calc())
+        result = orchestrator._calculate_term_structure(
+            analyzer, _calc(), progress_callback=lambda m: None,
+        )
 
         assert result is not None
         assert len(result.entries) == 2
         assert result.entries[0].dte <= result.entries[1].dte
         assert result.shape in ("CONTANGO", "BACKWARDATION", "FLAT")
+
+    def test_progress_callback_invoked_when_atm_ivs_present(self):
+        """
+        task A7 review: this phase's progress_callback("Calculating IV term
+        structure...") call was dropped during the T11 split (the other 5
+        phases' messages survived the move) -- regression guard.
+        """
+        orchestrator = MarketWideOrchestrator(api=MagicMock())
+        analyzer = _FakeAnalyzer(atm_ivs={"28MAR30": 70.0})
+        messages = []
+
+        orchestrator._calculate_term_structure(analyzer, _calc(), progress_callback=messages.append)
+
+        assert "Calculating IV term structure..." in messages
+
+    def test_progress_callback_not_invoked_when_no_atm_ivs(self):
+        orchestrator = MarketWideOrchestrator(api=MagicMock())
+        messages = []
+
+        orchestrator._calculate_term_structure(
+            _FakeAnalyzer(atm_ivs={}), _calc(), progress_callback=messages.append,
+        )
+
+        assert messages == []
 
 
 class TestCalculateFuturesBasis:
@@ -100,9 +138,10 @@ class TestCalculateFuturesBasis:
 class TestFetchPriceHistory:
     """Shared fetch feeding phases 3/4/5/8."""
 
-    def test_chart_data_parsed_into_price_history(self):
+    def test_chart_data_parsed_into_price_history(self, frozen_clock):
+        frozen_clock(FROZEN_EPOCH)
         api = MagicMock()
-        now_ms = int(time.time() * 1000)
+        now_ms = int(FROZEN_EPOCH * 1000)
         api.get_tradingview_chart_data.return_value = _price_points(5, now_ms)
         orchestrator = MarketWideOrchestrator(api=api)
 
@@ -128,9 +167,10 @@ class TestCalculateRealizedVolatility:
         assert result is None
         assert rv_values == {}
 
-    def test_sufficient_price_history_produces_result(self):
+    def test_sufficient_price_history_produces_result(self, frozen_clock):
+        frozen_clock(FROZEN_EPOCH)
         orchestrator = MarketWideOrchestrator(api=MagicMock())
-        now_ms = int(time.time() * 1000)
+        now_ms = int(FROZEN_EPOCH * 1000)
         history = _price_points(40, now_ms)
         price_history = [
             {"timestamp": ts / 1000, "close": c}
@@ -168,9 +208,10 @@ class TestCalculateVolatilityCone:
         result = orchestrator._calculate_volatility_cone(_calc(), [{"timestamp": 0, "close": 90000.0}] * 20)
         assert result is None
 
-    def test_sufficient_price_history_produces_result(self):
+    def test_sufficient_price_history_produces_result(self, frozen_clock):
+        frozen_clock(FROZEN_EPOCH)
         orchestrator = MarketWideOrchestrator(api=MagicMock())
-        now_ms = int(time.time() * 1000)
+        now_ms = int(FROZEN_EPOCH * 1000)
         history = _price_points(200, now_ms)
         price_history = [
             {"timestamp": ts / 1000, "close": c}
@@ -258,8 +299,9 @@ class TestCalculateCrossAssetCorrelation:
 class TestRunIntegration:
     """run() wires all 8 phases together into one MarketWideResult."""
 
-    def test_run_with_fully_stubbed_api_produces_populated_result(self):
-        now_ms = int(time.time() * 1000)
+    def test_run_with_fully_stubbed_api_produces_populated_result(self, frozen_clock):
+        frozen_clock(FROZEN_EPOCH)
+        now_ms = int(FROZEN_EPOCH * 1000)
 
         api = MagicMock()
 

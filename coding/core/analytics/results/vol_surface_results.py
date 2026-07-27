@@ -72,9 +72,12 @@ class VolSurfaceResult:
     weighted MATCHED mark-IV baseline, not a chain-wide average — see the
     calculator's docstring), and ``traded_instrument_count`` are typed-only
     fields: the legacy ``calculate()`` dict never carried VWAP data (it lived
-    only as ephemeral instance state consumed by ``generate_report_section``),
-    so ``to_dict()`` deliberately omits them to stay a byte-faithful legacy
-    shim. Read them as attributes.
+    only as ephemeral instance state, read as attributes by the live render
+    path, ``reporting/vol_surface_formatter.py``'s ``format_vol_surface_
+    section`` -- task A7 review: this comment previously named the deleted
+    ``generate_report_section`` as the consumer), so ``to_dict()``
+    deliberately omits them to stay a byte-faithful legacy shim. Read them
+    as attributes.
     """
 
     expiration: str

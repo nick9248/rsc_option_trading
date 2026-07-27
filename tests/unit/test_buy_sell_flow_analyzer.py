@@ -18,7 +18,6 @@ inf -> None sentinel unification (M7).
 import pytest
 from coding.core.analytics.buy_sell_flow_analyzer import (
     INSUFFICIENT_DATA_LABEL,
-    LOW_CONFIDENCE_SUFFIX,
     MINIMUM_TRADES_1H_FOR_TREND,
     MINIMUM_TRADES_FOR_CONFIDENCE,
     MINIMUM_TRADES_FOR_SECTION,
