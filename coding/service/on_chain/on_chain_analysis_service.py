@@ -140,10 +140,27 @@ class OnChainAnalysisService:
         analyzer = OnChainMetricsCalculator(all_data, currency)
         analyzer.parse_instruments()
 
+        # bugfix_spec.md Item 7: the spot index is fetched explicitly now --
+        # no heuristic, no volume-race pick across the whole book. Falls
+        # back to the nearest-expiry median underlying_price (the
+        # smallest-basis proxy available without the index) if the index
+        # fetch itself fails -- never silently reverts to the old global
+        # highest-volume pick.
+        progress(f"Fetching index price for {currency}...")
+        try:
+            index_price = self.api.get_index_price(currency=currency)
+        except Exception as e:
+            index_price = analyzer.nearest_expiry_median_underlying_price()
+            logger.error(
+                f"get_index_price failed for {currency}: {e} -- falling back "
+                f"to nearest-expiry median underlying_price ({index_price})"
+            )
+        analyzer.set_index_price(index_price)
+
         expirations = analyzer.get_expirations()
         progress(f"Found {len(expirations)} expirations")
 
-        builder = OnChainAnalysisBuilder(currency, analyzer.underlying_price, analyzer.parsed_data)
+        builder = OnChainAnalysisBuilder(currency, analyzer.index_price, analyzer.parsed_data)
         for expiration in expirations:
             # T10 (refactor_design_spec.md): analyze_expiration() now
             # returns the typed ExpirationAnalysisResult directly (the
@@ -243,7 +260,7 @@ class OnChainAnalysisService:
                     item_with_greeks["theta"] = greeks.get("theta")
                     item_with_greeks["vega"] = greeks.get("vega")
                     item_with_greeks["mark_iv"] = ticker.get("mark_iv")
-                    item_with_greeks["underlying_price"] = ticker.get("underlying_price", analyzer.underlying_price)
+                    item_with_greeks["underlying_price"] = ticker.get("underlying_price", analyzer.index_price)
                     instruments_with_greeks.append(item_with_greeks)
 
                     if (i + 1) % 20 == 0:
@@ -259,11 +276,14 @@ class OnChainAnalysisService:
                 if builder is not None:
                     builder.set_enriched_instruments(expiration, instruments_with_greeks)
 
-                # Calculate GEX/DEX and store in analyzer
+                # Calculate GEX/DEX and store in analyzer. bugfix_spec.md
+                # Item 7 anchor table: GEX/DEX are exposures to a move in the
+                # underlying SPOT, and GEX's S² term amplifies any basis
+                # error -- anchor on the index, not one expiry's future.
                 progress_callback(f"Calculating GEX/DEX for {expiration}...")
                 calculator = GexDexCalculator(
                     instruments_with_greeks,
-                    analyzer.underlying_price,
+                    analyzer.index_price,
                     currency=analyzer.currency
                 )
                 # T4 (refactor_design_spec.md): calculate() returns the typed
@@ -283,7 +303,7 @@ class OnChainAnalysisService:
         if gex_dex_typed_by_expiry:
             progress_callback("Calculating market-wide aggregate GEX/DEX...")
             aggregate_result = GexDexCalculator.aggregate_across_expirations(
-                gex_dex_typed_by_expiry, analyzer.underlying_price, analyzer.currency
+                gex_dex_typed_by_expiry, analyzer.index_price, analyzer.currency
             )
 
         return aggregate_result
@@ -335,7 +355,9 @@ class OnChainAnalysisService:
                     trades=trades,
                     currency=analyzer.currency,
                     expiration=expiration,
-                    spot_price=analyzer.underlying_price,
+                    # bugfix_spec.md Item 7 anchor table: flow notional
+                    # (amount x index_price) is a USD conversion -> index.
+                    spot_price=analyzer.index_price,
                     window_start_ms=window_start_ms,
                     window_end_ms=window_end_ms,
                 )
@@ -359,7 +381,7 @@ class OnChainAnalysisService:
                         currency=analyzer.currency,
                         expiration=expiration,
                         flow_data=flow_result_dict["flow_data"],
-                        underlying_price=analyzer.underlying_price,
+                        underlying_price=analyzer.index_price,
                         window_hours=24
                     )
                     logger.info(f"Saved flow metrics to database for {expiration}")
@@ -373,7 +395,7 @@ class OnChainAnalysisService:
 
                     fig_dist = generate_flow_distribution_chart(
                         flow_data=flow_result_dict,
-                        spot_price=analyzer.underlying_price,
+                        spot_price=analyzer.index_price,
                         currency=analyzer.currency,
                         expiration=expiration,
                     )
@@ -386,7 +408,7 @@ class OnChainAnalysisService:
 
                     fig_net = generate_net_flow_chart(
                         flow_data=flow_result_dict,
-                        spot_price=analyzer.underlying_price,
+                        spot_price=analyzer.index_price,
                         currency=analyzer.currency,
                         expiration=expiration,
                     )
@@ -667,9 +689,22 @@ class OnChainAnalysisService:
             try:
                 progress_callback(f"Calculating volatility surface for {expiration}...")
 
+                # bugfix_spec.md Item 7 anchor table: 25d skew/RR strike
+                # selection and ATM IV are settlement-space (ATM is defined
+                # at the forward) -- this expiry's own forward, not the
+                # index. Falls back to the index (with a warning) for the
+                # rare expiry with no priced instrument at all.
+                forward_price = analyzer.forward_price_by_expiration.get(expiration)
+                if forward_price is None:
+                    logger.warning(
+                        f"No forward price for expiration {expiration} -- "
+                        f"falling back to index price for volatility surface"
+                    )
+                    forward_price = analyzer.index_price
+
                 calculator = VolatilitySurfaceCalculator(
                     instruments=instruments,
-                    spot_price=analyzer.underlying_price,
+                    spot_price=forward_price,
                     expiration=expiration,
                 )
 
@@ -816,12 +851,23 @@ class OnChainAnalysisService:
 
         for expiration, instruments in analyzer.enriched_instruments.items():
             try:
+                # bugfix_spec.md Item 7 anchor table: ATM strike selection
+                # is settlement-space (ATM is defined at the forward) --
+                # this expiry's own forward, not a global index/future.
+                forward_price = analyzer.forward_price_by_expiration.get(expiration)
+                if forward_price is None:
+                    logger.warning(
+                        f"No forward price for expiration {expiration} -- "
+                        f"falling back to index price for ATM strike selection"
+                    )
+                    forward_price = analyzer.index_price
+
                 # Save today's OI snapshot (UPSERT, safe to call multiple times/day)
                 self.repository.save_daily_oi_snapshot(
                     currency=analyzer.currency,
                     expiration=expiration,
                     instruments=instruments,
-                    underlying_price=analyzer.underlying_price,
+                    underlying_price=forward_price,
                 )
 
                 # Get previous day's snapshot for OI change detection
@@ -841,10 +887,10 @@ class OnChainAnalysisService:
                     builder.set_oi_changes(expiration, oi_changes_result)
 
                 # Calculate IV percentile per expiry
-                # Find ATM strike (closest to spot)
+                # Find ATM strike (closest to this expiry's own forward)
                 atm_strike = min(
                     instruments,
-                    key=lambda i: abs(i["strike"] - analyzer.underlying_price)
+                    key=lambda i: abs(i["strike"] - forward_price)
                 )["strike"]
 
                 iv_history = self.repository.get_atm_iv_history(

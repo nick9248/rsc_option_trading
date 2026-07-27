@@ -64,6 +64,11 @@ def analyzer_with_data():
     """OnChainMetricsCalculator with one expiration (10MAR26) pre-parsed."""
     data = _make_instruments()
     a = OnChainMetricsCalculator(data=data, currency="ETH")
+    # bugfix_spec.md Item 7: index_price is no longer auto-extracted from
+    # data -- the service supplies it explicitly via set_index_price(). All
+    # fixture instruments share underlying_price=1900.0, so this preserves
+    # this test's original 1900.0 "spot" value exactly.
+    a.set_index_price(1900.0)
     a.parse_instruments()
     return a
 
@@ -71,7 +76,7 @@ def analyzer_with_data():
 def _render(analyzer, trend=None):
     """Render the expiration section for EXPIRATION with the given trend."""
     analysis = analyzer.analyze_expiration(EXPIRATION)
-    return format_expiration_section(analysis, analyzer.underlying_price, trend)
+    return format_expiration_section(analysis, analysis.underlying_price, trend)
 
 
 # ---------------------------------------------------------------------------

@@ -28,7 +28,11 @@ class _FakeAnalyzer:
     orchestrator reads."""
 
     def __init__(self, underlying_price=90000.0, dvol=None, atm_ivs=None, recent_trades=None):
+        # bugfix_spec.md Item 7: MarketWideOrchestrator now reads
+        # analyzer.index_price directly (not the deprecated underlying_price
+        # alias) -- this stub sets both to the same value.
         self.underlying_price = underlying_price
+        self.index_price = underlying_price
         self.currency = "BTC"
         self.market_metrics = {"dvol": dvol}
         self._atm_ivs = atm_ivs or {}

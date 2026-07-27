@@ -41,6 +41,37 @@ class FakeDeribitApiService:
         currency = meta["currency"]
         other_currency = meta["other_currency"]
 
+        # bugfix_spec.md Item 7: get_index_price wasn't recorded by fixtures
+        # captured before this item (record_onchain_fixture.py now records
+        # it explicitly to index_price.json.gz for anything recorded after).
+        # For an older fixture directory that lacks that file, derive the
+        # same quantity from data ALREADY recorded in the same session: the
+        # perpetual ticker's own `index_price` field (Deribit ticker
+        # responses always carry it) is the live index snapshot at
+        # approximately that same moment -- not a fabricated number, a
+        # different field of the same already-recorded observation.
+        index_price_path = self.fixture_dir / "index_price.json.gz"
+        if index_price_path.exists():
+            self._index_price_calls = load_json_gz(index_price_path)
+            self._index_price_fallback = None
+        else:
+            self._index_price_calls = []
+            perp_ticker = self._tickers.get(f"{currency}-PERPETUAL", {})
+            fallback = perp_ticker.get("index_price")
+            if fallback is None:
+                raise KeyError(
+                    f"No recorded get_index_price fixture and no "
+                    f"{currency}-PERPETUAL ticker index_price fallback in "
+                    f"{self.fixture_dir} -- re-record the fixture."
+                )
+            logger.warning(
+                "No index_price.json.gz in %s -- falling back to the "
+                "%s-PERPETUAL ticker's own recorded index_price (%.2f). "
+                "Re-record the fixture to record get_index_price directly.",
+                self.fixture_dir, currency, fallback,
+            )
+            self._index_price_fallback = fallback
+
         self._tradingview_calls: List[Dict[str, Any]] = []
         self._volatility_index_calls: List[Dict[str, Any]] = []
         for ccy in (currency, other_currency):
@@ -59,6 +90,13 @@ class FakeDeribitApiService:
             "present when the fixture was recorded. If this is expected new behavior, "
             "re-record the fixture; otherwise this is a regression."
         )
+
+    def get_index_price(self, currency: str = "BTC", save_to_csv: bool = False) -> float:
+        if self._index_price_calls:
+            return self._lookup(
+                self._index_price_calls, "get_index_price", {"currency": currency}
+            )
+        return self._index_price_fallback
 
     def get_book_summary(
         self, currency: str = "ETH", kind: Optional[str] = "option", save_to_csv: bool = False

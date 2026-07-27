@@ -8,6 +8,7 @@ import logging
 import time
 from typing import Any, Dict, List, Optional
 
+from coding.core.analytics.forward_price_utils import select_forward_price
 from coding.core.api.connection import ApiConnection
 from coding.core.api.response_parser import ResponseParser
 from coding.core.api.schema_validator import SchemaValidator
@@ -733,16 +734,12 @@ class DeribitApiService:
             contracts.append(contract)
             by_expiry.setdefault(expiry_str, []).append(item)
 
-        futures_by_expiry: Dict[str, float] = {}
-        for expiry_str, items in by_expiry.items():
-            active = [i for i in items if (i.get("volume") or 0) > 0 and i.get("underlying_price")]
-            if active:
-                futures_by_expiry[expiry_str] = max(
-                    active, key=lambda i: i.get("volume", 0)
-                ).get("underlying_price")
-            else:
-                priced = [i for i in items if i.get("underlying_price")]
-                futures_by_expiry[expiry_str] = priced[0]["underlying_price"] if priced else None
+        # bugfix_spec.md Item 7 (F7.3.1): shared with
+        # OnChainMetricsCalculator._extract_forward_prices, which needs the
+        # identical highest-volume-in-group pick a second time.
+        futures_by_expiry: Dict[str, float] = {
+            expiry_str: select_forward_price(items) for expiry_str, items in by_expiry.items()
+        }
 
         return {
             "as_of": as_of,

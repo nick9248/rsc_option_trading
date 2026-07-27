@@ -25,8 +25,12 @@ imports the old name.
 """
 
 import logging
+import statistics
+import warnings
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from coding.core.analytics.forward_price_utils import select_forward_price
 from coding.core.analytics.results.analysis_result import MarketMetricsResult, TrendSnapshot
 from coding.core.analytics.thresholds import (
     OI_SKEW_ITM_HEAVY_THRESHOLD_PCT,
@@ -156,13 +160,37 @@ class OnChainMetricsCalculator:
         """
         Initialize calculator with book summary data.
 
+        bugfix_spec.md Item 7: this used to auto-extract a single global
+        "spot" price -- the ``underlying_price`` (a FUTURE, not the index)
+        of whichever instrument in the WHOLE book happened to have the
+        highest 24h volume -- and apply it everywhere (GEX/DEX, moneyness,
+        max-pain distance, ...), regardless of expiry. That is wrong twice
+        over: (1) ``underlying_price`` is a future, not the index, so it is
+        the wrong basis for spot-anchored metrics (GEX/DEX, USD conversion);
+        (2) even where a future price IS correct (moneyness, breakevens --
+        strike-space math), using ONE expiry's future for every OTHER
+        expiry ignores the futures basis, which the audit measured at up to
+        +3.9% across expiries (GEX distortion up to +7.9%, since GEX scales
+        with S²).
+
+        Fix: two prices now, each anchored correctly --
+        ``index_price`` (spot index, set explicitly via ``set_index_price``,
+        no heuristic -- the service supplies it from
+        ``DeribitApiService.get_index_price``) and
+        ``forward_price_by_expiration`` (this expiry's own future price,
+        picked per-expiry from ``data`` at construction time -- no network
+        call needed, it's the same book-summary rows already passed in).
+        See ``DeribitApiService.get_option_chain_snapshot``'s docstring for
+        the authoritative index-vs-future rule this follows.
+
         Args:
             data: List of book summary items from Deribit API.
             currency: Currency symbol (ETH, BTC).
         """
         self.raw_data = data
         self.currency = currency
-        self.underlying_price: float = 0.0
+        self.index_price: float = 0.0
+        self.forward_price_by_expiration: Dict[str, Optional[float]] = {}
         self.parsed_data: Dict[str, List[Dict]] = {}
 
         # Cross-phase state written directly by OnChainAnalysisService (no
@@ -173,54 +201,130 @@ class OnChainMetricsCalculator:
         self._recent_trades: List[Dict[str, Any]] = []  # For block trade detection
         self._atm_ivs: Dict[str, float] = {}  # ATM IV per expiration (for term structure)
 
-        # Extract underlying price using most common value (mode)
-        # Different instruments may have slightly different underlying_price values
-        # depending on when their data was last updated. The mode gives us
-        # the most current price since most instruments share it.
         if data:
-            self.underlying_price = self._extract_underlying_price(data)
+            self.forward_price_by_expiration = self._extract_forward_prices(data)
 
         logger.info(f"Initialized OnChainMetricsCalculator with {len(data)} instruments")
 
-    def _extract_underlying_price(self, data: List[Dict[str, Any]]) -> float:
+    @property
+    def underlying_price(self) -> float:
         """
-        Extract the most accurate underlying price from data.
+        DEPRECATED (bugfix_spec.md Item 7): historically the single global
+        "spot" price (actually a future's price, from the highest-volume
+        instrument in the whole book). Kept for one release as a read-only
+        alias for ``index_price`` so existing readers (``save_onchain_snapshot``
+        callers, report code that has not yet migrated) keep working.
 
-        Uses the underlying_price from the highest volume instrument,
-        as actively traded instruments have the most recently updated
-        price data. The book_summary endpoint caches underlying_price
-        per instrument, so stale instruments may have outdated values.
+        Use ``index_price`` for spot-anchored metrics (GEX/DEX, USD
+        conversion) or ``forward_price_by_expiration[expiration]`` for
+        settlement-space metrics (moneyness, max-pain distance, breakevens).
+        """
+        warnings.warn(
+            "OnChainMetricsCalculator.underlying_price is deprecated -- use "
+            "index_price (spot-anchored metrics) or "
+            "forward_price_by_expiration[expiration] (settlement-space "
+            "metrics). bugfix_spec.md Item 7.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.index_price
+
+    def set_index_price(self, index_price: float) -> None:
+        """
+        Set the spot index price (bugfix_spec.md Item 7).
+
+        The service supplies this from ``DeribitApiService.get_index_price``
+        -- no heuristic, no volume race. Anchors every spot-anchored metric
+        (GEX/DEX, USD notional conversion).
+
+        Args:
+            index_price: Current spot index price (USD per unit currency).
+        """
+        self.index_price = index_price
+
+    def _extract_forward_prices(self, data: List[Dict[str, Any]]) -> Dict[str, Optional[float]]:
+        """
+        Per-expiry forward (future) price, picked from ``data`` directly (no
+        network call -- this is the same book-summary rows already passed to
+        the constructor).
+
+        Groups by expiry parsed from ``instrument_name`` (mirrors
+        ``parse_instruments``'s own parsing, done separately here because
+        ``parse_instruments`` drops ``underlying_price`` from its parsed
+        shape) and applies the shared ``select_forward_price`` pick --
+        the same highest-volume-in-group logic
+        ``DeribitApiService.get_option_chain_snapshot`` uses for its own
+        ``futures_by_expiry`` (bugfix_spec.md F7.3.1: shared helper, not a
+        third duplicate).
 
         Args:
             data: List of book summary items.
 
         Returns:
-            Underlying price from highest volume instrument, or 0 if none found.
+            Dict mapping expiry -> forward price. A group with no priced
+            instrument at all maps to ``None`` (resolved to ``index_price``
+            with a ``logger.warning`` at the point of use, once
+            ``index_price`` is actually known -- see ``analyze_expiration``).
         """
-        # Filter to instruments with volume and valid price
-        active_instruments = [
-            item for item in data
-            if (item.get("volume") or 0) > 0 and item.get("underlying_price")
-        ]
+        grouped: Dict[str, List[Dict[str, Any]]] = {}
+        for item in data:
+            parts = item.get("instrument_name", "").split("-")
+            if len(parts) < 2:
+                continue
+            grouped.setdefault(parts[1], []).append(item)
 
-        if not active_instruments:
-            # Fallback: use any instrument with a price
-            for item in data:
-                if item.get("underlying_price"):
-                    return item.get("underlying_price")
+        return {expiry: select_forward_price(items) for expiry, items in grouped.items()}
+
+    def nearest_expiry_median_underlying_price(self) -> float:
+        """
+        Fallback spot price when ``get_index_price`` fails (bugfix_spec.md
+        Item 7 / 7.4 edge case): the median ``underlying_price`` across the
+        NEAREST expiry's instruments -- the smallest-basis proxy available
+        without the index -- never the old global highest-volume pick.
+
+        Callers must ``logger.error`` when they use this (a fallback firing
+        means the primary index-price fetch failed) -- this method only
+        computes the value.
+
+        Returns:
+            The nearest expiry's median underlying_price, or 0.0 if no
+            instrument in ``raw_data`` has a parseable expiry with a priced
+            underlying_price at all.
+        """
+        prices_by_expiry: Dict[str, List[float]] = {}
+        for item in self.raw_data:
+            parts = item.get("instrument_name", "").split("-")
+            if len(parts) < 2:
+                continue
+            price = item.get("underlying_price")
+            if not price:
+                continue
+            prices_by_expiry.setdefault(parts[1], []).append(price)
+
+        if not prices_by_expiry:
             return 0.0
 
-        # Get the instrument with highest volume (most recently active)
-        highest_volume_item = max(active_instruments, key=lambda x: x.get("volume", 0))
-        price = highest_volume_item.get("underlying_price", 0)
+        now_utc = datetime.now(timezone.utc)
 
-        logger.debug(
-            f"Underlying price: {price} "
-            f"(from {highest_volume_item.get('instrument_name')} "
-            f"with volume {highest_volume_item.get('volume')})"
+        def _parse_expiry(expiry: str) -> Optional[datetime]:
+            try:
+                return datetime.strptime(expiry, "%d%b%y").replace(
+                    hour=8, minute=0, second=0, microsecond=0, tzinfo=timezone.utc
+                )
+            except ValueError:
+                return None
+
+        dated_expiries = [
+            (expiry, _parse_expiry(expiry)) for expiry in prices_by_expiry
+        ]
+        dated_expiries = [(expiry, dt) for expiry, dt in dated_expiries if dt is not None]
+        if not dated_expiries:
+            return 0.0
+
+        nearest_expiry, _ = min(
+            dated_expiries, key=lambda pair: abs((pair[1] - now_utc).total_seconds())
         )
-
-        return price
+        return float(statistics.median(prices_by_expiry[nearest_expiry]))
 
     def parse_instruments(self) -> Dict[str, List[Dict[str, Any]]]:
         """
@@ -682,18 +786,32 @@ class OnChainMetricsCalculator:
         call_count = sum(1 for i in instruments if i["option_type"] == "C")
         put_count = sum(1 for i in instruments if i["option_type"] == "P")
 
+        # bugfix_spec.md Item 7 / 7.2 anchor table: moneyness, max-pain
+        # distance, and support/resistance are settlement-space (strike vs.
+        # where THIS expiry's contract settles) -- the per-expiry forward is
+        # the correct anchor, not the global index. Fall back to the index
+        # (with a warning) only for the rare expiry with no priced
+        # instrument at all (edge case 7.4).
+        forward_price = self.forward_price_by_expiration.get(expiration)
+        if forward_price is None:
+            logger.warning(
+                f"No forward price for expiration {expiration} -- falling "
+                f"back to index price ({self.index_price})"
+            )
+            forward_price = self.index_price
+
         # Calculate analytics
         max_pain = self.calculate_max_pain(strike_data)
         put_call_ratio = self.calculate_put_call_ratio(strike_data)
         volume_stats = self.calculate_volume_stats(strike_data)
-        moneyness = self.analyze_moneyness(instruments, self.underlying_price)
+        moneyness = self.analyze_moneyness(instruments, forward_price)
         support_resistance = self.find_support_resistance(
-            strike_data, self.underlying_price
+            strike_data, forward_price
         )
 
         analysis = {
             "expiration": expiration,
-            "underlying_price": self.underlying_price,
+            "underlying_price": forward_price,
             "total_instruments": len(instruments),
             "call_count": call_count,
             "put_count": put_count,

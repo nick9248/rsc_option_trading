@@ -591,8 +591,23 @@ class ProspectiveCollector:
             # Parse instruments by expiration
             grouped = analyzer.parse_instruments()
 
-            # Get underlying price (from analyzer's extraction)
-            underlying_price = analyzer._extract_underlying_price(instruments)
+            # bugfix_spec.md Item 7: the spot index is fetched explicitly
+            # now -- no heuristic, no volume-race pick across the whole
+            # book. Falls back to the nearest-expiry median
+            # underlying_price (the smallest-basis proxy available without
+            # the index) if the index fetch itself fails -- never silently
+            # reverts to the old global highest-volume pick.
+            try:
+                index_price = self.api.get_index_price(currency=currency)
+            except Exception as e:
+                index_price = analyzer.nearest_expiry_median_underlying_price()
+                logger.error(
+                    f"    get_index_price failed for {currency}: {e} -- "
+                    f"falling back to nearest-expiry median underlying_price "
+                    f"({index_price})"
+                )
+            analyzer.set_index_price(index_price)
+            underlying_price = index_price
 
             logger.info(f"    Analyzing {len(grouped)} expirations...")
 
@@ -619,12 +634,26 @@ class ProspectiveCollector:
                         )
                         continue
 
+                    # bugfix_spec.md Item 7 anchor table: BS-fallback greeks
+                    # and max-pain distance are settlement-space (a
+                    # contract's own delta/gamma, and strike-vs-settlement
+                    # distance) -- this expiry's own forward, not the index.
+                    forward_price = analyzer.forward_price_by_expiration.get(expiration)
+                    if forward_price is None:
+                        logger.warning(
+                            f"    No forward price for {expiration} -- "
+                            f"falling back to index price"
+                        )
+                        forward_price = underlying_price
+
                     # Enrich with greeks for GEX/DEX (nested → top-level, with BS fallback)
                     gex_instruments = self._enrich_with_greeks(
-                        instruments_for_exp, raw_by_name, underlying_price
+                        instruments_for_exp, raw_by_name, forward_price
                     )
 
-                    # Run GEX/DEX calculation
+                    # Run GEX/DEX calculation. GEX/DEX are exposures to a
+                    # move in the underlying SPOT -- index, not the forward
+                    # (GEX's S² term amplifies any basis error).
                     gex_calc = GexDexCalculator(
                         instruments=gex_instruments,
                         spot_price=underlying_price
@@ -642,7 +671,8 @@ class ProspectiveCollector:
                         expiration=expiration,
                         analysis_data=analysis_data,
                         gex_dex_data=gex_dex_data,
-                        underlying_price=underlying_price
+                        underlying_price=underlying_price,
+                        forward_price=forward_price,
                     )
 
                     snapshots_saved += 1
@@ -695,9 +725,15 @@ class ProspectiveCollector:
                     else:
                         moneyness = front_data.moneyness
                         max_pain_strike = front_data.max_pain.max_pain_strike
+                        # bugfix_spec.md Item 7 anchor table: max-pain
+                        # distance is settlement-space -- front_data.
+                        # underlying_price is this expiry's own forward
+                        # (analyze_expiration already anchors it there),
+                        # not the index.
+                        front_forward_price = front_data.underlying_price
                         max_pain_dist = (
-                            (max_pain_strike - underlying_price) / underlying_price * 100
-                            if max_pain_strike and underlying_price else None
+                            (max_pain_strike - front_forward_price) / front_forward_price * 100
+                            if max_pain_strike and front_forward_price else None
                         )
                         metrics = {
                             "itm_call_oi_pct": moneyness.calls.itm_pct,

@@ -37,11 +37,23 @@ from coding.core.database.repository import DatabaseRepository
 
 def _make_collector():
     """Build a ProspectiveCollector with mocked I/O dependencies (no real
-    API/DB calls) — mirrors the pattern in test_prospective_collector_ohlcv.py."""
+    API/DB calls) — mirrors the pattern in test_prospective_collector_ohlcv.py.
+
+    bugfix_spec.md Item 7: ``_run_onchain_analysis`` now calls
+    ``self.api.get_index_price`` -- a bare ``MagicMock()`` would return
+    another MagicMock here, which arithmetic (``spot_price ** 2`` etc.)
+    silently propagates as a MagicMock instead of raising, corrupting
+    ``total_net_gex``/``total_net_dex`` (fails ``isinstance(..., float)``
+    downstream, e.g. in
+    ``test_gex_dex_data_has_the_attributes_save_onchain_snapshot_reads``)
+    without ever surfacing as an error. Fixed return value keeps the
+    daemon's real arithmetic real.
+    """
     from coding.service.data_collection.prospective_collector import ProspectiveCollector
 
     collector = ProspectiveCollector.__new__(ProspectiveCollector)
     collector.api = MagicMock()
+    collector.api.get_index_price.return_value = 70_000.0
     collector.repo = MagicMock()
     collector._forward_harness = MagicMock()
     return collector
@@ -181,6 +193,10 @@ class TestEndToEndAgainstRealSaveOnchainSnapshot:
 
         collector = ProspectiveCollector.__new__(ProspectiveCollector)
         collector.api = MagicMock()
+        # bugfix_spec.md Item 7: see _make_collector()'s docstring above --
+        # a bare MagicMock return value would silently corrupt the real
+        # GEX/DEX float arithmetic this class exercises end to end.
+        collector.api.get_index_price.return_value = 70_000.0
         collector.repo = DatabaseRepository.__new__(DatabaseRepository)
         collector._forward_harness = MagicMock()
         return collector

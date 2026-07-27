@@ -253,7 +253,9 @@ class TestCalculateBuySellFlowSingleFetch:
 
         analyzer = OnChainAnalyzer([], currency)
         analyzer.parsed_data = {exp: [] for exp in expirations}
-        analyzer.underlying_price = 64_000.0
+        # bugfix_spec.md Item 7: underlying_price is now a read-only
+        # deprecated alias for index_price -- set it via set_index_price().
+        analyzer.set_index_price(64_000.0)
         return analyzer
 
     def test_one_repository_fetch_and_one_calculate_call_per_expiration(self, service, mock_repo):

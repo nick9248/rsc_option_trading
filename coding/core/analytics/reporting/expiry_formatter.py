@@ -51,8 +51,12 @@ def format_expiration_section(
 
     Args:
         analysis: The expiration's computed analysis result.
-        spot_price: Current underlying spot price (matches the legacy
-            ``self.underlying_price`` used throughout this section).
+        spot_price: Underlying price anchoring this section's
+            settlement-space distances (max-pain distance, the
+            support/resistance "current price" label). bugfix_spec.md
+            Item 7: pass THIS expiration's own forward price (e.g.
+            ``analysis.underlying_price``), not a global index shared
+            across every expiration.
         trend: Previous DB snapshot for this expiration, or None if there is
             no prior record (or trend data was never set).
 

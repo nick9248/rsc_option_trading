@@ -212,8 +212,11 @@ class OnChainReportFormatter:
 
         Args:
             render_input: The expiration's typed analysis + trend + extras.
-            spot_price: Current underlying spot price (same value for every
-                expiration — matches the legacy single ``self.underlying_price``).
+            spot_price: Underlying price to anchor this section's
+                settlement-space distances (max-pain distance, "current
+                price" label on support/resistance) against. bugfix_spec.md
+                Item 7: this is THIS expiration's own forward price, not a
+                single value shared across every expiration.
 
         Returns:
             Formatted multi-line string.
@@ -284,7 +287,14 @@ class OnChainReportFormatter:
             extra_sections=tuple(extra_sections),
             evidence_line=self._evidence_line_from_flow(bundle.flow),
         )
-        return self.render_expiration(render_input, result.underlying_price)
+        # bugfix_spec.md Item 7 anchor table: format_expiration_section's
+        # spot_price feeds max-pain distance and the "current price" label
+        # on support/resistance levels -- both settlement-space (strike vs.
+        # where THIS expiry's contract settles), so this expiry's own
+        # forward (bundle.analysis.underlying_price, already anchored there
+        # by analyze_expiration) is correct here, not the aggregate
+        # result.underlying_price (the index, same for every expiration).
+        return self.render_expiration(render_input, bundle.analysis.underlying_price)
 
     @staticmethod
     def _evidence_line_from_flow(flow: Optional[FlowResult]) -> Optional[str]:

@@ -123,8 +123,11 @@ class MarketWideOrchestrator:
             refactor_design_spec.md's risk register for the known gap).
         """
         dvol = analyzer.market_metrics.get("dvol")
+        # bugfix_spec.md Item 7 anchor table: these are all cross-expiration,
+        # market-wide metrics (RV/VRP/vol cone/correlation/block-trade
+        # notional) -- index-anchored, not any one expiry's future.
         calc = MarketWideCalculator(
-            currency=currency, spot_price=analyzer.underlying_price, dvol=dvol,
+            currency=currency, spot_price=analyzer.index_price, dvol=dvol,
         )
 
         term_structure_result = self._calculate_term_structure(analyzer, calc, progress_callback)
@@ -142,7 +145,7 @@ class MarketWideOrchestrator:
         )
 
         return MarketWideResult(
-            spot_price=analyzer.underlying_price,
+            spot_price=analyzer.index_price,
             currency=currency,
             dvol=dvol,
             iv_percentile_365d=analyzer.market_metrics.get("iv_percentile"),
@@ -216,7 +219,7 @@ class MarketWideOrchestrator:
                     futures_data.append({
                         "instrument_name": name,
                         "mark_price": ticker.get("mark_price", 0),
-                        "index_price": ticker.get("index_price", analyzer.underlying_price),
+                        "index_price": ticker.get("index_price", analyzer.index_price),
                     })
                 except Exception as e:
                     logger.warning(f"Failed to fetch future ticker {name}: {e}")

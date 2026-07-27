@@ -91,7 +91,19 @@ def record(currency: str = "BTC") -> Path:
     analyzer = OnChainAnalyzer(book_summary, currency)
     analyzer.parse_instruments()
     expirations = analyzer.get_expirations()
-    spot_price = analyzer.underlying_price
+
+    # bugfix_spec.md Item 7: record the real get_index_price call so the
+    # replayed fixture doesn't need FakeDeribitApiService's ticker-derived
+    # fallback (see that class's docstring for why the fallback exists at
+    # all -- fixtures recorded before this item lack this file).
+    logger.info("Fetching index price...")
+    index_price = api.get_index_price(currency=currency)
+    dump_json_gz(
+        out_dir / "index_price.json.gz",
+        [{"kwargs": {"currency": currency}, "response": index_price}],
+    )
+    analyzer.set_index_price(index_price)
+    spot_price = analyzer.index_price
     logger.info(f"Spot price: {spot_price}, expirations ({len(expirations)}): {expirations}")
 
     # 2. Tickers: every option instrument

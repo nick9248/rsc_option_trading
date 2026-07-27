@@ -1065,7 +1065,8 @@ class DatabaseRepository:
         expiration: str,
         analysis_data: ExpirationAnalysisResult,
         gex_dex_data: GexDexResult,
-        underlying_price: float
+        underlying_price: float,
+        forward_price: Optional[float] = None,
     ) -> None:
         """
         Save on-chain analysis snapshot to the database.
@@ -1078,14 +1079,29 @@ class DatabaseRepository:
         directly as of this same task. ``ProspectiveCollector`` (the only
         production caller) updated in the same commit.
 
+        bugfix_spec.md Item 7 / F7.3.3: ``underlying_price`` is DEPRECATED as
+        a name -- new rows expect the INDEX price here (not the old
+        arbitrary highest-volume future), and it is now ALSO written into
+        the new ``index_price`` column for clarity. ``forward_price`` (this
+        expiration's own future price) is new -- used for
+        ``max_pain_distance_pct`` (a strike-vs-settlement, settlement-space
+        distance) and stored in its own new column. Falls back to
+        ``underlying_price`` when omitted so an un-migrated caller still
+        gets a value, just a less precise one.
+
         Args:
             snapshot_hour: Timestamp of the snapshot hour.
             currency: Currency symbol (e.g., "BTC", "ETH").
             expiration: Expiration date string (e.g., "27DEC24").
             analysis_data: Output of OnChainMetricsCalculator.analyze_expiration().
             gex_dex_data: Output of GexDexCalculator.calculate().
-            underlying_price: Current underlying asset price.
+            underlying_price: Current spot index price.
+            forward_price: This expiration's own future price. Defaults to
+                ``underlying_price`` when not given.
         """
+        if forward_price is None:
+            forward_price = underlying_price
+
         max_pain = analysis_data.max_pain
         put_call = analysis_data.put_call_ratio
         volume_stats = analysis_data.volume_stats
@@ -1095,8 +1111,8 @@ class DatabaseRepository:
 
         max_pain_strike = max_pain.max_pain_strike
         max_pain_distance_pct = (
-            (max_pain_strike - underlying_price) / underlying_price * 100
-            if max_pain_strike and underlying_price
+            (max_pain_strike - forward_price) / forward_price * 100
+            if max_pain_strike and forward_price
             else None
         )
 
@@ -1131,7 +1147,8 @@ class DatabaseRepository:
                     total_volume,
                     itm_call_oi_pct, otm_call_oi_pct,
                     itm_put_oi_pct, otm_put_oi_pct,
-                    underlying_price
+                    underlying_price,
+                    index_price, forward_price
                 ) VALUES (
                     %s, %s, %s,
                     %s, %s,
@@ -1144,7 +1161,8 @@ class DatabaseRepository:
                     %s,
                     %s, %s,
                     %s, %s,
-                    %s
+                    %s,
+                    %s, %s
                 )
                 ON CONFLICT (snapshot_hour, currency, expiration) DO UPDATE SET
                     max_pain_strike = EXCLUDED.max_pain_strike,
@@ -1167,7 +1185,9 @@ class DatabaseRepository:
                     otm_call_oi_pct = EXCLUDED.otm_call_oi_pct,
                     itm_put_oi_pct = EXCLUDED.itm_put_oi_pct,
                     otm_put_oi_pct = EXCLUDED.otm_put_oi_pct,
-                    underlying_price = EXCLUDED.underlying_price
+                    underlying_price = EXCLUDED.underlying_price,
+                    index_price = EXCLUDED.index_price,
+                    forward_price = EXCLUDED.forward_price
             """, (
                 snapshot_hour, currency, expiration,
                 max_pain_strike, max_pain_distance_pct,
@@ -1187,6 +1207,8 @@ class DatabaseRepository:
                 moneyness.puts.itm_pct,
                 moneyness.puts.otm_pct,
                 underlying_price,
+                underlying_price,
+                forward_price,
             ))
             logger.info(f"Saved on-chain snapshot for {currency} {expiration} at {snapshot_hour}")
 
