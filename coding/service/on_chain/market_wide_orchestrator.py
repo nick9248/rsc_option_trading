@@ -479,6 +479,7 @@ class MarketWideOrchestrator:
                 price_correlation=corr_data.get("btc_eth_price_corr"),
                 dvol_correlation=corr_data.get("btc_eth_dvol_corr"),
                 sample_size=min(len(own_prices_30d), len(other_prices)),
+                dvol_correlation_observations=corr_data.get("btc_eth_dvol_corr_n"),
             )
 
         except Exception as e:

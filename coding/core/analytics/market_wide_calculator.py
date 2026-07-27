@@ -43,6 +43,14 @@ MINIMUM_DAYS_FOR_ANNUALIZATION = 1.0
 # own "Insufficient" branch, producing a fake all-zero-percentile result.
 MINIMUM_PRICE_HISTORY_DAYS_FOR_VOL_CONE = 35
 
+# bugfix_spec.md Item 11 — DVOL correlation must be computed on log CHANGES
+# of the raw DVOL levels, not the levels themselves: correlating levels of
+# two trending, highly persistent series measures shared trend, not
+# co-movement (a textbook spurious-regression setup; live BTC/ETH, 30
+# points: levels corr 0.9858 vs log-change corr 0.8922). This threshold is
+# on the CHANGE series (after differencing), not the level series.
+MINIMUM_CORRELATION_OBSERVATIONS = 10
+
 # bugfix_spec.md Item 4 (F4.3) — the real get_funding_chart_data point shape
 # is {"data": [{"timestamp":..., "index_price":..., "interest_8h":...}, ...]}.
 # The old code read "funding_rate"/"value" keys that don't exist on any
@@ -658,8 +666,14 @@ class MarketWideCalculator:
         # from a genuine zero correlation once a typed CrossAssetCorrelationResult
         # (whose fields are Optional[float]) was built from this dict via
         # plain .get() -- an insufficient-data run silently looked like a
-        # measured zero correlation. Pre-seed None instead; both branches
-        # below now always assign the real (possibly-None) value.
+        # measured zero correlation. Pre-seed None instead. The price-
+        # correlation branch below always overwrites this with the real
+        # (possibly-None) value; the DVOL-correlation branch only
+        # overwrites it when there is enough aligned data to compute a
+        # real number -- on the "Insufficient data"/"N/A" paths the None
+        # pre-seed is what ships (task A7 review: the previous comment
+        # claimed both branches always assign, which was only true for
+        # price correlation).
         structured: Dict = {"btc_eth_price_corr": None, "btc_eth_dvol_corr": None}
 
         lines.append(f"CROSS-ASSET CORRELATION (30d, {self.currency}/{other_currency})")
@@ -673,16 +687,45 @@ class MarketWideCalculator:
         else:
             lines.append("  Price Correlation: Insufficient data")
 
-        # DVOL correlation
-        dvol_corr = None
+        # DVOL correlation (bugfix_spec.md Item 11): log CHANGES of the raw
+        # DVOL levels, not the levels themselves -- matches
+        # _calculate_return_correlation's log-return convention above, so
+        # the report has one consistent co-movement basis instead of two
+        # incompatible ones.
         if own_dvol_history and other_dvol_history:
-            min_len = min(len(own_dvol_history), len(other_dvol_history), 30)
-            if min_len >= 10:
-                own_slice = own_dvol_history[-min_len:]
-                other_slice = other_dvol_history[-min_len:]
-                dvol_corr = float(np.corrcoef(own_slice, other_slice)[0, 1])
-                structured["btc_eth_dvol_corr"] = dvol_corr
-                lines.append(f"  DVOL Correlation: {dvol_corr:.2f}")
+            if len(own_dvol_history) != len(other_dvol_history):
+                logger.warning(
+                    "DVOL history length mismatch (%s=%d, %s=%d); aligning "
+                    "from the most recent point on each side.",
+                    self.currency, len(own_dvol_history),
+                    other_currency, len(other_dvol_history),
+                )
+            # 31 levels -> 30 changes, matching the price correlation's own
+            # `window + 1` convention above so the reported n lines up.
+            window = min(len(own_dvol_history), len(other_dvol_history), 31)
+            own_changes = self._log_changes(own_dvol_history[-window:])
+            other_changes = self._log_changes(other_dvol_history[-window:])
+            n = min(len(own_changes), len(other_changes))
+            if n >= MINIMUM_CORRELATION_OBSERVATIONS:
+                own_window = own_changes[-n:]
+                other_window = other_changes[-n:]
+                # Zero (or float64-noise-level) variance in either series --
+                # e.g. a perfectly steady log-linear trend -- makes the
+                # correlation mathematically undefined (0/0), not a
+                # meaningful number; corrcoef can return nan OR, when both
+                # series happen to share identical rounding noise, an
+                # extreme value that looks meaningful but isn't. Guard on
+                # variance directly rather than trusting corrcoef's output.
+                if np.var(own_window) < 1e-10 or np.var(other_window) < 1e-10:
+                    lines.append("  DVOL Correlation: Insufficient data")
+                else:
+                    corr = float(np.corrcoef(own_window, other_window)[0, 1])
+                    if math.isnan(corr):
+                        lines.append("  DVOL Correlation: Insufficient data")
+                    else:
+                        structured["btc_eth_dvol_corr"] = corr
+                        structured["btc_eth_dvol_corr_n"] = n
+                        lines.append(f"  DVOL Correlation (log changes, {n}d): {corr:.2f}")
             else:
                 lines.append("  DVOL Correlation: Insufficient data")
         else:
@@ -690,6 +733,25 @@ class MarketWideCalculator:
 
         lines.append("")
         return "\n".join(lines), structured
+
+    @staticmethod
+    def _log_changes(series: List[float]) -> List[float]:
+        """
+        Log changes (first differences of ln) of a strictly-positive
+        series (bugfix_spec.md Item 11).
+
+        A non-positive value on either side of a step drops that step from
+        the output entirely -- callers must build both series' change
+        lists from the SAME aligned window so a dropped step desynchronizes
+        neither side (this method only guards a single series; the caller
+        is responsible for passing already-aligned slices).
+        """
+        changes = []
+        for i in range(1, len(series)):
+            previous, current = series[i - 1], series[i]
+            if previous > 0 and current > 0:
+                changes.append(math.log(current / previous))
+        return changes
 
     def _calculate_return_correlation(
         self,

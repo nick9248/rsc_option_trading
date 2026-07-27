@@ -2869,7 +2869,7 @@ BLOCK TRADES (>$100,000 notional)
 CROSS-ASSET CORRELATION (30d, BTC/ETH)
 --------------------------------------------------------------------------------
   Price Correlation: 0.86
-  DVOL Correlation: 0.99
+  DVOL Correlation (log changes, 30d): 0.89
 
 
 ================================================================================

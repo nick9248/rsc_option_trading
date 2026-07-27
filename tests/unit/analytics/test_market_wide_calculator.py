@@ -315,6 +315,111 @@ class TestFundingRateExtractionAndTrend:
         assert dte == 0
 
 
+class TestDvolCorrelationLogChanges:
+    """
+    bugfix_spec.md Item 11: DVOL correlation must be computed on log CHANGES
+    of the raw DVOL levels, not the levels themselves (correlating levels of
+    two trending, persistent series measures shared trend, not co-movement
+    -- a textbook spurious-regression setup). Acceptance tests T11.1-T11.4,
+    verbatim from bugfix_spec.md section 11.5.
+    """
+
+    def test_perfect_log_linear_comovement_is_zero_variance_guarded(self, calculator):
+        """T11.1 - every log change is identical in both series -> zero
+        variance -> corrcoef is nan, must be guarded to "Insufficient data"."""
+        own = [10.0 * (1.01 ** i) for i in range(31)]
+        other = [20.0 * (1.01 ** i) for i in range(31)]
+
+        report, structured = calculator.calculate_cross_asset_correlation(
+            own_prices=[], other_prices=[], own_dvol_history=own,
+            other_dvol_history=other, other_currency="ETH",
+        )
+
+        assert structured["btc_eth_dvol_corr"] is None
+        assert "Insufficient data" in report
+
+    def test_anti_correlated_changes_give_negative_one(self, calculator):
+        """T11.2 - hand-computed: alternating +10%/-10% log changes in
+        opposite phase -> correlation exactly -1.0."""
+        own = [10.0, 11.0, 10.0, 11.0, 10.0, 11.0, 10.0, 11.0, 10.0, 11.0, 10.0, 11.0]
+        other = [20.0, 18.0, 20.0, 18.0, 20.0, 18.0, 20.0, 18.0, 20.0, 18.0, 20.0, 18.0]
+
+        report, structured = calculator.calculate_cross_asset_correlation(
+            own_prices=[], other_prices=[], own_dvol_history=own,
+            other_dvol_history=other, other_currency="ETH",
+        )
+
+        assert structured["btc_eth_dvol_corr"] == pytest.approx(-1.0, abs=1e-9)
+        assert "log changes, 11d" in report
+
+    def test_levels_correlation_no_longer_produced_regression_guard(self, calculator):
+        """T11.3 - two series that trend together (shared upward drift) but
+        whose CHANGES are independent noise: levels correlation is ~0.999
+        (would fool the OLD levels-based code); the FIXED log-changes code
+        must report something close to zero, not a spurious near-1.0.
+        Noise generated via numpy.random.default_rng(42), hardcoded here for
+        a deterministic test."""
+        noise_a = [
+            0.0914151239263294, -0.31199523187214867, 0.22513535874193716, 0.28216941491736414,
+            -0.5853105565961509, -0.3906538520586954, 0.03835212095018561, -0.09487277770307466,
+            -0.005040347251286639, -0.255913178272074, 0.26381939245884856, 0.23333758062868448,
+            0.019809209268364814, 0.33817236209040985, 0.14025280267561369, -0.25778773886497147,
+            0.11062523522474965, -0.2876647802486997, 0.26353509039218176, -0.014977773295875869,
+            -0.055458709063578165, -0.20427886332118242, 0.3667624016022091, -0.046358844620640646,
+            -0.12849834664893217, -0.10564006514646887, 0.1596927556660046, 0.1096332193092235,
+            0.12381978347879652, 0.1292463009023648, 0.6424942802611383,
+        ]
+        noise_b = [
+            -0.12192450491538467, -0.15367281872146119, -0.2441318184743633, 0.1847938267726487,
+            0.33869168781626746, -0.03418423729646252, -0.2520469430887584, -0.24734436470737187,
+            0.19517783634741032, 0.2229762513610327, 0.1629462804915585, -0.19965291218660827,
+            0.06964839692001593, 0.03500574274221847, 0.06560657901870388, 0.26142863338445693,
+            0.06707866463240468, 0.20367406892156845, 0.020273720846667436, 0.08673581960699524,
+            0.18938646775156212, -0.43714674595669994, -0.0959013649071904, -0.14111179628783865,
+            -0.19166335447300256, -0.08254267536800512, 0.44848239337031875, -0.25974933470797296,
+            0.29048350637744424, -0.5048609314847414, -0.10046550899573245,
+        ]
+        own = [100.0 + i + noise_a[i] for i in range(31)]
+        other = [200.0 + i + noise_b[i] for i in range(31)]
+
+        levels_corr = pytest.approx(0.999, abs=0.01)
+        import numpy as np
+        assert np.corrcoef(own, other)[0, 1] == levels_corr  # would fool the OLD code
+
+        report, structured = calculator.calculate_cross_asset_correlation(
+            own_prices=[], other_prices=[], own_dvol_history=own,
+            other_dvol_history=other, other_currency="ETH",
+        )
+
+        assert abs(structured["btc_eth_dvol_corr"]) < 0.5  # old code returned > 0.98
+
+    def test_insufficient_data(self, calculator):
+        """T11.4 - fewer than 11 aligned changes -> Insufficient data, None."""
+        report, structured = calculator.calculate_cross_asset_correlation(
+            own_prices=[], other_prices=[], own_dvol_history=[10.0] * 5,
+            other_dvol_history=[20.0] * 5, other_currency="ETH",
+        )
+
+        assert structured["btc_eth_dvol_corr"] is None
+        assert "Insufficient data" in report
+
+    def test_mismatched_history_lengths_logs_warning_and_aligns_from_right(self, calculator, caplog):
+        """Edge case (bugfix_spec.md section 11.4): mismatched lengths must
+        log a warning and align from the most recent point on each side,
+        not silently misalign the two series."""
+        own = [10.0 * (1.01 ** i) * (1 + 0.02 * math.sin(i)) for i in range(31)]
+        other = [20.0 * (1.01 ** i) * (1 + 0.02 * math.cos(i)) for i in range(20)]
+
+        with caplog.at_level(logging.WARNING):
+            report, structured = calculator.calculate_cross_asset_correlation(
+                own_prices=[], other_prices=[], own_dvol_history=own,
+                other_dvol_history=other, other_currency="ETH",
+            )
+
+        assert any("DVOL history length mismatch" in rec.message for rec in caplog.records)
+        assert structured["btc_eth_dvol_corr"] is not None
+
+
 class TestExactFractionalDaysToExpiry:
     """
     bugfix_spec.md Item 5 (F5.3.1): exact fractional DTE to 08:00 UTC

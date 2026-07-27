@@ -290,7 +290,16 @@ def format_cross_asset_correlation_section(
         lines.append("  Price Correlation: Insufficient data")
 
     if result.dvol_correlation is not None:
-        lines.append(f"  DVOL Correlation: {result.dvol_correlation:.2f}")
+        # bugfix_spec.md Item 11: the label must say "log changes" so a
+        # reader comparing against a previously-stored levels-based value
+        # knows why the number changed.
+        if result.dvol_correlation_observations is not None:
+            lines.append(
+                f"  DVOL Correlation (log changes, {result.dvol_correlation_observations}d): "
+                f"{result.dvol_correlation:.2f}"
+            )
+        else:
+            lines.append(f"  DVOL Correlation: {result.dvol_correlation:.2f}")
     elif result.sample_size > 0:
         lines.append("  DVOL Correlation: Insufficient data")
     else:

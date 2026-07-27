@@ -181,6 +181,13 @@ class CrossAssetCorrelationResult:
     price_correlation: Optional[float]
     dvol_correlation: Optional[float]
     sample_size: int
+    # bugfix_spec.md Item 11: the DVOL correlation is computed on log
+    # CHANGES, whose observation count (n) differs from `sample_size`
+    # (a PRICE-history count) -- the report must say "log changes, Nd" so a
+    # reader comparing against a previously-stored levels-based value knows
+    # both why the number changed AND its own sample size. None when
+    # dvol_correlation is None (N/A or Insufficient data).
+    dvol_correlation_observations: Optional[int] = None
 
 
 @dataclass(frozen=True)
