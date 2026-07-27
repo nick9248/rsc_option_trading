@@ -249,10 +249,19 @@ class BlackScholesCalculator:
 
     def calculate_charm(self, d1: float, d2: float, time_to_expiry: float) -> float:
         """
-        Charm = ∂Δ/∂τ (rate of change of delta with respect to time-to-expiry).
+        bugfix_spec.md Item 12: the sign LABEL below was wrong; the
+        returned VALUE was always correct (verified by finite-difference
+        against real delta decay) -- documentation-only fix.
 
-        Closed-form BS (r=q=0): φ(d1) × d2 / (2τ)
-        Same for calls and puts.
+        Charm = ∂Δ/∂t -- the rate of change of delta with respect to
+        ELAPSING calendar time (equivalently −∂Δ/∂τ, where τ is time
+        REMAINING -- NOT ∂Δ/∂τ itself, which has the opposite sign).
+
+        Closed-form BS (r=q=0): +φ(d1) × d2 / (2τ)
+        Derivation: ∂d1/∂τ = −d2/(2τ)  ⇒  ∂Δ/∂τ = −φ(d1)·d2/(2τ)  ⇒
+        ∂Δ/∂t = +φ(d1)·d2/(2τ). Same for calls and puts.
+
+        Units: per YEAR. Divide by 365 for the per-day delta drift.
         """
         if time_to_expiry <= 0:
             return 0.0

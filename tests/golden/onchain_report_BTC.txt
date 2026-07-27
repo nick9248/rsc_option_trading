@@ -111,12 +111,19 @@ KEY LEVELS:
   Put Support: $60,000 (Net GEX: -503,037.72 USD)
   Cumulative GEX Zero Strike: $68,000 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
 
-TOTALS:
-  Total Net GEX: +1,963,960.35 USD
-  Total Net DEX: +156.1756 BTC
+EXPOSURES -- HOLDER SIDE (raw, no positioning assumption)
+--------------------------------------------------------------------------------
+  Gamma Exposure: +3,849,978.85 USD per 1% move
+  Delta Exposure: +156.1756 BTC
+  -> Option holders are net long delta
 
-  GEX Environment: Positive (Dealers long gamma - stabilizing, buy dips/sell rallies)
-  DEX Environment: Positive (Net long delta - bullish pressure)
+ASSUMED DEALER VIEW  (assumption: dealers long calls / short puts for
+                      gamma, short customer delta)
+--------------------------------------------------------------------------------
+  Dealer Gamma:   +1,963,960.35 USD per 1% move
+                  -> POSITIVE: dealers long gamma, stabilizing (buy dips/sell rallies)
+  Dealer Delta:   -156.1756 BTC
+                  -> Dealers net short delta - bearish pressure
 
 GAMMA PROFILE (re-priced, sticky-strike):
   Net GEX at spot $64,371: +1,931,956.40 USD (POSITIVE - dealers long gamma (stabilizing))
@@ -125,6 +132,7 @@ GAMMA PROFILE (re-priced, sticky-strike):
 
 GEX/DEX BY STRIKE:
 --------------------------------------------------------------------------------
+Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
     Strike   Net GEX(USD)  Net DEX(BTC)   Cum GEX(USD)  Cum DEX(BTC)  Notes
     ------        -------       -------        -------       -------  -----
     55,000    -47,900.46       -3.7131    -47,900.46       -3.7131  
@@ -183,11 +191,15 @@ P/C RATIO BY MONEYNESS:
   Near-OTM (5-15%):     P/C = 0.30 (Strong Bullish)
   Far-OTM (15%+):     P/C = 0.00 (Strong Bullish)
 
-SECOND-ORDER GREEKS:
-  Net Vanna Exposure: +849.667246
-  Net Charm Exposure: -2642.775435
-  Vanna Signal: IV drop → dealers buy underlying (bullish)
-  Charm Signal: Time decay pushing delta negative (bearish drift)
+SECOND-ORDER GREEKS -- HOLDER SIDE (raw, no positioning assumption)
+  Vanna Exposure: +849.667246
+  Charm Exposure: -2642.775435
+
+ASSUMED DEALER VIEW  (assumption: dealers short customer vanna/charm)
+  Dealer Vanna:   -849.667246
+  Dealer Charm:   +2642.775435
+  Vanna Signal: IV drop → dealers sell underlying (bearish)
+  Charm Signal: Time decay pushing delta positive (bullish drift)
 
 LARGE OI CHANGES (Day-over-Day)
 --------------------------------------------------------------------------------
@@ -334,12 +346,19 @@ KEY LEVELS:
   Put Support: $60,000 (Net GEX: -4,693,996.58 USD)
   Cumulative GEX Zero Strike: $100,000 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
 
-TOTALS:
-  Total Net GEX: +1,502,359.02 USD
-  Total Net DEX: -873.5490 BTC
+EXPOSURES -- HOLDER SIDE (raw, no positioning assumption)
+--------------------------------------------------------------------------------
+  Gamma Exposure: +40,258,307.29 USD per 1% move
+  Delta Exposure: -873.5490 BTC
+  -> Option holders are net short delta
 
-  GEX Environment: Positive (Dealers long gamma - stabilizing, buy dips/sell rallies)
-  DEX Environment: Negative (Net short delta - bearish pressure)
+ASSUMED DEALER VIEW  (assumption: dealers long calls / short puts for
+                      gamma, short customer delta)
+--------------------------------------------------------------------------------
+  Dealer Gamma:   +1,502,359.02 USD per 1% move
+                  -> POSITIVE: dealers long gamma, stabilizing (buy dips/sell rallies)
+  Dealer Delta:   +873.5490 BTC
+                  -> Dealers net long delta - bullish pressure
 
 GAMMA PROFILE (re-priced, sticky-strike):
   Net GEX at spot $64,371: +3,020,087.36 USD (POSITIVE - dealers long gamma (stabilizing))
@@ -348,6 +367,7 @@ GAMMA PROFILE (re-priced, sticky-strike):
 
 GEX/DEX BY STRIKE:
 --------------------------------------------------------------------------------
+Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
     Strike   Net GEX(USD)  Net DEX(BTC)   Cum GEX(USD)  Cum DEX(BTC)  Notes
     ------        -------       -------        -------       -------  -----
     30,000         +0.00     +224.7200         +0.00     +224.7200  
@@ -458,11 +478,15 @@ P/C RATIO BY MONEYNESS:
   Near-OTM (5-15%):     P/C = 2.56 (Strong Bearish)
   Far-OTM (15%+):     P/C = 0.37 (Strong Bullish)
 
-SECOND-ORDER GREEKS:
-  Net Vanna Exposure: +17656.849477
-  Net Charm Exposure: -7002.859333
-  Vanna Signal: IV drop → dealers buy underlying (bullish)
-  Charm Signal: Time decay pushing delta negative (bearish drift)
+SECOND-ORDER GREEKS -- HOLDER SIDE (raw, no positioning assumption)
+  Vanna Exposure: +17656.849477
+  Charm Exposure: -7002.859333
+
+ASSUMED DEALER VIEW  (assumption: dealers short customer vanna/charm)
+  Dealer Vanna:   -17656.849477
+  Dealer Charm:   +7002.859333
+  Vanna Signal: IV drop → dealers sell underlying (bearish)
+  Charm Signal: Time decay pushing delta positive (bullish drift)
 
 LARGE OI CHANGES (Day-over-Day)
 --------------------------------------------------------------------------------
@@ -586,12 +610,19 @@ KEY LEVELS:
   Put Support: $40,000 (Net GEX: -197,320.07 USD)
   Cumulative GEX Zero Strike: $70,000 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
 
-TOTALS:
-  Total Net GEX: +229,226.08 USD
-  Total Net DEX: +733.4117 BTC
+EXPOSURES -- HOLDER SIDE (raw, no positioning assumption)
+--------------------------------------------------------------------------------
+  Gamma Exposure: +1,273,174.37 USD per 1% move
+  Delta Exposure: +733.4117 BTC
+  -> Option holders are net long delta
 
-  GEX Environment: Positive (Dealers long gamma - stabilizing, buy dips/sell rallies)
-  DEX Environment: Positive (Net long delta - bullish pressure)
+ASSUMED DEALER VIEW  (assumption: dealers long calls / short puts for
+                      gamma, short customer delta)
+--------------------------------------------------------------------------------
+  Dealer Gamma:   +229,226.08 USD per 1% move
+                  -> POSITIVE: dealers long gamma, stabilizing (buy dips/sell rallies)
+  Dealer Delta:   -733.4117 BTC
+                  -> Dealers net short delta - bearish pressure
 
 GAMMA PROFILE (re-priced, sticky-strike):
   Net GEX at spot $64,371: +509,677.43 USD (POSITIVE - dealers long gamma (stabilizing))
@@ -600,6 +631,7 @@ GAMMA PROFILE (re-priced, sticky-strike):
 
 GEX/DEX BY STRIKE:
 --------------------------------------------------------------------------------
+Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
     Strike   Net GEX(USD)  Net DEX(BTC)   Cum GEX(USD)  Cum DEX(BTC)  Notes
     ------        -------       -------        -------       -------  -----
     30,000         +0.00       -0.5125         +0.00       -0.5125  
@@ -688,11 +720,15 @@ P/C RATIO BY MONEYNESS:
   Near-OTM (5-15%):     P/C = 0.33 (Strong Bullish)
   Far-OTM (15%+):     P/C = 0.92 (Bullish)
 
-SECOND-ORDER GREEKS:
-  Net Vanna Exposure: +272.506804
-  Net Charm Exposure: +1.715233
-  Vanna Signal: IV drop → dealers buy underlying (bullish)
-  Charm Signal: Time decay pushing delta positive (bullish drift)
+SECOND-ORDER GREEKS -- HOLDER SIDE (raw, no positioning assumption)
+  Vanna Exposure: +272.506804
+  Charm Exposure: +1.715233
+
+ASSUMED DEALER VIEW  (assumption: dealers short customer vanna/charm)
+  Dealer Vanna:   -272.506804
+  Dealer Charm:   -1.715233
+  Vanna Signal: IV drop → dealers sell underlying (bearish)
+  Charm Signal: Time decay pushing delta negative (bearish drift)
 
 LARGE OI CHANGES (Day-over-Day)
 --------------------------------------------------------------------------------
@@ -839,12 +875,19 @@ KEY LEVELS:
   Put Support: $60,000 (Net GEX: -4,250,751.57 USD)
   Cumulative GEX Zero Strike: $80,000 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
 
-TOTALS:
-  Total Net GEX: +4,171,732.38 USD
-  Total Net DEX: -4,954.5167 BTC
+EXPOSURES -- HOLDER SIDE (raw, no positioning assumption)
+--------------------------------------------------------------------------------
+  Gamma Exposure: +59,917,261.55 USD per 1% move
+  Delta Exposure: -4,954.5167 BTC
+  -> Option holders are net short delta
 
-  GEX Environment: Positive (Dealers long gamma - stabilizing, buy dips/sell rallies)
-  DEX Environment: Negative (Net short delta - bearish pressure)
+ASSUMED DEALER VIEW  (assumption: dealers long calls / short puts for
+                      gamma, short customer delta)
+--------------------------------------------------------------------------------
+  Dealer Gamma:   +4,171,732.38 USD per 1% move
+                  -> POSITIVE: dealers long gamma, stabilizing (buy dips/sell rallies)
+  Dealer Delta:   +4,954.5167 BTC
+                  -> Dealers net long delta - bullish pressure
 
 GAMMA PROFILE (re-priced, sticky-strike):
   Net GEX at spot $64,371: +2,666,937.98 USD (POSITIVE - dealers long gamma (stabilizing))
@@ -853,6 +896,7 @@ GAMMA PROFILE (re-priced, sticky-strike):
 
 GEX/DEX BY STRIKE:
 --------------------------------------------------------------------------------
+Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
     Strike   Net GEX(USD)  Net DEX(BTC)   Cum GEX(USD)  Cum DEX(BTC)  Notes
     ------        -------       -------        -------       -------  -----
     30,000         +0.00     +108.8388         +0.00     +108.8388  
@@ -964,11 +1008,15 @@ P/C RATIO BY MONEYNESS:
   Near-OTM (5-15%):     P/C = 1.24 (Bearish)
   Far-OTM (15%+):     P/C = 0.46 (Strong Bullish)
 
-SECOND-ORDER GREEKS:
-  Net Vanna Exposure: +17096.319113
-  Net Charm Exposure: -18627.591004
-  Vanna Signal: IV drop → dealers buy underlying (bullish)
-  Charm Signal: Time decay pushing delta negative (bearish drift)
+SECOND-ORDER GREEKS -- HOLDER SIDE (raw, no positioning assumption)
+  Vanna Exposure: +17096.319113
+  Charm Exposure: -18627.591004
+
+ASSUMED DEALER VIEW  (assumption: dealers short customer vanna/charm)
+  Dealer Vanna:   -17096.319113
+  Dealer Charm:   +18627.591004
+  Vanna Signal: IV drop → dealers sell underlying (bearish)
+  Charm Signal: Time decay pushing delta positive (bullish drift)
 
 LARGE OI CHANGES (Day-over-Day)
 --------------------------------------------------------------------------------
@@ -1078,12 +1126,19 @@ KEY LEVELS:
   Put Support: $64,000 (Net GEX: -2,853,475.23 USD)
   Cumulative GEX Zero Strike: $64,500 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
 
-TOTALS:
-  Total Net GEX: +7,999,957.14 USD
-  Total Net DEX: +63.4573 BTC
+EXPOSURES -- HOLDER SIDE (raw, no positioning assumption)
+--------------------------------------------------------------------------------
+  Gamma Exposure: +24,159,650.11 USD per 1% move
+  Delta Exposure: +63.4573 BTC
+  -> Option holders are net long delta
 
-  GEX Environment: Positive (Dealers long gamma - stabilizing, buy dips/sell rallies)
-  DEX Environment: Positive (Net long delta - bullish pressure)
+ASSUMED DEALER VIEW  (assumption: dealers long calls / short puts for
+                      gamma, short customer delta)
+--------------------------------------------------------------------------------
+  Dealer Gamma:   +7,999,957.14 USD per 1% move
+                  -> POSITIVE: dealers long gamma, stabilizing (buy dips/sell rallies)
+  Dealer Delta:   -63.4573 BTC
+                  -> Dealers net short delta - bearish pressure
 
 GAMMA PROFILE (re-priced, sticky-strike):
   Net GEX at spot $64,371: +7,961,036.28 USD (POSITIVE - dealers long gamma (stabilizing))
@@ -1092,6 +1147,7 @@ GAMMA PROFILE (re-priced, sticky-strike):
 
 GEX/DEX BY STRIKE:
 --------------------------------------------------------------------------------
+Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
     Strike   Net GEX(USD)  Net DEX(BTC)   Cum GEX(USD)  Cum DEX(BTC)  Notes
     ------        -------       -------        -------       -------  -----
     58,000         +0.00       +0.0000         +0.00       +0.0000  
@@ -1168,11 +1224,15 @@ P/C RATIO BY MONEYNESS:
   Near-OTM (5-15%):     P/C = 1.14 (Bearish)
   Far-OTM (15%+):     P/C = 0.00 (Strong Bullish)
 
-SECOND-ORDER GREEKS:
-  Net Vanna Exposure: -49.116276
-  Net Charm Exposure: +10039.503067
-  Vanna Signal: IV drop → dealers sell underlying (bearish)
-  Charm Signal: Time decay pushing delta positive (bullish drift)
+SECOND-ORDER GREEKS -- HOLDER SIDE (raw, no positioning assumption)
+  Vanna Exposure: -49.116276
+  Charm Exposure: +10039.503067
+
+ASSUMED DEALER VIEW  (assumption: dealers short customer vanna/charm)
+  Dealer Vanna:   +49.116276
+  Dealer Charm:   -10039.503067
+  Vanna Signal: IV drop → dealers buy underlying (bullish)
+  Charm Signal: Time decay pushing delta negative (bearish drift)
 
 LARGE OI CHANGES (Day-over-Day)
 --------------------------------------------------------------------------------
@@ -1320,12 +1380,19 @@ KEY LEVELS:
   Put Support: $50,000 (Net GEX: -829,929.36 USD)
   Cumulative GEX Zero Strike: $98,000 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
 
-TOTALS:
-  Total Net GEX: +1,139,417.72 USD
-  Total Net DEX: +640.7776 BTC
+EXPOSURES -- HOLDER SIDE (raw, no positioning assumption)
+--------------------------------------------------------------------------------
+  Gamma Exposure: +9,791,915.05 USD per 1% move
+  Delta Exposure: +640.7776 BTC
+  -> Option holders are net long delta
 
-  GEX Environment: Positive (Dealers long gamma - stabilizing, buy dips/sell rallies)
-  DEX Environment: Positive (Net long delta - bullish pressure)
+ASSUMED DEALER VIEW  (assumption: dealers long calls / short puts for
+                      gamma, short customer delta)
+--------------------------------------------------------------------------------
+  Dealer Gamma:   +1,139,417.72 USD per 1% move
+                  -> POSITIVE: dealers long gamma, stabilizing (buy dips/sell rallies)
+  Dealer Delta:   -640.7776 BTC
+                  -> Dealers net short delta - bearish pressure
 
 GAMMA PROFILE (re-priced, sticky-strike):
   Net GEX at spot $64,371: +873,024.57 USD (POSITIVE - dealers long gamma (stabilizing))
@@ -1334,6 +1401,7 @@ GAMMA PROFILE (re-priced, sticky-strike):
 
 GEX/DEX BY STRIKE:
 --------------------------------------------------------------------------------
+Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
     Strike   Net GEX(USD)  Net DEX(BTC)   Cum GEX(USD)  Cum DEX(BTC)  Notes
     ------        -------       -------        -------       -------  -----
     35,000         +0.00      -28.6019         +0.00      -28.6019  
@@ -1436,11 +1504,15 @@ P/C RATIO BY MONEYNESS:
   Near-OTM (5-15%):     P/C = 0.74 (Bullish)
   Far-OTM (15%+):     P/C = 0.44 (Strong Bullish)
 
-SECOND-ORDER GREEKS:
-  Net Vanna Exposure: +3828.768050
-  Net Charm Exposure: -1221.613740
-  Vanna Signal: IV drop → dealers buy underlying (bullish)
-  Charm Signal: Time decay pushing delta negative (bearish drift)
+SECOND-ORDER GREEKS -- HOLDER SIDE (raw, no positioning assumption)
+  Vanna Exposure: +3828.768050
+  Charm Exposure: -1221.613740
+
+ASSUMED DEALER VIEW  (assumption: dealers short customer vanna/charm)
+  Dealer Vanna:   -3828.768050
+  Dealer Charm:   +1221.613740
+  Vanna Signal: IV drop → dealers sell underlying (bearish)
+  Charm Signal: Time decay pushing delta positive (bullish drift)
 
 LARGE OI CHANGES (Day-over-Day)
 --------------------------------------------------------------------------------
@@ -1549,12 +1621,19 @@ KEY LEVELS:
   Put Support: $65,000 (Net GEX: -2,613,102.76 USD)
   Cumulative GEX Zero Strike: $64,500 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
 
-TOTALS:
-  Total Net GEX: -4,137,795.98 USD
-  Total Net DEX: -201.3906 BTC
+EXPOSURES -- HOLDER SIDE (raw, no positioning assumption)
+--------------------------------------------------------------------------------
+  Gamma Exposure: +12,772,641.41 USD per 1% move
+  Delta Exposure: -201.3906 BTC
+  -> Option holders are net short delta
 
-  GEX Environment: Negative (Dealers short gamma - amplifying volatility)
-  DEX Environment: Negative (Net short delta - bearish pressure)
+ASSUMED DEALER VIEW  (assumption: dealers long calls / short puts for
+                      gamma, short customer delta)
+--------------------------------------------------------------------------------
+  Dealer Gamma:   -4,137,795.98 USD per 1% move
+                  -> NEGATIVE: dealers short gamma, amplifying volatility
+  Dealer Delta:   +201.3906 BTC
+                  -> Dealers net long delta - bullish pressure
 
 GAMMA PROFILE (re-priced, sticky-strike):
   Net GEX at spot $64,371: -4,181,376.10 USD (NEGATIVE - dealers short gamma (amplifying volatility))
@@ -1563,6 +1642,7 @@ GAMMA PROFILE (re-priced, sticky-strike):
 
 GEX/DEX BY STRIKE:
 --------------------------------------------------------------------------------
+Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
     Strike   Net GEX(USD)  Net DEX(BTC)   Cum GEX(USD)  Cum DEX(BTC)  Notes
     ------        -------       -------        -------       -------  -----
     58,000         +0.00       -0.0956         +0.00       -0.0956  
@@ -1637,11 +1717,15 @@ P/C RATIO BY MONEYNESS:
   Near-OTM (5-15%):     P/C = 0.23 (Strong Bullish)
   Far-OTM (15%+):     P/C = 0.00 (Strong Bullish)
 
-SECOND-ORDER GREEKS:
-  Net Vanna Exposure: +133.825092
-  Net Charm Exposure: +761.644223
-  Vanna Signal: IV drop → dealers buy underlying (bullish)
-  Charm Signal: Time decay pushing delta positive (bullish drift)
+SECOND-ORDER GREEKS -- HOLDER SIDE (raw, no positioning assumption)
+  Vanna Exposure: +133.825092
+  Charm Exposure: +761.644223
+
+ASSUMED DEALER VIEW  (assumption: dealers short customer vanna/charm)
+  Dealer Vanna:   -133.825092
+  Dealer Charm:   -761.644223
+  Vanna Signal: IV drop → dealers sell underlying (bearish)
+  Charm Signal: Time decay pushing delta negative (bearish drift)
 
 LARGE OI CHANGES (Day-over-Day)
 --------------------------------------------------------------------------------
@@ -1783,12 +1867,19 @@ KEY LEVELS:
   Put Support: $60,000 (Net GEX: -2,148,393.70 USD)
   Cumulative GEX Zero Strike: $69,000 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
 
-TOTALS:
-  Total Net GEX: +18,724,439.47 USD
-  Total Net DEX: +3,446.7027 BTC
+EXPOSURES -- HOLDER SIDE (raw, no positioning assumption)
+--------------------------------------------------------------------------------
+  Gamma Exposure: +55,393,734.25 USD per 1% move
+  Delta Exposure: +3,446.7027 BTC
+  -> Option holders are net long delta
 
-  GEX Environment: Positive (Dealers long gamma - stabilizing, buy dips/sell rallies)
-  DEX Environment: Positive (Net long delta - bullish pressure)
+ASSUMED DEALER VIEW  (assumption: dealers long calls / short puts for
+                      gamma, short customer delta)
+--------------------------------------------------------------------------------
+  Dealer Gamma:   +18,724,439.47 USD per 1% move
+                  -> POSITIVE: dealers long gamma, stabilizing (buy dips/sell rallies)
+  Dealer Delta:   -3,446.7027 BTC
+                  -> Dealers net short delta - bearish pressure
 
 GAMMA PROFILE (re-priced, sticky-strike):
   Net GEX at spot $64,371: +17,503,661.56 USD (POSITIVE - dealers long gamma (stabilizing))
@@ -1797,6 +1888,7 @@ GAMMA PROFILE (re-priced, sticky-strike):
 
 GEX/DEX BY STRIKE:
 --------------------------------------------------------------------------------
+Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
     Strike   Net GEX(USD)  Net DEX(BTC)   Cum GEX(USD)  Cum DEX(BTC)  Notes
     ------        -------       -------        -------       -------  -----
     40,000         +0.00      +18.4267         +0.00      +18.4267  
@@ -1911,11 +2003,15 @@ P/C RATIO BY MONEYNESS:
   Near-OTM (5-15%):     P/C = 0.57 (Strong Bullish)
   Far-OTM (15%+):     P/C = 0.47 (Strong Bullish)
 
-SECOND-ORDER GREEKS:
-  Net Vanna Exposure: +7450.343574
-  Net Charm Exposure: -12172.666413
-  Vanna Signal: IV drop → dealers buy underlying (bullish)
-  Charm Signal: Time decay pushing delta negative (bearish drift)
+SECOND-ORDER GREEKS -- HOLDER SIDE (raw, no positioning assumption)
+  Vanna Exposure: +7450.343574
+  Charm Exposure: -12172.666413
+
+ASSUMED DEALER VIEW  (assumption: dealers short customer vanna/charm)
+  Dealer Vanna:   -7450.343574
+  Dealer Charm:   +12172.666413
+  Vanna Signal: IV drop → dealers sell underlying (bearish)
+  Charm Signal: Time decay pushing delta positive (bullish drift)
 
 LARGE OI CHANGES (Day-over-Day)
 --------------------------------------------------------------------------------
@@ -2027,12 +2123,19 @@ KEY LEVELS:
   Put Support: $61,000 (Net GEX: -282,803.33 USD)
   Cumulative GEX Zero Strike: $66,500 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
 
-TOTALS:
-  Total Net GEX: +225,662.55 USD
-  Total Net DEX: -39.8493 BTC
+EXPOSURES -- HOLDER SIDE (raw, no positioning assumption)
+--------------------------------------------------------------------------------
+  Gamma Exposure: +4,968,968.43 USD per 1% move
+  Delta Exposure: -39.8493 BTC
+  -> Option holders are net short delta
 
-  GEX Environment: Positive (Dealers long gamma - stabilizing, buy dips/sell rallies)
-  DEX Environment: Negative (Net short delta - bearish pressure)
+ASSUMED DEALER VIEW  (assumption: dealers long calls / short puts for
+                      gamma, short customer delta)
+--------------------------------------------------------------------------------
+  Dealer Gamma:   +225,662.55 USD per 1% move
+                  -> POSITIVE: dealers long gamma, stabilizing (buy dips/sell rallies)
+  Dealer Delta:   +39.8493 BTC
+                  -> Dealers net long delta - bullish pressure
 
 GAMMA PROFILE (re-priced, sticky-strike):
   Net GEX at spot $64,371: +225,961.10 USD (POSITIVE - dealers long gamma (stabilizing))
@@ -2041,6 +2144,7 @@ GAMMA PROFILE (re-priced, sticky-strike):
 
 GEX/DEX BY STRIKE:
 --------------------------------------------------------------------------------
+Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
     Strike   Net GEX(USD)  Net DEX(BTC)   Cum GEX(USD)  Cum DEX(BTC)  Notes
     ------        -------       -------        -------       -------  -----
     57,000     -1,533.15       -0.0297     -1,533.15       -0.0297  
@@ -2117,11 +2221,15 @@ P/C RATIO BY MONEYNESS:
   Near-OTM (5-15%):     P/C = 2.02 (Strong Bearish)
   Far-OTM (15%+):     P/C = 0.00 (Strong Bullish)
 
-SECOND-ORDER GREEKS:
-  Net Vanna Exposure: +160.965703
-  Net Charm Exposure: -2597.805843
-  Vanna Signal: IV drop → dealers buy underlying (bullish)
-  Charm Signal: Time decay pushing delta negative (bearish drift)
+SECOND-ORDER GREEKS -- HOLDER SIDE (raw, no positioning assumption)
+  Vanna Exposure: +160.965703
+  Charm Exposure: -2597.805843
+
+ASSUMED DEALER VIEW  (assumption: dealers short customer vanna/charm)
+  Dealer Vanna:   -160.965703
+  Dealer Charm:   +2597.805843
+  Vanna Signal: IV drop → dealers sell underlying (bearish)
+  Charm Signal: Time decay pushing delta positive (bullish drift)
 
 LARGE OI CHANGES (Day-over-Day)
 --------------------------------------------------------------------------------
@@ -2230,12 +2338,19 @@ KEY LEVELS:
   Put Support: $61,000 (Net GEX: -84,281.61 USD)
   Cumulative GEX Zero Strike: $57,000 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
 
-TOTALS:
-  Total Net GEX: -60,952.92 USD
-  Total Net DEX: -3.4892 BTC
+EXPOSURES -- HOLDER SIDE (raw, no positioning assumption)
+--------------------------------------------------------------------------------
+  Gamma Exposure: +344,460.67 USD per 1% move
+  Delta Exposure: -3.4892 BTC
+  -> Option holders are net short delta
 
-  GEX Environment: Negative (Dealers short gamma - amplifying volatility)
-  DEX Environment: Negative (Net short delta - bearish pressure)
+ASSUMED DEALER VIEW  (assumption: dealers long calls / short puts for
+                      gamma, short customer delta)
+--------------------------------------------------------------------------------
+  Dealer Gamma:   -60,952.92 USD per 1% move
+                  -> NEGATIVE: dealers short gamma, amplifying volatility
+  Dealer Delta:   +3.4892 BTC
+                  -> Dealers net long delta - bullish pressure
 
 GAMMA PROFILE (re-priced, sticky-strike):
   Net GEX at spot $64,371: -67,758.11 USD (NEGATIVE - dealers short gamma (amplifying volatility))
@@ -2244,6 +2359,7 @@ GAMMA PROFILE (re-priced, sticky-strike):
 
 GEX/DEX BY STRIKE:
 --------------------------------------------------------------------------------
+Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
     Strike   Net GEX(USD)  Net DEX(BTC)   Cum GEX(USD)  Cum DEX(BTC)  Notes
     ------        -------       -------        -------       -------  -----
     57,000     -3,314.91       -0.1118     -3,314.91       -0.1118  Cumulative GEX Zero Strike
@@ -2316,11 +2432,15 @@ P/C RATIO BY MONEYNESS:
   Near-OTM (5-15%):     P/C = 1.04 (Bearish)
   Far-OTM (15%+):     P/C = 0.00 (Strong Bullish)
 
-SECOND-ORDER GREEKS:
-  Net Vanna Exposure: -8.630391
-  Net Charm Exposure: +340.652938
-  Vanna Signal: IV drop → dealers sell underlying (bearish)
-  Charm Signal: Time decay pushing delta positive (bullish drift)
+SECOND-ORDER GREEKS -- HOLDER SIDE (raw, no positioning assumption)
+  Vanna Exposure: -8.630391
+  Charm Exposure: +340.652938
+
+ASSUMED DEALER VIEW  (assumption: dealers short customer vanna/charm)
+  Dealer Vanna:   +8.630391
+  Dealer Charm:   -340.652938
+  Vanna Signal: IV drop → dealers buy underlying (bullish)
+  Charm Signal: Time decay pushing delta negative (bearish drift)
 
 ================================================================================
 
@@ -2461,12 +2581,19 @@ KEY LEVELS:
   Put Support: $60,000 (Net GEX: -3,368,363.75 USD)
   Cumulative GEX Zero Strike: $66,000 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
 
-TOTALS:
-  Total Net GEX: +75,912,120.58 USD
-  Total Net DEX: +2,084.6151 BTC
+EXPOSURES -- HOLDER SIDE (raw, no positioning assumption)
+--------------------------------------------------------------------------------
+  Gamma Exposure: +162,575,740.02 USD per 1% move
+  Delta Exposure: +2,084.6151 BTC
+  -> Option holders are net long delta
 
-  GEX Environment: Positive (Dealers long gamma - stabilizing, buy dips/sell rallies)
-  DEX Environment: Positive (Net long delta - bullish pressure)
+ASSUMED DEALER VIEW  (assumption: dealers long calls / short puts for
+                      gamma, short customer delta)
+--------------------------------------------------------------------------------
+  Dealer Gamma:   +75,912,120.58 USD per 1% move
+                  -> POSITIVE: dealers long gamma, stabilizing (buy dips/sell rallies)
+  Dealer Delta:   -2,084.6151 BTC
+                  -> Dealers net short delta - bearish pressure
 
 GAMMA PROFILE (re-priced, sticky-strike):
   Net GEX at spot $64,371: +79,856,830.38 USD (POSITIVE - dealers long gamma (stabilizing))
@@ -2475,6 +2602,7 @@ GAMMA PROFILE (re-priced, sticky-strike):
 
 GEX/DEX BY STRIKE:
 --------------------------------------------------------------------------------
+Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
     Strike   Net GEX(USD)  Net DEX(BTC)   Cum GEX(USD)  Cum DEX(BTC)  Notes
     ------        -------       -------        -------       -------  -----
     45,000         +0.00       -0.3510         +0.00       -0.3510  
@@ -2597,11 +2725,15 @@ P/C RATIO BY MONEYNESS:
   Near-OTM (5-15%):     P/C = 0.21 (Strong Bullish)
   Far-OTM (15%+):     P/C = 0.35 (Strong Bullish)
 
-SECOND-ORDER GREEKS:
-  Net Vanna Exposure: +19979.717739
-  Net Charm Exposure: -219916.813594
-  Vanna Signal: IV drop → dealers buy underlying (bullish)
-  Charm Signal: Time decay pushing delta negative (bearish drift)
+SECOND-ORDER GREEKS -- HOLDER SIDE (raw, no positioning assumption)
+  Vanna Exposure: +19979.717739
+  Charm Exposure: -219916.813594
+
+ASSUMED DEALER VIEW  (assumption: dealers short customer vanna/charm)
+  Dealer Vanna:   -19979.717739
+  Dealer Charm:   +219916.813594
+  Vanna Signal: IV drop → dealers sell underlying (bearish)
+  Charm Signal: Time decay pushing delta positive (bullish drift)
 
 LARGE OI CHANGES (Day-over-Day)
 --------------------------------------------------------------------------------
@@ -2712,12 +2844,19 @@ KEY LEVELS:
   Put Support: $60,000 (Net GEX: -2,441,846.18 USD)
   Cumulative GEX Zero Strike: $68,000 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
 
-TOTALS:
-  Total Net GEX: +23,339,499.74 USD
-  Total Net DEX: +1,426.5991 BTC
+EXPOSURES -- HOLDER SIDE (raw, no positioning assumption)
+--------------------------------------------------------------------------------
+  Gamma Exposure: +34,888,814.75 USD per 1% move
+  Delta Exposure: +1,426.5991 BTC
+  -> Option holders are net long delta
 
-  GEX Environment: Positive (Dealers long gamma - stabilizing, buy dips/sell rallies)
-  DEX Environment: Positive (Net long delta - bullish pressure)
+ASSUMED DEALER VIEW  (assumption: dealers long calls / short puts for
+                      gamma, short customer delta)
+--------------------------------------------------------------------------------
+  Dealer Gamma:   +23,339,499.74 USD per 1% move
+                  -> POSITIVE: dealers long gamma, stabilizing (buy dips/sell rallies)
+  Dealer Delta:   -1,426.5991 BTC
+                  -> Dealers net short delta - bearish pressure
 
 GAMMA PROFILE (re-priced, sticky-strike):
   Net GEX at spot $64,371: +23,152,242.71 USD (POSITIVE - dealers long gamma (stabilizing))
@@ -2726,6 +2865,7 @@ GAMMA PROFILE (re-priced, sticky-strike):
 
 GEX/DEX BY STRIKE:
 --------------------------------------------------------------------------------
+Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
     Strike   Net GEX(USD)  Net DEX(BTC)   Cum GEX(USD)  Cum DEX(BTC)  Notes
     ------        -------       -------        -------       -------  -----
     53,000    -33,977.84       -1.8614    -33,977.84       -1.8614  
@@ -2794,11 +2934,15 @@ P/C RATIO BY MONEYNESS:
   Near-OTM (5-15%):     P/C = 0.12 (Strong Bullish)
   Far-OTM (15%+):     P/C = 0.02 (Strong Bullish)
 
-SECOND-ORDER GREEKS:
-  Net Vanna Exposure: +9517.833364
-  Net Charm Exposure: -48635.008327
-  Vanna Signal: IV drop → dealers buy underlying (bullish)
-  Charm Signal: Time decay pushing delta negative (bearish drift)
+SECOND-ORDER GREEKS -- HOLDER SIDE (raw, no positioning assumption)
+  Vanna Exposure: +9517.833364
+  Charm Exposure: -48635.008327
+
+ASSUMED DEALER VIEW  (assumption: dealers short customer vanna/charm)
+  Dealer Vanna:   -9517.833364
+  Dealer Charm:   +48635.008327
+  Vanna Signal: IV drop → dealers sell underlying (bearish)
+  Charm Signal: Time decay pushing delta positive (bullish drift)
 
 LARGE OI CHANGES (Day-over-Day)
 --------------------------------------------------------------------------------
@@ -2823,12 +2967,19 @@ KEY LEVELS:
   Put Support: $60,000 (Net GEX: -17,148,655.18 USD)
   Cumulative GEX Zero Strike: $68,000 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
 
-TOTALS:
-  Total Net GEX: +131,009,626.12 USD
-  Total Net DEX: +2,478.9444 BTC
+EXPOSURES -- HOLDER SIDE (raw, no positioning assumption)
+--------------------------------------------------------------------------------
+  Gamma Exposure: +410,194,646.76 USD per 1% move
+  Delta Exposure: +2,478.9444 BTC
+  -> Option holders are net long delta
 
-  GEX Environment: Positive (Dealers long gamma - stabilizing, buy dips/sell rallies)
-  DEX Environment: Positive (Net long delta - bullish pressure)
+ASSUMED DEALER VIEW  (assumption: dealers long calls / short puts for
+                      gamma, short customer delta)
+--------------------------------------------------------------------------------
+  Dealer Gamma:   +131,009,626.12 USD per 1% move
+                  -> POSITIVE: dealers long gamma, stabilizing (buy dips/sell rallies)
+  Dealer Delta:   -2,478.9444 BTC
+                  -> Dealers net short delta - bearish pressure
 
 GAMMA PROFILE (re-priced, sticky-strike):
   Net GEX at spot $64,371: not available (UNKNOWN - insufficient data to re-price)

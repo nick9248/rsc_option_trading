@@ -125,11 +125,20 @@ def format_vol_surface_section(result: VolSurfaceResult, expiration: str) -> str
         lines.append(f"  {label} ({rng}):{'':>5}{ratio_str}")
     lines.append("")
 
-    # Second-Order Greeks
+    # bugfix_spec.md Item 8: holder-side raw sums (no positioning
+    # assumption) and the assumed-dealer view (negation), explicitly
+    # labelled and separated -- the signals below are derived from the
+    # DEALER fields (see VolatilitySurfaceCalculator._calculate_second_
+    # order_greeks), not the holder sum, so the narrative names the actor
+    # only where the assumption is stated.
     second = result.second_order_greeks
-    lines.append("SECOND-ORDER GREEKS:")
-    lines.append(f"  Net Vanna Exposure: {second.net_vanna:+.6f}")
-    lines.append(f"  Net Charm Exposure: {second.net_charm:+.6f}")
+    lines.append("SECOND-ORDER GREEKS -- HOLDER SIDE (raw, no positioning assumption)")
+    lines.append(f"  Vanna Exposure: {second.vanna_exposure_holder:+.6f}")
+    lines.append(f"  Charm Exposure: {second.charm_exposure_holder:+.6f}")
+    lines.append("")
+    lines.append("ASSUMED DEALER VIEW  (assumption: dealers short customer vanna/charm)")
+    lines.append(f"  Dealer Vanna:   {second.dealer_vanna_exposure:+.6f}")
+    lines.append(f"  Dealer Charm:   {second.dealer_charm_exposure:+.6f}")
     lines.append(f"  Vanna Signal: {second.vanna_signal}")
     lines.append(f"  Charm Signal: {second.charm_signal}")
     lines.append("")

@@ -205,7 +205,7 @@ class TestOnChainAnalysisBuilder:
             iv_by_strike=(),
             pc_by_moneyness=PutCallByMoneyness(atm=bucket, near_otm=bucket, far_otm=bucket),
             second_order_greeks=SecondOrderGreeks(
-                net_vanna=0.0, net_charm=0.0, vanna_signal="N/A", charm_signal="N/A",
+                vanna_exposure_holder=0.0, charm_exposure_holder=0.0, vanna_signal="N/A", charm_signal="N/A",
                 skipped_instruments=0,
             ),
             spot_price=90000.0,

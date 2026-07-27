@@ -18,6 +18,19 @@ strike-axis cumulative-GEX sign-crossing artifact) is renamed to
 "GAMMA PROFILE" block reports the actual re-priced dealer-gamma flip
 (``zero_gamma_level``) so a reader can tell the two apart -- see
 ``GexDexKeyLevels``'s docstring for why both are kept.
+
+bugfix_spec.md Item 8: the old "TOTALS" block presented ``total_net_gex``
+(a DEALER-side number: the SqueezeMetrics call-put-gamma-split heuristic)
+and ``total_net_dex`` (a HOLDER-side number: the raw sum of what option
+owners hold) side by side with no positioning label at all -- one
+convention silently swapped for the other mid-report. Replaced with two
+explicitly labelled blocks: "EXPOSURES -- HOLDER SIDE" (pure arithmetic on
+observable OI/Greeks, no assumption) and "ASSUMED DEALER VIEW" (the
+SqueezeMetrics heuristic, explicitly named as an assumption). Every line
+that names an actor ("dealers...") now lives in the dealer block only.
+``total_net_gex``/``total_net_dex`` keep their exact values (dealer_gamma_
+exposure_total / delta_exposure_holder_total are aliases) -- this is
+presentation-only, not a value change.
 """
 
 from coding.core.analytics.results.gex_dex_results import GexDexResult
@@ -61,28 +74,45 @@ def _key_levels_and_totals_lines(result: GexDexResult, dex_unit: str) -> list:
 
     lines.append("")
 
-    lines.append("TOTALS:")
-    lines.append(f"  Total Net GEX: {result.total_net_gex:+,.2f} USD")
-    lines.append(f"  Total Net DEX: {result.total_net_dex:+,.4f} {dex_unit}")
+    # bugfix_spec.md Item 8: holder-side raw exposures -- pure arithmetic on
+    # observable OI/Greeks, no positioning assumption. No actor is named here.
+    lines.append("EXPOSURES -- HOLDER SIDE (raw, no positioning assumption)")
+    lines.append(_SEPARATOR)
+    holder_gamma = result.gamma_exposure_holder_total
+    holder_dex = result.delta_exposure_holder_total
+    lines.append(f"  Gamma Exposure: {holder_gamma:+,.2f} USD per 1% move")
+    lines.append(f"  Delta Exposure: {holder_dex:+,.4f} {dex_unit}")
+    if holder_dex > 0:
+        lines.append("  -> Option holders are net long delta")
+    elif holder_dex < 0:
+        lines.append("  -> Option holders are net short delta")
+    else:
+        lines.append("  -> Option holders are delta-neutral")
     lines.append("")
 
-    total_gex = result.total_net_gex
-    if total_gex > 0:
-        gex_interp = "Positive (Dealers long gamma - stabilizing, buy dips/sell rallies)"
-    elif total_gex < 0:
-        gex_interp = "Negative (Dealers short gamma - amplifying volatility)"
+    # bugfix_spec.md Item 8: the SqueezeMetrics assumed-dealer heuristic
+    # (dealers long calls / short puts for gamma; short whatever holders
+    # hold for delta) -- explicitly labelled as an assumption, derived from
+    # the holder-side numbers above, not conflated with them.
+    lines.append("ASSUMED DEALER VIEW  (assumption: dealers long calls / short puts for")
+    lines.append("                      gamma, short customer delta)")
+    lines.append(_SEPARATOR)
+    dealer_gamma = result.dealer_gamma_exposure_total
+    dealer_dex = result.dealer_delta_exposure_total
+    lines.append(f"  Dealer Gamma:   {dealer_gamma:+,.2f} USD per 1% move")
+    if dealer_gamma > 0:
+        lines.append("                  -> POSITIVE: dealers long gamma, stabilizing (buy dips/sell rallies)")
+    elif dealer_gamma < 0:
+        lines.append("                  -> NEGATIVE: dealers short gamma, amplifying volatility")
     else:
-        gex_interp = "Neutral"
-    lines.append(f"  GEX Environment: {gex_interp}")
-
-    total_dex = result.total_net_dex
-    if total_dex > 0:
-        dex_interp = "Positive (Net long delta - bullish pressure)"
-    elif total_dex < 0:
-        dex_interp = "Negative (Net short delta - bearish pressure)"
+        lines.append("                  -> NEUTRAL")
+    lines.append(f"  Dealer Delta:   {dealer_dex:+,.4f} {dex_unit}")
+    if dealer_dex > 0:
+        lines.append("                  -> Dealers net long delta - bullish pressure")
+    elif dealer_dex < 0:
+        lines.append("                  -> Dealers net short delta - bearish pressure")
     else:
-        dex_interp = "Neutral"
-    lines.append(f"  DEX Environment: {dex_interp}")
+        lines.append("                  -> Dealers delta-neutral")
     lines.append("")
 
     lines.extend(_gamma_profile_lines(result))
@@ -172,6 +202,9 @@ def format_gex_dex_section(result: GexDexResult, currency: str) -> str:
 
     lines.append("GEX/DEX BY STRIKE:")
     lines.append(_SEPARATOR)
+    lines.append(
+        "Net GEX = assumed-dealer gamma exposure, USD per 1% spot move."
+    )
     lines.append(
         f"{'Strike':>10}  {'Net GEX(USD)':>13}  {'Net DEX(' + currency + ')':>12}  "
         f"{'Cum GEX(USD)':>13}  {'Cum DEX(' + currency + ')':>12}  Notes"

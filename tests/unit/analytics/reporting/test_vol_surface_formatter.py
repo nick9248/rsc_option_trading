@@ -33,7 +33,7 @@ def _make_result(**overrides) -> VolSurfaceResult:
             far_otm=MoneynessBucket(call_oi=0.0, put_oi=0.0, range_label="15%+", ratio=0.0, bias="N/A"),
         ),
         second_order_greeks=SecondOrderGreeks(
-            net_vanna=0.001234, net_charm=-0.005678,
+            vanna_exposure_holder=0.001234, charm_exposure_holder=-0.005678,
             vanna_signal="IV drop → dealers buy underlying (bullish)",
             charm_signal="Time decay pushing delta negative (bearish drift)",
             skipped_instruments=2,
@@ -127,7 +127,13 @@ def test_pc_by_moneyness_buckets_and_na_ratio():
 
 def test_second_order_greeks_rendered():
     text = format_vol_surface_section(_make_result(), expiration="10MAR26")
-    assert "Net Vanna Exposure: +0.001234" in text
-    assert "Net Charm Exposure: -0.005678" in text
+    # bugfix_spec.md Item 8: holder-side raw sums, clearly labelled and
+    # separated from the assumed-dealer view (the negation).
+    assert "SECOND-ORDER GREEKS -- HOLDER SIDE (raw, no positioning assumption)" in text
+    assert "Vanna Exposure: +0.001234" in text
+    assert "Charm Exposure: -0.005678" in text
+    assert "ASSUMED DEALER VIEW  (assumption: dealers short customer vanna/charm)" in text
+    assert "Dealer Vanna:   -0.001234" in text
+    assert "Dealer Charm:   +0.005678" in text
     assert "Vanna Signal: IV drop → dealers buy underlying (bullish)" in text
     assert "Charm Signal: Time decay pushing delta negative (bearish drift)" in text

@@ -242,7 +242,7 @@ def make_onchain_result(
                 atm=bucket("ATM", 1.2), near_otm=bucket("Near-OTM", 0.9), far_otm=bucket("Far-OTM", 0.5),
             ),
             second_order_greeks=SecondOrderGreeks(
-                net_vanna=0.001, net_charm=50.0, vanna_signal="N/A", charm_signal="N/A",
+                vanna_exposure_holder=0.001, charm_exposure_holder=50.0, vanna_signal="N/A", charm_signal="N/A",
                 skipped_instruments=0,
             ),
             atm_iv=50.0, vwap_iv=None, mark_iv_average=None, traded_instrument_count=0,

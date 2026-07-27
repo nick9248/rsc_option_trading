@@ -22,7 +22,14 @@ class IvByStrikeRow:
 
 @dataclass(frozen=True)
 class SkewResult:
-    """25-delta put/call skew."""
+    """25-delta put/call skew.
+
+    NOTE: bugfix_spec.md Item 9 (sub-task 3, a separate commit) re-signs
+    and renames this to the market "risk reversal" convention -- untouched
+    here (this commit is Item 8 / sign-convention unification for GEX/DEX
+    and vanna/charm, plus Item 12's charm docstring fix; scoped separately
+    per the task brief).
+    """
 
     put_25d_iv: Optional[float]
     call_25d_iv: Optional[float]
@@ -54,13 +61,38 @@ class PutCallByMoneyness:
 
 @dataclass(frozen=True)
 class SecondOrderGreeks:
-    """Aggregated second-order Greeks (Vanna, Charm)."""
+    """
+    Aggregated second-order Greeks (Vanna, Charm).
 
-    net_vanna: float
-    net_charm: float
+    bugfix_spec.md Item 8: ``net_vanna``/``net_charm`` (the un-split raw
+    sum -- pure arithmetic, no positioning assumption) are renamed to
+    ``vanna_exposure_holder``/``charm_exposure_holder`` -- the "holder"
+    name they should always have had (see ``GexDexCalculator``'s class
+    docstring for the one convention this refers back to).
+    ``dealer_vanna_exposure``/``dealer_charm_exposure`` (the negation) are
+    new -- ``vanna_signal``/``charm_signal`` are now derived from these,
+    not the holder sum (the pre-Item-8 defect: the printed dealer
+    narrative was keyed off the holder-side number, backwards).
+    """
+
+    vanna_exposure_holder: float
+    charm_exposure_holder: float
     vanna_signal: str
     charm_signal: str
     skipped_instruments: int  # M5: replaces the silent `except: continue`
+
+    # --- Additive fields (bugfix_spec.md Item 8) ---
+    dealer_vanna_exposure: Optional[float] = None
+    """-vanna_exposure_holder -- the assumed-dealer view."""
+
+    dealer_charm_exposure: Optional[float] = None
+    """-charm_exposure_holder -- the assumed-dealer view."""
+
+    def __post_init__(self) -> None:
+        if self.dealer_vanna_exposure is None:
+            object.__setattr__(self, "dealer_vanna_exposure", -self.vanna_exposure_holder)
+        if self.dealer_charm_exposure is None:
+            object.__setattr__(self, "dealer_charm_exposure", -self.charm_exposure_holder)
 
 
 @dataclass(frozen=True)
@@ -149,8 +181,13 @@ class VolSurfaceResult:
                 "far_otm": _bucket_dict(self.pc_by_moneyness.far_otm),
             },
             "second_order_greeks": {
-                "net_vanna": self.second_order_greeks.net_vanna,
-                "net_charm": self.second_order_greeks.net_charm,
+                # bugfix_spec.md Item 8: net_vanna/net_charm (the un-split
+                # holder-side sum) renamed to vanna_exposure_holder/
+                # charm_exposure_holder; dealer_* added.
+                "vanna_exposure_holder": self.second_order_greeks.vanna_exposure_holder,
+                "charm_exposure_holder": self.second_order_greeks.charm_exposure_holder,
+                "dealer_vanna_exposure": self.second_order_greeks.dealer_vanna_exposure,
+                "dealer_charm_exposure": self.second_order_greeks.dealer_charm_exposure,
                 "vanna_signal": self.second_order_greeks.vanna_signal,
                 "charm_signal": self.second_order_greeks.charm_signal,
             },

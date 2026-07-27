@@ -47,6 +47,24 @@ class GexDexCalculator:
       * 0.01 scales to 1% underlying move
     - Net DEX per strike = Call Delta + Put Delta (put delta is negative)
 
+    SIGN CONVENTION (bugfix_spec.md Item 8 -- the one place this is stated;
+    every ``*_holder``/``dealer_*`` field on ``GexDexStrikeRow``/
+    ``GexDexResult`` refers back to this instead of re-explaining it):
+    two families of exposure are computed, from two different positioning
+    models. HOLDER-SIDE (``*_holder`` fields) is pure arithmetic on
+    observable open interest and Greeks -- no assumption about who holds
+    what. ASSUMED-DEALER VIEW (``dealer_*`` fields, including the original
+    ``net_gex``/``net_dex``) is the SqueezeMetrics/SpotGamma heuristic that
+    dealers are long calls and short puts for gamma, and short whatever
+    customers (i.e. holders) hold for delta/vanna/charm -- an inference, not
+    a measurement. ``net_gex`` (kept, not renamed) IS the dealer-side gamma
+    number -- that split is the specific published convention this figure
+    already means, and redefining it would break comparability with every
+    external GEX source. ``net_dex`` (kept) IS the holder-side delta number.
+    See ``dealer_gamma_exposure``/``gamma_exposure_holder``/
+    ``delta_exposure_holder``/``dealer_delta_exposure`` for the
+    correctly-labelled, complete set of both families.
+
     Key Levels:
     - Call Resistance: Strike with maximum positive Net GEX
     - Put Support: Strike with maximum negative Net GEX
@@ -257,6 +275,13 @@ class GexDexCalculator:
                 net_gamma=data["net_gamma"],
                 cumulative_gex=data["cumulative_gex"],
                 cumulative_dex=data["cumulative_dex"],
+                # bugfix_spec.md Item 8: explicit when available (correctly
+                # S^2*0.01-scaled by _calculate_gex_dex); GexDexStrikeRow's
+                # own __post_init__ derives a fallback otherwise.
+                gamma_exposure_holder=data.get("gamma_exposure_holder"),
+                delta_exposure_holder=data.get("delta_exposure_holder"),
+                dealer_gamma_exposure=data.get("dealer_gamma_exposure"),
+                dealer_delta_exposure=data.get("dealer_delta_exposure"),
             )
             for strike, data in sorted(strike_data.items())
         )
@@ -330,12 +355,21 @@ class GexDexCalculator:
         - Gamma values are already weighted by OI from aggregation
 
         Net DEX = Call Delta + Put Delta (put delta is already negative)
+
+        bugfix_spec.md Item 8 (F8.3.1): also computes the holder-side raw
+        exposures (no positioning assumption -- pure arithmetic on observable
+        OI/Greeks) alongside the existing dealer-side ``net_gex``/``net_dex``
+        (the SqueezeMetrics call-put-split heuristic for gamma; the raw
+        holder sum, unlabelled, for delta). ``net_gex``/``net_dex`` keep
+        their values and meaning unchanged -- ``dealer_gamma_exposure``/
+        ``delta_exposure_holder`` are exact aliases of them.
         """
+        spot_squared = self.spot_price ** 2
         for strike, data in self.strike_data.items():
             # Net GEX: (Call Gamma - Put Gamma) * Spot² * 0.01 (industry standard)
             # The gamma values are already weighted by OI from aggregation
             net_gamma = data["call_gamma"] - data["put_gamma"]
-            data["net_gex"] = net_gamma * (self.spot_price ** 2) * 0.01
+            data["net_gex"] = net_gamma * spot_squared * 0.01
 
             # Net DEX: Call Delta + Put Delta
             # Put delta is negative, so this gives net directional exposure
@@ -343,6 +377,15 @@ class GexDexCalculator:
 
             # Store raw net gamma for reference
             data["net_gamma"] = net_gamma
+
+            # Item 8: holder-side raw gamma exposure and the dealer-side
+            # aliases/negation.
+            data["gamma_exposure_holder"] = (
+                (data["call_gamma"] + data["put_gamma"]) * spot_squared * 0.01
+            )
+            data["delta_exposure_holder"] = data["net_dex"]
+            data["dealer_gamma_exposure"] = data["net_gex"]
+            data["dealer_delta_exposure"] = -data["net_dex"]
 
     def _calculate_cumulative_profiles(self) -> Dict[str, Dict[float, float]]:
         """

@@ -145,8 +145,12 @@ class TestVolatilitySurfaceCalculator:
 
         greeks = result.second_order_greeks
         # Values should be non-zero with our test data
-        assert greeks.net_vanna != 0
-        assert greeks.net_charm != 0
+        assert greeks.vanna_exposure_holder != 0
+        assert greeks.charm_exposure_holder != 0
+        # bugfix_spec.md Item 8: dealer_* is the exact negation of the
+        # holder-side sum.
+        assert greeks.dealer_vanna_exposure == pytest.approx(-greeks.vanna_exposure_holder)
+        assert greeks.dealer_charm_exposure == pytest.approx(-greeks.charm_exposure_holder)
         assert greeks.skipped_instruments >= 0
 
     def test_second_order_greeks_exception_is_logged_with_instrument_context(self, caplog):

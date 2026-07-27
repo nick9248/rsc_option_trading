@@ -281,6 +281,16 @@ def test_gex_dex_result_to_dict_matches_legacy_shape():
             "call_gamma": 1.5, "put_gamma": 0.5, "call_delta": 0.6, "put_delta": -0.4,
             "call_oi": 100.0, "put_oi": 50.0, "net_gex": 1_000_000.0, "net_dex": 0.2,
             "net_gamma": 1.0, "cumulative_gex": 1_000_000.0, "cumulative_dex": 0.2,
+            # bugfix_spec.md Item 8 (additive): gamma_exposure_holder
+            # defaults to call_gamma+put_gamma (unscaled fallback -- this
+            # fixture constructs GexDexStrikeRow directly, not through
+            # GexDexCalculator, which is the only path that scales it by
+            # S^2*0.01). dealer_gamma_exposure/delta_exposure_holder alias
+            # net_gex/net_dex; dealer_delta_exposure negates net_dex.
+            "gamma_exposure_holder": 2.0,
+            "delta_exposure_holder": 0.2,
+            "dealer_gamma_exposure": 1_000_000.0,
+            "dealer_delta_exposure": -0.2,
         }
     }
     assert d["cumulative_gex"] == {95000.0: 1_000_000.0}
@@ -300,6 +310,13 @@ def test_gex_dex_result_to_dict_matches_legacy_shape():
     assert d["spot_price"] == 94500.0
     assert d["total_net_gex"] == 1_000_000.0
     assert d["total_net_dex"] == 0.2
+    # bugfix_spec.md Item 8 (additive): totals default from
+    # total_net_gex/total_net_dex (dealer aliases) and summed strike_rows
+    # (gamma_exposure_holder_total).
+    assert d["gamma_exposure_holder_total"] == 2.0
+    assert d["delta_exposure_holder_total"] == 0.2
+    assert d["dealer_gamma_exposure_total"] == 1_000_000.0
+    assert d["dealer_delta_exposure_total"] == -0.2
     assert "expiration_count" not in d
 
 
@@ -414,7 +431,7 @@ def _make_vol_surface_result() -> VolSurfaceResult:
             far_otm=MoneynessBucket(call_oi=0.0, put_oi=0.0, range_label="15%+", ratio=0.0, bias="N/A"),
         ),
         second_order_greeks=SecondOrderGreeks(
-            net_vanna=0.001234, net_charm=-0.005678,
+            vanna_exposure_holder=0.001234, charm_exposure_holder=-0.005678,
             vanna_signal="IV drop → dealers buy underlying (bullish)",
             charm_signal="Time decay pushing delta negative (bearish drift)",
             skipped_instruments=2,
@@ -455,8 +472,12 @@ def test_vol_surface_result_to_dict_matches_legacy_reader_keys():
         "skew": 7.0, "interpretation": "Puts More Expensive - Hedging Demand",
     }
     assert d["atm_iv"] == 81.5
-    assert d["second_order_greeks"]["net_vanna"] == 0.001234
-    assert d["second_order_greeks"]["net_charm"] == -0.005678
+    # bugfix_spec.md Item 8: net_vanna/net_charm renamed to
+    # vanna_exposure_holder/charm_exposure_holder; dealer_* added.
+    assert d["second_order_greeks"]["vanna_exposure_holder"] == 0.001234
+    assert d["second_order_greeks"]["charm_exposure_holder"] == -0.005678
+    assert d["second_order_greeks"]["dealer_vanna_exposure"] == -0.001234
+    assert d["second_order_greeks"]["dealer_charm_exposure"] == 0.005678
     assert d["second_order_greeks"]["vanna_signal"] == "IV drop → dealers buy underlying (bullish)"
 
     pc = d["pc_by_moneyness"]

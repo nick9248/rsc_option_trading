@@ -701,3 +701,52 @@ class TestGammaProfileSafetyNet:
 
         assert result.key_levels.zero_gamma_level is None
         assert result.key_levels.gamma_regime == "UNKNOWN"
+
+
+class TestHolderDealerSignConvention:
+    """
+    bugfix_spec.md Item 8 acceptance tests (section 8.5), adapted to this
+    codebase's typed GexDexResult (attribute access, not the spec's
+    illustrative dict subscripting -- Wave A already replaced calculate()'s
+    return type).
+    """
+
+    FIXTURE = [
+        # K=100,000: call gamma*OI = 0.002, put gamma*OI = 0.0005;
+        #            call delta*OI = 50,    put delta*OI = -25
+        {"strike": 100_000.0, "option_type": "C", "gamma": 0.002, "delta": 50.0, "open_interest": 1.0},
+        {"strike": 100_000.0, "option_type": "P", "gamma": 0.0005, "delta": -25.0, "open_interest": 1.0},
+        # K=110,000: call gamma*OI = 0.0004, put gamma*OI = 0.0024;
+        #            call delta*OI = 12,     put delta*OI = -56
+        {"strike": 110_000.0, "option_type": "C", "gamma": 0.0004, "delta": 12.0, "open_interest": 1.0},
+        {"strike": 110_000.0, "option_type": "P", "gamma": 0.0024, "delta": -56.0, "open_interest": 1.0},
+    ]
+
+    def test_t8_1_both_families_hand_computed(self):
+        """
+        Sigma call g*OI = 0.0024; Sigma put g*OI = 0.0029; S^2*0.01 = 1e8
+          gamma_exposure_holder = (0.0024+0.0029)*1e8 = 530,000.00
+          dealer_gamma_exposure = (0.0024-0.0029)*1e8 = -50,000.00
+          delta_exposure_holder = (50-25)+(12-56) = -19.0
+          dealer_delta_exposure = +19.0
+        """
+        r = GexDexCalculator(self.FIXTURE, 100_000.0, "BTC").calculate()
+
+        assert r.gamma_exposure_holder_total == pytest.approx(530_000.0)
+        assert r.dealer_gamma_exposure_total == pytest.approx(-50_000.0)
+        assert r.delta_exposure_holder_total == pytest.approx(-19.0)
+        assert r.dealer_delta_exposure_total == pytest.approx(19.0)
+        # legacy aliases unchanged
+        assert r.total_net_gex == pytest.approx(r.dealer_gamma_exposure_total)
+        assert r.total_net_dex == pytest.approx(r.delta_exposure_holder_total)
+
+    def test_t8_2_holder_gamma_exposure_never_negative(self):
+        r = GexDexCalculator(self.FIXTURE, 100_000.0, "BTC").calculate()
+        assert r.gamma_exposure_holder_total >= 0.0
+
+    def test_holder_gamma_exposure_zero_when_no_oi(self):
+        """8.4 edge case: holder gamma exposure is 0 (no OI) -- no division,
+        both totals print 0.0."""
+        r = GexDexCalculator([], 100_000.0, "BTC").calculate()
+        assert r.gamma_exposure_holder_total == 0.0
+        assert r.dealer_gamma_exposure_total == 0.0

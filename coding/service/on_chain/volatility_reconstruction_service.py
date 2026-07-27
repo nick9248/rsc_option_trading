@@ -122,8 +122,13 @@ class VolatilityReconstructionService:
             "skew_25d": skew.skew,
             "put_25d_iv": skew.put_25d_iv,
             "call_25d_iv": skew.call_25d_iv,
-            "net_vanna": second_order.net_vanna,
-            "net_charm": second_order.net_charm,
+            # bugfix_spec.md Item 8: second_order.net_vanna/net_charm
+            # renamed to vanna_exposure_holder/charm_exposure_holder (same
+            # values -- the holder-side raw sum). This service's own
+            # onchain_volatility_snapshots.net_vanna/net_charm DB columns
+            # are unchanged.
+            "net_vanna": second_order.vanna_exposure_holder,
+            "net_charm": second_order.charm_exposure_holder,
             "vwap_iv": vwap_iv,
             "mark_iv_avg": mark_iv_avg,
             "pc_atm_ratio": self._sanitize_decimal(pc_moneyness.atm.ratio),

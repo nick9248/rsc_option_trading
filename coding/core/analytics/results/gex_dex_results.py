@@ -6,7 +6,7 @@ shape historically produced by ``GexDexCalculator.calculate()`` and
 ``GexDexCalculator.aggregate_across_expirations()``.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Tuple
 
 
@@ -20,6 +20,20 @@ class GexDexStrikeRow:
     dicts) — this mirrors the legacy ``GexDexCalculator.strike_data`` shape
     exactly (it stores the running cumulative sums back onto each strike's
     own entry as it iterates), which the golden-master fixture depends on.
+
+    bugfix_spec.md Item 8: ``net_gex``/``net_dex`` are DEPRECATED names for
+    exactly one release -- ``net_gex`` is the ASSUMED-DEALER gamma exposure
+    (dealers long calls / short puts, the SqueezeMetrics heuristic; kept
+    unrenamed since it is the specific published convention this number
+    already means) and ``net_dex`` is the HOLDER-side (raw, no positioning
+    assumption) delta exposure. ``dealer_gamma_exposure``/
+    ``delta_exposure_holder`` are exact aliases of them (same value, the
+    correctly-labelled name); ``gamma_exposure_holder``/
+    ``dealer_delta_exposure`` are the previously-missing other half of each
+    pair. All four default from ``net_gex``/``net_dex``/``call_gamma``/
+    ``put_gamma`` via ``__post_init__`` when not given explicitly, so
+    existing construction sites (tests, ``GexDexCalculator``) that only set
+    the original fields keep working unchanged.
     """
 
     strike: float
@@ -34,6 +48,33 @@ class GexDexStrikeRow:
     net_gamma: float
     cumulative_gex: float
     cumulative_dex: float
+
+    # --- Additive fields (bugfix_spec.md Item 8) ---
+    gamma_exposure_holder: Optional[float] = None
+    """(call_gamma + put_gamma) -- holder-side raw gamma exposure, NOT
+    scaled by S^2*0.01 the way net_gex/dealer_gamma_exposure are (this is
+    the raw OI-weighted gamma sum feeding GexDexCalculator's own S^2*0.01
+    scaling upstream -- see GexDexCalculator._calculate_gex_dex)."""
+
+    delta_exposure_holder: Optional[float] = None
+    """Alias of ``net_dex`` (same value, correctly-labelled name)."""
+
+    dealer_gamma_exposure: Optional[float] = None
+    """Alias of ``net_gex`` (same value, correctly-labelled name)."""
+
+    dealer_delta_exposure: Optional[float] = None
+    """-net_dex -- the assumed-dealer view (dealers are short what
+    customers, i.e. holders, hold)."""
+
+    def __post_init__(self) -> None:
+        if self.gamma_exposure_holder is None:
+            object.__setattr__(self, "gamma_exposure_holder", self.call_gamma + self.put_gamma)
+        if self.delta_exposure_holder is None:
+            object.__setattr__(self, "delta_exposure_holder", self.net_dex)
+        if self.dealer_gamma_exposure is None:
+            object.__setattr__(self, "dealer_gamma_exposure", self.net_gex)
+        if self.dealer_delta_exposure is None:
+            object.__setattr__(self, "dealer_delta_exposure", -self.net_dex)
 
 
 @dataclass(frozen=True)
@@ -109,7 +150,20 @@ class GexDexKeyLevels:
 
 @dataclass(frozen=True)
 class GexDexResult:
-    """Full GEX/DEX result for one expiration (or the cross-expiry aggregate)."""
+    """
+    Full GEX/DEX result for one expiration (or the cross-expiry aggregate).
+
+    bugfix_spec.md Item 8: ``total_net_gex``/``total_net_dex`` are DEPRECATED
+    names for exactly one release -- see ``GexDexStrikeRow``'s docstring for
+    the same holder/dealer distinction at the total level.
+    ``dealer_gamma_exposure_total``/``delta_exposure_holder_total`` are exact
+    aliases (same value); ``gamma_exposure_holder_total``/
+    ``dealer_delta_exposure_total`` are the previously-missing other half.
+    All four default via ``__post_init__`` when not given explicitly (from
+    ``total_net_gex``/``total_net_dex``, or summed from ``strike_rows`` for
+    ``gamma_exposure_holder_total``), so existing construction sites keep
+    working unchanged.
+    """
 
     strike_rows: Tuple[GexDexStrikeRow, ...]
     cumulative_gex: Dict[float, float]
@@ -120,6 +174,31 @@ class GexDexResult:
     total_net_dex: float
     currency: str
     expiration_count: Optional[int] = None  # set only on the AGGREGATE result
+
+    # --- Additive fields (bugfix_spec.md Item 8) ---
+    gamma_exposure_holder_total: Optional[float] = None
+    """Holder-side raw gamma exposure (>= 0 always) -- Sigma over
+    strike_rows.gamma_exposure_holder."""
+
+    delta_exposure_holder_total: Optional[float] = None
+    """Alias of ``total_net_dex`` (same value, correctly-labelled name)."""
+
+    dealer_gamma_exposure_total: Optional[float] = None
+    """Alias of ``total_net_gex`` (same value, correctly-labelled name)."""
+
+    dealer_delta_exposure_total: Optional[float] = None
+    """-total_net_dex -- the assumed-dealer view."""
+
+    def __post_init__(self) -> None:
+        if self.dealer_gamma_exposure_total is None:
+            object.__setattr__(self, "dealer_gamma_exposure_total", self.total_net_gex)
+        if self.delta_exposure_holder_total is None:
+            object.__setattr__(self, "delta_exposure_holder_total", self.total_net_dex)
+        if self.dealer_delta_exposure_total is None:
+            object.__setattr__(self, "dealer_delta_exposure_total", -self.total_net_dex)
+        if self.gamma_exposure_holder_total is None:
+            total = sum(row.gamma_exposure_holder for row in self.strike_rows) if self.strike_rows else 0.0
+            object.__setattr__(self, "gamma_exposure_holder_total", total)
 
     def to_dict(self) -> Dict[str, Any]:
         """
@@ -141,6 +220,11 @@ class GexDexResult:
                 "net_gamma": row.net_gamma,
                 "cumulative_gex": row.cumulative_gex,
                 "cumulative_dex": row.cumulative_dex,
+                # bugfix_spec.md Item 8 (additive):
+                "gamma_exposure_holder": row.gamma_exposure_holder,
+                "delta_exposure_holder": row.delta_exposure_holder,
+                "dealer_gamma_exposure": row.dealer_gamma_exposure,
+                "dealer_delta_exposure": row.dealer_delta_exposure,
             }
             for row in self.strike_rows
         }
@@ -173,6 +257,11 @@ class GexDexResult:
             "spot_price": self.spot_price,
             "total_net_gex": self.total_net_gex,
             "total_net_dex": self.total_net_dex,
+            # bugfix_spec.md Item 8 (additive):
+            "gamma_exposure_holder_total": self.gamma_exposure_holder_total,
+            "delta_exposure_holder_total": self.delta_exposure_holder_total,
+            "dealer_gamma_exposure_total": self.dealer_gamma_exposure_total,
+            "dealer_delta_exposure_total": self.dealer_delta_exposure_total,
         }
         if self.expiration_count is not None:
             result["expiration_count"] = self.expiration_count

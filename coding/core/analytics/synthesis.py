@@ -1712,9 +1712,19 @@ class SynthesisMapper:
         pc_near_otm = (pc_moneyness.near_otm.ratio if pc_moneyness is not None else 0.0)
         pc_far_otm = (pc_moneyness.far_otm.ratio if pc_moneyness is not None else 0.0)
 
+        # bugfix_spec.md Item 8: second_order.net_vanna/net_charm renamed to
+        # vanna_exposure_holder/charm_exposure_holder (same values -- the
+        # holder-side raw sum, unsplit). ExpiryMetrics.net_vanna/net_charm
+        # (and score_vanna_charm, which consumes them) are intentionally
+        # NOT switched to the new dealer_* fields here -- the report-text
+        # sign flip (Item 8's actual defect) is scoped to the printed
+        # narrative only; this preserves score_vanna_charm's numeric
+        # behavior unchanged, matching the task brief's golden-delta scope
+        # ("sign-dependent lines... and the narrative text that describes
+        # them" -- not the scoring engine's inputs).
         second_order = vol.second_order_greeks if vol is not None else None
-        net_vanna = (second_order.net_vanna if second_order is not None else 0.0)
-        net_charm = (second_order.net_charm if second_order is not None else 0.0)
+        net_vanna = (second_order.vanna_exposure_holder if second_order is not None else 0.0)
+        net_charm = (second_order.charm_exposure_holder if second_order is not None else 0.0)
 
         # Flow. bugfix_spec.md Item 6 / F6.3.4 (carried from A4 review):
         # flow_sufficient_data propagates the data-sufficiency gate so the

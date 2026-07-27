@@ -117,8 +117,10 @@ class VolatilitySurfaceCalculator:
                 atm=_bucket("atm"), near_otm=_bucket("near_otm"), far_otm=_bucket("far_otm"),
             ),
             second_order_greeks=SecondOrderGreeks(
-                net_vanna=second_order_dict["net_vanna"],
-                net_charm=second_order_dict["net_charm"],
+                vanna_exposure_holder=second_order_dict["vanna_exposure_holder"],
+                charm_exposure_holder=second_order_dict["charm_exposure_holder"],
+                dealer_vanna_exposure=second_order_dict["dealer_vanna_exposure"],
+                dealer_charm_exposure=second_order_dict["dealer_charm_exposure"],
                 vanna_signal=second_order_dict["vanna_signal"],
                 charm_signal=second_order_dict["charm_signal"],
                 skipped_instruments=second_order_dict["skipped_instruments"],
@@ -302,7 +304,11 @@ class VolatilitySurfaceCalculator:
 
         Closed-form Black-Scholes formulas (r=q=0, standard for crypto):
         - Vanna = −φ(d1) × d2 / σ  (∂Δ/∂σ, sensitivity of delta to vol)
-        - Charm = φ(d1) × d2 / (2τ) (∂Δ/∂τ, time decay of delta)
+        - Charm = φ(d1) × d2 / (2τ)  (∂Δ/∂t -- delta drift per unit of
+          ELAPSING calendar time, equivalently −∂Δ/∂τ where τ is time
+          REMAINING; bugfix_spec.md Item 12 -- the sign LABEL here was
+          previously wrong, the value was always correct. Per YEAR; divide
+          by 365 for the per-day drift.)
 
         d1 is recovered from stored delta via inverse normal CDF.
         τ is derived from stored gamma and vega without needing expiry date:
@@ -371,20 +377,33 @@ class VolatilitySurfaceCalculator:
                 )
                 continue
 
-        # Interpret signals
-        if net_vanna > 0:
+        # bugfix_spec.md Item 8: net_vanna/net_charm above are the HOLDER-side
+        # raw sums (Sigma over ALL instruments, no call/put positioning
+        # split) -- pure arithmetic, no assumption. The assumed-dealer view
+        # (SqueezeMetrics heuristic: dealers are short whatever holders
+        # hold) is the negation. The narrative below describes the DEALER's
+        # action, so it must be derived from the dealer-side (negated)
+        # value -- using the holder sum directly here was the pre-Item-8
+        # defect (GexDexCalculator's docstring states the one convention
+        # this whole module follows).
+        dealer_vanna = -net_vanna
+        dealer_charm = -net_charm
+
+        if dealer_vanna > 0:
             vanna_signal = "IV drop → dealers buy underlying (bullish)"
         else:
             vanna_signal = "IV drop → dealers sell underlying (bearish)"
 
-        if net_charm > 0:
+        if dealer_charm > 0:
             charm_signal = "Time decay pushing delta positive (bullish drift)"
         else:
             charm_signal = "Time decay pushing delta negative (bearish drift)"
 
         return {
-            "net_vanna": net_vanna,
-            "net_charm": net_charm,
+            "vanna_exposure_holder": net_vanna,
+            "charm_exposure_holder": net_charm,
+            "dealer_vanna_exposure": dealer_vanna,
+            "dealer_charm_exposure": dealer_charm,
             "vanna_signal": vanna_signal,
             "charm_signal": charm_signal,
             "skipped_instruments": skipped_instruments,
