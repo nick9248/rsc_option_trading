@@ -30,7 +30,6 @@ from PySide6.QtGui import QFont
 from coding.gui.components.log_viewer import LogViewer, GuiLogHandler
 from coding.gui.dialogs.flow_charts_window import FlowChartsWindow
 from coding.gui.theme.colors import Colors
-from coding.core.database.repository import DatabaseRepository
 from coding.service.on_chain.on_chain_analysis_service import OnChainAnalysisService
 from coding.service.on_chain.on_chain_workflow_service import OnChainWorkflowService
 
@@ -406,11 +405,14 @@ class OnChainAnalysisTab(QWidget):
 
         H3 (refactor_design_spec.md section T9): hands ``FlowChartsWindow`` a
         service, not a raw ``DatabaseRepository`` -- the dialog's own read
-        calls go through the service (see ``FlowChartsWindow``).
+        calls go through the service (see ``FlowChartsWindow``). This module
+        does not construct ``DatabaseRepository`` itself (review fix):
+        ``OnChainAnalysisService.create_default()`` is the service-layer
+        factory that does, mirroring ``OnChainWorkflowService.run``'s own
+        lazy dependency construction.
         """
         currency = self._last_analyzed_currency or ("BTC" if self.btc_checkbox.isChecked() else "ETH")
-        repository = DatabaseRepository()
-        service = OnChainAnalysisService(repository=repository)
+        service = OnChainAnalysisService.create_default()
 
         dialog = FlowChartsWindow(currency, service, parent=self)
         dialog.exec()

@@ -321,3 +321,22 @@ def test_get_aggregated_flow_metrics_delegates_to_repository(service, mock_repo)
 def test_get_aggregated_flow_metrics_without_repository_returns_empty_shape():
     service = OnChainAnalysisService(repository=None)
     assert service.get_aggregated_flow_metrics("BTC") == {"flow_data": {}, "spot_price": 0.0}
+
+
+# ---------------------------------------------------------------------------
+# Review fix (task A6): OnChainAnalysisService.create_default() -- the
+# service-layer factory GUI callers use instead of constructing
+# DatabaseRepository themselves (the review bar: "zero business logic,
+# zero direct repository/API access" in GUI modules).
+# ---------------------------------------------------------------------------
+
+
+def test_create_default_constructs_its_own_repository():
+    with patch(
+        "coding.service.on_chain.on_chain_analysis_service.DatabaseRepository"
+    ) as mock_repo_cls:
+        service = OnChainAnalysisService.create_default()
+
+    mock_repo_cls.assert_called_once_with()
+    assert service.repository is mock_repo_cls.return_value
+    assert service.api is None

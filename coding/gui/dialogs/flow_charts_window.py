@@ -29,7 +29,6 @@ from coding.core.analytics.chart_generator import (
     inject_hover_js,
     generate_flow_distribution_chart,
     generate_net_flow_chart,
-    generate_flow_trend_chart,
 )
 from coding.gui.theme.colors import Colors
 from coding.service.on_chain.on_chain_analysis_service import OnChainAnalysisService
@@ -59,14 +58,12 @@ class FlowChartsWindow(QDialog):
 
         H3 (refactor_design_spec.md section T9): takes an
         ``OnChainAnalysisService`` instead of a raw ``DatabaseRepository`` --
-        ``get_flow_metrics``/``get_aggregated_flow_metrics``/
-        ``get_filtered_aggregate_flow`` all go through the injected service.
-        ``self.repository`` is kept as the service's own repository (not a
-        second independently-constructed instance) for the handful of
-        lower-level read calls (``get_active_expirations_with_flow``, and
-        the ``generate_flow_trend_chart`` chart-generator call) that this
-        dialog still needs directly and that are not part of the
-        compatibility map's three named passthrough calls.
+        every read this dialog needs (``get_flow_metrics``,
+        ``get_aggregated_flow_metrics``, ``get_filtered_aggregate_flow``,
+        ``get_active_expirations_with_flow``, and flow-trend chart
+        generation) goes through the injected service now (review fix,
+        task A6 Important #2: this dialog no longer reaches through to
+        ``service.repository`` directly for anything).
 
         Args:
             currency: Currency symbol (BTC, ETH).
@@ -77,7 +74,6 @@ class FlowChartsWindow(QDialog):
         super().__init__(parent)
         self.currency = currency
         self.service = service
-        self.repository = service.repository
         self.current_expiration = None
         self.current_filter: str = "all"
         self._setup_ui()
@@ -245,7 +241,7 @@ class FlowChartsWindow(QDialog):
     def _load_expirations(self) -> None:
         """Load active expirations from database."""
         try:
-            expirations = self.repository.get_active_expirations_with_flow(self.currency)
+            expirations = self.service.get_active_expirations_with_flow(self.currency)
 
             self.expiration_combo.clear()
 
@@ -362,8 +358,7 @@ class FlowChartsWindow(QDialog):
 
             # Chart C: Trend over time
             logger.info("Generating trend chart...")
-            fig_trend = generate_flow_trend_chart(
-                repository=self.repository,
+            fig_trend = self.service.generate_flow_trend_chart_figure(
                 currency=self.currency,
                 expiration=expiration,
                 lookback_days=7,
@@ -455,8 +450,7 @@ class FlowChartsWindow(QDialog):
                 currency=self.currency,
                 expiration=label,
             )
-            fig_trend = generate_flow_trend_chart(
-                repository=self.repository,
+            fig_trend = self.service.generate_flow_trend_chart_figure(
                 currency=self.currency,
                 expiration=None,
                 lookback_days=7,

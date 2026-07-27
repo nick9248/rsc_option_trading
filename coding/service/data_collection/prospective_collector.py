@@ -647,6 +647,25 @@ class ProspectiveCollector:
 
                     snapshots_saved += 1
 
+                except (AttributeError, TypeError):
+                    # Review fix (task A6, Important #3 -- the A4 lesson
+                    # applied): AttributeError/TypeError here means a
+                    # producer/consumer shape mismatch (e.g. the wrong
+                    # object type reaching save_onchain_snapshot's typed
+                    # attribute reads) -- a programming error, not a data
+                    # condition. Swallowing it the same way as the broad
+                    # except below (which correctly skips one expiration's
+                    # genuinely bad data and keeps processing the rest) is
+                    # exactly the failure mode that hid the original A4
+                    # bug: snapshots_saved silently stays low/zero and the
+                    # only trace is an INFO-level "Saved N snapshots" line,
+                    # no error-level signal at all. Re-raise instead --
+                    # this method's own outer except (below) logs it at
+                    # ERROR with a full traceback and re-raises again, and
+                    # the daemon's caller (run_hourly_cycle) already logs
+                    # that and moves on to the next step, so the process
+                    # does not crash -- but the failure is now loud.
+                    raise
                 except Exception as e:
                     logger.warning(f"    Failed to analyze expiration {expiration}: {e}")
                     continue
@@ -696,6 +715,14 @@ class ProspectiveCollector:
                             metrics=metrics,
                             spot_price=underlying_price,
                         )
+                except (AttributeError, TypeError):
+                    # Same reasoning as the per-expiration loop above: a
+                    # shape mismatch here is a programming error, not a
+                    # data condition -- re-raise so it is loud (this
+                    # method's own outer except logs it at ERROR and
+                    # re-raises; the daemon's caller already catches that
+                    # and moves on, so the process does not crash).
+                    raise
                 except Exception as e:
                     logger.warning(f"    Forward harness record failed for {currency}: {e}")
 

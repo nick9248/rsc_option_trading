@@ -234,3 +234,75 @@ class TestEndToEndAgainstRealSaveOnchainSnapshot:
             assert not hasattr(value, "__dataclass_fields__"), (
                 f"dataclass instance leaked into SQL params: {value!r}"
             )
+
+
+class TestShapeMismatchIsNotSilentlySwallowed:
+    """
+    Review fix (task A6, Important #3 -- the A4 lesson applied): before
+    this fix, ANY exception from the per-expiration save (including a
+    producer/consumer shape mismatch -- exactly the class of bug A4 was)
+    was caught by a bare `except Exception`, logged at WARNING, and the
+    loop moved on -- leaving only an INFO-level "Saved N snapshots" line
+    as the only trace, easy to miss in a healthy-looking log stream.
+    AttributeError/TypeError now propagate instead (re-raised past this
+    method's own outer handler, which logs at ERROR with a full
+    traceback); genuine per-expiration data problems are still gracefully
+    skipped so one bad expiration doesn't take down the others.
+    """
+
+    def test_attribute_error_from_save_onchain_snapshot_propagates(self, instruments):
+        collector = _make_collector()
+        collector.repo.save_onchain_snapshot.side_effect = AttributeError(
+            "'dict' object has no attribute 'max_pain'"
+        )
+
+        with pytest.raises(AttributeError):
+            collector._run_onchain_analysis(
+                currency="BTC",
+                hour=datetime(2026, 7, 25, 12, 0, 0),
+                instruments=instruments,
+            )
+
+    def test_type_error_from_save_onchain_snapshot_propagates(self, instruments):
+        collector = _make_collector()
+        collector.repo.save_onchain_snapshot.side_effect = TypeError(
+            "argument of type 'GexDexResult' is not iterable"
+        )
+
+        with pytest.raises(TypeError):
+            collector._run_onchain_analysis(
+                currency="BTC",
+                hour=datetime(2026, 7, 25, 12, 0, 0),
+                instruments=instruments,
+            )
+
+    def test_propagated_shape_error_is_logged_at_error_level_with_traceback(self, instruments, caplog):
+        import logging
+
+        collector = _make_collector()
+        collector.repo.save_onchain_snapshot.side_effect = AttributeError("boom")
+
+        with caplog.at_level(logging.ERROR):
+            with pytest.raises(AttributeError):
+                collector._run_onchain_analysis(
+                    currency="BTC",
+                    hour=datetime(2026, 7, 25, 12, 0, 0),
+                    instruments=instruments,
+                )
+
+        error_records = [r for r in caplog.records if r.levelno >= logging.ERROR]
+        assert error_records, "Expected an ERROR-level log record, got none"
+
+    def test_key_error_still_gracefully_skipped_not_propagated(self, instruments):
+        """A genuine per-expiration data problem (not a shape/programming
+        error) must still be caught and logged, not propagated -- the
+        broad except still does its job for real bad-data cases."""
+        collector = _make_collector()
+        collector.repo.save_onchain_snapshot.side_effect = KeyError("missing_field")
+
+        # Must not raise -- KeyError is not in the re-raised set.
+        collector._run_onchain_analysis(
+            currency="BTC",
+            hour=datetime(2026, 7, 25, 12, 0, 0),
+            instruments=instruments,
+        )

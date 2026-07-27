@@ -112,6 +112,22 @@ class OnChainAnalysisService:
         self.api = api_service
         self.repository = repository
 
+    @classmethod
+    def create_default(cls) -> "OnChainAnalysisService":
+        """
+        Construct with a freshly-built ``DatabaseRepository`` and no API
+        service (read-only DB operations only).
+
+        T9 review fix (refactor_design_spec.md): the GUI must not construct
+        ``DatabaseRepository`` itself ("zero business logic, zero direct
+        repository/API access" is the review bar) -- this factory lives in
+        the service layer instead, the same lazy-construction pattern
+        ``OnChainWorkflowService.run`` already uses for its own
+        dependencies, so a caller like ``OnChainAnalysisTab._open_flow_charts``
+        can get a fully-wired service with zero repository import of its own.
+        """
+        return cls(repository=DatabaseRepository())
+
     def fetch_and_analyze(
         self,
         currency: str,
@@ -488,6 +504,59 @@ class OnChainAnalysisService:
             logger.warning("Repository not available for get_aggregated_flow_metrics")
             return {"flow_data": {}, "spot_price": 0.0}
         return self.repository.get_aggregated_flow_metrics(currency)
+
+    def get_active_expirations_with_flow(self, currency: str) -> List[Dict[str, Any]]:
+        """
+        Review fix (task A6, Important #2): passthrough so
+        ``FlowChartsWindow`` goes through this service instead of reaching
+        through to its own ``.repository`` attribute directly.
+
+        Args:
+            currency: Currency symbol (BTC, ETH).
+
+        Returns:
+            List of active-expiration dicts (see
+            ``DatabaseRepository.get_active_expirations_with_flow``), or an
+            empty list when no repository is configured.
+        """
+        if self.repository is None:
+            logger.warning("Repository not available for get_active_expirations_with_flow")
+            return []
+        return self.repository.get_active_expirations_with_flow(currency)
+
+    def generate_flow_trend_chart_figure(
+        self,
+        currency: str,
+        expiration: Optional[str] = None,
+        lookback_days: int = 7,
+        trade_filter: str = "all",
+    ):
+        """
+        Review fix (task A6, Important #2): passthrough so
+        ``FlowChartsWindow`` goes through this service for chart generation
+        instead of passing its own ``.repository`` attribute directly into
+        ``chart_generator.generate_flow_trend_chart``.
+
+        Args:
+            currency: Currency symbol (BTC, ETH).
+            expiration: Expiration date string, or None to aggregate across
+                all expirations.
+            lookback_days: Number of days to look back.
+            trade_filter: "all", "block", or "non_block".
+
+        Returns:
+            Plotly figure, or None when no repository is configured.
+        """
+        if self.repository is None:
+            logger.warning("Repository not available for generate_flow_trend_chart_figure")
+            return None
+        return generate_flow_trend_chart(
+            repository=self.repository,
+            currency=currency,
+            expiration=expiration,
+            lookback_days=lookback_days,
+            trade_filter=trade_filter,
+        )
 
     def get_filtered_aggregate_flow(
         self,

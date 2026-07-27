@@ -66,16 +66,41 @@ class TestWorkerSingleServiceCall:
 
     def test_module_does_not_import_database_or_api_service_directly(self):
         """
-        The worker's own module previously imported DatabaseRepository,
+        Review fix: the module previously imported DatabaseRepository,
         DeribitApiService, OnChainAnalysisService, and MorningNoteService to
-        hand-orchestrate the 3-step workflow. After T9 the worker only needs
-        OnChainWorkflowService; DatabaseRepository/OnChainAnalysisService are
-        still imported for _open_flow_charts's service construction (see
-        refactor_design_spec.md compat map row 5), but DeribitApiService and
+        hand-orchestrate the 3-step workflow. After T9, neither
+        DatabaseRepository nor DeribitApiService may be imported anywhere in
+        this module -- the brief's review bar is "zero business logic, zero
+        direct repository/API access". _open_flow_charts gets its service
+        via OnChainAnalysisService.create_default() (a service-layer
+        factory, see on_chain_analysis_service.py), not by constructing
+        DatabaseRepository itself. OnChainAnalysisService itself is still
+        imported (for that one call plus its class reference), and
         MorningNoteService must not be imported at all anymore.
         """
+        assert not hasattr(tab_module, "DatabaseRepository")
         assert not hasattr(tab_module, "DeribitApiService")
         assert not hasattr(tab_module, "MorningNoteService")
+
+    def test_open_flow_charts_uses_service_factory_not_database_repository(self, qapp):
+        """
+        Review fix: pin the actual call path, not just the absent import --
+        _open_flow_charts must go through OnChainAnalysisService.
+        create_default(), never construct DatabaseRepository directly.
+        """
+        with patch.object(tab_module.OnChainAnalysisService, "create_default") as mock_factory, \
+             patch.object(tab_module, "FlowChartsWindow") as mock_dialog_cls:
+            mock_dialog = mock_dialog_cls.return_value
+            tab = OnChainAnalysisTab()
+            tab._last_analyzed_currency = "BTC"
+
+            tab._open_flow_charts()
+
+            mock_factory.assert_called_once_with()
+            mock_dialog_cls.assert_called_once_with("BTC", mock_factory.return_value, parent=tab)
+            mock_dialog.exec.assert_called_once()
+
+            tab.close()
 
 
 class TestLogHandlerLifecycle:
