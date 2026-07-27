@@ -1,8 +1,14 @@
 """
 GEX (Gamma Exposure) and DEX (Delta Exposure) calculator.
 
-Calculates gamma and delta exposure per strike, cumulative profiles,
-and identifies key levels (Call Resistance, Put Support, Zero Gamma Level).
+Calculates gamma and delta exposure per strike, cumulative profiles, and
+identifies key levels (Call Resistance, Put Support, Cumulative GEX Zero
+Strike). Also re-prices dealer gamma across a spot grid (via
+``GammaProfileCalculator``) to locate the actual Zero Gamma Level --
+bugfix_spec.md Item 2. See
+``coding.core.analytics.results.gex_dex_results.GexDexKeyLevels``'s
+docstring for why both quantities exist and why ``hvl``/``gamma_flip`` keep
+their historical, now-misleading name instead of being renamed outright.
 """
 
 import logging
@@ -44,10 +50,23 @@ class GexDexCalculator:
     Key Levels:
     - Call Resistance: Strike with maximum positive Net GEX
     - Put Support: Strike with maximum negative Net GEX
-    - Zero Gamma Level (ZGL): Where cumulative GEX crosses zero.
-      NOTE: This is the SpotGamma/SqueezeMetrics definition, NOT MenthorQ's HVL.
-      MenthorQ HVL = per-strike net GEX sign change (inflection point in slope).
-      ZGL = global cumulative zero crossing. They often differ.
+    - Cumulative GEX Zero Strike (internally ``hvl``/``gamma_flip`` -- kept
+      unrenamed, see ``GexDexKeyLevels``'s docstring): the STRIKE where
+      cumulative net GEX (summed strike-by-strike) changes sign. This is a
+      property of how open interest happens to be distributed along the
+      strike axis, NOT a re-priced dealer-gamma flip -- bugfix_spec.md Item
+      2's live audit found it can (and did) sit on the OPPOSITE side of spot
+      from the actual Zero Gamma Level. ``repository.save_onchain_snapshot``
+      persists this value into the LIVE ``hvl_level`` DB column read by the
+      straddle regime gate and IC/BF scanners, and ``synthesis.py``
+      (morning-note rendering) also reads it directly -- that is why this
+      attribute keeps its old, misleading name rather than being renamed.
+    - Zero Gamma Level (the actual gamma flip, ``GexDexKeyLevels.
+      zero_gamma_level``): re-prices total dealer gamma across a spot grid
+      (sticky-strike Black-Scholes, ``GammaProfileCalculator``) and finds
+      where it changes sign. This is the SpotGamma/SqueezeMetrics
+      definition of "Zero Gamma Level" -- Cumulative GEX Zero Strike above
+      is NOT it, despite historically being labeled that in this report.
     """
 
     def __init__(
@@ -171,9 +190,46 @@ class GexDexCalculator:
         re-priced profile needs service-layer leg plumbing across expirations,
         which is out of scope for task B1 (D3 restricts this task to
         ``GexDexCalculator`` alone).
+
+        Task B1 review (Important #1): this feeds an ADDITIVE field only
+        (``zero_gamma_level`` etc. on ``GexDexKeyLevels``) -- it must never be
+        able to raise. ``calculate()`` is the same method that produces the
+        value persisted into the live ``hvl_level`` DB column, and task A6
+        made the daemon (``ProspectiveCollector._run_onchain_analysis``)
+        re-raise ``TypeError``/``AttributeError`` rather than swallow them,
+        specifically so real shape-mismatch bugs surface loudly instead of
+        silently zeroing writes. Without a guard here, a malformed field
+        feeding only this new computation (e.g. a non-numeric ``mark_iv`` or
+        ``open_interest``, a non-string ``expiration``) would raise
+        ``TypeError``/``ValueError`` uncaught and abort ``calculate()`` --
+        and therefore the WHOLE currency's on-chain analysis, including the
+        untouched ``hvl``/``key_levels`` path -- defeating D3's "purely
+        additive, can't hurt the live path" guarantee. Any exception here is
+        caught, logged, and degrades to the same "insufficient data" shape
+        ``GammaProfileCalculator`` itself already returns for a non-positive
+        spot / no legs, rather than propagating.
         """
-        legs = GexDexCalculator._build_gamma_legs(instruments)
-        return GammaProfileCalculator(legs, spot_price).calculate()
+        try:
+            legs = GexDexCalculator._build_gamma_legs(instruments)
+            return GammaProfileCalculator(legs, spot_price).calculate()
+        except Exception:
+            logger.error(
+                "GexDexCalculator: gamma-profile re-pricing failed "
+                "unexpectedly -- degrading to 'insufficient data' rather "
+                "than aborting the GEX/DEX calculation (this computation is "
+                "additive only, bugfix_spec.md Item 2 / task B1 D3)",
+                exc_info=True,
+            )
+            return {
+                "zero_gamma_level": None,
+                "zero_gamma_crossings": [],
+                "net_gex_at_spot": None,
+                "gamma_profile": [],
+                "spot_price": spot_price,
+                "leg_count": 0,
+                "legs_skipped": 0,
+                "regime": "UNKNOWN",
+            }
 
     @staticmethod
     def _build_result(
@@ -322,7 +378,15 @@ class GexDexCalculator:
         Detect key trading levels from GEX/DEX data.
 
         Returns:
-            Dict with call_resistance, put_support, hvl (Zero Gamma Level = cumulative zero crossing), and gamma_flip.
+            Dict with call_resistance, put_support, hvl, and gamma_flip.
+            ``hvl``/``gamma_flip`` are the STRIKE where cumulative net GEX
+            (summed strike-by-strike) changes sign -- a strike-axis artifact
+            of how open interest is distributed, NOT a re-priced gamma flip.
+            See the class docstring's "Key Levels" section and
+            ``GexDexKeyLevels``'s docstring for why this attribute name is
+            kept and what it actually represents; the correct gamma flip is
+            ``GexDexKeyLevels.zero_gamma_level``, computed separately by
+            ``GammaProfileCalculator`` (bugfix_spec.md Item 2).
         """
         if not self.strike_data:
             return {

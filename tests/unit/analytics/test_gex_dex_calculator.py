@@ -10,6 +10,8 @@ instead of a dict — assertions here use attribute access. Legacy dict
 consumers use GexDexResult.to_dict().
 """
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from coding.core.analytics.gex_dex_calculator import GexDexCalculator
 
@@ -580,3 +582,122 @@ class TestAggregateAcrossExpirations:
     # tests/unit/analytics/reporting/test_gex_dex_formatter.py::
     # test_aggregate_gex_dex_section_has_expiration_count_and_no_strike_table,
     # exercising the actual live render path (format_aggregate_gex_dex_section).
+
+
+class TestBuildGammaLegs:
+    """
+    Direct unit coverage for GexDexCalculator._build_gamma_legs
+    (bugfix_spec.md Item 2 / task B1 review Important #2): previously only
+    covered transitively through the golden master, which would not have
+    caught a silent degrade (e.g. an upstream field rename causing zero legs
+    to build -- just a mysteriously-UNKNOWN gamma profile, no failing test).
+    """
+
+    @staticmethod
+    def _future_expiration(days: int = 30) -> str:
+        """A Deribit-format expiration label ('%d%b%y') safely in the future
+        relative to real wall-clock time, so these tests never depend on --
+        or drift with -- today's date."""
+        return (datetime.now(timezone.utc) + timedelta(days=days)).strftime("%d%b%y").upper()
+
+    def test_leg_built_correctly_from_well_formed_instrument(self):
+        instrument = {
+            "strike": 70000, "option_type": "C", "open_interest": 150,
+            "mark_iv": 55.0, "expiration": self._future_expiration(30),
+        }
+        legs = GexDexCalculator._build_gamma_legs([instrument])
+
+        assert len(legs) == 1
+        leg = legs[0]
+        assert leg.strike == 70000.0
+        assert leg.option_type == "C"
+        assert leg.open_interest == 150.0
+        assert leg.implied_volatility == pytest.approx(0.55)
+        # ~30 days to expiry -> a small positive fraction of a year.
+        assert 0.0 < leg.time_to_expiry_years < (45 / 365)
+
+    def test_iv_scaling_mark_iv_50_gives_sigma_0_50(self):
+        instrument = {
+            "strike": 70000, "option_type": "P", "open_interest": 10,
+            "mark_iv": 50.0, "expiration": self._future_expiration(30),
+        }
+        legs = GexDexCalculator._build_gamma_legs([instrument])
+
+        assert legs[0].implied_volatility == pytest.approx(0.50)
+
+    def test_skips_leg_with_missing_mark_iv(self):
+        instrument = {
+            "strike": 70000, "option_type": "C", "open_interest": 10,
+            "mark_iv": None, "expiration": self._future_expiration(30),
+        }
+        assert GexDexCalculator._build_gamma_legs([instrument]) == []
+
+    def test_skips_leg_with_zero_open_interest(self):
+        instrument = {
+            "strike": 70000, "option_type": "C", "open_interest": 0,
+            "mark_iv": 50.0, "expiration": self._future_expiration(30),
+        }
+        assert GexDexCalculator._build_gamma_legs([instrument]) == []
+
+    def test_skips_leg_with_unparseable_expiration(self):
+        instrument = {
+            "strike": 70000, "option_type": "C", "open_interest": 10,
+            "mark_iv": 50.0, "expiration": "not-a-date",
+        }
+        assert GexDexCalculator._build_gamma_legs([instrument]) == []
+
+
+class TestGammaProfileSafetyNet:
+    """
+    bugfix_spec.md Item 2 / task B1 review Important #1: the gamma-profile
+    computation is ADDITIVE only (zero_gamma_level etc.) and must never be
+    able to abort calculate() -- the same method that produces the value
+    persisted into the live hvl_level DB column. A malformed field feeding
+    only the new computation (e.g. a non-numeric mark_iv) must degrade to
+    the "insufficient data" shape rather than raising TypeError/ValueError
+    uncaught, which would otherwise abort the whole currency's on-chain
+    analysis (task A6 made the daemon re-raise TypeError/AttributeError
+    precisely so genuine shape-mismatch bugs are loud -- this guards against
+    an unrelated data-quality issue in the new field accidentally triggering
+    that same loud path).
+    """
+
+    def test_malformed_mark_iv_does_not_raise_and_hvl_path_is_unaffected(self):
+        instruments = [
+            {"strike": 65000, "option_type": "C", "gamma": 0.00010, "delta": 0.7,
+             "open_interest": 500, "mark_iv": "not-a-number", "expiration": "27DEC24"},
+            {"strike": 65000, "option_type": "P", "gamma": 0.00002, "delta": -0.3,
+             "open_interest": 500, "mark_iv": "not-a-number", "expiration": "27DEC24"},
+            {"strike": 70000, "option_type": "C", "gamma": 0.00005, "delta": 0.5,
+             "open_interest": 500, "mark_iv": "not-a-number", "expiration": "27DEC24"},
+            {"strike": 70000, "option_type": "P", "gamma": 0.00005, "delta": -0.5,
+             "open_interest": 500, "mark_iv": "not-a-number", "expiration": "27DEC24"},
+            {"strike": 75000, "option_type": "C", "gamma": 0.00002, "delta": 0.3,
+             "open_interest": 500, "mark_iv": "not-a-number", "expiration": "27DEC24"},
+            {"strike": 75000, "option_type": "P", "gamma": 0.00010, "delta": -0.7,
+             "open_interest": 500, "mark_iv": "not-a-number", "expiration": "27DEC24"},
+        ]
+        calculator = GexDexCalculator(instruments, spot_price=70000)
+
+        result = calculator.calculate()  # must not raise
+
+        # The strike-axis hvl/key_levels path is entirely independent of
+        # mark_iv and must be computed exactly as it always was.
+        assert result.key_levels.hvl in [70000, 75000]
+        # The new, additive gamma-profile field degrades safely instead of
+        # propagating the TypeError ("not-a-number" <= 0.0) raised while
+        # building legs.
+        assert result.key_levels.zero_gamma_level is None
+        assert result.key_levels.gamma_regime == "UNKNOWN"
+
+    def test_non_string_expiration_does_not_raise(self):
+        instrument = {
+            "strike": 70000, "option_type": "C", "gamma": 0.00005, "delta": 0.5,
+            "open_interest": 100, "mark_iv": 50.0, "expiration": 12345,
+        }
+        calculator = GexDexCalculator([instrument], spot_price=70000)
+
+        result = calculator.calculate()  # must not raise
+
+        assert result.key_levels.zero_gamma_level is None
+        assert result.key_levels.gamma_regime == "UNKNOWN"
