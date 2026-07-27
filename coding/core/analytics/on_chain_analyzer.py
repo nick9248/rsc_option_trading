@@ -722,4 +722,19 @@ class OnChainMetricsCalculator:
 # caller that still imports the pre-T10 name. ProspectiveCollector (the
 # production daemon) is the highest-risk consumer of this class -- this
 # alias means an import site that was never updated still works.
+#
+# CHANGELOG / removal candidate (carried finding #5, A6 review; re-verified
+# at task A7): this alias is NOT yet dead code. As of task A7, two in-repo
+# call sites still import it directly by the old name --
+# tests/unit/test_on_chain_analysis_service_flow.py::
+# TestCalculateBuySellFlowSingleFetch._make_analyzer and
+# scripts/record_onchain_fixture.py (the golden-master fixture recorder) --
+# so a same-task removal is not free even ignoring any out-of-tree caller.
+# `analyze_expiration`'s dict->typed-result flip (T10) is the one real
+# behavior change that could hide behind this alias for an out-of-tree
+# caller that never migrated. Flagged for removal in a future cleanup
+# task, once the two in-repo call sites above are migrated to
+# OnChainMetricsCalculator and the removal is treated as the
+# breaking-change decision it is -- not bundled into T12's janitorial
+# scope.
 OnChainAnalyzer = OnChainMetricsCalculator
