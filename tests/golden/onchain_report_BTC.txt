@@ -174,9 +174,9 @@ IV BY STRIKE:
       75,000       38.2%       38.2%
 
 P/C RATIO BY MONEYNESS:
-  ATM (±5%):     P/C = 0.86 (Slightly Bullish)
-  Near-OTM (5-15%):     P/C = 0.30 (Bullish)
-  Far-OTM (15%+):     P/C = 0.00 (Bullish)
+  ATM (±5%):     P/C = 0.86 (Bullish)
+  Near-OTM (5-15%):     P/C = 0.30 (Strong Bullish)
+  Far-OTM (15%+):     P/C = 0.00 (Strong Bullish)
 
 SECOND-ORDER GREEKS:
   Net Vanna Exposure: +849.854415
@@ -442,9 +442,9 @@ IV BY STRIKE:
       82,000       39.2%       39.2%
 
 P/C RATIO BY MONEYNESS:
-  ATM (±5%):     P/C = 1.24 (Slightly Bearish)
-  Near-OTM (5-15%):     P/C = 3.24 (Bearish)
-  Far-OTM (15%+):     P/C = 0.36 (Bullish)
+  ATM (±5%):     P/C = 1.24 (Bearish)
+  Near-OTM (5-15%):     P/C = 3.24 (Strong Bearish)
+  Far-OTM (15%+):     P/C = 0.36 (Strong Bullish)
 
 SECOND-ORDER GREEKS:
   Net Vanna Exposure: +17835.041543
@@ -669,9 +669,9 @@ IV BY STRIKE:
       82,000       41.4%       41.4%
 
 P/C RATIO BY MONEYNESS:
-  ATM (±5%):     P/C = 0.46 (Bullish)
-  Near-OTM (5-15%):     P/C = 0.34 (Bullish)
-  Far-OTM (15%+):     P/C = 0.87 (Slightly Bullish)
+  ATM (±5%):     P/C = 0.46 (Strong Bullish)
+  Near-OTM (5-15%):     P/C = 0.34 (Strong Bullish)
+  Far-OTM (15%+):     P/C = 0.87 (Bullish)
 
 SECOND-ORDER GREEKS:
   Net Vanna Exposure: +309.828957
@@ -944,9 +944,9 @@ IV BY STRIKE:
       82,000       37.2%       37.2%
 
 P/C RATIO BY MONEYNESS:
-  ATM (±5%):     P/C = 1.09 (Slightly Bearish)
-  Near-OTM (5-15%):     P/C = 1.61 (Bearish)
-  Far-OTM (15%+):     P/C = 0.39 (Bullish)
+  ATM (±5%):     P/C = 1.09 (Bearish)
+  Near-OTM (5-15%):     P/C = 1.61 (Strong Bearish)
+  Far-OTM (15%+):     P/C = 0.39 (Strong Bullish)
 
 SECOND-ORDER GREEKS:
   Net Vanna Exposure: +17133.423382
@@ -1148,9 +1148,9 @@ IV BY STRIKE:
       73,000       52.0%       52.0%
 
 P/C RATIO BY MONEYNESS:
-  ATM (±5%):     P/C = 0.66 (Bullish)
-  Near-OTM (5-15%):     P/C = 1.14 (Slightly Bearish)
-  Far-OTM (15%+):     P/C = 0.00 (Bullish)
+  ATM (±5%):     P/C = 0.66 (Strong Bullish)
+  Near-OTM (5-15%):     P/C = 1.14 (Bearish)
+  Far-OTM (15%+):     P/C = 0.00 (Strong Bullish)
 
 SECOND-ORDER GREEKS:
   Net Vanna Exposure: -49.121195
@@ -1409,9 +1409,9 @@ IV BY STRIKE:
       82,000       40.4%       40.4%
 
 P/C RATIO BY MONEYNESS:
-  ATM (±5%):     P/C = 3.33 (Bearish)
-  Near-OTM (5-15%):     P/C = 1.58 (Bearish)
-  Far-OTM (15%+):     P/C = 0.33 (Bullish)
+  ATM (±5%):     P/C = 3.33 (Strong Bearish)
+  Near-OTM (5-15%):     P/C = 1.58 (Strong Bearish)
+  Far-OTM (15%+):     P/C = 0.33 (Strong Bullish)
 
 SECOND-ORDER GREEKS:
   Net Vanna Exposure: +3930.470389
@@ -1610,9 +1610,9 @@ IV BY STRIKE:
       73,000       46.2%       46.2%
 
 P/C RATIO BY MONEYNESS:
-  ATM (±5%):     P/C = 1.56 (Bearish)
-  Near-OTM (5-15%):     P/C = 0.23 (Bullish)
-  Far-OTM (15%+):     P/C = 0.00 (Bullish)
+  ATM (±5%):     P/C = 1.56 (Strong Bearish)
+  Near-OTM (5-15%):     P/C = 0.23 (Strong Bullish)
+  Far-OTM (15%+):     P/C = 0.00 (Strong Bullish)
 
 SECOND-ORDER GREEKS:
   Net Vanna Exposure: +133.813452
@@ -1879,9 +1879,9 @@ IV BY STRIKE:
       83,000       41.9%       41.9%
 
 P/C RATIO BY MONEYNESS:
-  ATM (±5%):     P/C = 0.55 (Bullish)
-  Near-OTM (5-15%):     P/C = 0.57 (Bullish)
-  Far-OTM (15%+):     P/C = 0.47 (Bullish)
+  ATM (±5%):     P/C = 0.55 (Strong Bullish)
+  Near-OTM (5-15%):     P/C = 0.57 (Strong Bullish)
+  Far-OTM (15%+):     P/C = 0.47 (Strong Bullish)
 
 SECOND-ORDER GREEKS:
   Net Vanna Exposure: +7459.065233
@@ -2084,9 +2084,9 @@ IV BY STRIKE:
       73,000       49.2%       49.2%
 
 P/C RATIO BY MONEYNESS:
-  ATM (±5%):     P/C = 0.78 (Slightly Bullish)
-  Near-OTM (5-15%):     P/C = 2.02 (Bearish)
-  Far-OTM (15%+):     P/C = 0.00 (Bullish)
+  ATM (±5%):     P/C = 0.78 (Bullish)
+  Near-OTM (5-15%):     P/C = 2.02 (Strong Bearish)
+  Far-OTM (15%+):     P/C = 0.00 (Strong Bullish)
 
 SECOND-ORDER GREEKS:
   Net Vanna Exposure: +160.957518
@@ -2278,9 +2278,9 @@ IV BY STRIKE:
       71,000       40.6%       40.6%
 
 P/C RATIO BY MONEYNESS:
-  ATM (±5%):     P/C = 0.66 (Bullish)
-  Near-OTM (5-15%):     P/C = 1.04 (Slightly Bearish)
-  Far-OTM (15%+):     P/C = 0.00 (Bullish)
+  ATM (±5%):     P/C = 0.66 (Strong Bullish)
+  Near-OTM (5-15%):     P/C = 1.04 (Bearish)
+  Far-OTM (15%+):     P/C = 0.00 (Strong Bullish)
 
 SECOND-ORDER GREEKS:
   Net Vanna Exposure: -8.631324
@@ -2554,9 +2554,9 @@ IV BY STRIKE:
       83,000       57.9%       57.9%
 
 P/C RATIO BY MONEYNESS:
-  ATM (±5%):     P/C = 0.52 (Bullish)
-  Near-OTM (5-15%):     P/C = 0.21 (Bullish)
-  Far-OTM (15%+):     P/C = 0.35 (Bullish)
+  ATM (±5%):     P/C = 0.52 (Strong Bullish)
+  Near-OTM (5-15%):     P/C = 0.21 (Strong Bullish)
+  Far-OTM (15%+):     P/C = 0.35 (Strong Bullish)
 
 SECOND-ORDER GREEKS:
   Net Vanna Exposure: +19979.717739
@@ -2746,9 +2746,9 @@ IV BY STRIKE:
       80,000       50.1%       50.1%
 
 P/C RATIO BY MONEYNESS:
-  ATM (±5%):     P/C = 0.68 (Bullish)
-  Near-OTM (5-15%):     P/C = 0.12 (Bullish)
-  Far-OTM (15%+):     P/C = 0.02 (Bullish)
+  ATM (±5%):     P/C = 0.68 (Strong Bullish)
+  Near-OTM (5-15%):     P/C = 0.12 (Strong Bullish)
+  Far-OTM (15%+):     P/C = 0.02 (Strong Bullish)
 
 SECOND-ORDER GREEKS:
   Net Vanna Exposure: +9518.367078

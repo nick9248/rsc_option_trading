@@ -22,6 +22,7 @@ from coding.core.analytics.results.vol_surface_results import (
     SkewResult,
     VolSurfaceResult,
 )
+from coding.core.analytics.thresholds import interpret_put_call_ratio
 
 logger = logging.getLogger(__name__)
 _bs = BlackScholesCalculator()
@@ -280,23 +281,13 @@ class VolatilitySurfaceCalculator:
                 ratio = float("inf") if put_oi > 0 else 0
 
             bucket_data["ratio"] = ratio
-            bucket_data["bias"] = self._interpret_pc_ratio(ratio)
+            # M4 (code_quality_review.md): shared interpreter, unifying
+            # this bucket-level bias with OnChainMetricsCalculator.
+            # calculate_put_call_ratio's whole-expiration bias
+            # (refactor_design_spec.md T12 -- planned golden delta).
+            bucket_data["bias"] = interpret_put_call_ratio(ratio)
 
         return buckets
-
-    @staticmethod
-    def _interpret_pc_ratio(ratio: float) -> str:
-        """Interpret P/C ratio into directional bias."""
-        if ratio == float("inf"):
-            return "N/A"
-        if ratio < 0.7:
-            return "Bullish"
-        elif ratio < 1.0:
-            return "Slightly Bullish"
-        elif ratio < 1.3:
-            return "Slightly Bearish"
-        else:
-            return "Bearish"
 
     def _calculate_second_order_greeks(self) -> Dict[str, Any]:
         """

@@ -28,6 +28,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from coding.core.analytics.results.analysis_result import MarketMetricsResult, TrendSnapshot
+from coding.core.analytics.thresholds import interpret_put_call_ratio
 from coding.core.analytics.results.expiry_results import (
     ExpirationAnalysisResult,
     LevelRef,
@@ -388,17 +389,11 @@ class OnChainMetricsCalculator:
         else:
             ratio = float("inf") if total_put_oi > 0 else 0
 
-        # Determine bias
-        if ratio < 0.7:
-            bias = "Strong Bullish"
-        elif ratio < 1.0:
-            bias = "Bullish"
-        elif ratio == 1.0:
-            bias = "Neutral"
-        elif ratio < 1.3:
-            bias = "Bearish"
-        else:
-            bias = "Strong Bearish"
+        # M4 (code_quality_review.md): shared interpreter, unifying this
+        # method's vocabulary with VolatilitySurfaceCalculator's per-bucket
+        # P/C ratio bias (refactor_design_spec.md T12 -- planned golden
+        # delta).
+        bias = interpret_put_call_ratio(ratio)
 
         return {
             "total_call_oi": total_call_oi,

@@ -223,9 +223,16 @@ class TestVolatilitySurfaceCalculator:
         assert result.skew_25d.skew is None
         assert result.atm_iv is None
 
-    def test_pc_ratio_interpretation(self):
-        assert VolatilitySurfaceCalculator._interpret_pc_ratio(0.5) == "Bullish"
-        assert VolatilitySurfaceCalculator._interpret_pc_ratio(0.85) == "Slightly Bullish"
-        assert VolatilitySurfaceCalculator._interpret_pc_ratio(1.1) == "Slightly Bearish"
-        assert VolatilitySurfaceCalculator._interpret_pc_ratio(1.5) == "Bearish"
-        assert VolatilitySurfaceCalculator._interpret_pc_ratio(float("inf")) == "N/A"
+    def test_pc_by_moneyness_bias_uses_shared_interpreter(self, sample_instruments):
+        """M4 (code_quality_review.md): _interpret_pc_ratio was deleted --
+        bucket bias now comes from the shared
+        coding.core.analytics.thresholds.interpret_put_call_ratio (see
+        tests/unit/analytics/test_thresholds.py for the full boundary
+        coverage). This just confirms the wiring."""
+        calc = VolatilitySurfaceCalculator(sample_instruments, 90000, "28MAR26")
+        buckets = calc._calculate_pc_by_moneyness()
+
+        for bucket in buckets.values():
+            assert bucket["bias"] in (
+                "N/A", "Strong Bullish", "Bullish", "Neutral", "Bearish", "Strong Bearish",
+            )

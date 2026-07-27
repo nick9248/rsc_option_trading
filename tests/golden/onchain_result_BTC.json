@@ -2021,21 +2021,21 @@
         ],
         "pc_by_moneyness": {
           "atm": {
-            "bias": "Slightly Bullish",
+            "bias": "Bullish",
             "call_oi": 115.60000000000001,
             "put_oi": 99.7,
             "range": "\u00b15%",
             "ratio": 0.8624567474048442
           },
           "far_otm": {
-            "bias": "Bullish",
+            "bias": "Strong Bullish",
             "call_oi": 208.8,
             "put_oi": 0,
             "range": "15%+",
             "ratio": 0.0
           },
           "near_otm": {
-            "bias": "Bullish",
+            "bias": "Strong Bullish",
             "call_oi": 1272.5,
             "put_oi": 375.7,
             "range": "5-15%",
@@ -3425,21 +3425,21 @@
         ],
         "pc_by_moneyness": {
           "atm": {
-            "bias": "Slightly Bearish",
+            "bias": "Bearish",
             "call_oi": 1534.2,
             "put_oi": 1909.2,
             "range": "\u00b15%",
             "ratio": 1.2444270629644114
           },
           "far_otm": {
-            "bias": "Bullish",
+            "bias": "Strong Bullish",
             "call_oi": 53657.7,
             "put_oi": 19301.100000000002,
             "range": "15%+",
             "ratio": 0.35970792635539733
           },
           "near_otm": {
-            "bias": "Bearish",
+            "bias": "Strong Bearish",
             "call_oi": 3623.6000000000004,
             "put_oi": 11725.800000000001,
             "range": "5-15%",
@@ -4388,21 +4388,21 @@
         ],
         "pc_by_moneyness": {
           "atm": {
-            "bias": "Bullish",
+            "bias": "Strong Bullish",
             "call_oi": 133.6,
             "put_oi": 61.3,
             "range": "\u00b15%",
             "ratio": 0.4588323353293413
           },
           "far_otm": {
-            "bias": "Slightly Bullish",
+            "bias": "Bullish",
             "call_oi": 1216.3999999999999,
             "put_oi": 1059.3999999999999,
             "range": "15%+",
             "ratio": 0.8709306149292996
           },
           "near_otm": {
-            "bias": "Bullish",
+            "bias": "Strong Bullish",
             "call_oi": 1170.0000000000002,
             "put_oi": 400.70000000000005,
             "range": "5-15%",
@@ -5834,21 +5834,21 @@
         ],
         "pc_by_moneyness": {
           "atm": {
-            "bias": "Slightly Bearish",
+            "bias": "Bearish",
             "call_oi": 2748.8,
             "put_oi": 3002.1000000000004,
             "range": "\u00b15%",
             "ratio": 1.0921493015133876
           },
           "far_otm": {
-            "bias": "Bullish",
+            "bias": "Strong Bullish",
             "call_oi": 49661.99999999999,
             "put_oi": 19590.799999999992,
             "range": "15%+",
             "ratio": 0.39448270307277183
           },
           "near_otm": {
-            "bias": "Bearish",
+            "bias": "Strong Bearish",
             "call_oi": 7357.499999999999,
             "put_oi": 11846.800000000001,
             "range": "5-15%",
@@ -6503,21 +6503,21 @@
         ],
         "pc_by_moneyness": {
           "atm": {
-            "bias": "Bullish",
+            "bias": "Strong Bullish",
             "call_oi": 1252.4,
             "put_oi": 822.7999999999998,
             "range": "\u00b15%",
             "ratio": 0.6569786010859149
           },
           "far_otm": {
-            "bias": "Bullish",
+            "bias": "Strong Bullish",
             "call_oi": 0,
             "put_oi": 0,
             "range": "15%+",
             "ratio": 0
           },
           "near_otm": {
-            "bias": "Slightly Bearish",
+            "bias": "Bearish",
             "call_oi": 179.7,
             "put_oi": 205.7,
             "range": "5-15%",
@@ -7760,21 +7760,21 @@
         ],
         "pc_by_moneyness": {
           "atm": {
-            "bias": "Bearish",
+            "bias": "Strong Bearish",
             "call_oi": 357.9,
             "put_oi": 1191.0,
             "range": "\u00b15%",
             "ratio": 3.327745180217938
           },
           "far_otm": {
-            "bias": "Bullish",
+            "bias": "Strong Bullish",
             "call_oi": 13631.300000000001,
             "put_oi": 4485.099999999999,
             "range": "15%+",
             "ratio": 0.32902951295914545
           },
           "near_otm": {
-            "bias": "Bearish",
+            "bias": "Strong Bearish",
             "call_oi": 1670.0999999999997,
             "put_oi": 2632.2,
             "range": "5-15%",
@@ -8408,21 +8408,21 @@
         ],
         "pc_by_moneyness": {
           "atm": {
-            "bias": "Bearish",
+            "bias": "Strong Bearish",
             "call_oi": 703.0,
             "put_oi": 1097.6,
             "range": "\u00b15%",
             "ratio": 1.5613086770981506
           },
           "far_otm": {
-            "bias": "Bullish",
+            "bias": "Strong Bullish",
             "call_oi": 0,
             "put_oi": 0,
             "range": "15%+",
             "ratio": 0
           },
           "near_otm": {
-            "bias": "Bullish",
+            "bias": "Strong Bullish",
             "call_oi": 442.2,
             "put_oi": 103.2,
             "range": "5-15%",
@@ -9623,21 +9623,21 @@
         ],
         "pc_by_moneyness": {
           "atm": {
-            "bias": "Bullish",
+            "bias": "Strong Bullish",
             "call_oi": 5294.599999999999,
             "put_oi": 2890.1,
             "range": "\u00b15%",
             "ratio": 0.5458580440448759
           },
           "far_otm": {
-            "bias": "Bullish",
+            "bias": "Strong Bullish",
             "call_oi": 12112.2,
             "put_oi": 5697.200000000001,
             "range": "15%+",
             "ratio": 0.47036871914268263
           },
           "near_otm": {
-            "bias": "Bullish",
+            "bias": "Strong Bullish",
             "call_oi": 11079.099999999997,
             "put_oi": 6350.9,
             "range": "5-15%",
@@ -10292,21 +10292,21 @@
         ],
         "pc_by_moneyness": {
           "atm": {
-            "bias": "Slightly Bullish",
+            "bias": "Bullish",
             "call_oi": 329.2,
             "put_oi": 255.29999999999995,
             "range": "\u00b15%",
             "ratio": 0.775516403402187
           },
           "far_otm": {
-            "bias": "Bullish",
+            "bias": "Strong Bullish",
             "call_oi": 0,
             "put_oi": 0,
             "range": "15%+",
             "ratio": 0
           },
           "near_otm": {
-            "bias": "Bearish",
+            "bias": "Strong Bearish",
             "call_oi": 83.2,
             "put_oi": 168.4,
             "range": "5-15%",
@@ -10912,21 +10912,21 @@
         ],
         "pc_by_moneyness": {
           "atm": {
-            "bias": "Bullish",
+            "bias": "Strong Bullish",
             "call_oi": 15.8,
             "put_oi": 10.4,
             "range": "\u00b15%",
             "ratio": 0.6582278481012658
           },
           "far_otm": {
-            "bias": "Bullish",
+            "bias": "Strong Bullish",
             "call_oi": 0,
             "put_oi": 0,
             "range": "15%+",
             "ratio": 0
           },
           "near_otm": {
-            "bias": "Slightly Bearish",
+            "bias": "Bearish",
             "call_oi": 93.6,
             "put_oi": 97.4,
             "range": "5-15%",
@@ -12316,21 +12316,21 @@
         ],
         "pc_by_moneyness": {
           "atm": {
-            "bias": "Bullish",
+            "bias": "Strong Bullish",
             "call_oi": 9796.3,
             "put_oi": 5083.900000000001,
             "range": "\u00b15%",
             "ratio": 0.5189612404683401
           },
           "far_otm": {
-            "bias": "Bullish",
+            "bias": "Strong Bullish",
             "call_oi": 38906.6,
             "put_oi": 13798.1,
             "range": "15%+",
             "ratio": 0.35464676944271667
           },
           "near_otm": {
-            "bias": "Bullish",
+            "bias": "Strong Bullish",
             "call_oi": 67222.8,
             "put_oi": 14199.0,
             "range": "5-15%",
@@ -12901,21 +12901,21 @@
         ],
         "pc_by_moneyness": {
           "atm": {
-            "bias": "Bullish",
+            "bias": "Strong Bullish",
             "call_oi": 1024.6,
             "put_oi": 694.4,
             "range": "\u00b15%",
             "ratio": 0.6777278938122194
           },
           "far_otm": {
-            "bias": "Bullish",
+            "bias": "Strong Bullish",
             "call_oi": 3512.1,
             "put_oi": 82.0,
             "range": "15%+",
             "ratio": 0.02334785455994989
           },
           "near_otm": {
-            "bias": "Bullish",
+            "bias": "Strong Bullish",
             "call_oi": 14951.499999999998,
             "put_oi": 1848.7,
             "range": "5-15%",
