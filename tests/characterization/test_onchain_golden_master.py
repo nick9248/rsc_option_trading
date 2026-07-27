@@ -54,38 +54,100 @@ def _find_fixture_dir(currency: str) -> Path:
     return candidates[-1]
 
 
-def _build_structured_snapshot(analyzer) -> Dict[str, Any]:
+def _build_structured_snapshot(result) -> Dict[str, Any]:
     """
     Assemble a JSON-serializable dict of every numeric field the pipeline
     computed, independent of how the text report happens to format/round
     them. Catches value drift that text formatting rounds away — see
     refactor_design_spec.md section 7.4, test_structured_data_snapshot.
+
+    T10 (refactor_design_spec.md): rebuilt from the typed
+    ``OnChainAnalysisResult`` -- the analyzer's own gex_dex_structured/
+    buy_sell_flow_structured/volatility_surface_structured/
+    market_wide_structured/trend_data dict bookkeeping this used to read
+    directly is deleted. Each per-expiration field is reconstructed via
+    the exact same ``.to_dict()`` shim the legacy dict consumers
+    (``repository.save_onchain_snapshot`` etc.) already rely on, so the
+    shape is unchanged for every field except ``market_wide_structured``
+    (see the reviewed golden delta noted below).
     """
     per_expiration: Dict[str, Any] = {}
-    for expiration in analyzer.get_expirations():
-        analysis = analyzer.analyze_expiration(expiration)
+    for expiration in result.expiration_names():
+        bundle = result.bundle(expiration)
+        analysis_dict = bundle.analysis.to_dict()
+
+        flow_dict = None
+        if bundle.flow is not None:
+            flow_dict = bundle.flow.to_dict()
+            # F6.3.4 (carried from A4 review): to_dict()'s legacy shim
+            # doesn't carry the data-sufficiency bookkeeping keys the
+            # legacy flow_result_dict always added explicitly.
+            flow_dict["sufficient_data"] = bundle.flow.sufficient_data
+            flow_dict["low_confidence"] = bundle.flow.low_confidence
+            flow_dict["lookback_hours"] = bundle.flow.lookback_hours
+
+        trend_dict = None
+        if bundle.trend is not None:
+            t = bundle.trend
+            trend_dict = {}
+            if t.max_pain_strike is not None:
+                trend_dict["max_pain_strike"] = t.max_pain_strike
+            if t.call_oi is not None:
+                trend_dict["call_oi"] = t.call_oi
+            if t.put_oi is not None:
+                trend_dict["put_oi"] = t.put_oi
+            # pc_ratio/volume_ratio were always set by the legacy
+            # _fetch_trend_data (even to None), unlike the other four
+            # fields -- mirrored here for exact byte parity.
+            trend_dict["pc_ratio"] = t.pc_ratio
+            if t.total_volume is not None:
+                trend_dict["total_volume"] = t.total_volume
+            trend_dict["volume_ratio"] = t.volume_ratio
+
         per_expiration[expiration] = {
-            "underlying_price": analysis.get("underlying_price"),
-            "total_instruments": analysis.get("total_instruments"),
-            "call_count": analysis.get("call_count"),
-            "put_count": analysis.get("put_count"),
-            "max_pain": analysis.get("max_pain"),
-            "put_call_ratio": analysis.get("put_call_ratio"),
-            "volume_stats": analysis.get("volume_stats"),
-            "moneyness": analysis.get("moneyness"),
-            "support_resistance": analysis.get("support_resistance"),
-            "gex_dex": analyzer.gex_dex_structured.get(expiration),
-            "buy_sell_flow": analyzer.buy_sell_flow_structured.get(expiration),
-            "volatility_surface": analyzer.volatility_surface_structured.get(expiration),
-            "trend_data": analyzer.trend_data.get(expiration),
+            "underlying_price": analysis_dict["underlying_price"],
+            "total_instruments": analysis_dict["total_instruments"],
+            "call_count": analysis_dict["call_count"],
+            "put_count": analysis_dict["put_count"],
+            "max_pain": analysis_dict["max_pain"],
+            "put_call_ratio": analysis_dict["put_call_ratio"],
+            "volume_stats": analysis_dict["volume_stats"],
+            "moneyness": analysis_dict["moneyness"],
+            "support_resistance": analysis_dict["support_resistance"],
+            "gex_dex": bundle.gex_dex.to_dict() if bundle.gex_dex is not None else None,
+            "buy_sell_flow": flow_dict,
+            "volatility_surface": (
+                bundle.vol_surface.to_dict() if bundle.vol_surface is not None else None
+            ),
+            "trend_data": trend_dict,
         }
 
+    mm = result.market_metrics
+    market_metrics_dict = {
+        "dvol": mm.dvol, "iv_percentile": mm.iv_percentile, "iv_rank": mm.iv_rank,
+        "current_funding": mm.current_funding, "funding_8h": mm.funding_8h,
+    }
+
     return {
-        "currency": analyzer.currency,
-        "underlying_price": analyzer.underlying_price,
-        "market_metrics": analyzer.market_metrics,
-        "market_wide_structured": analyzer.market_wide_structured,
-        "gex_dex_aggregate": analyzer.gex_dex_structured.get("AGGREGATE"),
+        "currency": result.currency,
+        "underlying_price": result.underlying_price,
+        "market_metrics": market_metrics_dict,
+        # T10 golden delta (reviewed, additive-only in practice against
+        # this fixture -- confirmed via a direct dict-diff before
+        # re-recording): analyzer.market_wide_structured (the legacy flat
+        # accumulator dict) is deleted along with the rest of the report-
+        # text bookkeeping. MarketWideResult.to_flat_dict() is the typed
+        # model's own flattened-dict reproduction (already used by
+        # SynthesisMapper.build_market_wide) and the closest available
+        # equivalent -- it omits a small number of keys the legacy dict
+        # carried that nothing downstream of the typed pipeline reads
+        # (e.g. funding_annualized_pct), by the same design note already
+        # on to_flat_dict() itself.
+        "market_wide_structured": result.market_wide.to_flat_dict(),
+        "gex_dex_aggregate": (
+            result.market_wide.aggregate_gex_dex.to_dict()
+            if result.market_wide.aggregate_gex_dex is not None else None
+        ),
         "per_expiration": per_expiration,
     }
 
@@ -216,7 +278,7 @@ def test_structured_data_snapshot(pipeline_result, update_golden):
     formatting — catches value drift that rounding/formatting in the text
     report would round away.
     """
-    snapshot_text = _dump_json(_build_structured_snapshot(pipeline_result["analyzer"]))
+    snapshot_text = _dump_json(_build_structured_snapshot(pipeline_result["result"]))
 
     if update_golden:
         GOLDEN_RESULT.write_text(snapshot_text, encoding="utf-8")
@@ -304,12 +366,30 @@ def test_per_expiration_files_match_golden(pipeline_result):
 
 def test_builder_result_matches_analyzer_dicts(pipeline_result):
     """
-    refactor_design_spec.md section T6 proof: run the pipeline against the
-    fixture (return_result=True dual-write) and assert every builder field
-    equals its analyzer-dict counterpart. This is the T6 safety net — the
-    builder must describe the SAME run the analyzer/report/golden-master
-    already describe, not a parallel computation that happens to agree on
-    a synthetic test case.
+    refactor_design_spec.md section T6/T10 proof: run the pipeline against
+    the fixture (return_result=True dual-write) and assert the builder's
+    typed result agrees with independently-recomputed values from
+    OnChainMetricsCalculator's own kept methods/attributes.
+
+    T10 note: before this task, the analyzer additionally kept a parallel
+    dict-shaped bookkeeping of every phase's output (gex_dex_structured,
+    buy_sell_flow_structured, volatility_surface_structured,
+    market_wide_structured, trend_data) that this test used to compare the
+    builder's result against, field-by-field. T10 deletes all of that
+    bookkeeping by design — ``OnChainAnalysisResult`` is now the SOLE
+    aggregate the rest of the pipeline (report rendering, synthesis,
+    persistence) reads, not a second representation kept in sync with a
+    first, so there is no longer an independent "legacy dict" to compare
+    against for those fields. What remains directly comparable is
+    ``analyze_expiration()``'s determinism (recomputing it here must
+    reproduce exactly what the builder captured at the top of
+    ``fetch_and_analyze``) and the state ``OnChainMetricsCalculator`` still
+    keeps as plain attributes (``parsed_data``, ``market_metrics``,
+    ``_recent_trades``) — both checked below. Whole-report correctness
+    (including gex_dex/flow/vol_surface/market_wide content) is covered by
+    ``test_full_report_matches_golden`` and
+    ``test_structured_data_snapshot``, which build their comparison
+    directly from this same ``result`` (see ``_build_structured_snapshot``).
     """
     analyzer = pipeline_result["analyzer"]
     result = pipeline_result["result"]
@@ -335,82 +415,21 @@ def test_builder_result_matches_analyzer_dicts(pipeline_result):
         assert bundle is not None
         checked_expirations += 1
 
-        # ExpirationAnalysisResult must match analyze_expiration()'s own dict
-        # (analyze_expiration recomputes deterministically from parsed_data,
-        # so calling it again here reproduces the exact values the builder
-        # captured at the top of fetch_and_analyze).
-        assert bundle.analysis.to_dict() == analyzer.analyze_expiration(expiration)
-
-        expected_gex_dex = analyzer.gex_dex_structured.get(expiration)
-        if expected_gex_dex is not None:
-            assert bundle.gex_dex is not None
-            assert bundle.gex_dex.to_dict() == expected_gex_dex
-        else:
-            assert bundle.gex_dex is None
-
-        expected_flow = analyzer.buy_sell_flow_structured.get(expiration)
-        if expected_flow is not None:
-            assert bundle.flow is not None
-            # F6.3.4 (carried from A4 review): the service extends
-            # to_dict()'s legacy shim with sufficient_data/low_confidence/
-            # lookback_hours bookkeeping keys the typed FlowResult itself
-            # never included in to_dict() — compare those separately.
-            extra_keys = {"sufficient_data", "low_confidence", "lookback_hours"}
-            assert bundle.flow.to_dict() == {
-                k: v for k, v in expected_flow.items() if k not in extra_keys
-            }
-            assert bundle.flow.sufficient_data == expected_flow.get("sufficient_data")
-            assert bundle.flow.low_confidence == expected_flow.get("low_confidence")
-            assert bundle.flow.lookback_hours == expected_flow.get("lookback_hours")
-        else:
-            assert bundle.flow is None
-
-        expected_vol_surface = analyzer.volatility_surface_structured.get(expiration)
-        if expected_vol_surface is not None:
-            assert bundle.vol_surface is not None
-            assert bundle.vol_surface.to_dict() == expected_vol_surface
-            if expected_vol_surface["atm_iv"] is not None:
-                assert result.atm_iv_by_expiration[expiration] == expected_vol_surface["atm_iv"]
-        else:
-            assert bundle.vol_surface is None
-
-        expected_trend = analyzer.trend_data.get(expiration)
-        if expected_trend:
-            assert bundle.trend is not None
-            assert bundle.trend.max_pain_strike == expected_trend.get("max_pain_strike")
-            assert bundle.trend.call_oi == expected_trend.get("call_oi")
-            assert bundle.trend.put_oi == expected_trend.get("put_oi")
-            assert bundle.trend.pc_ratio == expected_trend.get("pc_ratio")
-            assert bundle.trend.total_volume == expected_trend.get("total_volume")
-            assert bundle.trend.volume_ratio == expected_trend.get("volume_ratio")
-        else:
-            assert bundle.trend is None
+        # ExpirationAnalysisResult must match analyze_expiration()'s own
+        # (typed, T10) return value — analyze_expiration recomputes
+        # deterministically from parsed_data, so calling it again here
+        # reproduces the exact values the builder captured at the top of
+        # fetch_and_analyze.
+        assert bundle.analysis == analyzer.analyze_expiration(expiration)
 
     assert checked_expirations > 0, "No expirations found — fixture may be empty"
     assert result.expiration_names() == tuple(sorted(analyzer.get_expirations())), (
         "Builder must only include expirations analyze_expiration() actually produced a result for"
     )
 
-    # Market-wide: check the fields directly analogous to the legacy dict
-    # (market_wide_structured carries extra/renamed keys not on
-    # MarketWideResult.to_flat_dict() by design — e.g. funding_annualized_pct
-    # is new in the typed model's structured dict but not part of the
-    # to_flat_dict() shape synthesis reads today).
-    mw = result.market_wide
-    legacy_mw = analyzer.market_wide_structured
-    assert mw.spot_price == legacy_mw.get("spot_price")
-    assert mw.dvol == analyzer.market_metrics.get("dvol")
-    if mw.term_structure is not None:
-        assert mw.term_structure.shape == legacy_mw.get("shape")
-        assert mw.term_structure.spread == legacy_mw.get("spread")
-        assert mw.term_structure.iv_by_dte == legacy_mw.get("iv_by_dte")
-    if mw.futures_basis is not None:
-        assert mw.futures_basis.futures_basis == legacy_mw.get("futures_basis")
-    if mw.realized_volatility is not None:
-        assert mw.realized_volatility.rv_10d == legacy_mw.get("rv_10d")
-        assert mw.realized_volatility.rv_20d == legacy_mw.get("rv_20d")
-        assert mw.realized_volatility.rv_30d == legacy_mw.get("rv_30d")
-    if mw.perpetual_funding is not None:
-        assert mw.perpetual_funding.perp_open_interest == legacy_mw.get("perp_oi")
-        assert mw.perpetual_funding.funding_trend == legacy_mw.get("perp_funding_trend")
-        assert mw.perpetual_funding.funding_8h == legacy_mw.get("funding_8h")
+    # Market-wide: dvol is the one field still directly comparable against
+    # a plain analyzer attribute (market_metrics, kept as real cross-phase
+    # data — see the on_chain_analyzer.py module docstring). Everything
+    # else on MarketWideResult is checked by test_structured_data_snapshot
+    # against the golden JSON instead.
+    assert result.market_wide.dvol == analyzer.market_metrics.get("dvol")

@@ -1,18 +1,32 @@
 """
 On-chain analytics for options market data.
 
-Calculates max pain, put/call ratios, support/resistance levels,
-and generates formatted text reports per expiration.
+Calculates max pain, put/call ratios, support/resistance levels, and
+moneyness breakdowns per expiration.
+
+refactor_design_spec.md section T10: this module was ``OnChainAnalyzer``, a
+mutable accumulator that also owned 351 lines of report-text generation
+(``generate_report()``) plus 14 setters and 16 mutable section attributes
+for that report's bookkeeping. All of that moved out over T3 (formatters
+extracted to ``core/analytics/reporting/``), T6 (``OnChainAnalysisBuilder``
+replaced the setters as the typed aggregation point), T8/T10 (rendering
+moved to ``OnChainReportFormatter.render_full_from_result``, fed by the
+builder's typed result, not this class's dicts). This module is now
+``OnChainMetricsCalculator``: pure per-expiration calculation, narrowed to
+exactly the methods ``ProspectiveCollector`` (the production daemon) and
+``OnChainAnalysisService`` actually call, plus the state those calls need
+across phases (``enriched_instruments``, ``market_metrics``,
+``_recent_trades``, ``_atm_ivs`` -- real cross-phase data, not report
+bookkeeping, so they stay as plain attributes the service writes directly,
+with no setter method).
+
+``OnChainAnalyzer`` remains a back-compat alias for any caller that still
+imports the old name.
 """
 
 import logging
-from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-from coding.core.analytics.reporting.report_formatter import (
-    ExpirationRenderInput,
-    OnChainReportFormatter,
-)
 from coding.core.analytics.results.analysis_result import MarketMetricsResult, TrendSnapshot
 from coding.core.analytics.results.expiry_results import (
     ExpirationAnalysisResult,
@@ -32,7 +46,7 @@ logger = logging.getLogger(__name__)
 def _to_market_metrics(market_metrics: Dict[str, Any]) -> Optional[MarketMetricsResult]:
     """Adapt the legacy market_metrics dict into a MarketMetricsResult.
 
-    Returns None when set_market_metrics() was never called (empty dict) —
+    Returns None when market_metrics was never populated (empty dict) —
     matches the legacy ``if self.market_metrics:`` truthiness gate.
     """
     if not market_metrics:
@@ -68,11 +82,9 @@ def _level_ref(level: Optional[Dict[str, Any]], oi_key: str) -> Optional[LevelRe
 
 def _to_expiration_analysis_result(analysis: Dict[str, Any]) -> ExpirationAnalysisResult:
     """
-    Adapt the legacy ``analyze_expiration()`` dict into an
-    ExpirationAnalysisResult. Temporary adapter (refactor_design_spec.md
-    section T3) — analyze_expiration() itself keeps returning the legacy
-    dict shape until a later task wires the calculators to produce typed
-    results directly.
+    Adapt the legacy ``analyze_expiration()`` dict shape into an
+    ExpirationAnalysisResult. Used internally by ``analyze_expiration``
+    (the method itself now returns the typed result directly, T10).
     """
     strike_data = analysis["strike_data"]
     strike_rows = tuple(
@@ -118,7 +130,7 @@ def _to_expiration_analysis_result(analysis: Dict[str, Any]) -> ExpirationAnalys
     )
 
 
-class OnChainAnalyzer:
+class OnChainMetricsCalculator:
     """
     Calculate on-chain analytics from option book summary data.
 
@@ -127,12 +139,17 @@ class OnChainAnalyzer:
     - Put/Call ratios
     - Support and resistance levels
     - Open interest by strike
-    - GEX/DEX exposure (when Greeks data is provided)
+    - Moneyness (ITM/OTM) breakdown
+
+    Pure calculation (refactor_design_spec.md section T10) -- GEX/DEX, flow,
+    volatility-surface, market-wide, and report-rendering concerns all live
+    in their own calculator/formatter modules now; this class only knows
+    about the per-expiration book-summary numbers.
     """
 
     def __init__(self, data: List[Dict[str, Any]], currency: str):
         """
-        Initialize analyzer with book summary data.
+        Initialize calculator with book summary data.
 
         Args:
             data: List of book summary items from Deribit API.
@@ -142,21 +159,14 @@ class OnChainAnalyzer:
         self.currency = currency
         self.underlying_price: float = 0.0
         self.parsed_data: Dict[str, List[Dict]] = {}
-        self.gex_dex_data: Dict[str, str] = {}  # Stores GEX/DEX report per expiration
-        self.buy_sell_flow_data: Dict[str, str] = {}  # Stores buy/sell flow report per expiration
-        self.buy_sell_flow_charts: Dict[str, Dict[str, str]] = {}  # Stores chart paths per expiration
-        self.market_metrics: Dict[str, Any] = {}  # Stores DVOL, funding rate, etc.
+
+        # Cross-phase state written directly by OnChainAnalysisService (no
+        # setter methods -- these are real data dependencies between
+        # pipeline phases, not report-text bookkeeping):
         self.enriched_instruments: Dict[str, List[Dict]] = {}  # Instruments with full Greeks/IV
-        self.volatility_surface_data: Dict[str, str] = {}  # Vol surface report per expiration
-        self.oi_changes_data: Dict[str, str] = {}  # OI changes report per expiration
-        self.market_wide_sections: Dict[str, str] = {}  # Market-wide report sections
-        self.gex_dex_structured: Dict[str, Dict] = {}           # Raw GEX/DEX data per expiry
-        self.buy_sell_flow_structured: Dict[str, Dict] = {}     # Raw flow data per expiry
-        self.volatility_surface_structured: Dict[str, Dict] = {}  # Raw vol surface per expiry
-        self.market_wide_structured: Dict[str, Any] = {}        # Raw market-wide metrics
-        self.trend_data: Dict[str, Optional[Dict]] = {}         # Previous DB snapshot per expiry
-        self._recent_trades: List[Dict[str, Any]] = []          # Recent trades for block trade detection
-        self._atm_ivs: Dict[str, float] = {}                    # ATM IV per expiration (for term structure)
+        self.market_metrics: Dict[str, Any] = {}  # DVOL, funding rate, IV rank/percentile
+        self._recent_trades: List[Dict[str, Any]] = []  # For block trade detection
+        self._atm_ivs: Dict[str, float] = {}  # ATM IV per expiration (for term structure)
 
         # Extract underlying price using most common value (mode)
         # Different instruments may have slightly different underlying_price values
@@ -165,7 +175,7 @@ class OnChainAnalyzer:
         if data:
             self.underlying_price = self._extract_underlying_price(data)
 
-        logger.info(f"Initialized OnChainAnalyzer with {len(data)} instruments")
+        logger.info(f"Initialized OnChainMetricsCalculator with {len(data)} instruments")
 
     def _extract_underlying_price(self, data: List[Dict[str, Any]]) -> float:
         """
@@ -643,19 +653,28 @@ class OnChainAnalyzer:
             "short_term_support": short_term_support,
         }
 
-    def analyze_expiration(self, expiration: str) -> Dict[str, Any]:
+    def analyze_expiration(self, expiration: str) -> Optional[ExpirationAnalysisResult]:
         """
         Perform full analysis for a single expiration.
+
+        refactor_design_spec.md section T10 (compat map row #8): returns
+        the typed ``ExpirationAnalysisResult`` directly now (previously a
+        plain dict; the adapter that used to sit in the caller,
+        ``_to_expiration_analysis_result``, now lives inside this method).
+        Every caller (``OnChainAnalysisService``, ``ProspectiveCollector``)
+        updated in the same commit.
 
         Args:
             expiration: Expiration date string (e.g., "27DEC24").
 
         Returns:
-            Dict with all analysis results for this expiration.
+            The expiration's typed analysis result, or None if the
+            expiration is not in the parsed data (matches the legacy
+            ``return {}`` "not found" case's falsy/absent semantics).
         """
         if expiration not in self.parsed_data:
             logger.warning(f"Expiration {expiration} not found in data")
-            return {}
+            return None
 
         instruments = self.parsed_data[expiration]
         strike_data = self.group_by_strike(instruments)
@@ -673,7 +692,7 @@ class OnChainAnalyzer:
             strike_data, self.underlying_price
         )
 
-        return {
+        analysis = {
             "expiration": expiration,
             "underlying_price": self.underlying_price,
             "total_instruments": len(instruments),
@@ -686,104 +705,7 @@ class OnChainAnalyzer:
             "moneyness": moneyness,
             "support_resistance": support_resistance,
         }
-
-    def generate_report(self) -> str:
-        """
-        Generate a formatted text report for all expirations.
-
-        Pure delegator (refactor_design_spec.md section T3): builds a
-        temporary ExpirationRenderInput per expiration (adapting this
-        analyzer's own dicts into the typed ExpirationAnalysisResult /
-        TrendSnapshot models, plus whatever pre-rendered extra section text
-        the other calculators already produced) and hands everything to
-        OnChainReportFormatter, which owns all the actual text formatting.
-
-        Returns:
-            Formatted text report string.
-        """
-        if not self.parsed_data:
-            self.parse_instruments()
-
-        generated_at = datetime.now()
-        market_metrics = _to_market_metrics(self.market_metrics)
-
-        render_inputs = []
-        for expiration in sorted(self.parsed_data.keys()):
-            analysis = self.analyze_expiration(expiration)
-            if not analysis:
-                continue
-
-            render_inputs.append(
-                ExpirationRenderInput(
-                    expiration=expiration,
-                    analysis=_to_expiration_analysis_result(analysis),
-                    trend=_to_trend_snapshot(self.trend_data.get(expiration)),
-                    extra_sections=tuple(self._raw_extra_sections(expiration)),
-                    evidence_line=self._build_evidence_line(expiration),
-                )
-            )
-
-        return OnChainReportFormatter().render_full(
-            currency=self.currency,
-            underlying_price=self.underlying_price,
-            generated_at=generated_at,
-            market_metrics=market_metrics,
-            expirations=tuple(render_inputs),
-            market_wide_sections=self.market_wide_sections,
-        )
-
-    def _raw_extra_sections(self, expiration: str) -> List[str]:
-        """
-        Collect this expiration's already-formatted GEX/DEX, buy/sell flow,
-        volatility surface, and OI-changes text, in that fixed order —
-        matches the legacy inline appends in generate_report(). These
-        calculators still produce plain text (not typed results) until
-        T4/T5/T8, so generate_report() passes their output through verbatim.
-        """
-        texts = []
-        if expiration in self.gex_dex_data:
-            texts.append(self.gex_dex_data[expiration])
-        if expiration in self.buy_sell_flow_data:
-            texts.append(self.buy_sell_flow_data[expiration])
-        if expiration in self.volatility_surface_data:
-            texts.append(self.volatility_surface_data[expiration])
-        if expiration in self.oi_changes_data:
-            texts.append(self.oi_changes_data[expiration])
-        return texts
-
-    def _build_evidence_line(self, expiration: str) -> Optional[str]:
-        """
-        bugfix_spec.md Item 6 / F6.3.4 (carried from A4 review): propagate
-        the flow data-sufficiency gate to the report's directional
-        conclusions. The complaint that "the surrounding report still
-        asserts PCR bias and GEX environment labels around an empty flow
-        section" is fixed here, at the report level — PCR is an OI metric
-        and does not need trades, so it is not silenced; instead the
-        per-expiration header carries an explicit evidence caveat.
-
-        Returns None when there is no flow bookkeeping at all for this
-        expiration (e.g. the repository was unavailable and the whole flow
-        phase was skipped) — the header omits the line entirely rather than
-        guessing.
-        """
-        flow_data = self.buy_sell_flow_structured.get(expiration)
-        if not flow_data:
-            return "EVIDENCE: OI/GEX from full book | Flow: NOT ANALYZED"
-
-        sufficient = flow_data.get("sufficient_data")
-        if sufficient is None:
-            # Pre-fix bookkeeping absent (flow_result_dict without the
-            # sufficient_data key) — omit rather than assert a status we
-            # cannot actually verify.
-            return None
-
-        trade_count = flow_data.get("trade_count", 0)
-        lookback_hours = flow_data.get("lookback_hours", 24)
-        status = "OK" if sufficient else "INSUFFICIENT"
-        return (
-            f"EVIDENCE: OI/GEX from full book | "
-            f"Flow: {status} ({trade_count} trades in {lookback_hours:.0f}h)"
-        )
+        return _to_expiration_analysis_result(analysis)
 
     def get_expirations(self) -> List[str]:
         """
@@ -796,143 +718,9 @@ class OnChainAnalyzer:
             self.parse_instruments()
         return sorted(self.parsed_data.keys())
 
-    def set_gex_dex_data(self, expiration: str, report_text: str) -> None:
-        """
-        Store GEX/DEX report text for an expiration.
 
-        Args:
-            expiration: Expiration date string (e.g., "27DEC24").
-            report_text: Formatted GEX/DEX report section text.
-        """
-        self.gex_dex_data[expiration] = report_text
-
-    def set_buy_sell_flow_data(self, expiration: str, report_text: str) -> None:
-        """
-        Store buy/sell flow report text for an expiration.
-
-        Args:
-            expiration: Expiration date string (e.g., "27DEC24").
-            report_text: Formatted buy/sell flow report section text.
-        """
-        self.buy_sell_flow_data[expiration] = report_text
-
-    def set_buy_sell_flow_charts(self, expiration: str, chart_paths: Dict[str, str]) -> None:
-        """
-        Store buy/sell flow chart paths for an expiration.
-
-        Args:
-            expiration: Expiration date string (e.g., "27DEC24").
-            chart_paths: Dict with keys: distribution, net_flow, trend (values are file paths).
-        """
-        self.buy_sell_flow_charts[expiration] = chart_paths
-
-    def set_volatility_surface_data(self, expiration: str, report_text: str) -> None:
-        """Store volatility surface report text for an expiration."""
-        self.volatility_surface_data[expiration] = report_text
-
-    def set_oi_changes_data(self, expiration: str, report_text: str) -> None:
-        """Store OI changes report text for an expiration."""
-        self.oi_changes_data[expiration] = report_text
-
-    def set_market_wide_section(self, section_name: str, report_text: str) -> None:
-        """Store a market-wide report section."""
-        self.market_wide_sections[section_name] = report_text
-
-    def set_gex_dex_structured(self, expiration: str, data: Dict) -> None:
-        """Store raw GEX/DEX structured data for an expiration."""
-        self.gex_dex_structured[expiration] = data
-
-    def set_buy_sell_flow_structured(self, expiration: str, data: Dict) -> None:
-        """Store raw buy/sell flow structured data for an expiration."""
-        self.buy_sell_flow_structured[expiration] = data
-
-    def set_volatility_surface_structured(self, expiration: str, data: Dict) -> None:
-        """Store raw volatility surface structured data for an expiration."""
-        self.volatility_surface_structured[expiration] = data
-
-    def set_market_wide_structured(self, data: Dict) -> None:
-        """Store raw market-wide structured metrics."""
-        self.market_wide_structured = data
-
-    def set_recent_trades(self, trades: List[Dict[str, Any]]) -> None:
-        """
-        Store recent trades fetched from API for block trade detection.
-
-        Args:
-            trades: List of recent trade dicts from get_last_trades_by_currency.
-        """
-        self._recent_trades = trades
-
-    def set_atm_iv(self, expiration: str, atm_iv: float) -> None:
-        """
-        Store ATM IV for a specific expiration (used for term structure in market-wide analysis).
-
-        Args:
-            expiration: Expiration string (e.g. '27MAR26').
-            atm_iv: ATM implied volatility as a percentage (e.g. 55.3).
-        """
-        self._atm_ivs[expiration] = atm_iv
-
-    def set_trend_data(self, expiration: str, data: Optional[Dict]) -> None:
-        """
-        Store previous DB snapshot for trend comparison in report.
-
-        Args:
-            expiration: Expiration string (e.g. '10MAR26').
-            data: Dict with prev values, or None if no prior record.
-                  Keys: max_pain_strike, call_oi, put_oi, pc_ratio,
-                        total_volume, volume_ratio.
-        """
-        self.trend_data[expiration] = data
-
-    def _format_trend(
-        self, current: float, previous: Optional[float], is_ratio: bool = False
-    ) -> str:
-        """
-        Format trend vs previous value.
-
-        Args:
-            current: Current value.
-            previous: Previous value, or None if unavailable.
-            is_ratio: If True, format as ratio (2 decimal places); otherwise as integer.
-
-        Returns:
-            Formatted trend string, or empty string if no previous value.
-        """
-        if previous is None:
-            return ""
-        delta = current - previous
-        if delta == 0:
-            return "  [→ unchanged]"
-        arrow = "↑" if delta > 0 else "↓"
-        if is_ratio:
-            return f"  [{arrow} from {previous:.2f}, {delta:+.2f}]"
-        return f"  [{arrow} from {previous:,.0f}, {delta:+,.0f}]"
-
-    def set_market_metrics(
-        self,
-        dvol: Optional[float] = None,
-        iv_percentile: Optional[float] = None,
-        current_funding: Optional[float] = None,
-        funding_8h: Optional[float] = None,
-        iv_rank: Optional[float] = None,
-    ) -> None:
-        """
-        Store market-wide metrics (DVOL, funding rate, IV rank).
-
-        These metrics are currency-wide, not from the book summary data.
-
-        Args:
-            dvol: Current DVOL (Deribit Volatility Index) value.
-            iv_percentile: IV percentile based on past 365 days.
-            current_funding: Current funding rate from perpetual.
-            funding_8h: 8-hour funding rate from perpetual.
-            iv_rank: IV rank over 52 weeks (0-100 scale).
-        """
-        self.market_metrics = {
-            "dvol": dvol,
-            "iv_percentile": iv_percentile,
-            "current_funding": current_funding,
-            "funding_8h": funding_8h,
-            "iv_rank": iv_rank,
-        }
+# T10 design choice (refactor_design_spec.md): back-compat alias for any
+# caller that still imports the pre-T10 name. ProspectiveCollector (the
+# production daemon) is the highest-risk consumer of this class -- this
+# alias means an import site that was never updated still works.
+OnChainAnalyzer = OnChainMetricsCalculator

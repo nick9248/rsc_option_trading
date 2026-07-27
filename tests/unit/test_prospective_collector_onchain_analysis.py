@@ -1,25 +1,38 @@
 """
-Regression test for a daemon-breaking bug found in independent review of
-Task A4: ProspectiveCollector._run_onchain_analysis fed GexDexCalculator's
-new typed GexDexResult (T4) straight into
-DatabaseRepository.save_onchain_snapshot(gex_dex_data=...), which still
-does dict-style ``gex_dex_data.get("key_levels", {})`` /
-``gex_dex_data.get("total_net_gex")`` (compatibility-map row #9, T10-scoped
-— it was never supposed to see anything but a legacy dict until T10).
-A frozen dataclass has no ``.get()``, so every hourly write to
-onchain_analysis_snapshots was raising AttributeError, silently swallowed
-by the broad ``except Exception`` in the per-expiration loop.
+Producer -> consumer wiring test for ProspectiveCollector._run_onchain_analysis
+-> DatabaseRepository.save_onchain_snapshot (the production daemon's hourly
+on-chain snapshot write).
 
-This test asserts exactly what save_onchain_snapshot receives from
-_run_onchain_analysis: a plain dict, with ``key_levels`` and
-``total_net_gex`` present in the shapes repository.py's
-save_onchain_snapshot expects.
+History: this file originally pinned a Task A4 regression where
+GexDexCalculator's typed GexDexResult (T4) reached save_onchain_snapshot's
+dict-style ``.get()`` reads, raising AttributeError on every hourly write,
+silently swallowed by the per-expiration ``except Exception``. That bug was
+fixed by keeping gex_dex_data as a plain dict (via ``.to_dict()``) until
+T10, when both the producer AND the consumer flip to typed together.
+
+refactor_design_spec.md section T10 (compat-map rows #8/#9): that flip has
+now happened in THIS commit --
+``OnChainMetricsCalculator.analyze_expiration()`` returns
+``ExpirationAnalysisResult`` directly (not a dict) and
+``DatabaseRepository.save_onchain_snapshot`` reads ``analysis_data``/
+``gex_dex_data`` via attribute access (not ``.get()``). This file's
+assertions are inverted to match: it now pins that a *dict* reaching
+save_onchain_snapshot would be the bug (no ``.max_pain`` attribute), and
+adds an end-to-end test that exercises the REAL ``save_onchain_snapshot``
+body (not a mock) against exactly what ``_run_onchain_analysis`` produces --
+the class of gap that let the original A4 bug through 717 green tests: a
+producer and consumer each individually tested against a shape the other
+side didn't actually send.
 """
 
 from datetime import datetime
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
+
+from coding.core.analytics.results.expiry_results import ExpirationAnalysisResult
+from coding.core.analytics.results.gex_dex_results import GexDexResult
+from coding.core.database.repository import DatabaseRepository
 
 
 def _make_collector():
@@ -58,11 +71,14 @@ def instruments():
     ]
 
 
-class TestRunOnchainAnalysisSavesPlainDictGexDexData:
-    """C1 regression: save_onchain_snapshot must receive a dict, not a
-    frozen GexDexResult, for gex_dex_data."""
+class TestRunOnchainAnalysisSavesTypedResults:
+    """
+    T10: save_onchain_snapshot's params must be the typed producer objects,
+    not dicts -- the inverse of the pre-T10 pinned bug now that both sides
+    have flipped together in the same commit.
+    """
 
-    def test_gex_dex_data_passed_to_save_is_a_plain_dict(self, instruments):
+    def test_analysis_data_passed_to_save_is_the_typed_result(self, instruments):
         collector = _make_collector()
 
         collector._run_onchain_analysis(
@@ -73,21 +89,15 @@ class TestRunOnchainAnalysisSavesPlainDictGexDexData:
 
         assert collector.repo.save_onchain_snapshot.call_count == 1
         _, kwargs = collector.repo.save_onchain_snapshot.call_args
-        gex_dex_data = kwargs["gex_dex_data"]
+        analysis_data = kwargs["analysis_data"]
 
-        # The bug: a frozen dataclass has no .get() at all.
-        assert isinstance(gex_dex_data, dict), (
-            f"gex_dex_data must be a plain dict for save_onchain_snapshot's "
-            f".get() calls to work; got {type(gex_dex_data)!r}"
+        assert isinstance(analysis_data, ExpirationAnalysisResult), (
+            f"analysis_data must be the typed ExpirationAnalysisResult for "
+            f"save_onchain_snapshot's attribute reads to work; got {type(analysis_data)!r}"
         )
-        assert hasattr(gex_dex_data, "get")
+        assert not isinstance(analysis_data, dict)
 
-    def test_gex_dex_data_has_shapes_save_onchain_snapshot_expects(self, instruments):
-        """repository.py:1084 does gex_dex_data.get("key_levels", {}) then
-        .get("call_resistance")/.get("put_support")/.get("hvl"); :1165 does
-        gex_dex_data.get("total_net_gex")/.get("total_net_dex"). Assert the
-        exact producer output satisfies the exact consumer read pattern —
-        the wiring the 717-green-test suite had zero coverage of."""
+    def test_gex_dex_data_passed_to_save_is_the_typed_result(self, instruments):
         collector = _make_collector()
 
         collector._run_onchain_analysis(
@@ -99,23 +109,45 @@ class TestRunOnchainAnalysisSavesPlainDictGexDexData:
         _, kwargs = collector.repo.save_onchain_snapshot.call_args
         gex_dex_data = kwargs["gex_dex_data"]
 
-        assert "total_net_gex" in gex_dex_data
-        assert "total_net_dex" in gex_dex_data
-        assert isinstance(gex_dex_data["total_net_gex"], float)
+        assert isinstance(gex_dex_data, GexDexResult), (
+            f"gex_dex_data must be the typed GexDexResult for "
+            f"save_onchain_snapshot's attribute reads to work; got {type(gex_dex_data)!r}"
+        )
+        assert not isinstance(gex_dex_data, dict)
 
-        key_levels = gex_dex_data.get("key_levels", {})
-        assert isinstance(key_levels, dict)
-        assert "hvl" in key_levels
-        # call_resistance/put_support are either None or {"strike", "net_gex"} dicts
-        for level_name in ("call_resistance", "put_support"):
-            level = key_levels.get(level_name)
-            assert level is None or ("strike" in level and "net_gex" in level)
+    def test_gex_dex_data_has_the_attributes_save_onchain_snapshot_reads(self, instruments):
+        """
+        repository.py reads gex_dex_data.total_net_gex/.total_net_dex and
+        gex_dex_data.key_levels.{call_resistance,put_support,hvl}. Assert
+        the exact producer output satisfies the exact consumer read
+        pattern — the wiring the original 717-green-test suite had zero
+        coverage of (that gap is exactly what let the A4 bug through).
+        """
+        collector = _make_collector()
+
+        collector._run_onchain_analysis(
+            currency="BTC",
+            hour=datetime(2026, 7, 25, 12, 0, 0),
+            instruments=instruments,
+        )
+
+        _, kwargs = collector.repo.save_onchain_snapshot.call_args
+        gex_dex_data = kwargs["gex_dex_data"]
+
+        assert isinstance(gex_dex_data.total_net_gex, float)
+        assert isinstance(gex_dex_data.total_net_dex, float)
+
+        key_levels = gex_dex_data.key_levels
+        assert key_levels.hvl is None or isinstance(key_levels.hvl, float)
+        for level in (key_levels.call_resistance, key_levels.put_support):
+            assert level is None or (hasattr(level, "strike") and hasattr(level, "net_gex"))
 
     def test_no_exception_swallowed_by_broad_except(self, instruments, caplog):
-        """Before the fix, the AttributeError was caught by the per-expiration
-        `except Exception` and only surfaced as a warning log + snapshots_saved
-        staying effectively at 0 useful rows. After the fix, save_onchain_snapshot
-        is actually called (no warning about a failed expiration)."""
+        """Before the A4 fix, a shape mismatch here raised AttributeError,
+        caught by the per-expiration `except Exception` and only surfaced
+        as a warning log — the daemon kept running, saving nothing, with
+        no loud failure. After the fix (both sides typed together),
+        save_onchain_snapshot is actually called with no such warning."""
         collector = _make_collector()
 
         collector._run_onchain_analysis(
@@ -129,3 +161,76 @@ class TestRunOnchainAnalysisSavesPlainDictGexDexData:
             r for r in caplog.records if "Failed to analyze expiration" in r.message
         ]
         assert failure_logs == []
+
+
+class TestEndToEndAgainstRealSaveOnchainSnapshot:
+    """
+    The A4 lesson, applied: a producer-side test asserting shapes and a
+    consumer-side test asserting reads can BOTH pass while disagreeing
+    with each other, if neither actually calls the other for real. This
+    class removes that gap — it runs the REAL _run_onchain_analysis
+    against a REAL DatabaseRepository.save_onchain_snapshot (only the SQL
+    cursor is mocked, exactly as test_repository_onchain_snapshot.py
+    already does), so the params that actually reach the SQL execute()
+    call are produced by the real daemon code path end to end, not
+    reconstructed by hand in a test fixture.
+    """
+
+    def _make_collector_with_real_repository(self):
+        from coding.service.data_collection.prospective_collector import ProspectiveCollector
+
+        collector = ProspectiveCollector.__new__(ProspectiveCollector)
+        collector.api = MagicMock()
+        collector.repo = DatabaseRepository.__new__(DatabaseRepository)
+        collector._forward_harness = MagicMock()
+        return collector
+
+    def test_real_save_onchain_snapshot_executes_without_raising(self, instruments):
+        collector = self._make_collector_with_real_repository()
+
+        mock_cursor = MagicMock()
+        mock_ctx = MagicMock()
+        mock_ctx.__enter__ = MagicMock(return_value=mock_cursor)
+        mock_ctx.__exit__ = MagicMock(return_value=False)
+
+        with patch.object(collector.repo, "_db_cursor", return_value=mock_ctx):
+            # No exception means the real save_onchain_snapshot body
+            # (attribute access on analysis_data/gex_dex_data) accepted
+            # exactly what _run_onchain_analysis produced.
+            collector._run_onchain_analysis(
+                currency="BTC",
+                hour=datetime(2026, 7, 25, 12, 0, 0),
+                instruments=instruments,
+            )
+
+        assert mock_cursor.execute.called
+
+    def test_real_save_onchain_snapshot_sql_params_contain_no_dicts_or_dataclasses(self, instruments):
+        """
+        psycopg2 cannot adapt a dict or a dataclass instance -- this is
+        exactly the regression test_repository_onchain_snapshot.py already
+        pins at the unit level, replicated here end to end (real
+        _run_onchain_analysis -> real save_onchain_snapshot -> real SQL
+        param tuple).
+        """
+        collector = self._make_collector_with_real_repository()
+
+        mock_cursor = MagicMock()
+        mock_ctx = MagicMock()
+        mock_ctx.__enter__ = MagicMock(return_value=mock_cursor)
+        mock_ctx.__exit__ = MagicMock(return_value=False)
+
+        with patch.object(collector.repo, "_db_cursor", return_value=mock_ctx):
+            collector._run_onchain_analysis(
+                currency="BTC",
+                hour=datetime(2026, 7, 25, 12, 0, 0),
+                instruments=instruments,
+            )
+
+        assert mock_cursor.execute.call_count >= 1
+        _, params = mock_cursor.execute.call_args[0]
+        for value in params:
+            assert not isinstance(value, dict), f"dict leaked into SQL params: {value}"
+            assert not hasattr(value, "__dataclass_fields__"), (
+                f"dataclass instance leaked into SQL params: {value!r}"
+            )

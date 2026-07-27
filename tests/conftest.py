@@ -44,7 +44,12 @@ def update_golden(request) -> bool:
 # covered by the spec, patch it via injectable clock/parameters in the test
 # fakes ... do NOT modify production behavior").
 _FROZEN_CLOCK_MODULES = (
-    "coding.core.analytics.on_chain_analyzer",
+    # T10 (refactor_design_spec.md): on_chain_analyzer.py's own datetime.now()
+    # call (inside generate_report()) is gone along with the method itself --
+    # OnChainMetricsCalculator (the narrowed, renamed class) does no
+    # date/time-dependent calculation. analysis_builder.py (below) is the
+    # sole remaining source of the report header's "now" (OnChainAnalysisResult
+    # .generated_at), so removing this entry is not a coverage gap.
     "coding.core.analytics.buy_sell_flow_analyzer",
     "coding.core.analytics.market_wide_calculator",
     "coding.service.on_chain.on_chain_analysis_service",

@@ -10,6 +10,8 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
+from coding.core.analytics.results.expiry_results import ExpirationAnalysisResult
+from coding.core.analytics.results.gex_dex_results import GexDexResult
 from coding.core.database.config import ConnectionPool, DatabaseConfig
 
 logger = logging.getLogger(__name__)
@@ -1061,47 +1063,56 @@ class DatabaseRepository:
         snapshot_hour,
         currency: str,
         expiration: str,
-        analysis_data: Dict[str, Any],
-        gex_dex_data: Dict[str, Any],
+        analysis_data: ExpirationAnalysisResult,
+        gex_dex_data: GexDexResult,
         underlying_price: float
     ) -> None:
         """
         Save on-chain analysis snapshot to the database.
 
+        refactor_design_spec.md section T10 (compatibility-map row #9):
+        ``analysis_data``/``gex_dex_data`` are the typed results now
+        (attribute access), not the legacy dicts (``.get()``) --
+        ``OnChainMetricsCalculator.analyze_expiration()`` and
+        ``GexDexCalculator.calculate()`` both return typed results
+        directly as of this same task. ``ProspectiveCollector`` (the only
+        production caller) updated in the same commit.
+
         Args:
             snapshot_hour: Timestamp of the snapshot hour.
             currency: Currency symbol (e.g., "BTC", "ETH").
             expiration: Expiration date string (e.g., "27DEC24").
-            analysis_data: Output of OnChainAnalyzer.analyze_expiration().
+            analysis_data: Output of OnChainMetricsCalculator.analyze_expiration().
             gex_dex_data: Output of GexDexCalculator.calculate().
             underlying_price: Current underlying asset price.
         """
-        max_pain = analysis_data.get("max_pain", {})
-        put_call = analysis_data.get("put_call_ratio", {})
-        volume_stats = analysis_data.get("volume_stats", {})
-        moneyness = analysis_data.get("moneyness", {})
-        support_resistance = analysis_data.get("support_resistance", {})
-        key_levels = gex_dex_data.get("key_levels", {})
+        max_pain = analysis_data.max_pain
+        put_call = analysis_data.put_call_ratio
+        volume_stats = analysis_data.volume_stats
+        moneyness = analysis_data.moneyness
+        support_resistance = analysis_data.support_resistance
+        key_levels = gex_dex_data.key_levels
 
-        max_pain_strike = max_pain.get("max_pain_strike")
+        max_pain_strike = max_pain.max_pain_strike
         max_pain_distance_pct = (
             (max_pain_strike - underlying_price) / underlying_price * 100
             if max_pain_strike and underlying_price
             else None
         )
 
-        resistance_levels = support_resistance.get("resistance_levels", [])
-        support_levels = support_resistance.get("support_levels", [])
-        resistance_1 = resistance_levels[0] if resistance_levels else {}
-        support_1 = support_levels[0] if support_levels else {}
+        resistance_levels = support_resistance.resistance_levels
+        support_levels = support_resistance.support_levels
+        resistance_1 = resistance_levels[0] if resistance_levels else None
+        support_1 = support_levels[0] if support_levels else None
 
-        # key_levels call_resistance/put_support are dicts ({"strike", "net_gex"})
-        # when greeks are non-zero; the table stores only the strike scalar
-        call_resistance = key_levels.get("call_resistance") or {}
-        put_support = key_levels.get("put_support") or {}
+        # key_levels.call_resistance/put_support are GexDexLevel instances
+        # ({"strike", "net_gex"}) when greeks are non-zero, else None -- the
+        # table stores only the strike scalar.
+        call_resistance = key_levels.call_resistance
+        put_support = key_levels.put_support
 
-        volume_stats_call = volume_stats.get("total_call_volume", 0)
-        volume_stats_put = volume_stats.get("total_put_volume", 0)
+        volume_stats_call = volume_stats.total_call_volume
+        volume_stats_put = volume_stats.total_put_volume
         put_call_ratio_volume = (
             volume_stats_put / volume_stats_call if volume_stats_call > 0 else None
         )
@@ -1160,17 +1171,21 @@ class DatabaseRepository:
             """, (
                 snapshot_hour, currency, expiration,
                 max_pain_strike, max_pain_distance_pct,
-                put_call.get("ratio"), put_call_ratio_volume,
-                put_call.get("total_call_oi"), put_call.get("total_put_oi"),
-                gex_dex_data.get("total_net_gex"), gex_dex_data.get("total_net_dex"),
-                call_resistance.get("strike"), put_support.get("strike"), key_levels.get("hvl"),
-                resistance_1.get("strike"), resistance_1.get("call_oi"),
-                support_1.get("strike"), support_1.get("put_oi"),
-                volume_stats.get("total_volume"),
-                moneyness.get("calls", {}).get("itm_pct"),
-                moneyness.get("calls", {}).get("otm_pct"),
-                moneyness.get("puts", {}).get("itm_pct"),
-                moneyness.get("puts", {}).get("otm_pct"),
+                put_call.ratio, put_call_ratio_volume,
+                put_call.total_call_oi, put_call.total_put_oi,
+                gex_dex_data.total_net_gex, gex_dex_data.total_net_dex,
+                call_resistance.strike if call_resistance else None,
+                put_support.strike if put_support else None,
+                key_levels.hvl,
+                resistance_1.strike if resistance_1 else None,
+                resistance_1.open_interest if resistance_1 else None,
+                support_1.strike if support_1 else None,
+                support_1.open_interest if support_1 else None,
+                volume_stats.total_volume,
+                moneyness.calls.itm_pct,
+                moneyness.calls.otm_pct,
+                moneyness.puts.itm_pct,
+                moneyness.puts.otm_pct,
                 underlying_price,
             ))
             logger.info(f"Saved on-chain snapshot for {currency} {expiration} at {snapshot_hour}")

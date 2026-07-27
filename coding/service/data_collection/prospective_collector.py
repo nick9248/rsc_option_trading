@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from coding.core.analytics.black_scholes_calculator import BlackScholesCalculator
 from coding.core.analytics.gex_dex_calculator import GexDexCalculator
-from coding.core.analytics.on_chain_analyzer import OnChainAnalyzer
+from coding.core.analytics.on_chain_analyzer import OnChainMetricsCalculator
 from coding.core.config import SUPPORTED_CURRENCIES
 from coding.core.database.repository import DatabaseRepository
 from coding.service.data_collection.hourly_aggregation_service import HourlyAggregationService
@@ -586,7 +586,7 @@ class ProspectiveCollector:
         """
         try:
             # Create on-chain analyzer
-            analyzer = OnChainAnalyzer(data=instruments, currency=currency)
+            analyzer = OnChainMetricsCalculator(data=instruments, currency=currency)
 
             # Parse instruments by expiration
             grouped = analyzer.parse_instruments()
@@ -607,8 +607,17 @@ class ProspectiveCollector:
             # Process each expiration
             for expiration, instruments_for_exp in grouped.items():
                 try:
-                    # Run on-chain analysis for this expiration
+                    # Run on-chain analysis for this expiration. T10
+                    # (refactor_design_spec.md compat-map row #8):
+                    # analyze_expiration() returns the typed
+                    # ExpirationAnalysisResult directly now (was a dict).
                     analysis_data = analyzer.analyze_expiration(expiration)
+                    if analysis_data is None:
+                        logger.warning(
+                            f"    analyze_expiration returned None for {expiration} "
+                            f"(expiration missing from parsed data) — skipping"
+                        )
+                        continue
 
                     # Enrich with greeks for GEX/DEX (nested → top-level, with BS fallback)
                     gex_instruments = self._enrich_with_greeks(
@@ -620,13 +629,11 @@ class ProspectiveCollector:
                         instruments=gex_instruments,
                         spot_price=underlying_price
                     )
-                    # T4 (refactor_design_spec.md): calculate() returns the
-                    # typed GexDexResult. save_onchain_snapshot (compat-map
-                    # row #9) is a T10-scoped consumer that still reads a
-                    # legacy dict (repository.py's gex_dex_data.get(...)
-                    # calls) — .to_dict() shim keeps it working unchanged
-                    # until T10 migrates it to attribute access.
-                    gex_dex_data = gex_calc.calculate().to_dict()  # T10: switch to typed attribute access
+                    # T10 (refactor_design_spec.md compat-map row #9):
+                    # save_onchain_snapshot now reads the typed GexDexResult
+                    # directly (attribute access) — the .to_dict() shim
+                    # is no longer needed at this call site.
+                    gex_dex_data = gex_calc.calculate()
 
                     # Save to database
                     self.repo.save_onchain_snapshot(
@@ -656,30 +663,39 @@ class ProspectiveCollector:
             if snapshots_saved > 0 and grouped:
                 try:
                     front_exp = sorted(grouped.keys())[0]
+                    # T10 (refactor_design_spec.md compat-map row #8):
+                    # analyze_expiration() returns the typed
+                    # ExpirationAnalysisResult now -- attribute access
+                    # instead of the legacy dict's .get() chains.
                     front_data = analyzer.analyze_expiration(front_exp)
-                    moneyness = front_data.get("moneyness", {})
-                    max_pain = front_data.get("max_pain", {})
-                    max_pain_strike = max_pain.get("max_pain_strike")
-                    max_pain_dist = (
-                        (max_pain_strike - underlying_price) / underlying_price * 100
-                        if max_pain_strike and underlying_price else None
-                    )
-                    metrics = {
-                        "itm_call_oi_pct": moneyness.get("calls", {}).get("itm_pct"),
-                        "otm_call_oi_pct": moneyness.get("calls", {}).get("otm_pct"),
-                        "itm_put_oi_pct": moneyness.get("puts", {}).get("itm_pct"),
-                        "otm_put_oi_pct": moneyness.get("puts", {}).get("otm_pct"),
-                        "max_pain_distance_pct": max_pain_dist,
-                        # pc_far_otm_ratio: live vol-surface computation deferred;
-                        # harness will use None and fall back to the 5 common metrics.
-                        "pc_far_otm_ratio": None,
-                    }
-                    self._forward_harness.record_prediction(
-                        currency=currency,
-                        snapshot_hour=hour,
-                        metrics=metrics,
-                        spot_price=underlying_price,
-                    )
+                    if front_data is None:
+                        logger.warning(
+                            f"    analyze_expiration returned None for front-month "
+                            f"{front_exp} — skipping forward-harness prediction"
+                        )
+                    else:
+                        moneyness = front_data.moneyness
+                        max_pain_strike = front_data.max_pain.max_pain_strike
+                        max_pain_dist = (
+                            (max_pain_strike - underlying_price) / underlying_price * 100
+                            if max_pain_strike and underlying_price else None
+                        )
+                        metrics = {
+                            "itm_call_oi_pct": moneyness.calls.itm_pct,
+                            "otm_call_oi_pct": moneyness.calls.otm_pct,
+                            "itm_put_oi_pct": moneyness.puts.itm_pct,
+                            "otm_put_oi_pct": moneyness.puts.otm_pct,
+                            "max_pain_distance_pct": max_pain_dist,
+                            # pc_far_otm_ratio: live vol-surface computation deferred;
+                            # harness will use None and fall back to the 5 common metrics.
+                            "pc_far_otm_ratio": None,
+                        }
+                        self._forward_harness.record_prediction(
+                            currency=currency,
+                            snapshot_hour=hour,
+                            metrics=metrics,
+                            spot_price=underlying_price,
+                        )
                 except Exception as e:
                     logger.warning(f"    Forward harness record failed for {currency}: {e}")
 

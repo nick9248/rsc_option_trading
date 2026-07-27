@@ -280,10 +280,12 @@ class TestCalculateBuySellFlowSingleFetch:
             service._calculate_buy_sell_flow(analyzer, progress_callback=lambda msg: None)
 
         assert mock_repo.get_trades_for_flow_analysis.call_count == 1
+        # T10 (refactor_design_spec.md): generate_report_section() is no
+        # longer called at all -- rendering is format_flow_section's job
+        # now, operating on the typed result the builder receives. The
+        # "one fetch, one calculate" invariant this test exists to pin is
+        # still exactly what's asserted here.
         assert instance.calculate.call_count == 1
-        # generate_report_section must be given the precomputed result
-        _, report_kwargs = instance.generate_report_section.call_args
-        assert report_kwargs["result"] is instance.calculate.return_value
 
 
 # ---------------------------------------------------------------------------

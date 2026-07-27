@@ -1,13 +1,27 @@
 """
 Unit tests for 1-day trend comparison in the on-chain analysis report.
 
-Covers Max Pain, P/C Ratio, and Volume trend lines added via set_trend_data().
+Covers Max Pain, P/C Ratio, and Volume trend lines.
+
+refactor_design_spec.md section T10: OnChainAnalyzer.generate_report(),
+_format_trend(), and set_trend_data() (plus the trend_data dict they
+supported) are all deleted. These tests, which previously drove report
+generation through set_trend_data() + generate_report(), are rewritten
+against format_trend_delta() (the extracted, still-live equivalent of
+_format_trend) and format_expiration_section(analysis, spot_price, trend)
+directly, per the section 3 compat table's planned replacement for this
+file. Trend data is now expressed as a TrendSnapshot (the typed model
+set_trend_data used to feed) instead of a raw dict.
 """
 
 import pytest
 
-from coding.core.analytics.on_chain_analyzer import OnChainAnalyzer
-
+from coding.core.analytics.on_chain_analyzer import OnChainMetricsCalculator
+from coding.core.analytics.reporting.expiry_formatter import (
+    format_expiration_section,
+    format_trend_delta,
+)
+from coding.core.analytics.results.analysis_result import TrendSnapshot
 
 EXPIRATION = "10MAR26"
 
@@ -47,69 +61,54 @@ def _make_instruments(expiration: str = EXPIRATION):
 
 @pytest.fixture
 def analyzer_with_data():
-    """OnChainAnalyzer with one expiration (10MAR26) pre-parsed."""
+    """OnChainMetricsCalculator with one expiration (10MAR26) pre-parsed."""
     data = _make_instruments()
-    a = OnChainAnalyzer(data=data, currency="ETH")
+    a = OnChainMetricsCalculator(data=data, currency="ETH")
     a.parse_instruments()
     return a
 
 
-# ---------------------------------------------------------------------------
-# set_trend_data / _format_trend basics
-# ---------------------------------------------------------------------------
-
-def test_trend_data_initially_empty(analyzer_with_data):
-    """trend_data dict starts empty before any set_trend_data call."""
-    assert analyzer_with_data.trend_data == {}
-
-
-def test_set_trend_data_stores_value(analyzer_with_data):
-    """set_trend_data stores the provided dict under the expiration key."""
-    analyzer_with_data.set_trend_data(EXPIRATION, {"max_pain_strike": 1900.0})
-    assert analyzer_with_data.trend_data[EXPIRATION]["max_pain_strike"] == 1900.0
-
-
-def test_set_trend_data_accepts_none(analyzer_with_data):
-    """set_trend_data accepts None without raising."""
-    analyzer_with_data.set_trend_data(EXPIRATION, None)
-    assert analyzer_with_data.trend_data[EXPIRATION] is None
+def _render(analyzer, trend=None):
+    """Render the expiration section for EXPIRATION with the given trend."""
+    analysis = analyzer.analyze_expiration(EXPIRATION)
+    return format_expiration_section(analysis, analyzer.underlying_price, trend)
 
 
 # ---------------------------------------------------------------------------
-# _format_trend helper
+# format_trend_delta (extracted from the deleted _format_trend)
 # ---------------------------------------------------------------------------
 
-def test_format_trend_returns_empty_when_previous_none(analyzer_with_data):
-    """_format_trend returns empty string when previous is None."""
-    result = analyzer_with_data._format_trend(2000.0, None)
+def test_format_trend_returns_empty_when_previous_none():
+    """format_trend_delta returns empty string when previous is None."""
+    result = format_trend_delta(2000.0, None)
     assert result == ""
 
 
-def test_format_trend_unchanged(analyzer_with_data):
-    """_format_trend returns unchanged marker when values are equal."""
-    result = analyzer_with_data._format_trend(2000.0, 2000.0)
+def test_format_trend_unchanged():
+    """format_trend_delta returns unchanged marker when values are equal."""
+    result = format_trend_delta(2000.0, 2000.0)
     assert "unchanged" in result
 
 
-def test_format_trend_up_integer(analyzer_with_data):
-    """_format_trend shows up arrow and delta for increase (integer mode)."""
-    result = analyzer_with_data._format_trend(2100.0, 1900.0)
+def test_format_trend_up_integer():
+    """format_trend_delta shows up arrow and delta for increase (integer mode)."""
+    result = format_trend_delta(2100.0, 1900.0)
     assert "↑" in result
     assert "1,900" in result
     assert "+200" in result
 
 
-def test_format_trend_down_integer(analyzer_with_data):
-    """_format_trend shows down arrow and delta for decrease (integer mode)."""
-    result = analyzer_with_data._format_trend(1800.0, 2000.0)
+def test_format_trend_down_integer():
+    """format_trend_delta shows down arrow and delta for decrease (integer mode)."""
+    result = format_trend_delta(1800.0, 2000.0)
     assert "↓" in result
     assert "2,000" in result
     assert "-200" in result
 
 
-def test_format_trend_ratio_mode(analyzer_with_data):
-    """_format_trend uses 2 decimal places in ratio mode."""
-    result = analyzer_with_data._format_trend(1.59, 1.42, is_ratio=True)
+def test_format_trend_ratio_mode():
+    """format_trend_delta uses 2 decimal places in ratio mode."""
+    result = format_trend_delta(1.59, 1.42, is_ratio=True)
     assert "↑" in result
     assert "1.42" in result
     assert "+0.17" in result
@@ -120,51 +119,61 @@ def test_format_trend_ratio_mode(analyzer_with_data):
 # ---------------------------------------------------------------------------
 
 def test_trend_max_pain_shown_when_set(analyzer_with_data):
-    """Trend line appears for Max Pain when trend_data has prior value."""
-    analyzer_with_data.set_trend_data(EXPIRATION, {"max_pain_strike": 1900.0})
-    report = analyzer_with_data.generate_report()
+    """Trend line appears for Max Pain when trend data has a prior value."""
+    trend = TrendSnapshot(
+        max_pain_strike=1900.0, call_oi=None, put_oi=None,
+        pc_ratio=None, total_volume=None, volume_ratio=None,
+    )
+    report = _render(analyzer_with_data, trend)
     assert "Trend (Max Pain):" in report
 
 
 def test_trend_skipped_when_no_data(analyzer_with_data):
-    """No trend lines when trend_data not set for expiration."""
-    report = analyzer_with_data.generate_report()
+    """No trend lines when trend is None."""
+    report = _render(analyzer_with_data, None)
     assert "Trend (Max Pain):" not in report
 
 
 def test_trend_graceful_when_none(analyzer_with_data):
-    """No crash when set_trend_data called with None; report still renders."""
-    analyzer_with_data.set_trend_data(EXPIRATION, None)
-    report = analyzer_with_data.generate_report()
+    """No crash when trend is None; report still renders."""
+    report = _render(analyzer_with_data, None)
     assert "Max Pain Strike:" in report
     assert "Trend (Max Pain):" not in report
 
 
 def test_trend_max_pain_unchanged_label(analyzer_with_data):
     """When current and previous max pain are identical, 'unchanged' appears."""
-    # To know the calculated max pain we need to run the analysis first
     analysis = analyzer_with_data.analyze_expiration(EXPIRATION)
-    mp = analysis["max_pain"]["max_pain_strike"]
-    analyzer_with_data.set_trend_data(EXPIRATION, {"max_pain_strike": mp})
-    report = analyzer_with_data.generate_report()
+    mp = analysis.max_pain.max_pain_strike
+    trend = TrendSnapshot(
+        max_pain_strike=mp, call_oi=None, put_oi=None,
+        pc_ratio=None, total_volume=None, volume_ratio=None,
+    )
+    report = _render(analyzer_with_data, trend)
     assert "→ unchanged" in report
 
 
 def test_trend_max_pain_up_arrow(analyzer_with_data):
     """Up arrow appears when current max pain is higher than previous."""
     analysis = analyzer_with_data.analyze_expiration(EXPIRATION)
-    mp = analysis["max_pain"]["max_pain_strike"]
-    analyzer_with_data.set_trend_data(EXPIRATION, {"max_pain_strike": mp - 100.0})
-    report = analyzer_with_data.generate_report()
+    mp = analysis.max_pain.max_pain_strike
+    trend = TrendSnapshot(
+        max_pain_strike=mp - 100.0, call_oi=None, put_oi=None,
+        pc_ratio=None, total_volume=None, volume_ratio=None,
+    )
+    report = _render(analyzer_with_data, trend)
     assert "↑" in report
 
 
 def test_trend_max_pain_down_arrow(analyzer_with_data):
     """Down arrow appears when current max pain is lower than previous."""
     analysis = analyzer_with_data.analyze_expiration(EXPIRATION)
-    mp = analysis["max_pain"]["max_pain_strike"]
-    analyzer_with_data.set_trend_data(EXPIRATION, {"max_pain_strike": mp + 100.0})
-    report = analyzer_with_data.generate_report()
+    mp = analysis.max_pain.max_pain_strike
+    trend = TrendSnapshot(
+        max_pain_strike=mp + 100.0, call_oi=None, put_oi=None,
+        pc_ratio=None, total_volume=None, volume_ratio=None,
+    )
+    report = _render(analyzer_with_data, trend)
     assert "↓" in report
 
 
@@ -173,24 +182,28 @@ def test_trend_max_pain_down_arrow(analyzer_with_data):
 # ---------------------------------------------------------------------------
 
 def test_trend_volume_shown_when_set(analyzer_with_data):
-    """Trend line appears for Volume when trend_data has prior value."""
-    analyzer_with_data.set_trend_data(EXPIRATION, {"total_volume": 6000.0})
-    report = analyzer_with_data.generate_report()
+    """Trend line appears for Volume when trend data has a prior value."""
+    trend = TrendSnapshot(
+        max_pain_strike=None, call_oi=None, put_oi=None,
+        pc_ratio=None, total_volume=6000.0, volume_ratio=None,
+    )
+    report = _render(analyzer_with_data, trend)
     assert "Trend (Volume):" in report
 
 
 def test_trend_volume_not_shown_without_trend_data(analyzer_with_data):
-    """No volume trend line when trend_data not set."""
-    report = analyzer_with_data.generate_report()
+    """No volume trend line when trend is None."""
+    report = _render(analyzer_with_data, None)
     assert "Trend (Volume):" not in report
 
 
 def test_trend_vol_pc_shown_when_ratio_set(analyzer_with_data):
-    """Trend (Vol P/C) line appears when volume_ratio is in trend_data."""
-    analyzer_with_data.set_trend_data(
-        EXPIRATION, {"total_volume": 200.0, "volume_ratio": 1.20}
+    """Trend (Vol P/C) line appears when volume_ratio is present."""
+    trend = TrendSnapshot(
+        max_pain_strike=None, call_oi=None, put_oi=None,
+        pc_ratio=None, total_volume=200.0, volume_ratio=1.20,
     )
-    report = analyzer_with_data.generate_report()
+    report = _render(analyzer_with_data, trend)
     assert "Trend (Vol P/C):" in report
 
 
@@ -199,57 +212,68 @@ def test_trend_vol_pc_shown_when_ratio_set(analyzer_with_data):
 # ---------------------------------------------------------------------------
 
 def test_trend_pc_ratio_shown_when_set(analyzer_with_data):
-    """Trend line appears for P/C Ratio when trend_data has prior value."""
-    analyzer_with_data.set_trend_data(EXPIRATION, {"pc_ratio": 1.20})
-    report = analyzer_with_data.generate_report()
+    """Trend line appears for P/C Ratio when trend data has a prior value."""
+    trend = TrendSnapshot(
+        max_pain_strike=None, call_oi=None, put_oi=None,
+        pc_ratio=1.20, total_volume=None, volume_ratio=None,
+    )
+    report = _render(analyzer_with_data, trend)
     assert "Trend (P/C):" in report
 
 
 def test_trend_call_oi_shown_when_set(analyzer_with_data):
-    """Trend (Call OI) line appears when call_oi is in trend_data."""
-    analyzer_with_data.set_trend_data(
-        EXPIRATION, {"call_oi": 400.0, "put_oi": 700.0}
+    """Trend (Call OI) line appears when call_oi/put_oi are present."""
+    trend = TrendSnapshot(
+        max_pain_strike=None, call_oi=400.0, put_oi=700.0,
+        pc_ratio=None, total_volume=None, volume_ratio=None,
     )
-    report = analyzer_with_data.generate_report()
+    report = _render(analyzer_with_data, trend)
     assert "Trend (Call OI):" in report
     assert "Trend (Put OI):" in report
 
 
 def test_trend_pc_ratio_not_shown_without_trend_data(analyzer_with_data):
-    """No P/C trend line when trend_data not set."""
-    report = analyzer_with_data.generate_report()
+    """No P/C trend line when trend is None."""
+    report = _render(analyzer_with_data, None)
     assert "Trend (P/C):" not in report
 
 
 # ---------------------------------------------------------------------------
-# Partial data: only some keys present
+# Partial data: only some fields present
 # ---------------------------------------------------------------------------
 
 def test_trend_partial_data_only_max_pain(analyzer_with_data):
-    """When only max_pain_strike is in trend_data, only that trend appears."""
-    analyzer_with_data.set_trend_data(EXPIRATION, {"max_pain_strike": 1800.0})
-    report = analyzer_with_data.generate_report()
+    """When only max_pain_strike is set, only that trend appears."""
+    trend = TrendSnapshot(
+        max_pain_strike=1800.0, call_oi=None, put_oi=None,
+        pc_ratio=None, total_volume=None, volume_ratio=None,
+    )
+    report = _render(analyzer_with_data, trend)
     assert "Trend (Max Pain):" in report
     assert "Trend (Volume):" not in report
     assert "Trend (P/C):" not in report
 
 
 def test_trend_partial_data_only_volume(analyzer_with_data):
-    """When only total_volume is in trend_data, only volume trend appears."""
-    analyzer_with_data.set_trend_data(EXPIRATION, {"total_volume": 5000.0})
-    report = analyzer_with_data.generate_report()
+    """When only total_volume is set, only volume trend appears."""
+    trend = TrendSnapshot(
+        max_pain_strike=None, call_oi=None, put_oi=None,
+        pc_ratio=None, total_volume=5000.0, volume_ratio=None,
+    )
+    report = _render(analyzer_with_data, trend)
     assert "Trend (Volume):" in report
     assert "Trend (Max Pain):" not in report
     assert "Trend (P/C):" not in report
 
 
 def test_trend_partial_data_only_oi(analyzer_with_data):
-    """When only call_oi/put_oi present, OI trends appear but not P/C trend."""
-    analyzer_with_data.set_trend_data(
-        EXPIRATION, {"call_oi": 500.0, "put_oi": 900.0}
+    """When only call_oi/put_oi are present, OI trends appear but not P/C trend."""
+    trend = TrendSnapshot(
+        max_pain_strike=None, call_oi=500.0, put_oi=900.0,
+        pc_ratio=None, total_volume=None, volume_ratio=None,
     )
-    report = analyzer_with_data.generate_report()
+    report = _render(analyzer_with_data, trend)
     assert "Trend (Call OI):" in report
     assert "Trend (Put OI):" in report
-    # pc_ratio not in trend_data so P/C trend should not appear
+    # pc_ratio not set so P/C trend should not appear
     assert "Trend (P/C):" not in report
