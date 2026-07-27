@@ -326,53 +326,17 @@ class TestGexDexCalculator:
         expected_total_dex = (0.5 * 100) + (-0.3 * 200)
         assert result.total_net_dex == pytest.approx(expected_total_dex)
 
-    def test_report_generation(self):
-        """Test that report generation doesn't crash and includes key sections."""
-        instruments = [
-            {"strike": 70000, "option_type": "C", "gamma": 0.00005, "delta": 0.5, "open_interest": 1000},
-            {"strike": 72000, "option_type": "P", "gamma": 0.00003, "delta": -0.5, "open_interest": 1000},
-        ]
-        calculator = GexDexCalculator(instruments, spot_price=70000)
-        report = calculator.generate_report_section()
-
-        # Check report contains expected sections
-        assert "GEX/DEX ANALYSIS" in report
-        assert "Spot Price:" in report
-        assert "KEY LEVELS:" in report
-        assert "TOTALS:" in report
-        assert "Call Resistance" in report or "None found" in report
-        assert "Put Support" in report or "None found" in report
-        assert "Zero Gamma Level" in report
-
-    def test_gex_report_shows_usd_unit(self):
-        """GEX values are labeled USD in the report."""
-        instruments = [
-            {"strike": 70000, "option_type": "C", "gamma": 0.00005, "delta": 0.5, "open_interest": 1000},
-            {"strike": 72000, "option_type": "P", "gamma": 0.00003, "delta": -0.5, "open_interest": 1000},
-        ]
-        calc = GexDexCalculator(instruments, spot_price=70000, currency="BTC")
-        report = calc.generate_report_section()
-        assert "USD" in report
-
-    def test_dex_report_shows_currency_unit_eth(self):
-        """DEX values are labeled with currency (ETH)."""
-        instruments = [
-            {"strike": 2000, "option_type": "C", "gamma": 0.00005, "delta": 0.5, "open_interest": 100},
-            {"strike": 2000, "option_type": "P", "gamma": 0.00003, "delta": -0.5, "open_interest": 100},
-        ]
-        calc = GexDexCalculator(instruments, spot_price=2000.0, currency="ETH")
-        report = calc.generate_report_section()
-        assert "ETH" in report
-
-    def test_dex_report_shows_currency_unit_btc(self):
-        """DEX values are labeled with currency (BTC)."""
-        instruments = [
-            {"strike": 50000, "option_type": "C", "gamma": 0.00005, "delta": 0.5, "open_interest": 100},
-            {"strike": 50000, "option_type": "P", "gamma": 0.00003, "delta": -0.5, "open_interest": 100},
-        ]
-        calc = GexDexCalculator(instruments, spot_price=50000.0, currency="BTC")
-        report = calc.generate_report_section()
-        assert "BTC" in report
+    # NOTE (task A7, carried finding #1): test_report_generation,
+    # test_gex_report_shows_usd_unit, test_dex_report_shows_currency_unit_eth,
+    # and test_dex_report_shows_currency_unit_btc used to live here, covering
+    # GexDexCalculator.generate_report_section() (deleted -- zero production
+    # callers, only test call sites). Equivalent (better) coverage now lives
+    # in tests/unit/analytics/reporting/test_gex_dex_formatter.py, which
+    # exercises the actual live render path (format_gex_dex_section) against
+    # a typed GexDexResult: test_gex_dex_section_key_levels_and_totals (USD
+    # label, key levels, totals), test_gex_dex_section_no_levels_found,
+    # test_gex_dex_section_neutral_environment (currency-unit label via the
+    # DEX line).
 
     def test_multiple_strikes_multiple_instruments(self):
         """Test realistic scenario with multiple strikes and instruments."""
@@ -450,36 +414,35 @@ class TestIdempotentCalculateAndResultPassing:
         assert first.total_net_dex == second.total_net_dex == pytest.approx(-19.0)
         assert calc.strike_data[100_000.0]["call_oi"] == pytest.approx(100.0)
 
-    def test_generate_report_section_with_result_does_not_recompute(self):
-        """T1.2 - passing result= must not call calculate() again (no doubling)."""
+    def test_calculate_result_has_correct_undoubled_per_strike_values(self):
+        """
+        T1.2 (adapted, task A7 carried finding #1): the original test named
+        this "generate_report_section with result= does not recompute" and
+        exercised the now-deleted dead-code report method to prove it. The
+        actual regression this guards -- calculate() itself must produce
+        correct, un-doubled per-strike net_gex -- doesn't need the report
+        path at all; keeping only that assertion here.
+        """
         calc = GexDexCalculator(self.FIXTURE, 100_000.0, "BTC")
         stored = calc.calculate()
-        report = calc.generate_report_section(result=stored)
 
-        assert "Total Net GEX: -50,000.00 USD" in report
-        assert "Total Net DEX: -19.0000 BTC" in report
         assert _strike_row(stored, 100_000.0).net_gex == pytest.approx(150_000.0)
         assert _strike_row(stored, 110_000.0).net_gex == pytest.approx(-200_000.0)
         assert calc.strike_data[100_000.0]["call_oi"] == pytest.approx(100.0)
 
-    def test_repeated_report_generation_without_result_does_not_drift(self):
-        """T1.3 - regression guard: 3 renders with no result= must never accumulate."""
-        calc = GexDexCalculator(self.FIXTURE, 100_000.0, "BTC")
-        stored = calc.calculate()
-        for _ in range(3):
-            calc.generate_report_section()  # no result= : must still be safe
-
-        assert sum(d["net_gex"] for d in calc.strike_data.values()) == pytest.approx(-50_000.0)
-        assert calc.strike_data[100_000.0]["call_oi"] == pytest.approx(100.0)
+    # NOTE (task A7, carried finding #1): test_repeated_report_generation_
+    # without_result_does_not_drift (T1.3) used to live here, calling the
+    # now-deleted generate_report_section() 3 times with no result= to prove
+    # repeated renders don't accumulate. That guard is now structurally
+    # redundant with test_calculate_is_idempotent (T1.1) above -- there is
+    # no report-rendering path left that can call calculate() a second time.
 
     def test_aggregate_across_expirations_matches_true_sum(self):
         """T1.4 - service-level regression: aggregate must not double-count."""
         a = GexDexCalculator(self.FIXTURE, 100_000.0, "BTC")
         ra = a.calculate()
-        a.generate_report_section(result=ra)
         b = GexDexCalculator(self.FIXTURE, 100_000.0, "BTC")
         rb = b.calculate()
-        b.generate_report_section(result=rb)
 
         agg = GexDexCalculator.aggregate_across_expirations({"A": ra, "B": rb}, 100_000.0, "BTC")
 
@@ -610,27 +573,10 @@ class TestAggregateAcrossExpirations:
         # Should count only 1 real expiry
         assert agg.expiration_count == 1
 
-    def test_aggregate_report_section_contains_expected_content(self):
-        """Report should mention aggregation count and standard sections."""
-        instruments = [
-            {"strike": 70000, "option_type": "C", "gamma": 0.00005, "delta": 0.5, "open_interest": 1000},
-            {"strike": 68000, "option_type": "P", "gamma": 0.00004, "delta": -0.5, "open_interest": 800},
-        ]
-        spot_price = 70000
-        result = self._make_expiry_result(instruments, spot_price)
-        agg_result = GexDexCalculator.aggregate_across_expirations(
-            {"27DEC24": result}, spot_price, "BTC"
-        )
-
-        report = GexDexCalculator.generate_aggregate_report_section(
-            agg_result, spot_price, "BTC"
-        )
-
-        assert "MARKET-WIDE GEX/DEX LEVELS" in report
-        assert "Aggregated" in report
-        assert "KEY LEVELS:" in report
-        assert "TOTALS:" in report
-        assert "USD" in report
-        assert "BTC" in report
-        # No per-strike table
-        assert "GEX/DEX BY STRIKE:" not in report
+    # NOTE (task A7, carried finding #1): test_aggregate_report_section_
+    # contains_expected_content used to live here, covering
+    # GexDexCalculator.generate_aggregate_report_section() (deleted -- zero
+    # production callers). Equivalent coverage now lives in
+    # tests/unit/analytics/reporting/test_gex_dex_formatter.py::
+    # test_aggregate_gex_dex_section_has_expiration_count_and_no_strike_table,
+    # exercising the actual live render path (format_aggregate_gex_dex_section).

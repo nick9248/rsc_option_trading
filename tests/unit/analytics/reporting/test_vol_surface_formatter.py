@@ -79,6 +79,23 @@ def test_vwap_iv_aggression_suppressed_below_instrument_floor():
     assert "Buyers aggressive" not in text
 
 
+def test_vwap_iv_balanced_within_threshold():
+    """
+    bugfix_spec.md Item 3 (T3.2, migrated from tests/unit/
+    test_on_chain_analysis_service_vwap.py's now-deleted TestVwapReportGate
+    -- carried finding #1, task A7): the OLD (buggy, unweighted-chain-
+    average baseline) code produced "Sellers aggressive" for this exact
+    vwap_iv/mark_iv_average pair; the FIXED matched-baseline diff is
+    47.25 - 47.50 = -0.25, within +-VWAP_AGGRESSION_THRESHOLD_POINTS (1.0),
+    so it must render "Balanced".
+    """
+    result = _make_result(vwap_iv=47.25, mark_iv_average=47.50, traded_instrument_count=2)
+    text = format_vol_surface_section(result, expiration="10MAR26")
+    assert "Matched Mark IV: 47.5%" in text
+    assert "Sellers aggressive" not in text
+    assert "Balanced" in text
+
+
 def test_vwap_iv_omitted_when_none():
     result = _make_result(vwap_iv=None, mark_iv_average=None)
     text = format_vol_surface_section(result, expiration="10MAR26")

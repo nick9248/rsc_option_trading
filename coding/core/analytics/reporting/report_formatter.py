@@ -335,16 +335,20 @@ class OnChainReportFormatter:
         ``OnChainAnalysisResult.market_wide`` (refactor_design_spec.md
         section T8), in the same fixed order ``render_market_wide`` uses.
 
-        Not currently called by ``_save_reports_per_expiration`` — the
-        legacy text-splitter's naive "EXPIRATION:" scan ran the LAST
-        expiration's slice to the end of the full report string, so that
-        one expiration's saved file also picked up the trailing
-        MARKET-WIDE METRICS block (never the intent per this method's own
-        "each expiration folder gets only its section" contract). T8 does
-        not reproduce that leak: per-expiration files now contain only
-        that expiration's own section, for every expiration including the
-        last. This method exists for a future full-report-from-result
-        render path (T9/T10) where the market-wide block belongs.
+        Not called by ``_save_reports_per_expiration`` — the legacy
+        text-splitter's naive "EXPIRATION:" scan ran the LAST expiration's
+        slice to the end of the full report string, so that one
+        expiration's saved file also picked up the trailing MARKET-WIDE
+        METRICS block (never the intent per this method's own "each
+        expiration folder gets only its section" contract). T8 does not
+        reproduce that leak: per-expiration files now contain only that
+        expiration's own section, for every expiration including the last.
+        This method is live as of T10: it is ``render_full_from_result``'s
+        market-wide block, called from ``fetch_and_analyze``'s report path
+        (task A6 flipped this render path from dead code to the sole full
+        -report renderer — this docstring previously called it "not
+        currently called", which stopped being true then; task A7 review
+        caught the stale comment).
 
         A section is included only when its typed sub-result is not None —
         matches the legacy ``if section_name in self.market_wide_sections``
@@ -381,32 +385,6 @@ class OnChainReportFormatter:
             )
 
         return self.render_market_wide(sections)
-
-    def render_full(
-        self,
-        currency: str,
-        underlying_price: float,
-        generated_at: datetime,
-        market_metrics: Optional[MarketMetricsResult],
-        expirations: Tuple[ExpirationRenderInput, ...],
-        market_wide_sections: Dict[str, str],
-    ) -> str:
-        """
-        Render the complete report: header, every expiration in order, then
-        the market-wide block.
-
-        Returns:
-            The full formatted report text.
-        """
-        blocks = [self.render_header(currency, underlying_price, generated_at, market_metrics)]
-        for render_input in expirations:
-            blocks.append(self.render_expiration(render_input, underlying_price))
-
-        market_wide_text = self.render_market_wide(market_wide_sections)
-        if market_wide_text:
-            blocks.append(market_wide_text)
-
-        return "\n".join(blocks)
 
     def render_full_from_result(self, result: OnChainAnalysisResult) -> str:
         """

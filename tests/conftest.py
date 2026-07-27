@@ -50,7 +50,16 @@ _FROZEN_CLOCK_MODULES = (
     # date/time-dependent calculation. analysis_builder.py (below) is the
     # sole remaining source of the report header's "now" (OnChainAnalysisResult
     # .generated_at), so removing this entry is not a coverage gap.
-    "coding.core.analytics.buy_sell_flow_analyzer",
+    #
+    # Task A7 (carried finding #1): coding.core.analytics.buy_sell_flow_
+    # analyzer's own entry is removed here for the same reason --
+    # generate_report_section() (its last datetime.fromtimestamp() call
+    # site, formatting the window start/end for display) was deleted as
+    # dead code (zero production callers; format_flow_section is the sole
+    # live render path and takes pre-formatted ms timestamps, no datetime
+    # import). The module has carried no time.time() call since T5 (the
+    # window is injected by the caller). Not a coverage gap: nothing left
+    # in this module reads "now".
     "coding.core.analytics.market_wide_calculator",
     "coding.service.on_chain.on_chain_analysis_service",
     # T11 (refactor_design_spec.md): the term-structure DTE calc's

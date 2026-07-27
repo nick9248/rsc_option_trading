@@ -192,23 +192,16 @@ class TestVolatilitySurfaceCalculator:
         result = calc.calculate()
         assert result.atm_iv is None
 
-    def test_generate_report_section(self, sample_instruments):
-        calc = VolatilitySurfaceCalculator(sample_instruments, 90000, "28MAR26")
-        report = calc.generate_report_section()
-
-        assert "VOLATILITY SURFACE ANALYSIS" in report
-        assert "25-Delta Skew" in report
-        assert "IV BY STRIKE" in report
-        assert "P/C RATIO BY MONEYNESS" in report
-        assert "SECOND-ORDER GREEKS" in report
-
-    def test_vwap_iv_in_report(self, sample_instruments):
-        calc = VolatilitySurfaceCalculator(sample_instruments, 90000, "28MAR26")
-        calc.set_vwap_iv_data(vwap_iv=67.5, mark_iv_baseline=65.0)
-        report = calc.generate_report_section()
-
-        assert "VWAP IV:" in report
-        assert "67.5%" in report
+    # NOTE (task A7, carried finding #1): test_generate_report_section and
+    # test_vwap_iv_in_report used to live here, covering
+    # VolatilitySurfaceCalculator.generate_report_section() (deleted -- zero
+    # production callers). Equivalent (better) coverage now lives in
+    # tests/unit/analytics/reporting/test_vol_surface_formatter.py, which
+    # exercises the actual live render path (format_vol_surface_section)
+    # against a typed VolSurfaceResult: test_skew_and_atm_iv_rendered,
+    # test_vwap_iv_buyers_aggressive, test_iv_by_strike_merges_call_and_
+    # put_rows_per_strike, test_pc_by_moneyness_buckets_and_na_ratio,
+    # test_second_order_greeks_rendered.
 
     def test_zero_spot_price(self, sample_instruments):
         calc = VolatilitySurfaceCalculator(sample_instruments, 0, "28MAR26")
@@ -234,14 +227,12 @@ class TestVolatilitySurfaceCalculator:
             assert bucket["ratio"] == 0.0
             assert bucket["bias"] == "N/A"
 
-    def test_zero_spot_report_generation_does_not_raise(self, sample_instruments):
-        """bugfix_spec.md H2: report path must not KeyError when spot_price == 0."""
-        calc = VolatilitySurfaceCalculator(sample_instruments, 0, "28MAR26")
-        report = calc.generate_report_section()
-
-        assert isinstance(report, str)
-        assert "P/C RATIO BY MONEYNESS" in report
-        assert "N/A" in report
+    # NOTE (task A7, carried finding #1): test_zero_spot_report_generation_
+    # does_not_raise used to live here, covering the H2 zero-spot fix via
+    # the now-deleted generate_report_section(). test_zero_spot_price above
+    # already guards the same H2 regression at the live path
+    # (calc.calculate() must not crash with spot_price == 0); redundant via
+    # the dead-code report path is dropped, not weakened.
 
     def test_empty_instruments(self):
         calc = VolatilitySurfaceCalculator([], 90000, "28MAR26")

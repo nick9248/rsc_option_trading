@@ -22,8 +22,7 @@ data were provably drawn from two different windows).
 
 import logging
 from collections import defaultdict
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from coding.core.analytics.results.flow_results import (
     FlowResult,
@@ -519,96 +518,3 @@ class BuySellFlowAnalyzer:
             low_confidence=False,
         )
 
-    def generate_report_section(self, result: Optional[FlowResult] = None) -> str:
-        """
-        Generate formatted text report section for buy/sell flow.
-
-        Args:
-            result: Pre-computed result from calculate(). If None, calculate()
-                is called. Pass a pre-computed result so the report and the
-                stored/persisted data describe one instant (bugfix_spec.md
-                Item 6a's result-passing fix, mirrors
-                VolatilitySurfaceCalculator.generate_report_section).
-
-        Returns:
-            Formatted string for inclusion in analysis report.
-        """
-        if result is None:
-            result = self.calculate()
-        lines = []
-        separator = "-" * 80
-
-        start_str = datetime.fromtimestamp(result.window_start_ms / 1000.0, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
-        end_str = datetime.fromtimestamp(result.window_end_ms / 1000.0, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
-
-        lines.append("BUY/SELL FLOW ANALYSIS (Trade Direction-Based)")
-        lines.append(separator)
-        lines.append(f"Spot Price: ${result.spot_price:,.2f}")
-        lines.append(f"Window: {start_str} -> {end_str} UTC")
-        lines.append(f"Trades Analyzed: {result.trade_count}")
-        lines.append("")
-
-        if not result.sufficient_data:
-            lines.append(
-                f"  ** INSUFFICIENT FLOW DATA ** - {result.trade_count} trade(s) in window, "
-                f"{MINIMUM_TRADES_FOR_SECTION} required. Flow section suppressed."
-            )
-            lines.append("")
-            return "\n".join(lines)
-
-        # Expiration-level summary
-        totals = result.expiration_totals
-        confidence_tag = LOW_CONFIDENCE_SUFFIX if result.low_confidence else ""
-        trend_tag = (
-            LOW_CONFIDENCE_SUFFIX
-            if result.low_confidence and result.flow_trend != INSUFFICIENT_DATA_LABEL
-            else ""
-        )
-        lines.append("EXPIRATION-LEVEL FLOW:")
-        lines.append(f"  Calls:  Buy: {totals.call_buy_volume:>10,.1f}  Sell: {totals.call_sell_volume:>10,.1f}")
-        lines.append(f"  Puts:   Buy: {totals.put_buy_volume:>10,.1f}  Sell: {totals.put_sell_volume:>10,.1f}")
-        lines.append(f"  Bias: {result.bias_interpretation}{confidence_tag}")
-        lines.append(f"  Trend: {result.flow_trend}{trend_tag}")
-        lines.append("")
-
-        # Top buying pressure strikes
-        lines.append("TOP 5 STRIKES BY BUYING PRESSURE:")
-        lines.append(separator)
-        if result.top_buy_strikes:
-            lines.append(
-                f"{'Strike':>10}  {'Type':>6}  {'Net Flow':>12}  {'Buy Vol':>12}  {'Buy Notional':>15}"
-            )
-            lines.append(
-                f"{'------':>10}  {'----':>6}  {'---------':>12}  {'--------':>12}  {'-------------':>15}"
-            )
-            for item in result.top_buy_strikes:
-                lines.append(
-                    f"{item.strike:>10,.0f}  {item.option_type:>6}  "
-                    f"{item.net_flow:>+12,.1f}  {item.volume:>12,.1f}  "
-                    f"${item.notional:>14,.2f}"
-                )
-        else:
-            lines.append("  No net buying detected")
-        lines.append("")
-
-        # Top selling pressure strikes
-        lines.append("TOP 5 STRIKES BY SELLING PRESSURE:")
-        lines.append(separator)
-        if result.top_sell_strikes:
-            lines.append(
-                f"{'Strike':>10}  {'Type':>6}  {'Net Flow':>12}  {'Sell Vol':>12}  {'Sell Notional':>15}"
-            )
-            lines.append(
-                f"{'------':>10}  {'----':>6}  {'---------':>12}  {'---------':>12}  {'--------------':>15}"
-            )
-            for item in result.top_sell_strikes:
-                lines.append(
-                    f"{item.strike:>10,.0f}  {item.option_type:>6}  "
-                    f"{item.net_flow:>+12,.1f}  {item.volume:>12,.1f}  "
-                    f"${item.notional:>14,.2f}"
-                )
-        else:
-            lines.append("  No net selling detected")
-        lines.append("")
-
-        return "\n".join(lines)

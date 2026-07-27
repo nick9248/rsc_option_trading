@@ -7,10 +7,6 @@ Fixture and hand-computed numbers are verbatim from bugfix_spec.md section 3.5.
 
 import pytest
 
-from coding.core.analytics.volatility_surface_calculator import (
-    MINIMUM_TRADED_INSTRUMENTS_FOR_AGGRESSION,
-    VolatilitySurfaceCalculator,
-)
 from coding.service.on_chain.on_chain_analysis_service import OnChainAnalysisService
 
 CHAIN = [
@@ -81,28 +77,15 @@ class TestCalculateVwapIv:
         assert n == 2
 
 
-class TestVwapReportGate:
-    """T3.2/T3.4: the report renders the matched baseline, with a gate on
-    thin sample sizes."""
-
-    def test_label_flips_vs_old_behavior(self):
-        """T3.2 - old (buggy) code produced 'Sellers aggressive' here; the fix
-        must produce 'Balanced' with the matched baseline."""
-        calc = VolatilitySurfaceCalculator(CHAIN, 64_000.0, "1AUG26")
-        calc.set_vwap_iv_data(47.25, 47.50, 2)
-        report = calc.generate_report_section(result=calc.calculate())
-
-        assert "Matched Mark IV: 47.5%" in report
-        assert "Sellers aggressive" not in report  # old code produced this
-        assert "Balanced" in report
-
-    def test_thin_data_suppresses_aggression_label(self):
-        """T3.4 - below MINIMUM_TRADED_INSTRUMENTS_FOR_AGGRESSION, print the
-        numbers but suppress the aggression label."""
-        calc = VolatilitySurfaceCalculator(CHAIN, 64_000.0, "1AUG26")
-        assert 1 < MINIMUM_TRADED_INSTRUMENTS_FOR_AGGRESSION
-        calc.set_vwap_iv_data(47.25, 40.00, 1)
-        report = calc.generate_report_section(result=calc.calculate())
-
-        assert "aggression signal suppressed" in report
-        assert "Buyers aggressive" not in report
+# NOTE (task A7, carried finding #1): TestVwapReportGate
+# (test_label_flips_vs_old_behavior / T3.2, test_thin_data_suppresses_
+# aggression_label / T3.4) used to live here, covering
+# VolatilitySurfaceCalculator.generate_report_section() (deleted -- zero
+# production callers). T3.4's suppressed-aggression-label coverage is
+# equivalent (better) in tests/unit/analytics/reporting/test_vol_surface_
+# formatter.py::test_vwap_iv_aggression_suppressed_below_instrument_floor.
+# T3.2's "Balanced" regression guard (the specific label the matched-
+# baseline fix must produce, vs. the old buggy "Sellers aggressive") was
+# NOT otherwise covered at the live-formatter level -- migrated to
+# test_vol_surface_formatter.py::test_vwap_iv_balanced_within_threshold
+# rather than dropped.

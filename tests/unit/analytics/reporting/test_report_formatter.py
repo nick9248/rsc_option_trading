@@ -187,52 +187,17 @@ def test_render_market_wide_skips_unknown_keys():
     assert "MARKET-WIDE METRICS" in text
 
 
-# ---------------------------------------------------------------------------
-# render_full — block-joining semantics
-# ---------------------------------------------------------------------------
-
-def test_render_full_joins_header_expirations_and_market_wide_with_blank_lines():
-    formatter = OnChainReportFormatter()
-    expirations = (
-        ExpirationRenderInput(expiration="10MAR26", analysis=_make_analysis("10MAR26")),
-        ExpirationRenderInput(expiration="28MAR26", analysis=_make_analysis("28MAR26")),
-    )
-    text = formatter.render_full(
-        currency="BTC",
-        underlying_price=95000.0,
-        generated_at=GENERATED_AT,
-        market_metrics=None,
-        expirations=expirations,
-        market_wide_sections={"vrp": "VRP TEXT"},
-    )
-
-    assert "EXPIRATION: 10MAR26" in text
-    assert "EXPIRATION: 28MAR26" in text
-    assert "MARKET-WIDE METRICS" in text
-    assert text.index("EXPIRATION: 10MAR26") < text.index("EXPIRATION: 28MAR26") < text.index("MARKET-WIDE METRICS")
-
-    # Blank-line separation: header's own trailing blank + the outer join's \n
-    # produces exactly one blank line before the first EXPIRATION line.
-    header_end = text.index("EXPIRATION: 10MAR26")
-    assert text[:header_end].endswith("\n\n")
-
-
-def test_render_full_without_market_wide_sections_omits_the_block():
-    formatter = OnChainReportFormatter()
-    expirations = (ExpirationRenderInput(expiration="10MAR26", analysis=_make_analysis("10MAR26")),)
-    text = formatter.render_full(
-        currency="BTC",
-        underlying_price=95000.0,
-        generated_at=GENERATED_AT,
-        market_metrics=None,
-        expirations=expirations,
-        market_wide_sections={},
-    )
-    assert "MARKET-WIDE METRICS" not in text
-    # Report ends with the last expiration's own closing separator, one trailing \n.
-    assert text.endswith("=" * 80 + "\n")
-    assert not text.endswith("=" * 80 + "\n\n")
-
+# NOTE (task A7, carried finding #1): this section used to test
+# OnChainReportFormatter.render_full (the legacy per-argument full-report
+# path) directly -- test_render_full_joins_header_expirations_and_market_
+# wide_with_blank_lines and test_render_full_without_market_wide_sections_
+# omits_the_block. render_full is deleted (zero production callers --
+# render_full_from_result is the sole live full-report path since T10).
+# Both scenarios are already redundantly covered below by
+# test_render_full_from_result_matches_manual_composition (equivalent to
+# the blank-line-joining assertion, since both build the same "\n".join(
+# blocks)) and test_render_full_from_result_omits_market_wide_block_when_
+# empty (identical assertions, same trailing-separator check).
 
 # ---------------------------------------------------------------------------
 # T8: render_header_from_result / render_expiration_from_result /

@@ -92,17 +92,12 @@ class TestNoDatabaseImportInCore:
         assert not hasattr(module, "DatabaseRepository")
 
 
-class TestSingleFetchInProductionSequence:
-    """T6.1 (bugfix_spec.md section 6.5) - one computation, single truth."""
-
-    def test_one_call_produces_consistent_report_and_structured_data(self):
-        trades = make_trades(50)
-        analyzer = _make_analyzer(trades)
-        result = analyzer.calculate()
-        report = analyzer.generate_report_section(result=result)
-
-        assert result.trade_count == 50
-        assert "Trades Analyzed: 50" in report
+# NOTE (task A7, carried finding #1): TestSingleFetchInProductionSequence
+# (T6.1, "one computation, single truth") used to live here, calling the
+# now-deleted BuySellFlowAnalyzer.generate_report_section() (zero production
+# callers -- the live render path, format_flow_section, is a pure function
+# over an already-typed FlowResult and structurally cannot recompute).
+# That regression class is now impossible by construction, not just tested.
 
 
 class TestBasicFlowCalculation:
@@ -286,27 +281,13 @@ class TestBiasInterpretation:
         assert result.bias_interpretation == "Balanced"
 
 
-class TestReportGeneration:
-    def test_report_generation(self):
-        trades = make_trades(20, amount=2.0)
-        analyzer = _make_analyzer(trades)
-        report = analyzer.generate_report_section()
-
-        assert isinstance(report, str)
-        assert len(report) > 0
-        assert "BUY/SELL FLOW ANALYSIS" in report
-        assert "EXPIRATION-LEVEL FLOW:" in report
-        assert "TOP 5 STRIKES BY BUYING PRESSURE:" in report
-
-    def test_window_printed_instead_of_lookback_hours(self):
-        """F6.3.1 - the report prints the actual window, not just a
-        'Lookback Window: N hours' label divorced from the real fetch."""
-        trades = make_trades(20, amount=2.0)
-        analyzer = _make_analyzer(trades)
-        report = analyzer.generate_report_section()
-
-        assert "Window:" in report
-        assert "UTC" in report
+# NOTE (task A7, carried finding #1): TestReportGeneration
+# (test_report_generation, test_window_printed_instead_of_lookback_hours)
+# used to live here, covering BuySellFlowAnalyzer.generate_report_section()
+# (deleted -- zero production callers). Equivalent (better) coverage now
+# lives in tests/unit/analytics/reporting/test_flow_formatter.py::
+# test_flow_section_header_and_totals, exercising the actual live render
+# path (format_flow_section) against a typed FlowResult.
 
 
 class TestDataSufficiencyGate:
@@ -371,37 +352,16 @@ class TestDataSufficiencyGate:
         assert result.low_confidence is False
         assert result.bias_interpretation == "Heavy Buying"
 
-    def test_gated_report_text(self):
-        """T6.4 (adapted per Decision D5's 5-trade section-suppression floor,
-        not the bugfix_spec.md F6.3.3 snippet's 20-trade floor — see the
-        bugfix Item 6 commit message for why D5 governs)."""
-        trades = [
-            buy(64_000.0, "C", 5.0, trade_id="1"),
-            buy(64_000.0, "C", 3.0, trade_id="2"),
-            sell(66_000.0, "C", 1.0, trade_id="3"),
-        ]
-        analyzer = _make_analyzer(trades)
-        report = analyzer.generate_report_section(result=analyzer.calculate())
-
-        assert "** INSUFFICIENT FLOW DATA **" in report
-        assert f"3 trade(s) in window, {MINIMUM_TRADES_FOR_SECTION} required" in report
-        assert "Heavy Buying" not in report
-        assert "Accelerating" not in report
-        assert "EXPIRATION-LEVEL FLOW:" not in report  # section fully suppressed
-
-    def test_low_confidence_tag_rendered_in_report(self):
-        trades = make_trades(10, amount=2.0)
-        analyzer = _make_analyzer(trades)
-        report = analyzer.generate_report_section(result=analyzer.calculate())
-
-        assert LOW_CONFIDENCE_SUFFIX in report
-
-    def test_full_confidence_report_has_no_tag(self):
-        trades = make_trades(MINIMUM_TRADES_FOR_CONFIDENCE, amount=2.0)
-        analyzer = _make_analyzer(trades)
-        report = analyzer.generate_report_section(result=analyzer.calculate())
-
-        assert LOW_CONFIDENCE_SUFFIX not in report
+    # NOTE (task A7, carried finding #1): test_gated_report_text (T6.4),
+    # test_low_confidence_tag_rendered_in_report, and
+    # test_full_confidence_report_has_no_tag used to live here, covering
+    # BuySellFlowAnalyzer.generate_report_section() (deleted -- zero
+    # production callers). Equivalent coverage now lives in
+    # tests/unit/analytics/reporting/test_flow_formatter.py::
+    # test_flow_section_suppressed_below_sufficiency_floor,
+    # test_flow_section_low_confidence_tag_rendered, and
+    # test_flow_section_header_and_totals (asserts "LOW CONFIDENCE" absent),
+    # exercising the actual live render path (format_flow_section).
 
     def test_all_trades_on_one_strike_still_labeled(self):
         """Count is the gate, not diversity — 20 trades on a single strike
