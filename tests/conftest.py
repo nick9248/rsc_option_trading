@@ -53,6 +53,12 @@ _FROZEN_CLOCK_MODULES = (
     "coding.core.analytics.buy_sell_flow_analyzer",
     "coding.core.analytics.market_wide_calculator",
     "coding.service.on_chain.on_chain_analysis_service",
+    # T11 (refactor_design_spec.md): the term-structure DTE calc's
+    # datetime.now(timezone.utc) call and the price-history/cross-asset-
+    # correlation phases' time.time() calls moved out of
+    # on_chain_analysis_service.py into MarketWideOrchestrator when
+    # _calculate_market_wide_metrics was split into 8 named phase methods.
+    "coding.service.on_chain.market_wide_orchestrator",
     "coding.core.analytics.synthesis",
     # vrp_calculator.calculate_realized_volatility defaults reference_time to
     # datetime.now() when the caller doesn't pass one

@@ -25,10 +25,6 @@ from coding.core.analytics.on_chain_analyzer import (
     _to_market_metrics,
     _to_trend_snapshot,
 )
-from coding.core.analytics.market_wide_calculator import (
-    MINIMUM_PRICE_HISTORY_DAYS_FOR_VOL_CONE,
-    MarketWideCalculator,
-)
 from coding.core.analytics.reporting.report_formatter import OnChainReportFormatter
 from coding.core.analytics.results.analysis_result import (
     IvPercentileResult,
@@ -36,57 +32,13 @@ from coding.core.analytics.results.analysis_result import (
     OiChangesResult,
     OnChainAnalysisResult,
 )
-from coding.core.analytics.results.market_wide_results import (
-    BlockTrade,
-    BlockTradesResult,
-    CrossAssetCorrelationResult,
-    MarketWideResult,
-    PerpetualFundingResult,
-    RealizedVolatilityResult,
-    TermStructureEntry,
-    TermStructureResult,
-    VarianceRiskPremiumResult,
-    VolatilityConeResult,
-    VolatilityConeWindowStats,
-)
 from coding.core.analytics.volatility_surface_calculator import VolatilitySurfaceCalculator
 from coding.core.database.repository import DatabaseRepository
 from coding.service.deribit.deribit_api_service import DeribitApiService
 from coding.service.on_chain.analysis_builder import OnChainAnalysisBuilder
+from coding.service.on_chain.market_wide_orchestrator import MarketWideOrchestrator
 
 logger = logging.getLogger(__name__)
-
-_EXPECTED_FUNDING_RESOLUTION_MS = 3_600_000  # 1 hour
-
-
-def _warn_if_funding_resolution_unexpected(funding_data: Dict[str, Any]) -> None:
-    """
-    bugfix_spec.md Item 4 (F4.3): ``get_funding_chart_data(length="1m")`` is
-    expected to return hourly points. Log a warning (do not raise — the
-    trend classifier degrades gracefully to "N/A" on too few points) if the
-    median timestamp delta is not ~3,600,000 ms, so a future API resolution
-    change is loud rather than silently corrupting the trend window sizes.
-    """
-    if not isinstance(funding_data, dict):
-        return
-    points = funding_data.get("data")
-    if not isinstance(points, list) or len(points) < 2:
-        return
-    try:
-        timestamps = sorted(p["timestamp"] for p in points if isinstance(p, dict) and "timestamp" in p)
-    except (TypeError, KeyError):
-        return
-    if len(timestamps) < 2:
-        return
-    deltas = [b - a for a, b in zip(timestamps, timestamps[1:])]
-    deltas.sort()
-    median_delta = deltas[len(deltas) // 2]
-    if median_delta != _EXPECTED_FUNDING_RESOLUTION_MS:
-        logger.warning(
-            "Funding chart data median timestamp delta is %d ms, expected %d ms "
-            "(hourly) — trend window sizing assumes hourly resolution.",
-            median_delta, _EXPECTED_FUNDING_RESOLUTION_MS,
-        )
 
 
 class OnChainAnalysisService:
@@ -803,362 +755,31 @@ class OnChainAnalysisService:
         aggregate_gex_dex_result: Optional[Any] = None,
     ) -> None:
         """
-        Calculate all market-wide metrics and store in analyzer.
+        Calculate all market-wide metrics and store in the builder.
+
+        refactor_design_spec.md T11 (M1): the 222-line, 8-job method that
+        used to live here is split into ``MarketWideOrchestrator``'s 8
+        named phase methods (market_wide_orchestrator.py). This is now a
+        thin delegator so existing callers/tests exercising this method's
+        builder-mutation contract keep working unchanged.
 
         Args:
-            analyzer: OnChainMetricsCalculator to store results in.
+            analyzer: OnChainMetricsCalculator with per-expiration state
+                already populated.
             currency: Currency symbol.
             progress_callback: Callback for progress updates.
             builder: T6 dual-write target (typed aggregate result).
             aggregate_gex_dex_result: Typed aggregate GexDexResult from
-                ``_fetch_greeks_and_store_gex_dex`` — computed in a different
+                ``_fetch_greeks_and_store_gex_dex`` -- computed in a different
                 phase but a field of the same ``MarketWideResult`` this
-                method assembles.
+                orchestrator assembles.
         """
-        dvol = analyzer.market_metrics.get("dvol")
-        calc = MarketWideCalculator(
-            currency=currency,
-            spot_price=analyzer.underlying_price,
-            dvol=dvol,
+        orchestrator = MarketWideOrchestrator(self.api)
+        market_wide_result = orchestrator.run(
+            analyzer, currency, progress_callback, aggregate_gex_dex_result,
         )
-
-        # T10: the analyzer's own market_wide_structured/market_wide_sections
-        # dict-and-text bookkeeping is deleted -- SynthesisMapper (T7) and
-        # render_full_from_result (T10) both read the typed sub-results
-        # below directly.
-        term_structure_result: Optional[TermStructureResult] = None
-        basis_result = None
-        realized_volatility_result: Optional[RealizedVolatilityResult] = None
-        vrp_result: Optional[VarianceRiskPremiumResult] = None
-        volatility_cone_result: Optional[VolatilityConeResult] = None
-        funding_result: Optional[PerpetualFundingResult] = None
-        block_trades_result: Optional[BlockTradesResult] = None
-        correlation_result: Optional[CrossAssetCorrelationResult] = None
-
-        # 1. IV Term Structure (uses ATM IVs collected during vol surface phase)
-        atm_ivs = analyzer._atm_ivs
-        if atm_ivs:
-            progress_callback("Calculating IV term structure...")
-            # Text return value is unused -- render_market_wide_from_result
-            # renders this section from the typed result now.
-            _, term_struct = calc.calculate_iv_term_structure(atm_ivs)
-
-            # calculate_iv_term_structure is not migrated to a typed result in
-            # this task (out of A5 scope — only calculate_futures_basis was
-            # called out); reconstruct entries here to feed MarketWideResult.
-            # Not itself the source of truth for the report text above.
-            _now_for_term_structure = datetime.now(timezone.utc)
-            _ts_entries = []
-            for exp, iv in sorted(atm_ivs.items()):
-                dte = MarketWideCalculator._calculate_dte(exp, _now_for_term_structure)
-                if dte is not None:
-                    _ts_entries.append(TermStructureEntry(expiration=exp, dte=dte, atm_iv=iv))
-            _ts_entries.sort(key=lambda e: e.dte)
-            term_structure_result = TermStructureResult(
-                entries=tuple(_ts_entries),
-                shape=term_struct.get("shape", "FLAT"),
-                spread=term_struct.get("spread", 0.0),
-                spread_signed=term_struct.get("spread_signed", term_struct.get("spread", 0.0)),
-                iv_by_dte=dict(term_struct.get("iv_by_dte", {})),
-            )
-
-        # 2. Futures Basis
-        try:
-            progress_callback("Fetching futures for basis calculation...")
-            futures_instruments = self.api.get_instruments(
-                currency=currency, kind="future", expired=False
-            )
-
-            futures_data = []
-            for fut in futures_instruments:
-                name = fut.get("instrument_name", "")
-                # Skip perpetual (not a dated future)
-                if "PERPETUAL" in name:
-                    continue
-                try:
-                    ticker = self.api.get_ticker(name)
-                    futures_data.append({
-                        "instrument_name": name,
-                        "mark_price": ticker.get("mark_price", 0),
-                        "index_price": ticker.get("index_price", analyzer.underlying_price),
-                    })
-                except Exception as e:
-                    logger.warning(f"Failed to fetch future ticker {name}: {e}")
-
-            if futures_data:
-                # calculate_futures_basis returns the typed
-                # FuturesBasisResult; market_wide_formatter's
-                # format_futures_basis_section renders it directly from
-                # render_market_wide_from_result now.
-                basis_result = calc.calculate_futures_basis(futures_data)
-
-        except Exception as e:
-            logger.warning(f"Failed to calculate futures basis: {e}")
-
-        # 3. Realized Volatility (multi-window) + 4. VRP + 5. Vol Cone
-        price_history: List[Dict[str, Any]] = []
-        rv_values: Dict[int, float] = {}
-        try:
-            progress_callback("Fetching price history for RV/VRP/Vol Cone...")
-            end_ts = int(time.time() * 1000)
-            start_ts = end_ts - (180 * 24 * 60 * 60 * 1000)  # 180 days
-
-            chart_data = self.api.get_tradingview_chart_data(
-                instrument_name=f"{currency}-PERPETUAL",
-                resolution="1D",
-                start_timestamp=start_ts,
-                end_timestamp=end_ts,
-            )
-
-            if chart_data and "ticks" in chart_data:
-                timestamps = chart_data["ticks"]
-                closes = chart_data.get("close", [])
-
-                for i, ts in enumerate(timestamps):
-                    if i < len(closes):
-                        price_history.append({
-                            "timestamp": ts / 1000,
-                            "close": closes[i],
-                        })
-
-            if price_history:
-                # RV -- text return value unused, rendered from the typed
-                # result by render_market_wide_from_result now.
-                _, rv_values = calc.calculate_realized_volatility_multi_window(
-                    price_history
-                )
-                if rv_values:
-                    realized_volatility_result = RealizedVolatilityResult(rv_by_window=dict(rv_values))
-
-                # VRP
-                rv_30d = rv_values.get(30, 0)
-                if rv_30d > 0:
-                    _, vrp_data = calc.calculate_vrp(rv_30d)
-                    # Additional finding (same bug class as carried finding
-                    # #1, found verifying the render-path flip): dvol is
-                    # Optional on VarianceRiskPremiumResult and
-                    # calc.calculate_vrp's own text branch already renders
-                    # "DVOL not available" when dvol is None -- gating
-                    # construction on dvol being available too meant a
-                    # dvol-unavailable-but-rv_30d>0 run silently DROPPED the
-                    # VRP section from the typed path while the legacy text
-                    # path still showed it (with its own "not available"
-                    # message). Always construct when rv_30d > 0; dvol=None
-                    # flows straight through the same way it already does
-                    # for the calculator's own text.
-                    vrp_result = VarianceRiskPremiumResult(
-                        vrp=vrp_data["vrp"], signal=vrp_data["signal"],
-                        dvol=dvol, rv_30d=rv_30d,
-                    )
-
-                # Vol Cone -- text return value unused, rendered from the
-                # typed result (including the full 6-column table via
-                # stats_by_window) by render_market_wide_from_result now.
-                _, cone_data = calc.calculate_volatility_cone(price_history)
-                # Additional finding (same bug class as carried finding #1):
-                # cone_data pre-seeds all three percentile keys at 0.0, so
-                # constructing unconditionally whenever price_history was
-                # truthy produced a fake all-zero-percentile
-                # VolatilityConeResult on the calculator's own "Insufficient
-                # price history" path. Mirror that method's exact threshold
-                # (the shared constant, not a re-declared literal) so the
-                # typed result is None exactly when the legacy text says
-                # "Insufficient".
-                if len(price_history) >= MINIMUM_PRICE_HISTORY_DAYS_FOR_VOL_CONE:
-                    # T10: also carry the full per-window row (current RV,
-                    # 25th/median/75th, percentile) the legacy 6-column
-                    # table shows -- percentile_by_window alone can only
-                    # reproduce a 2-column table (see
-                    # format_volatility_cone_section), which is what a live
-                    # characterization run against the recorded fixture
-                    # caught once render_market_wide_from_result went live.
-                    stats_by_window = {
-                        window: VolatilityConeWindowStats(
-                            current_rv=cone_data[f"cone_{window}d_current_rv"],
-                            p25=cone_data[f"cone_{window}d_p25"],
-                            p50=cone_data[f"cone_{window}d_p50"],
-                            p75=cone_data[f"cone_{window}d_p75"],
-                            percentile=cone_data.get(f"cone_{window}d_pctile", 0.0),
-                        )
-                        for window in (10, 20, 30)
-                        if f"cone_{window}d_current_rv" in cone_data
-                    }
-                    volatility_cone_result = VolatilityConeResult(
-                        percentile_by_window={
-                            10: cone_data.get("cone_10d_pctile", 0.0),
-                            20: cone_data.get("cone_20d_pctile", 0.0),
-                            30: cone_data.get("cone_30d_pctile", 0.0),
-                        },
-                        stats_by_window=stats_by_window,
-                    )
-
-        except Exception as e:
-            logger.warning(f"Failed to calculate RV/VRP/Vol Cone: {e}")
-
-        # 6. Perpetual Funding Trend
-        try:
-            progress_callback("Fetching perpetual funding trend...")
-            funding_data = self.api.get_funding_chart_data(
-                instrument_name=f"{currency}-PERPETUAL",
-                length="1m",
-            )
-            # bugfix_spec.md Item 4 (F4.3): "1m" is expected to return hourly
-            # points; assert that resolution rather than assuming it, so a
-            # future API change is a loud warning, not a silently-wrong trend.
-            _warn_if_funding_resolution_unexpected(funding_data)
-            perp_ticker = self.api.get_ticker(f"{currency}-PERPETUAL")
-
-            # Text return value unused, rendered from the typed result by
-            # render_market_wide_from_result now.
-            _, funding_data_struct = calc.calculate_perpetual_funding_trend(
-                funding_data, perp_ticker
-            )
-
-            # CARRIED FINDING #1 (A5 review, gates the render-path flip):
-            # funding_data_struct pre-seeds "funding_8h": 0.0 /
-            # "perp_funding_trend": "Stable" (market_wide_calculator.py's
-            # own structured-dict defaults, read by the legacy text path
-            # too), so funding_data_struct.get("funding_8h") is never None
-            # even when funding is genuinely unavailable -- the typed
-            # result never represented "unavailable". Read the ticker's raw
-            # Optional values directly and gate construction on their
-            # presence, so an unavailable reading produces funding_8h=None
-            # (matching the "not available" case the formatter already
-            # handles) instead of a fabricated zero-value result.
-            ticker_funding_8h = perp_ticker.get("funding_8h")
-            ticker_current_funding = perp_ticker.get("current_funding")
-            if ticker_funding_8h is not None or ticker_current_funding is not None:
-                funding_result = PerpetualFundingResult(
-                    perp_open_interest=funding_data_struct.get("perp_oi", 0.0),
-                    funding_rate=ticker_current_funding,
-                    funding_8h=ticker_funding_8h,
-                    funding_trend=funding_data_struct.get("perp_funding_trend", "Stable"),
-                    history_points=len(calc._extract_funding_rates(funding_data)),
-                )
-
-        except Exception as e:
-            logger.warning(f"Failed to calculate perpetual funding trend: {e}")
-
-        # 7. Block Trades (reuse trade data from VWAP IV phase)
-        recent_trades = analyzer._recent_trades
-        if recent_trades:
-            progress_callback("Detecting block trades...")
-            # Text return value unused, rendered from the typed result by
-            # render_market_wide_from_result now.
-            _, block_data = calc.detect_block_trades(recent_trades)
-            block_trades_tuple = tuple(
-                BlockTrade(
-                    timestamp=bt.get("timestamp"),
-                    instrument_name=bt.get("instrument", ""),
-                    amount=bt.get("amount", 0.0),
-                    direction=bt.get("direction", ""),
-                    notional=bt.get("notional", 0.0),
-                    implied_volatility=bt.get("iv"),
-                )
-                for bt in block_data.get("block_trades", [])
-            )
-            # notional_threshold matches detect_block_trades' default; total_detected
-            # approximates the (already top-10-truncated) displayed count — the
-            # calculator does not expose the pre-truncation total externally.
-            block_trades_result = BlockTradesResult(
-                trades=block_trades_tuple, notional_threshold=100_000.0,
-                total_detected=len(block_trades_tuple),
-            )
-
-        # 8. Cross-Asset Correlation
-        try:
-            other_currency = "ETH" if currency == "BTC" else "BTC"
-            progress_callback(f"Calculating {currency}/{other_currency} correlation...")
-
-            end_ts = int(time.time() * 1000)
-            start_ts = end_ts - (35 * 24 * 60 * 60 * 1000)  # 35 days
-
-            other_chart = self.api.get_tradingview_chart_data(
-                instrument_name=f"{other_currency}-PERPETUAL",
-                resolution="1D",
-                start_timestamp=start_ts,
-                end_timestamp=end_ts,
-            )
-
-            other_prices = []
-            if other_chart and "ticks" in other_chart:
-                timestamps = other_chart["ticks"]
-                closes = other_chart.get("close", [])
-                for i, ts in enumerate(timestamps):
-                    if i < len(closes):
-                        other_prices.append({
-                            "timestamp": ts / 1000,
-                            "close": closes[i],
-                        })
-
-            # Own prices (reuse from RV calculation above, last 35 days)
-            own_prices_30d = price_history[-35:] if price_history else []
-
-            # DVOL histories for correlation
-            own_dvol_history: List[float] = []
-            other_dvol_history: List[float] = []
-
-            try:
-                for ccy, target_list in [
-                    (currency, own_dvol_history),
-                    (other_currency, other_dvol_history)
-                ]:
-                    dvol_data = self.api.get_volatility_index_data(
-                        currency=ccy,
-                        resolution=86400,
-                        start_timestamp=start_ts,
-                        end_timestamp=end_ts,
-                    )
-                    if dvol_data and "data" in dvol_data:
-                        for point in dvol_data["data"]:
-                            if len(point) > 4:
-                                target_list.append(point[4])
-            except Exception as e:
-                logger.warning(f"Failed to fetch DVOL for correlation: {e}")
-
-            # Text return value unused, rendered from the typed result by
-            # render_market_wide_from_result now.
-            _, corr_data = calc.calculate_cross_asset_correlation(
-                own_prices=own_prices_30d,
-                other_prices=other_prices,
-                own_dvol_history=own_dvol_history,
-                other_dvol_history=other_dvol_history,
-                other_currency=other_currency,
-            )
-            # calculate_cross_asset_correlation now pre-seeds both
-            # correlation keys at None (fixed alongside task A6 carried
-            # finding #1 -- previously 0.0, indistinguishable from a
-            # genuine zero correlation), so .get() here correctly yields
-            # None on insufficient data instead of a fabricated zero.
-            correlation_result = CrossAssetCorrelationResult(
-                other_currency=other_currency,
-                price_correlation=corr_data.get("btc_eth_price_corr"),
-                dvol_correlation=corr_data.get("btc_eth_dvol_corr"),
-                sample_size=min(len(own_prices_30d), len(other_prices)),
-            )
-
-        except Exception as e:
-            logger.warning(f"Failed to calculate cross-asset correlation: {e}")
-
         if builder is not None:
-            builder.set_market_wide(
-                MarketWideResult(
-                    spot_price=analyzer.underlying_price,
-                    currency=currency,
-                    dvol=analyzer.market_metrics.get("dvol"),
-                    iv_percentile_365d=analyzer.market_metrics.get("iv_percentile"),
-                    aggregate_gex_dex=aggregate_gex_dex_result,
-                    term_structure=term_structure_result,
-                    futures_basis=basis_result,
-                    realized_volatility=realized_volatility_result,
-                    variance_risk_premium=vrp_result,
-                    volatility_cone=volatility_cone_result,
-                    perpetual_funding=funding_result,
-                    block_trades=block_trades_result,
-                    cross_asset_correlation=correlation_result,
-                    failed_sections=(),
-                )
-            )
+            builder.set_market_wide(market_wide_result)
 
     def _calculate_oi_changes_and_iv_percentile(
         self,
