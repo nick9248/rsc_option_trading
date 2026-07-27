@@ -6,7 +6,7 @@ and identifies key levels (Call Resistance, Put Support, Zero Gamma Level).
 """
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from coding.core.analytics.results.gex_dex_results import (
     GexDexKeyLevels,

@@ -9,7 +9,7 @@ import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from coding.core.analytics.buy_sell_flow_analyzer import BuySellFlowAnalyzer
 from coding.core.analytics.chart_generator import (
@@ -31,6 +31,10 @@ from coding.core.analytics.results.analysis_result import (
     OiChangeRow,
     OiChangesResult,
     OnChainAnalysisResult,
+)
+from coding.core.analytics.thresholds import (
+    OI_CHANGE_SIGNIFICANT_ABS_THRESHOLD,
+    OI_CHANGE_SIGNIFICANT_PCT_THRESHOLD,
 )
 from coding.core.analytics.volatility_surface_calculator import VolatilitySurfaceCalculator
 from coding.core.database.repository import DatabaseRepository
@@ -86,7 +90,12 @@ class OnChainAnalysisService:
         progress_callback: Optional[Callable[[str], None]] = None,
         return_analyzer: bool = False,
         return_result: bool = False,
-    ):
+    ) -> Union[
+        str,
+        Tuple[str, OnChainMetricsCalculator],
+        Tuple[str, OnChainAnalysisResult],
+        Tuple[str, OnChainMetricsCalculator, OnChainAnalysisResult],
+    ]:
         """
         Fetch and analyze on-chain data for a currency.
 
@@ -918,7 +927,10 @@ class OnChainAnalysisService:
                     change_pct = ((current_oi - prev) / prev) * 100
                     abs_change = current_oi - prev
 
-                    if abs(change_pct) >= 20 and abs(abs_change) >= 10:
+                    if (
+                        abs(change_pct) >= OI_CHANGE_SIGNIFICANT_PCT_THRESHOLD
+                        and abs(abs_change) >= OI_CHANGE_SIGNIFICANT_ABS_THRESHOLD
+                    ):
                         significant_changes.append({
                             "strike": strike,
                             "type": opt_type,

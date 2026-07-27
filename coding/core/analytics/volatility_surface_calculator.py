@@ -11,7 +11,7 @@ Computes per-expiry volatility metrics:
 
 import logging
 import math
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from coding.core.analytics.black_scholes_calculator import BlackScholesCalculator
 from coding.core.analytics.results.vol_surface_results import (
@@ -22,7 +22,11 @@ from coding.core.analytics.results.vol_surface_results import (
     SkewResult,
     VolSurfaceResult,
 )
-from coding.core.analytics.thresholds import interpret_put_call_ratio
+from coding.core.analytics.thresholds import (
+    SKEW_MILD_THRESHOLD_POINTS,
+    SKEW_STRONG_THRESHOLD_POINTS,
+    interpret_put_call_ratio,
+)
 
 logger = logging.getLogger(__name__)
 _bs = BlackScholesCalculator()
@@ -188,13 +192,13 @@ class VolatilitySurfaceCalculator:
         call_iv = call_25d.get("mark_iv", 0)
         skew = put_iv - call_iv
 
-        if skew > 5:
+        if skew > SKEW_STRONG_THRESHOLD_POINTS:
             interpretation = "Puts More Expensive - Strong Hedging Demand"
-        elif skew > 1:
+        elif skew > SKEW_MILD_THRESHOLD_POINTS:
             interpretation = "Puts More Expensive - Hedging Demand"
-        elif skew > -1:
+        elif skew > -SKEW_MILD_THRESHOLD_POINTS:
             interpretation = "Balanced"
-        elif skew > -5:
+        elif skew > -SKEW_STRONG_THRESHOLD_POINTS:
             interpretation = "Calls More Expensive - Upside Speculation"
         else:
             interpretation = "Calls More Expensive - Strong Upside Speculation"
@@ -350,8 +354,18 @@ class VolatilitySurfaceCalculator:
                 net_vanna += _bs.calculate_vanna(d1, d2, sigma) * float(oi)
                 net_charm += _bs.calculate_charm(d1, d2, tau) * float(oi)
 
-            except Exception:
+            except Exception as e:
+                # M5 (code_quality_review.md): this used to be a bare
+                # `except Exception: continue` with zero logging -- a
+                # systematic input problem (e.g. every mark_iv malformed)
+                # yielded a plausible-looking net vanna of 0.0 with no
+                # diagnostics. Name the failing instrument so a real outage
+                # is loud, not silent.
                 skipped_instruments += 1
+                logger.warning(
+                    "Skipping vanna/charm for instrument %s: %s",
+                    inst.get("instrument_name", "<unknown>"), e,
+                )
                 continue
 
         # Interpret signals

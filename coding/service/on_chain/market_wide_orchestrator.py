@@ -43,6 +43,7 @@ from coding.core.analytics.results.market_wide_results import (
     VolatilityConeResult,
     VolatilityConeWindowStats,
 )
+from coding.core.analytics.thresholds import BLOCK_TRADE_NOTIONAL_THRESHOLD_USD
 from coding.service.deribit.deribit_api_service import DeribitApiService
 
 logger = logging.getLogger(__name__)
@@ -411,7 +412,7 @@ class MarketWideOrchestrator:
         # pre-truncation total externally.
         return BlockTradesResult(
             trades=block_trades_tuple,
-            notional_threshold=100_000.0,
+            notional_threshold=BLOCK_TRADE_NOTIONAL_THRESHOLD_USD,
             total_detected=len(block_trades_tuple),
         )
 

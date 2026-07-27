@@ -15,12 +15,13 @@ Computes metrics that span across all expirations:
 import logging
 import math
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
 from coding.core.analytics.results.market_wide_results import FuturesBasisEntry, FuturesBasisResult
+from coding.core.analytics.thresholds import BLOCK_TRADE_NOTIONAL_THRESHOLD_USD
 from coding.core.analytics.vrp_calculator import VRPCalculator
 
 logger = logging.getLogger(__name__)
@@ -558,7 +559,7 @@ class MarketWideCalculator:
     def detect_block_trades(
         self,
         trades: List[Dict[str, Any]],
-        notional_threshold: float = 100_000,
+        notional_threshold: float = BLOCK_TRADE_NOTIONAL_THRESHOLD_USD,
     ) -> Tuple[str, Dict]:
         """
         Detect and report block trades (large notional trades).

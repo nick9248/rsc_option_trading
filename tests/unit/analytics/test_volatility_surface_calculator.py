@@ -8,6 +8,8 @@ INSTRUMENT; use ``result.merged_iv_by_strike()`` for the legacy per-strike
 {call_iv, put_iv} view.
 """
 
+import logging
+
 import pytest
 from coding.core.analytics.volatility_surface_calculator import VolatilitySurfaceCalculator
 
@@ -146,6 +148,32 @@ class TestVolatilitySurfaceCalculator:
         assert greeks.net_vanna != 0
         assert greeks.net_charm != 0
         assert greeks.skipped_instruments >= 0
+
+    def test_second_order_greeks_exception_is_logged_with_instrument_context(self, caplog):
+        """
+        M5 (code_quality_review.md): the vanna/charm loop's ``except
+        Exception: skipped_instruments += 1; continue`` used to discard
+        per-instrument failures with zero logging -- a systematic input
+        problem (e.g. every mark_iv malformed) yielded a plausible-looking
+        net vanna of 0.0 with no diagnostics. Must now log a warning naming
+        the failing instrument.
+        """
+        instruments = [
+            _make_instrument(
+                90000, "C", mark_iv="not-a-number", delta=0.5,
+                gamma=0.00003, theta=-70, vega=130,
+            )
+        ]
+        calc = VolatilitySurfaceCalculator(instruments, 90000, "28MAR26")
+
+        with caplog.at_level(logging.WARNING):
+            greeks = calc._calculate_second_order_greeks()
+
+        assert greeks["skipped_instruments"] == 1
+        assert any(
+            "BTC-28MAR26-90000-C" in record.message or "instrument" in record.message.lower()
+            for record in caplog.records
+        )
 
     def test_atm_iv(self, sample_instruments):
         calc = VolatilitySurfaceCalculator(sample_instruments, 90000, "28MAR26")

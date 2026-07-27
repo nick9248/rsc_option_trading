@@ -31,6 +31,15 @@ from coding.core.analytics.results.flow_results import (
     StrikeFlowEntry,
     TopStrikeEntry,
 )
+from coding.core.analytics.thresholds import (
+    FLOW_BIAS_BALANCED_LOW_THRESHOLD,
+    FLOW_BIAS_HEAVY_THRESHOLD,
+    FLOW_BIAS_MODERATE_THRESHOLD,
+    FLOW_BIAS_SELLING_THRESHOLD,
+    FLOW_TREND_ACCELERATION_FACTOR,
+    FLOW_TREND_CONFIRMATION_FACTOR,
+    FLOW_TREND_DECELERATION_FACTOR,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -366,18 +375,24 @@ class BuySellFlowAnalyzer:
         # Detect trend patterns
         # Accelerating buy: 1h >> 4h >> full (all positive, increasing rate)
         if rate_1h > 0 and rate_4h > 0 and rate_full > 0:
-            if rate_1h > rate_4h * 1.5 and rate_4h > rate_full * 1.2:
+            if (
+                rate_1h > rate_4h * FLOW_TREND_ACCELERATION_FACTOR
+                and rate_4h > rate_full * FLOW_TREND_CONFIRMATION_FACTOR
+            ):
                 return "Accelerating Buy Pressure"
-            elif rate_1h < rate_4h * 0.7:
+            elif rate_1h < rate_4h * FLOW_TREND_DECELERATION_FACTOR:
                 return "Decelerating Buy Pressure"
             else:
                 return "Steady Buy Pressure"
 
         # Accelerating sell: 1h << 4h << full (all negative, increasing magnitude)
         elif rate_1h < 0 and rate_4h < 0 and rate_full < 0:
-            if abs(rate_1h) > abs(rate_4h) * 1.5 and abs(rate_4h) > abs(rate_full) * 1.2:
+            if (
+                abs(rate_1h) > abs(rate_4h) * FLOW_TREND_ACCELERATION_FACTOR
+                and abs(rate_4h) > abs(rate_full) * FLOW_TREND_CONFIRMATION_FACTOR
+            ):
                 return "Accelerating Sell Pressure"
-            elif abs(rate_1h) < abs(rate_4h) * 0.7:
+            elif abs(rate_1h) < abs(rate_4h) * FLOW_TREND_DECELERATION_FACTOR:
                 return "Decelerating Sell Pressure"
             else:
                 return "Steady Sell Pressure"
@@ -473,13 +488,13 @@ class BuySellFlowAnalyzer:
         else:
             buy_sell_ratio = float("inf") if total_buy > 0 else 1.0
 
-        if buy_sell_ratio > 1.3:
+        if buy_sell_ratio > FLOW_BIAS_HEAVY_THRESHOLD:
             return "Heavy Buying"
-        elif buy_sell_ratio > 1.1:
+        elif buy_sell_ratio > FLOW_BIAS_MODERATE_THRESHOLD:
             return "Moderate Buying"
-        elif buy_sell_ratio > 0.9:
+        elif buy_sell_ratio > FLOW_BIAS_BALANCED_LOW_THRESHOLD:
             return "Balanced"
-        elif buy_sell_ratio > 0.7:
+        elif buy_sell_ratio > FLOW_BIAS_SELLING_THRESHOLD:
             return "Moderate Selling"
         else:
             return "Heavy Selling"

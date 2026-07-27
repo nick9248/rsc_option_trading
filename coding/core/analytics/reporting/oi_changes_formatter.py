@@ -21,6 +21,10 @@ section).
 """
 
 from coding.core.analytics.results.analysis_result import IvPercentileResult, OiChangesResult
+from coding.core.analytics.thresholds import (
+    IV_PERCENTILE_HIGH_THRESHOLD,
+    IV_PERCENTILE_LOW_THRESHOLD,
+)
 
 _SUB_SEPARATOR = "-" * 80
 
@@ -84,9 +88,9 @@ def format_iv_percentile_section(result: IvPercentileResult) -> str:
         f"Percentile: {result.percentile:.1f}%",
     ]
 
-    if result.percentile >= 80:
+    if result.percentile >= IV_PERCENTILE_HIGH_THRESHOLD:
         lines.append("  IV is very high relative to history - favor selling vol")
-    elif result.percentile <= 20:
+    elif result.percentile <= IV_PERCENTILE_LOW_THRESHOLD:
         lines.append("  IV is very low relative to history - favor buying vol")
 
     return "\n".join(lines) + "\n\n"

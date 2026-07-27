@@ -28,7 +28,11 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from coding.core.analytics.results.analysis_result import MarketMetricsResult, TrendSnapshot
-from coding.core.analytics.thresholds import interpret_put_call_ratio
+from coding.core.analytics.thresholds import (
+    OI_SKEW_ITM_HEAVY_THRESHOLD_PCT,
+    OI_SKEW_OTM_HEAVY_THRESHOLD_PCT,
+    interpret_put_call_ratio,
+)
 from coding.core.analytics.results.expiry_results import (
     ExpirationAnalysisResult,
     LevelRef,
@@ -514,9 +518,9 @@ class OnChainMetricsCalculator:
         total_otm_pct = (total_otm_notional / total_notional * 100) if total_notional > 0 else 0
 
         # Determine OI skew interpretation
-        if total_otm_pct > 70:
+        if total_otm_pct > OI_SKEW_OTM_HEAVY_THRESHOLD_PCT:
             oi_skew = "Heavy OTM (Speculative)"
-        elif total_itm_pct > 40:
+        elif total_itm_pct > OI_SKEW_ITM_HEAVY_THRESHOLD_PCT:
             oi_skew = "Heavy ITM (Hedging)"
         else:
             oi_skew = "Balanced"
