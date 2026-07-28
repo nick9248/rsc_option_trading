@@ -2251,3 +2251,92 @@ class DatabaseRepository:
                 logger.warning("get_recent_onchain_history (vol) failed: %s", exc)
 
         return sorted(results.values(), key=lambda x: x["snapshot_hour"])
+
+    # institutional_metrics_spec.md section 1(c): whitelist of (table,
+    # column) pairs get_metric_history is allowed to read, plus the
+    # time_column each table uses for its trailing-window filter. Extends
+    # get_recent_onchain_history's existing whitelist pattern instead of
+    # inventing a second one -- one generic reader replaces ad-hoc
+    # per-metric SQL for every AVAILABLE metric in section 1(a): net GEX,
+    # PCR-OI (+ PCR-volume for bugfix_spec.md Item 10), total call/put OI,
+    # DVOL, VRP, funding.
+    _METRIC_HISTORY_WHITELIST = {
+        ("onchain_analysis_snapshots", "total_net_gex"): "snapshot_hour",
+        ("onchain_analysis_snapshots", "put_call_ratio_oi"): "snapshot_hour",
+        ("onchain_analysis_snapshots", "put_call_ratio_volume"): "snapshot_hour",
+        ("onchain_analysis_snapshots", "total_call_oi"): "snapshot_hour",
+        ("onchain_analysis_snapshots", "total_put_oi"): "snapshot_hour",
+        ("onchain_volatility_snapshots", "vrp_absolute"): "snapshot_hour",
+        ("volatility_index_history", "dvol"): "date",
+        ("funding_rate_history", "funding_rate"): "date",
+    }
+
+    def get_metric_history(
+        self,
+        table: str,
+        column: str,
+        currency: str,
+        lookback_hours: int,
+        expiration: Optional[str] = None,
+        time_column: Optional[str] = None,
+    ) -> List[float]:
+        """
+        Generic trailing-history reader for HistoricalNormalizer
+        (institutional_metrics_spec.md section 1(c)).
+
+        Args:
+            table: Source table. Must be one of the whitelisted tables.
+            column: Source column. Must be whitelisted for ``table``.
+            currency: Currency symbol.
+            lookback_hours: Trailing window size in hours (30d ~= 720,
+                90d ~= 2160).
+            expiration: When set, filters to one (currency, expiration)
+                series (onchain_analysis_snapshots / onchain_volatility_
+                snapshots). Market-wide tables (volatility_index_history,
+                funding_rate_history) have no expiration column -- omit it.
+            time_column: Overrides the whitelist's default time column.
+                Callers normally rely on the whitelist default; this exists
+                so tests/callers can be explicit without a second lookup.
+
+        Returns:
+            Plain floats, oldest-first, NULLs dropped, Decimal cast to
+            float at this boundary (never inside HistoricalNormalizer,
+            which must not know about psycopg2's Decimal type).
+
+        Raises:
+            ValueError: (table, column) is not in the whitelist.
+        """
+        key = (table, column)
+        if key not in self._METRIC_HISTORY_WHITELIST:
+            raise ValueError(
+                f"get_metric_history: ({table!r}, {column!r}) is not whitelisted. "
+                f"Allowed pairs: {sorted(self._METRIC_HISTORY_WHITELIST)}"
+            )
+        col = self._METRIC_HISTORY_WHITELIST[key] if time_column is None else time_column
+
+        if expiration is not None:
+            sql = (
+                f"SELECT {column} FROM {table} "
+                f"WHERE currency = %s AND expiration = %s "
+                f"AND {col} >= NOW() - INTERVAL '1 hour' * %s "
+                f"ORDER BY {col} ASC"
+            )
+            params = (currency, expiration, lookback_hours)
+        else:
+            sql = (
+                f"SELECT {column} FROM {table} "
+                f"WHERE currency = %s "
+                f"AND {col} >= NOW() - INTERVAL '1 hour' * %s "
+                f"ORDER BY {col} ASC"
+            )
+            params = (currency, lookback_hours)
+
+        try:
+            with self._db_cursor() as cursor:
+                cursor.execute(sql, params)
+                rows = cursor.fetchall()
+        except Exception as exc:
+            logger.warning("get_metric_history(%s, %s) failed: %s", table, column, exc)
+            return []
+
+        return [float(row[0]) for row in rows if row[0] is not None]
