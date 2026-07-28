@@ -30,6 +30,9 @@ from coding.core.analytics.reporting.gex_dex_formatter import (
     format_aggregate_gex_dex_section,
     format_gex_dex_section,
 )
+from coding.core.analytics.reporting.historical_context_formatter import (
+    format_historical_context_section,
+)
 from coding.core.analytics.reporting.market_wide_formatter import (
     format_block_trades_section,
     format_cross_asset_correlation_section,
@@ -419,5 +422,14 @@ class OnChainReportFormatter:
         market_wide_text = self.render_market_wide_from_result(result)
         if market_wide_text:
             blocks.append(market_wide_text)
+
+        # institutional_metrics_spec.md section 1: front-month percentile/
+        # z-score context. Appended last, after market-wide -- absent
+        # entirely (format_historical_context_section returns "") when
+        # result.normalized_metrics is empty (e.g. no repository, or an
+        # offline fixture with no recorded trailing history).
+        historical_context_text = format_historical_context_section(result.normalized_metrics)
+        if historical_context_text:
+            blocks.append(historical_context_text)
 
         return "\n".join(blocks)

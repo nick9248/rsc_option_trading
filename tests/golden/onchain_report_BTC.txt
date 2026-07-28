@@ -3073,3 +3073,10 @@ CROSS-ASSET CORRELATION (30d, BTC/ETH)
 
 
 ================================================================================
+HISTORICAL CONTEXT
+--------------------------------------------------------------------------------
+Net GEX          +1.96M USD     30d: n/a (0 obs)  |  90d: n/a (0 obs)
+PCR (OI)         0.298          30d: n/a (0 obs)  |  90d: n/a (0 obs)
+Total OI         2,072 coins    30d: n/a (0 obs)  |  90d: n/a (0 obs)
+DVOL             37.53          30d: n/a (0 obs)  |  90d: n/a (0 obs)
+Funding (8h)     +0.0003%       30d: n/a (0 obs)  |  90d: n/a (0 obs)

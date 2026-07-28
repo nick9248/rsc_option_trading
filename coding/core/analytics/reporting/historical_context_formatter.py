@@ -1,0 +1,116 @@
+"""
+Report rendering for HistoricalNormalizer output
+(institutional_metrics_spec.md section 1(c)).
+
+One line per metric: value, then 30d and 90d percentile/z/regime, so a
+bare number is never printed without its own-history context. Regime for
+the 90d window is recomputed from ``percentile_90d`` via
+``HistoricalNormalizer.regime_label`` at render time rather than stored on
+``NormalizedMetric`` -- the dataclass (institutional_metrics_spec.md
+section 1(c)) only carries ``regime_30d``, so this keeps that class exactly
+as specified while still surfacing a 90d regime label in the report.
+
+Known gap: the spec's "STALE: history ends {ts}" prefix (section 1(c) edge
+cases -- printed when ``max(snapshot_hour) < now() - 3h``) is not
+implemented. It needs the max observed timestamp per metric, which
+``NormalizedMetric``/the repository reader do not currently thread through.
+Flagged in task-C1-report.md as a follow-up, not silently dropped.
+"""
+
+from typing import Dict
+
+from coding.core.analytics.historical_normalizer import HistoricalNormalizer, NormalizedMetric
+
+_SUB_SEPARATOR = "-" * 80
+
+# Fixed render order and display label per metric key -- matches
+# institutional_metrics_spec.md section 1(c)'s example block ordering.
+_METRIC_ORDER = ("net_gex", "pcr_oi", "total_oi", "dvol", "funding")
+_METRIC_LABELS = {
+    "net_gex": "Net GEX",
+    "pcr_oi": "PCR (OI)",
+    "total_oi": "Total OI",
+    "dvol": "DVOL",
+    "funding": "Funding (8h)",
+}
+
+
+def _format_value(value: float, unit: str) -> str:
+    """Format ``value`` for display according to its unit."""
+    if unit == "USD":
+        if abs(value) >= 1_000_000:
+            return f"{value / 1_000_000:+.2f}M USD"
+        return f"{value:+,.2f} USD"
+    if unit == "ratio":
+        return f"{value:.3f}"
+    if unit == "vol pts":
+        return f"{value:.2f}"
+    if unit == "%":
+        # value is a raw decimal fraction (e.g. 0.0007 == 0.07%).
+        return f"{value * 100:+.4f}%"
+    if unit == "coins":
+        return f"{value:,.0f} coins"
+    return f"{value}"
+
+
+def _format_window(percentile, z, regime, n: int, sufficient: bool) -> str:
+    """
+    Format one window's ("30d" or "90d") percentile/z/regime, or the
+    insufficient-history fallback.
+    """
+    if not sufficient or percentile is None:
+        return f"n/a ({n} obs)"
+    z_str = f"z{z:+.2f}" if z is not None else "z n/a"
+    regime_str = regime if regime is not None else "n/a"
+    return f"p{percentile:.0f}  {z_str}  {regime_str}"
+
+
+def _format_metric_line(metric: NormalizedMetric) -> str:
+    label = _METRIC_LABELS.get(metric.name, metric.name)
+    value_str = _format_value(metric.value, metric.unit)
+
+    window_30d = _format_window(
+        metric.percentile_30d, metric.z_30d, metric.regime_30d,
+        metric.n_30d, metric.sufficient,
+    )
+
+    # regime_90d is not stored on NormalizedMetric (section 1(c)'s dataclass
+    # only has regime_30d) -- recompute it from percentile_90d here.
+    sufficient_90d = metric.n_90d >= HistoricalNormalizer.MIN_OBS
+    regime_90d = HistoricalNormalizer.regime_label(metric.percentile_90d)
+    window_90d = _format_window(
+        metric.percentile_90d, metric.z_90d, regime_90d,
+        metric.n_90d, sufficient_90d,
+    )
+
+    return f"{label:<16} {value_str:<14} 30d: {window_30d}  |  90d: {window_90d}"
+
+
+def format_historical_context_section(metrics: Dict[str, NormalizedMetric]) -> str:
+    """
+    Render the HISTORICAL CONTEXT section: one line per metric present in
+    ``metrics``, in the fixed order net GEX / PCR (OI) / Total OI / DVOL /
+    Funding (8h) -- metrics absent from the dict (e.g. VRP, deliberately
+    never wired -- see OnChainAnalysisService._build_normalized_metrics)
+    are simply not printed.
+
+    Returns "" when ``metrics`` is empty (matches the codebase's existing
+    "no data -> no section" convention, e.g. render_market_wide_from_result).
+    """
+    if not metrics:
+        return ""
+
+    lines = ["HISTORICAL CONTEXT", _SUB_SEPARATOR]
+    for key in _METRIC_ORDER:
+        metric = metrics.get(key)
+        if metric is not None:
+            lines.append(_format_metric_line(metric))
+
+    # Any metric not in the known fixed order (forward-compatible with a
+    # future AVAILABLE metric) still gets printed, appended after the
+    # fixed-order ones rather than silently dropped.
+    for key, metric in metrics.items():
+        if key not in _METRIC_ORDER:
+            lines.append(_format_metric_line(metric))
+
+    return "\n".join(lines)
