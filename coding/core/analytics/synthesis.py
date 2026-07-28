@@ -573,16 +573,11 @@ class ScoringEngine:
         historical comparability, same as every other convention fix in
         this campaign -- an intentional, reviewed break, not a bug.
 
-        KNOWN CONSEQUENCE flagged for review: ``classify_vol_regime``'s
-        EXPLOSIVE-regime trigger checks ``skew_score >= 1`` ("steep skew"
-        alongside negative GEX + high IV). Under the OLD magnitude-of-fear
-        axis this fired only for extreme PUT-side skew (the historically
-        more crash-correlated side). Under this directional re-sign it now
-        fires only for extreme CALL-side risk reversal instead -- the
-        EXPLOSIVE trigger's real-world polarity has flipped along with this
-        function's sign, not just its label. Not remediated here (D6 scopes
-        this task to the re-sign itself, not a redesign of
-        classify_vol_regime's own condition) -- flagged in the task report.
+        Consumer note: ``classify_vol_regime``'s EXPLOSIVE-regime trigger
+        reads this score and was re-signed alongside this function (fix-
+        review Critical #1, ``skew_score >= 1`` -> ``skew_score <= -1`` --
+        see that method's own docstring for the full history; not repeated
+        here to avoid two copies of the same story drifting out of sync).
 
         Feeds into: vol regime classifier, risk factors, trade recs, vol
         assessment narrative. Does NOT feed into directional scoring
@@ -1053,7 +1048,7 @@ class NarrativeGenerator:
         if risk_reversal_25d < -8:
             rich_side = "OTM puts are rich — selling put premium has edge"
         elif risk_reversal_25d <= -4:
-            rich_side = "Skew is normal — no clear rich/cheap side"
+            rich_side = "RR25 is normal — no clear rich/cheap side"
         else:
             rich_side = "OTM puts are cheap relative to calls — tail risk underpriced"
         cheap_side = "calls" if risk_reversal_25d < -4 else "puts"

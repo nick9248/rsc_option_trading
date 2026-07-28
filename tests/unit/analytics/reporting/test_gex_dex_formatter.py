@@ -73,10 +73,10 @@ def test_gex_dex_section_key_levels_and_totals():
     assert "Dealer Gamma:   +500,000.00 USD per 1% move" in text
     assert "POSITIVE: dealers long gamma, stabilizing (buy dips/sell rallies)" in text
     assert "Dealer Delta:   +0.2000 BTC" in text  # = -total_net_dex
-    # bugfix_spec.md Item 8 fix-review (Critical #2): mechanics only, no
-    # directional bull/bear call (the removed text contradicted
-    # ScoringEngine.score_dex's own docstring).
-    assert "Dealers net long delta; they sell the underlying as spot rises" in text
+    # bugfix_spec.md Item 8 fix-review (Critical #2, then round-2 Important
+    # finding): mechanics only, present tense, no directional bull/bear call
+    # and no spot-direction claim (that's gamma's story, told two lines up).
+    assert "Dealers net long delta; hedging back to neutral means selling the underlying" in text
 
 
 def test_gex_dex_section_holder_block_names_no_actor():

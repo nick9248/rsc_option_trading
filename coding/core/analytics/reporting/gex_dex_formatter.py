@@ -106,20 +106,22 @@ def _key_levels_and_totals_lines(result: GexDexResult, dex_unit: str) -> list:
         lines.append("                  -> NEGATIVE: dealers short gamma, amplifying volatility")
     else:
         lines.append("                  -> NEUTRAL")
-    # bugfix_spec.md Item 8 fix-review (Critical #2): this line previously
-    # asserted a directional "bullish"/"bearish" call that directly
-    # contradicted synthesis.ScoringEngine.score_dex's own docstring in
-    # this same codebase (positive DEX -> dealers short delta -> dealers
-    # BUY to hedge -> bullish; the formatter had "dealers net short delta -
-    # bearish pressure", the opposite conclusion from the same number).
-    # Ruling: describe the hedging MECHANICS only (matches bugfix_spec.md
-    # F8.3.2's own example text, which never labels this bullish/bearish
-    # either) -- do not re-derive a directional tag a second time.
+    # bugfix_spec.md Item 8 fix-review (Critical #2, then round-2 Important
+    # finding on the first fix): this line originally asserted a
+    # directional "bullish"/"bearish" call that directly contradicted
+    # synthesis.ScoringEngine.score_dex's own docstring in this same
+    # codebase. The first fix replaced it with "...they sell/buy the
+    # underlying as spot rises" -- still wrong: whether dealers buy or
+    # sell AS SPOT MOVES is a GAMMA question (the Dealer Gamma line two
+    # lines above already answers it -- short gamma means dealers buy as
+    # spot rises, long gamma means they sell), not a delta question. Delta
+    # only tells you the hedge direction needed RIGHT NOW to get back to
+    # neutral -- no spot-direction claim. Present tense, mechanics only.
     lines.append(f"  Dealer Delta:   {dealer_dex:+,.4f} {dex_unit}")
     if dealer_dex > 0:
-        lines.append("                  -> Dealers net long delta; they sell the underlying as spot rises")
+        lines.append("                  -> Dealers net long delta; hedging back to neutral means selling the underlying")
     elif dealer_dex < 0:
-        lines.append("                  -> Dealers net short delta; they buy the underlying as spot rises")
+        lines.append("                  -> Dealers net short delta; hedging back to neutral means buying the underlying")
     else:
         lines.append("                  -> Dealers delta-neutral")
     lines.append("")
