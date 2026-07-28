@@ -10,14 +10,15 @@ the 90d window is recomputed from ``percentile_90d`` via
 section 1(c)) only carries ``regime_30d``, so this keeps that class exactly
 as specified while still surfacing a 90d regime label in the report.
 
-Known gap: the spec's "STALE: history ends {ts}" prefix (section 1(c) edge
-cases -- printed when ``max(snapshot_hour) < now() - 3h``) is not
-implemented. It needs the max observed timestamp per metric, which
-``NormalizedMetric``/the repository reader do not currently thread through.
-Flagged in task-C1-report.md as a follow-up, not silently dropped.
+C1 review Important #1/#4: the block header names the front-month
+expiration these per-expiry metrics (net GEX, PCR-OI, total OI) describe,
+and a "STALE: history ends {ts}" line is prepended when
+``OnChainAnalysisService._compute_historical_context_staleness`` finds the
+most-stale queried table's data older than the spec's 3h threshold.
 """
 
-from typing import Dict
+from datetime import datetime
+from typing import Dict, Optional
 
 from coding.core.analytics.historical_normalizer import HistoricalNormalizer, NormalizedMetric
 
@@ -86,7 +87,11 @@ def _format_metric_line(metric: NormalizedMetric) -> str:
     return f"{label:<16} {value_str:<14} 30d: {window_30d}  |  90d: {window_90d}"
 
 
-def format_historical_context_section(metrics: Dict[str, NormalizedMetric]) -> str:
+def format_historical_context_section(
+    metrics: Dict[str, NormalizedMetric],
+    front_month_expiration: Optional[str] = None,
+    stale_since: Optional[datetime] = None,
+) -> str:
     """
     Render the HISTORICAL CONTEXT section: one line per metric present in
     ``metrics``, in the fixed order net GEX / PCR (OI) / Total OI / DVOL /
@@ -94,13 +99,33 @@ def format_historical_context_section(metrics: Dict[str, NormalizedMetric]) -> s
     never wired -- see OnChainAnalysisService._build_normalized_metrics)
     are simply not printed.
 
+    Args:
+        metrics: Per-metric NormalizedMetric, keyed by name.
+        front_month_expiration: Which expiration the per-expiry metrics
+            (net GEX, PCR-OI, total OI) describe (C1 review Important #1)
+            -- printed in the header when given; omitted when None (e.g.
+            no expiration parsed as a valid date).
+        stale_since: When not None, prefixes the block with "STALE:
+            history ends {ts}" (C1 review Important #4 / institutional_
+            metrics_spec.md section 1(c)) -- the caller
+            (OnChainAnalysisService._compute_historical_context_staleness)
+            already applied the 3h threshold, so any non-None value here
+            renders the prefix unconditionally.
+
     Returns "" when ``metrics`` is empty (matches the codebase's existing
     "no data -> no section" convention, e.g. render_market_wide_from_result).
     """
     if not metrics:
         return ""
 
-    lines = ["HISTORICAL CONTEXT", _SUB_SEPARATOR]
+    header = "HISTORICAL CONTEXT"
+    if front_month_expiration is not None:
+        header += f" (front-month: {front_month_expiration})"
+
+    lines = [header, _SUB_SEPARATOR]
+    if stale_since is not None:
+        lines.append(f"STALE: history ends {stale_since.strftime('%Y-%m-%d %H:%M')}")
+
     for key in _METRIC_ORDER:
         metric = metrics.get(key)
         if metric is not None:

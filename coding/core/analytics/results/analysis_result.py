@@ -113,6 +113,17 @@ class OnChainAnalysisResult:
     # empty dict keeps every pre-existing direct OnChainAnalysisResult(...)
     # constructor (tests, the builder) working unchanged.
     normalized_metrics: Dict[str, NormalizedMetric] = field(default_factory=dict)
+    # C1 review Important #1: which expiration normalized_metrics' per-
+    # expiry entries (net GEX, PCR-OI, total OI) describe -- the report
+    # has no way to tell a reader which expiry the numbers are for
+    # without this. Set by _pick_front_month_expiration, the true
+    # nearest-DTE expiration, not a lexicographic string sort.
+    normalized_metrics_front_month: Optional[str] = None
+    # C1 review Important #4: the most-stale queried table's max
+    # timestamp, set only when it exceeds the spec's 3h staleness
+    # threshold (institutional_metrics_spec.md section 1(c)) -- None means
+    # either fresh, or freshness could not be determined.
+    normalized_metrics_stale_since: Optional[datetime] = None
 
     def bundle(self, expiration: str) -> Optional[ExpirationBundle]:
         """Return the ``ExpirationBundle`` for ``expiration``, or ``None`` if absent."""

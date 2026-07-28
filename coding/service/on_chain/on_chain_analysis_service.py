@@ -218,9 +218,16 @@ class OnChainAnalysisService:
         # the typed result to read the front-month bundle) and attaches via
         # dataclasses.replace since OnChainAnalysisResult is frozen.
         progress("Calculating historical percentile context...")
-        normalized_metrics = self._build_normalized_metrics(analyzer, result)
+        normalized_metrics, normalized_metrics_front_month, normalized_metrics_stale_since = (
+            self._build_normalized_metrics(analyzer, result)
+        )
         if normalized_metrics:
-            result = dataclasses.replace(result, normalized_metrics=normalized_metrics)
+            result = dataclasses.replace(
+                result,
+                normalized_metrics=normalized_metrics,
+                normalized_metrics_front_month=normalized_metrics_front_month,
+                normalized_metrics_stale_since=normalized_metrics_stale_since,
+            )
 
         # Generate report (includes GEX/DEX and flow) — rendered directly
         # from the typed result (T10). analyzer.generate_report() (a pure
@@ -319,7 +326,23 @@ class OnChainAnalysisService:
                     history_90d = []
 
                 if len(history_90d) >= HistoricalNormalizer.MIN_OBS:
-                    percentile = HistoricalNormalizer.percentile(ratio, history_90d)
+                    # C1 review Important #2: HistoricalNormalizer's own
+                    # degenerate-series guard only covers value == the
+                    # constant (mid-rank -> 50.0, "no signal"). It does
+                    # NOT cover a zero-variance history paired with a
+                    # DIFFERING current ratio -- that combination computes
+                    # a maximally-confident (0.0 or 100.0) percentile from
+                    # a history that says nothing about normal variation
+                    # (a flat 90d series carries no information about
+                    # whether ANY value is "unusual"). This is PCR-
+                    # specific business logic (guard lives here, not in
+                    # HistoricalNormalizer's core, per review guidance --
+                    # the other 5 normalized metrics don't get this guard
+                    # in this round).
+                    if max(history_90d) == min(history_90d):
+                        percentile = None
+                    else:
+                        percentile = HistoricalNormalizer.percentile(ratio, history_90d)
                 else:
                     percentile = None
 
@@ -340,22 +363,149 @@ class OnChainAnalysisService:
     _NORMALIZER_LOOKBACK_30D_HOURS = 720
     _NORMALIZER_LOOKBACK_90D_HOURS = 2160
 
+    # institutional_metrics_spec.md section 1(c): "if max(snapshot_hour) <
+    # now() - 3h, prefix the whole normalization block with STALE: history
+    # ends {ts}".
+    _STALENESS_THRESHOLD_HOURS = 3
+
+    # C1 review Critical #2 (confirmed, not just suspected): prospective_
+    # collector.py's save_funding_rate call divides the live ticker's
+    # funding_8h field by 100 before persisting it ("Convert from
+    # percentage"). A live ticker call plus a DB query (avg(abs(
+    # funding_rate)) by month) confirmed a ~100x level break in
+    # funding_rate_history exactly at the point the daemon collector
+    # became the writer -- the stored column is 100x smaller than the raw
+    # ticker/market_metrics["funding_8h"] scale this service (and the
+    # report header) otherwise use. Rather than dividing the live value
+    # (which would then need report_formatter.py's *already-correct*
+    # header display convention -- funding_8h * 100 -- special-cased for
+    # this one metric too), the fetched HISTORY is multiplied back up by
+    # this factor so both value and history are compared on the SAME
+    # (raw-ticker) scale, and every other display convention in the report
+    # stays untouched. backfill_funding_rate.py is fixed to also divide by
+    # 100 going forward, so future rows stay on the "divided" stored scale
+    # this factor corrects for.
+    _FUNDING_RATE_STORAGE_SCALE_CORRECTION = 100.0
+
+    @staticmethod
+    def _pick_front_month_expiration(expiration_names: Tuple[str, ...]) -> Optional[str]:
+        """
+        Pick the true nearest-DTE (front-month) expiration.
+
+        C1 review Important #1: ``sorted(expiration_names)[0]`` (the
+        previous convention, mirrored from ``get_recent_onchain_history``'s
+        subquery) picks the lexicographically-first expiration STRING, not
+        the chronologically-nearest one -- "%d%b%y"-style date strings
+        like "14AUG26"/"26JUL26" do not sort chronologically as plain
+        strings. Confirmed in this task's own golden fixture: string-sort
+        picked "14AUG26" (19 DTE) over the true front month "26JUL26"
+        (0 DTE). Parses each name as a real date instead (same "%d%b%y"
+        convention already used by ``SynthesisMapper._calculate_dte`` and
+        ``OnChainMetricsCalculator.nearest_expiry_median_underlying_
+        price``) and picks the minimum.
+
+        Returns:
+            The nearest-DTE expiration name, or ``None`` if none of
+            ``expiration_names`` parses as a valid "%d%b%y" date.
+        """
+        dated = []
+        for name in expiration_names:
+            try:
+                exp_date = datetime.strptime(name, "%d%b%y")
+            except ValueError:
+                continue
+            dated.append((exp_date, name))
+        if not dated:
+            return None
+        return min(dated, key=lambda pair: pair[0])[1]
+
+    def _sum_paired_history(
+        self,
+        history_a: List[float],
+        history_b: List[float],
+        *,
+        currency: str,
+        expiration: str,
+        metric_name: str,
+    ) -> List[float]:
+        """
+        Element-wise sum of two same-query-shape history series (C1
+        review Critical #1: replaces the never-whitelisted composite SQL
+        expression ``"(total_call_oi + total_put_oi)"`` -- fetch each
+        whitelisted column separately and sum in Python instead).
+
+        Both series come from identical WHERE/ORDER BY clauses against the
+        same table, so they are row-aligned by construction UNLESS one
+        column has an independent NULL the other doesn't (both columns are
+        written by the same INSERT in this schema, so this is expected to
+        be rare, not structural). Guards against silently pairing values
+        from different hours: a length mismatch is logged and treated as
+        "no history" for this metric rather than risking a misaligned sum.
+        """
+        if len(history_a) != len(history_b):
+            logger.warning(
+                "%s history length mismatch for %s %s (call=%d, put=%d) -- "
+                "treating as no history rather than risk a misaligned sum",
+                metric_name, currency, expiration, len(history_a), len(history_b),
+            )
+            return []
+        return [a + b for a, b in zip(history_a, history_b)]
+
+    def _compute_historical_context_staleness(
+        self, currency: str, front_month: str, tables_used: List[Tuple[str, Optional[str]]],
+    ) -> Optional[datetime]:
+        """
+        Most-stale (earliest) freshness timestamp across every table the
+        HISTORICAL CONTEXT block actually drew from (C1 review Important
+        #4). Returns the timestamp only when it is more than
+        ``_STALENESS_THRESHOLD_HOURS`` old -- the formatter treats a
+        non-None return as "prefix STALE: history ends {ts}".
+
+        Args:
+            tables_used: (table, expiration_or_None) pairs actually queried
+                -- e.g. [("onchain_analysis_snapshots", front_month),
+                ("volatility_index_history", None)]. Deduplicated
+                internally so a table isn't queried twice for the same
+                staleness check.
+        """
+        seen = set()
+        timestamps = []
+        for table, expiration in tables_used:
+            key = (table, expiration)
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                ts = self.repository.get_metric_freshness(
+                    table=table, currency=currency, expiration=expiration,
+                )
+            except Exception as exc:
+                logger.warning("get_metric_freshness(%s) failed for %s: %s", table, currency, exc)
+                ts = None
+            if ts is not None:
+                timestamps.append(ts)
+
+        if not timestamps:
+            return None
+
+        most_stale = min(timestamps)
+        threshold = datetime.now(most_stale.tzinfo) - timedelta(hours=self._STALENESS_THRESHOLD_HOURS)
+        return most_stale if most_stale < threshold else None
+
     def _build_normalized_metrics(
         self,
         analyzer: OnChainMetricsCalculator,
         result: OnChainAnalysisResult,
-    ) -> Dict[str, NormalizedMetric]:
+    ) -> Tuple[Dict[str, NormalizedMetric], Optional[str], Optional[datetime]]:
         """
         Build percentile/z-score context for the front-month AVAILABLE
         metrics (institutional_metrics_spec.md section 1), runs once per
         analysis (not per expiry).
 
         Wires exactly five of the six section-1(a) AVAILABLE metrics:
-        net GEX, PCR-OI, and total OI (front-month, i.e. this result's
-        first expiration in its stored sorted order -- the same
-        "alphabetically-first expiration string" front-month convention
-        ``get_recent_onchain_history``'s subquery already uses) plus DVOL
-        and funding (market-wide, no expiration filter).
+        net GEX, PCR-OI, and total OI (front-month -- see
+        ``_pick_front_month_expiration``, C1 review Important #1) plus
+        DVOL and funding (market-wide, no expiration filter).
 
         VRP is deliberately NOT wired here. The live report's VRP
         (MarketWideOrchestrator's DVOL-vs-realized-vol figure, see
@@ -371,33 +521,49 @@ class OnChainAnalysisService:
         stored history's formula, or migrate the stored history to the
         DVOL-based formula).
 
+        C1 review Critical #1: each metric's history fetch is now isolated
+        in its OWN try/except (previously one broad try/except wrapped
+        every metric, so a single whitelist ``ValueError`` on ONE metric --
+        which is exactly what the never-whitelisted composite total_oi
+        expression triggered, on every single run -- silently discarded
+        ALL FIVE metrics). A ``ValueError`` (a whitelist violation, a
+        programming error, not a data-availability issue) is logged at
+        ERROR with the full exception and that metric is skipped; any
+        other exception is logged at WARNING and that metric is skipped.
+        Every other already-built metric survives.
+
         Returns:
-            Empty dict if there is no repository, no expirations, or every
-            metric's inputs were unavailable. Never raises -- a failed
-            history fetch for one metric is logged and that metric is
-            simply absent from the result (matches the codebase's existing
-            per-expiration try/except convention, e.g.
-            ``_calculate_oi_changes_and_iv_percentile``).
+            ``({}, None, None)`` if there is no repository, no
+            expirations, or none of the expiration names parses as a
+            valid date (``_pick_front_month_expiration`` returns None).
+            Otherwise ``(metrics, front_month_expiration, stale_since)``
+            -- ``stale_since`` is the most-stale queried table's max
+            timestamp when it exceeds ``_STALENESS_THRESHOLD_HOURS``,
+            else None. Never raises.
         """
         if self.repository is None:
-            return {}
+            return {}, None, None
 
         expiration_names = result.expiration_names()
         if not expiration_names:
-            return {}
-        front_month = expiration_names[0]
+            return {}, None, None
+
+        front_month = self._pick_front_month_expiration(expiration_names)
+        if front_month is None:
+            return {}, None, None
 
         bundle = result.bundle(front_month)
         if bundle is None:
-            return {}
+            return {}, front_month, None
 
         currency = analyzer.currency
         lookback_30d = self._NORMALIZER_LOOKBACK_30D_HOURS
         lookback_90d = self._NORMALIZER_LOOKBACK_90D_HOURS
         specs: List[MetricSpec] = []
+        tables_used: List[Tuple[str, Optional[str]]] = []
 
-        try:
-            if bundle.gex_dex is not None and bundle.gex_dex.total_net_gex is not None:
+        if bundle.gex_dex is not None and bundle.gex_dex.total_net_gex is not None:
+            try:
                 specs.append(MetricSpec(
                     name="net_gex", value=float(bundle.gex_dex.total_net_gex),
                     history_30d=self.repository.get_metric_history(
@@ -410,28 +576,67 @@ class OnChainAnalysisService:
                     ),
                     unit="USD",
                 ))
+                tables_used.append(("onchain_analysis_snapshots", front_month))
+            except ValueError as exc:
+                logger.error(
+                    "net_gex normalized-metric history hit a whitelist violation "
+                    "(programming bug, not a data issue): %s", exc,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to fetch net_gex history for %s %s: %s", currency, front_month, exc,
+                )
 
-            pcr = bundle.analysis.put_call_ratio if bundle.analysis is not None else None
-            if pcr is not None:
-                # Total OI is well-defined even when the ratio itself is
-                # inf (call_oi == 0) -- do not couple its availability to
-                # the ratio's finiteness.
+        pcr = bundle.analysis.put_call_ratio if bundle.analysis is not None else None
+        if pcr is not None:
+            # Total OI is well-defined even when the ratio itself is inf
+            # (call_oi == 0) -- do not couple its availability to the
+            # ratio's finiteness. C1 review Critical #1: total_call_oi and
+            # total_put_oi are fetched as two SEPARATE whitelisted queries
+            # and summed in Python (see _sum_paired_history) instead of a
+            # composite SQL expression that was never whitelisted.
+            try:
+                call_oi_30d = self.repository.get_metric_history(
+                    table="onchain_analysis_snapshots", column="total_call_oi",
+                    currency=currency, lookback_hours=lookback_30d, expiration=front_month,
+                )
+                put_oi_30d = self.repository.get_metric_history(
+                    table="onchain_analysis_snapshots", column="total_put_oi",
+                    currency=currency, lookback_hours=lookback_30d, expiration=front_month,
+                )
+                call_oi_90d = self.repository.get_metric_history(
+                    table="onchain_analysis_snapshots", column="total_call_oi",
+                    currency=currency, lookback_hours=lookback_90d, expiration=front_month,
+                )
+                put_oi_90d = self.repository.get_metric_history(
+                    table="onchain_analysis_snapshots", column="total_put_oi",
+                    currency=currency, lookback_hours=lookback_90d, expiration=front_month,
+                )
                 specs.append(MetricSpec(
                     name="total_oi", value=float(pcr.total_call_oi + pcr.total_put_oi),
-                    history_30d=self.repository.get_metric_history(
-                        table="onchain_analysis_snapshots",
-                        column="(total_call_oi + total_put_oi)",
-                        currency=currency, lookback_hours=lookback_30d, expiration=front_month,
+                    history_30d=self._sum_paired_history(
+                        call_oi_30d, put_oi_30d,
+                        currency=currency, expiration=front_month, metric_name="total_oi (30d)",
                     ),
-                    history_90d=self.repository.get_metric_history(
-                        table="onchain_analysis_snapshots",
-                        column="(total_call_oi + total_put_oi)",
-                        currency=currency, lookback_hours=lookback_90d, expiration=front_month,
+                    history_90d=self._sum_paired_history(
+                        call_oi_90d, put_oi_90d,
+                        currency=currency, expiration=front_month, metric_name="total_oi (90d)",
                     ),
                     unit="coins",
                 ))
+                tables_used.append(("onchain_analysis_snapshots", front_month))
+            except ValueError as exc:
+                logger.error(
+                    "total_oi normalized-metric history hit a whitelist violation "
+                    "(programming bug, not a data issue): %s", exc,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to fetch total_oi history for %s %s: %s", currency, front_month, exc,
+                )
 
-                if pcr.ratio is not None and pcr.ratio != float("inf"):
+            if pcr.ratio is not None and pcr.ratio != float("inf"):
+                try:
                     specs.append(MetricSpec(
                         name="pcr_oi", value=float(pcr.ratio),
                         history_30d=self.repository.get_metric_history(
@@ -444,10 +649,21 @@ class OnChainAnalysisService:
                         ),
                         unit="ratio",
                     ))
+                    tables_used.append(("onchain_analysis_snapshots", front_month))
+                except ValueError as exc:
+                    logger.error(
+                        "pcr_oi normalized-metric history hit a whitelist violation "
+                        "(programming bug, not a data issue): %s", exc,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to fetch pcr_oi history for %s %s: %s", currency, front_month, exc,
+                    )
 
-            market_metrics = analyzer.market_metrics or {}
-            dvol = market_metrics.get("dvol")
-            if dvol is not None:
+        market_metrics = analyzer.market_metrics or {}
+        dvol = market_metrics.get("dvol")
+        if dvol is not None:
+            try:
                 specs.append(MetricSpec(
                     name="dvol", value=float(dvol),
                     history_30d=self.repository.get_metric_history(
@@ -460,28 +676,56 @@ class OnChainAnalysisService:
                     ),
                     unit="vol pts",
                 ))
+                tables_used.append(("volatility_index_history", None))
+            except ValueError as exc:
+                logger.error(
+                    "dvol normalized-metric history hit a whitelist violation "
+                    "(programming bug, not a data issue): %s", exc,
+                )
+            except Exception as exc:
+                logger.warning("Failed to fetch dvol history for %s: %s", currency, exc)
 
-            funding_8h = market_metrics.get("funding_8h")
-            if funding_8h is not None:
+        funding_8h = market_metrics.get("funding_8h")
+        if funding_8h is not None:
+            try:
+                # C1 review Critical #2: funding_rate_history.funding_rate
+                # is stored 100x smaller than the raw ticker/market_
+                # metrics["funding_8h"] scale (confirmed -- see
+                # _FUNDING_RATE_STORAGE_SCALE_CORRECTION's docstring).
+                # Rescale the fetched history back up rather than divide
+                # the live value, so ``value`` and the report header's
+                # existing funding_8h * 100 display convention are
+                # untouched -- only the history is corrected.
+                scale = self._FUNDING_RATE_STORAGE_SCALE_CORRECTION
+                raw_history_30d = self.repository.get_metric_history(
+                    table="funding_rate_history", column="funding_rate",
+                    currency=currency, lookback_hours=lookback_30d, time_column="date",
+                )
+                raw_history_90d = self.repository.get_metric_history(
+                    table="funding_rate_history", column="funding_rate",
+                    currency=currency, lookback_hours=lookback_90d, time_column="date",
+                )
                 specs.append(MetricSpec(
                     name="funding", value=float(funding_8h),
-                    history_30d=self.repository.get_metric_history(
-                        table="funding_rate_history", column="funding_rate",
-                        currency=currency, lookback_hours=lookback_30d, time_column="date",
-                    ),
-                    history_90d=self.repository.get_metric_history(
-                        table="funding_rate_history", column="funding_rate",
-                        currency=currency, lookback_hours=lookback_90d, time_column="date",
-                    ),
+                    history_30d=[v * scale for v in raw_history_30d],
+                    history_90d=[v * scale for v in raw_history_90d],
                     unit="%",
                 ))
-        except Exception as exc:
-            logger.warning("Failed to build normalized metrics for %s: %s", currency, exc)
-            return {}
+                tables_used.append(("funding_rate_history", None))
+            except ValueError as exc:
+                logger.error(
+                    "funding normalized-metric history hit a whitelist violation "
+                    "(programming bug, not a data issue): %s", exc,
+                )
+            except Exception as exc:
+                logger.warning("Failed to fetch funding history for %s: %s", currency, exc)
 
         if not specs:
-            return {}
-        return HistoricalNormalizer().normalize_many(specs)
+            return {}, front_month, None
+
+        metrics = HistoricalNormalizer().normalize_many(specs)
+        stale_since = self._compute_historical_context_staleness(currency, front_month, tables_used)
+        return metrics, front_month, stale_since
 
     def _fetch_greeks_and_store_gex_dex(
         self,

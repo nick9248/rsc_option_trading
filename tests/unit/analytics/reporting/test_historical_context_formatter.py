@@ -3,6 +3,8 @@ Unit tests for coding.core.analytics.reporting.historical_context_formatter
 (institutional_metrics_spec.md section 1(c) report format).
 """
 
+from datetime import datetime
+
 from coding.core.analytics.historical_normalizer import NormalizedMetric
 from coding.core.analytics.reporting.historical_context_formatter import (
     format_historical_context_section,
@@ -113,3 +115,35 @@ def test_header_title_present():
     metrics = {"dvol": _metric("dvol", 37.69, "vol pts")}
     text = format_historical_context_section(metrics)
     assert "HISTORICAL CONTEXT" in text
+
+
+def test_front_month_expiration_printed_in_header():
+    """C1 review Important #1: a reader must be able to tell which
+    expiration the per-expiry metrics (net GEX, PCR-OI, total OI) describe."""
+    metrics = {"net_gex": _metric("net_gex", 22_700_000.0, "USD")}
+    text = format_historical_context_section(metrics, front_month_expiration="26JUL26")
+    assert "HISTORICAL CONTEXT (front-month: 26JUL26)" in text
+
+
+def test_no_front_month_expiration_omits_the_suffix():
+    metrics = {"dvol": _metric("dvol", 37.69, "vol pts")}
+    text = format_historical_context_section(metrics, front_month_expiration=None)
+    first_line = text.splitlines()[0]
+    assert first_line == "HISTORICAL CONTEXT"
+
+
+def test_stale_prefix_rendered_when_stale_since_given():
+    """C1 review Important #4: institutional_metrics_spec.md section 1(c)'s
+    "STALE: history ends {ts}" line, printed right after the header."""
+    metrics = {"dvol": _metric("dvol", 37.69, "vol pts")}
+    stale_ts = datetime(2026, 7, 26, 15, 0)
+    text = format_historical_context_section(metrics, stale_since=stale_ts)
+    lines = text.splitlines()
+    assert lines[0] == "HISTORICAL CONTEXT"
+    assert lines[2] == "STALE: history ends 2026-07-26 15:00"
+
+
+def test_no_stale_prefix_when_stale_since_is_none():
+    metrics = {"dvol": _metric("dvol", 37.69, "vol pts")}
+    text = format_historical_context_section(metrics, stale_since=None)
+    assert "STALE" not in text

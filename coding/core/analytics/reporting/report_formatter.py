@@ -428,7 +428,11 @@ class OnChainReportFormatter:
         # entirely (format_historical_context_section returns "") when
         # result.normalized_metrics is empty (e.g. no repository, or an
         # offline fixture with no recorded trailing history).
-        historical_context_text = format_historical_context_section(result.normalized_metrics)
+        historical_context_text = format_historical_context_section(
+            result.normalized_metrics,
+            front_month_expiration=result.normalized_metrics_front_month,
+            stale_since=result.normalized_metrics_stale_since,
+        )
         if historical_context_text:
             blocks.append(historical_context_text)
 

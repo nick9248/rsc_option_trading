@@ -86,15 +86,25 @@ def backfill_funding_rate(currency: str):
                 # Convert timestamp to datetime
                 date = datetime.fromtimestamp(funding_timestamp / 1000)
 
-                # Save to database
-                # Note: Funding rate from API is typically in percentage form
-                # Convert to decimal (divide by 100)
+                # Save to database.
+                # C1 review Critical #2: unconditionally divide by 100,
+                # matching prospective_collector.py's convention exactly
+                # ("Convert from percentage" -- same ticker/chart field,
+                # same treatment). The old `if funding_rate > 1` guard let
+                # this script skip the division for the vast majority of
+                # real funding-rate readings (always < 1), producing a
+                # ~100x scale break in funding_rate_history between rows
+                # this script wrote and rows the daemon collector wrote --
+                # confirmed via a live DB query (avg(abs(funding_rate)) by
+                # month drops ~100x exactly at the collector handoff
+                # point). One column, one scale, pinned here and in
+                # prospective_collector.py's save_funding_rate call.
                 repo.save_funding_rate(
                     currency=currency,
                     instrument_name=instrument_name,
                     timestamp=funding_timestamp,
                     date=date,
-                    funding_rate=funding_rate / 100 if funding_rate > 1 else funding_rate
+                    funding_rate=funding_rate / 100
                 )
 
                 saved_count += 1

@@ -1,11 +1,14 @@
 """
-Unit tests for DatabaseRepository.get_metric_history.
+Unit tests for DatabaseRepository.get_metric_history and
+get_metric_freshness.
 
 institutional_metrics_spec.md section 1(c): a generic (table, column)
-history reader behind a whitelist, feeding HistoricalNormalizer. Mocked
-cursor only -- no live database.
+history reader behind a whitelist, feeding HistoricalNormalizer, plus
+(C1 review Important #4) a freshness reader for the "STALE: history ends
+{ts}" report gate. Mocked cursor only -- no live database.
 """
 
+from datetime import datetime
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
@@ -21,6 +24,16 @@ def _make_repo():
 def _patched(repo, rows):
     mock_cursor = MagicMock()
     mock_cursor.fetchall.return_value = rows
+    ctx = patch.object(repo, "_db_cursor")
+    mock_ctx = ctx.start()
+    mock_ctx.return_value.__enter__ = lambda s: mock_cursor
+    mock_ctx.return_value.__exit__ = MagicMock(return_value=False)
+    return ctx, mock_cursor
+
+
+def _patched_one(repo, row):
+    mock_cursor = MagicMock()
+    mock_cursor.fetchone.return_value = row
     ctx = patch.object(repo, "_db_cursor")
     mock_ctx = ctx.start()
     mock_ctx.return_value.__enter__ = lambda s: mock_cursor
@@ -128,3 +141,63 @@ class TestResultShape:
             ctx.stop()
 
         assert result == []
+
+
+class TestGetMetricFreshness:
+    def test_returns_max_timestamp(self):
+        repo = _make_repo()
+        ts = datetime(2026, 7, 26, 15, 0)
+        ctx, mock_cursor = _patched_one(repo, (ts,))
+        try:
+            result = repo.get_metric_freshness(
+                table="onchain_analysis_snapshots", currency="BTC", expiration="25DEC26",
+            )
+        finally:
+            ctx.stop()
+        assert result == ts
+        sql, params = mock_cursor.execute.call_args[0]
+        assert "MAX(snapshot_hour)" in sql
+        assert "expiration" in sql
+        assert params == ("BTC", "25DEC26")
+
+    def test_market_wide_table_no_expiration_filter(self):
+        repo = _make_repo()
+        ts = datetime(2026, 7, 26, 0, 0)
+        ctx, mock_cursor = _patched_one(repo, (ts,))
+        try:
+            result = repo.get_metric_freshness(table="volatility_index_history", currency="BTC")
+        finally:
+            ctx.stop()
+        assert result == ts
+        sql, params = mock_cursor.execute.call_args[0]
+        assert "MAX(date)" in sql
+        assert "expiration" not in sql
+        assert params == ("BTC",)
+
+    def test_unwhitelisted_table_returns_none(self):
+        repo = _make_repo()
+        result = repo.get_metric_freshness(table="pg_shadow", currency="BTC")
+        assert result is None
+
+    def test_no_rows_returns_none(self):
+        repo = _make_repo()
+        ctx, _ = _patched_one(repo, (None,))
+        try:
+            result = repo.get_metric_freshness(table="funding_rate_history", currency="BTC")
+        finally:
+            ctx.stop()
+        assert result is None
+
+    def test_query_failure_returns_none_not_raise(self):
+        repo = _make_repo()
+        mock_cursor = MagicMock()
+        mock_cursor.execute.side_effect = RuntimeError("db down")
+        ctx = patch.object(repo, "_db_cursor")
+        mock_ctx = ctx.start()
+        mock_ctx.return_value.__enter__ = lambda s: mock_cursor
+        mock_ctx.return_value.__exit__ = MagicMock(return_value=False)
+        try:
+            result = repo.get_metric_freshness(table="funding_rate_history", currency="BTC")
+        finally:
+            ctx.stop()
+        assert result is None

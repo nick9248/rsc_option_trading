@@ -2340,3 +2340,67 @@ class DatabaseRepository:
             return []
 
         return [float(row[0]) for row in rows if row[0] is not None]
+
+    # institutional_metrics_spec.md section 1(c) / C1 review Important #4:
+    # "STALE: history ends {ts}" requires knowing how fresh the queried
+    # history actually is. Derived from the same table set
+    # _METRIC_HISTORY_WHITELIST already covers, keeping one time-column
+    # mapping instead of a second one that could drift out of sync (kept
+    # as an explicit dict, not a class-body comprehension over
+    # _METRIC_HISTORY_WHITELIST, to sidestep Python's class-body
+    # comprehension scoping rule).
+    _TABLE_TIME_COLUMNS = {
+        "onchain_analysis_snapshots": "snapshot_hour",
+        "onchain_volatility_snapshots": "snapshot_hour",
+        "volatility_index_history": "date",
+        "funding_rate_history": "date",
+    }
+
+    def get_metric_freshness(
+        self,
+        table: str,
+        currency: str,
+        expiration: Optional[str] = None,
+        time_column: Optional[str] = None,
+    ) -> Optional[datetime]:
+        """
+        Most recent timestamp available for ``table`` (institutional_metrics
+        _spec.md section 1(c)'s staleness gate: "if max(snapshot_hour) <
+        now() - 3h, prefix the whole normalization block with STALE:
+        history ends {ts}").
+
+        Args:
+            table: Must be one of ``_TABLE_TIME_COLUMNS``'s keys (the same
+                tables ``get_metric_history`` is whitelisted against).
+            currency: Currency symbol.
+            expiration: When set, filters to one (currency, expiration)
+                series. Market-wide tables have no expiration column.
+            time_column: Overrides the table's default time column.
+
+        Returns:
+            The max timestamp, or ``None`` if the table has no rows for
+            this currency/expiration, the table is not whitelisted, or the
+            query failed (logged, not raised -- freshness is a display
+            nicety, not something that should crash analysis).
+        """
+        if table not in self._TABLE_TIME_COLUMNS:
+            logger.warning("get_metric_freshness: table %r is not whitelisted", table)
+            return None
+        col = self._TABLE_TIME_COLUMNS[table] if time_column is None else time_column
+
+        if expiration is not None:
+            sql = f"SELECT MAX({col}) FROM {table} WHERE currency = %s AND expiration = %s"
+            params = (currency, expiration)
+        else:
+            sql = f"SELECT MAX({col}) FROM {table} WHERE currency = %s"
+            params = (currency,)
+
+        try:
+            with self._db_cursor() as cursor:
+                cursor.execute(sql, params)
+                row = cursor.fetchone()
+        except Exception as exc:
+            logger.warning("get_metric_freshness(%s) failed: %s", table, exc)
+            return None
+
+        return row[0] if row and row[0] is not None else None

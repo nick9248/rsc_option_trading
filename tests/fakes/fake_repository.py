@@ -11,9 +11,11 @@ loudly instead of silently hitting a real connection.
 """
 
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from coding.core.database.repository import DatabaseRepository
 from tests.fakes.fixture_io import load_json_gz
 
 logger = logging.getLogger(__name__)
@@ -126,8 +128,46 @@ class FakeDatabaseRepository:
         renders every percentile/z line as "insufficient history", a
         legitimate and explained golden-master delta (task-C1: new
         percentile/z display), not a silent degraded computation.
+
+        C1 review Critical #1: this used to return ``[]`` unconditionally,
+        with NO whitelist check -- which meant a caller passing an
+        un-whitelisted (table, column) pair (e.g. a composite SQL
+        expression like ``"(total_call_oi + total_put_oi)"``, never added
+        to ``DatabaseRepository._METRIC_HISTORY_WHITELIST``) sailed through
+        the golden master completely unnoticed, even though the REAL
+        repository would raise ``ValueError`` on every single production
+        run. Delegating the whitelist check to the real class (never
+        touching the DB -- ``DatabaseRepository.__new__`` skips
+        ``__init__``'s connection-pool setup) closes that gap: a future
+        un-whitelisted (table, column) pair now fails the golden master
+        loudly, the same way it fails in production.
         """
+        key = (table, column)
+        if key not in DatabaseRepository._METRIC_HISTORY_WHITELIST:
+            raise ValueError(
+                f"get_metric_history: ({table!r}, {column!r}) is not whitelisted. "
+                f"Allowed pairs: {sorted(DatabaseRepository._METRIC_HISTORY_WHITELIST)}"
+            )
         return []
+
+    def get_metric_freshness(
+        self,
+        table: str,
+        currency: str,
+        expiration: Optional[str] = None,
+        time_column: Optional[str] = None,
+    ) -> Optional[datetime]:
+        """
+        institutional_metrics_spec.md section 1(c) / C1 review Important #4:
+        this offline fixture never recorded a freshness timestamp either --
+        returns None honestly (no STALE prefix renders against the
+        fixture), same reasoning as get_metric_history above. Still
+        validates the table against the real whitelist for the same
+        "un-whitelisted call fails loudly, even offline" reason.
+        """
+        if table not in DatabaseRepository._TABLE_TIME_COLUMNS:
+            raise ValueError(f"get_metric_freshness: table {table!r} is not whitelisted")
+        return None
 
     # ── Write methods (record, never persist) ───────────────────────────────
 

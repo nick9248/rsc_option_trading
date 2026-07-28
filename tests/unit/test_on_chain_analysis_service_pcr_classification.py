@@ -164,11 +164,16 @@ class TestApplyPcrPercentileClassification:
 
     def test_multiple_expirations_each_use_their_own_history(self):
         repo = MagicMock()
+        # Non-degenerate (slightly varied) histories -- a pure constant
+        # series would hit the Important #2 guard below instead of
+        # exercising "each expiration uses its own history".
+        high_history = [0.85 + 0.001 * i for i in range(40)]  # ~0.85-0.89
+        low_history = [0.08 + 0.001 * i for i in range(40)]  # ~0.08-0.12
 
         def _side_effect(table, column, currency, lookback_hours, expiration=None, time_column=None):
             if expiration == "25DEC26":
-                return [0.9] * 40  # 0.15 will be low percentile here
-            return [0.1] * 40  # 0.6 will be high percentile here
+                return high_history  # 0.15 will be low percentile here
+            return low_history  # 0.6 will be high percentile here
         repo.get_metric_history.side_effect = _side_effect
 
         service = _make_service(repository=repo)
@@ -183,3 +188,53 @@ class TestApplyPcrPercentileClassification:
         aug_pcr = out.bundle("7AUG26").analysis.put_call_ratio
         assert dec_pcr.bias in ("Strong Bullish", "Bullish")
         assert aug_pcr.bias in ("Strong Bearish", "Bearish")
+
+    def test_degenerate_history_with_differing_value_is_insufficient_not_extreme(self):
+        """
+        C1 review Important #2 (confirmed, executed directly by the
+        reviewer): a zero-information 90d history (every value identical)
+        combined with a DIFFERING current ratio must NOT produce a
+        maximally-confident "Strong Bullish"/"Strong Bearish" label.
+        HistoricalNormalizer's own degenerate-series guard only covers
+        value == the constant (returns 50.0, "no signal"); it does not
+        cover value != constant, which naively computes percentile 0.0 or
+        100.0 from a history that says nothing about normal variation.
+        The guard added at this service call site must catch that case.
+        """
+        repo = MagicMock()
+        repo.get_metric_history.return_value = [0.5] * 100  # degenerate, sufficient length
+        service = _make_service(repository=repo)
+        result = _make_result([_bundle("25DEC26", 0.9)])  # differs from the constant 0.5
+
+        out = service._apply_pcr_percentile_classification(_FakeAnalyzer(), result)
+
+        pcr = out.bundle("25DEC26").analysis.put_call_ratio
+        assert pcr.bias == "Insufficient history"
+        assert pcr.percentile_90d is None
+        assert pcr.history_n_90d == 100
+
+    def test_degenerate_history_with_matching_value_also_insufficient(self):
+        """
+        Deliberate design choice (documented, not left implicit): the
+        service-level guard treats ANY degenerate (zero-variance) 90d
+        history as "Insufficient history", uniformly, regardless of
+        whether the current ratio happens to equal the frozen constant or
+        not. A history that has shown zero variance ever is too little
+        information to classify either way -- HistoricalNormalizer's own
+        50.0/"NORMAL"-equivalent convention for the matching case is a
+        sound default for the *generic* regime ladder (institutional_
+        metrics_spec.md section 1's other 5 metrics keep that behavior
+        unchanged), but PCR's 5-level directional vocabulary has no
+        "Insufficient but also not wrong" middle state distinct from
+        "Neutral" -- so this guard picks the safer, uniform answer.
+        """
+        repo = MagicMock()
+        repo.get_metric_history.return_value = [0.5] * 100
+        service = _make_service(repository=repo)
+        result = _make_result([_bundle("25DEC26", 0.5)])
+
+        out = service._apply_pcr_percentile_classification(_FakeAnalyzer(), result)
+
+        pcr = out.bundle("25DEC26").analysis.put_call_ratio
+        assert pcr.bias == "Insufficient history"
+        assert pcr.percentile_90d is None

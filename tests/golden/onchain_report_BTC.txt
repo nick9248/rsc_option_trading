@@ -187,9 +187,9 @@ IV BY STRIKE:
       75,000       38.2%       38.2%
 
 P/C RATIO BY MONEYNESS:
-  ATM (±5%):     P/C = 0.86 (Bullish)
-  Near-OTM (5-15%):     P/C = 0.30 (Strong Bullish)
-  Far-OTM (15%+):     P/C = 0.00 (Strong Bullish)
+  ATM (±5%):     P/C = 0.86
+  Near-OTM (5-15%):     P/C = 0.30
+  Far-OTM (15%+):     P/C = 0.00
 
 SECOND-ORDER GREEKS -- HOLDER SIDE (raw, no positioning assumption)
   Vanna Exposure: +849.667246
@@ -474,9 +474,9 @@ IV BY STRIKE:
       85,000       39.3%       39.3%
 
 P/C RATIO BY MONEYNESS:
-  ATM (±5%):     P/C = 0.87 (Bullish)
-  Near-OTM (5-15%):     P/C = 2.56 (Strong Bearish)
-  Far-OTM (15%+):     P/C = 0.37 (Strong Bullish)
+  ATM (±5%):     P/C = 0.87
+  Near-OTM (5-15%):     P/C = 2.56
+  Far-OTM (15%+):     P/C = 0.37
 
 SECOND-ORDER GREEKS -- HOLDER SIDE (raw, no positioning assumption)
   Vanna Exposure: +17656.849477
@@ -716,9 +716,9 @@ IV BY STRIKE:
       86,000       41.3%       41.3%
 
 P/C RATIO BY MONEYNESS:
-  ATM (±5%):     P/C = 0.27 (Strong Bullish)
-  Near-OTM (5-15%):     P/C = 0.33 (Strong Bullish)
-  Far-OTM (15%+):     P/C = 0.92 (Bullish)
+  ATM (±5%):     P/C = 0.27
+  Near-OTM (5-15%):     P/C = 0.33
+  Far-OTM (15%+):     P/C = 0.92
 
 SECOND-ORDER GREEKS -- HOLDER SIDE (raw, no positioning assumption)
   Vanna Exposure: +272.506804
@@ -1004,9 +1004,9 @@ IV BY STRIKE:
       84,000       38.3%       38.3%
 
 P/C RATIO BY MONEYNESS:
-  ATM (±5%):     P/C = 1.02 (Bearish)
-  Near-OTM (5-15%):     P/C = 1.24 (Bearish)
-  Far-OTM (15%+):     P/C = 0.46 (Strong Bullish)
+  ATM (±5%):     P/C = 1.02
+  Near-OTM (5-15%):     P/C = 1.24
+  Far-OTM (15%+):     P/C = 0.46
 
 SECOND-ORDER GREEKS -- HOLDER SIDE (raw, no positioning assumption)
   Vanna Exposure: +17096.319113
@@ -1220,9 +1220,9 @@ IV BY STRIKE:
       73,000       52.0%       52.0%
 
 P/C RATIO BY MONEYNESS:
-  ATM (±5%):     P/C = 0.66 (Strong Bullish)
-  Near-OTM (5-15%):     P/C = 1.14 (Bearish)
-  Far-OTM (15%+):     P/C = 0.00 (Strong Bullish)
+  ATM (±5%):     P/C = 0.66
+  Near-OTM (5-15%):     P/C = 1.14
+  Far-OTM (15%+):     P/C = 0.00
 
 SECOND-ORDER GREEKS -- HOLDER SIDE (raw, no positioning assumption)
   Vanna Exposure: -49.116276
@@ -1500,9 +1500,9 @@ IV BY STRIKE:
       85,000       40.3%       40.3%
 
 P/C RATIO BY MONEYNESS:
-  ATM (±5%):     P/C = 2.83 (Strong Bearish)
-  Near-OTM (5-15%):     P/C = 0.74 (Bullish)
-  Far-OTM (15%+):     P/C = 0.44 (Strong Bullish)
+  ATM (±5%):     P/C = 2.83
+  Near-OTM (5-15%):     P/C = 0.74
+  Far-OTM (15%+):     P/C = 0.44
 
 SECOND-ORDER GREEKS -- HOLDER SIDE (raw, no positioning assumption)
   Vanna Exposure: +3828.768050
@@ -1713,9 +1713,9 @@ IV BY STRIKE:
       73,000       46.2%       46.2%
 
 P/C RATIO BY MONEYNESS:
-  ATM (±5%):     P/C = 1.56 (Strong Bearish)
-  Near-OTM (5-15%):     P/C = 0.23 (Strong Bullish)
-  Far-OTM (15%+):     P/C = 0.00 (Strong Bullish)
+  ATM (±5%):     P/C = 1.56
+  Near-OTM (5-15%):     P/C = 0.23
+  Far-OTM (15%+):     P/C = 0.00
 
 SECOND-ORDER GREEKS -- HOLDER SIDE (raw, no positioning assumption)
   Vanna Exposure: +133.825092
@@ -1999,9 +1999,9 @@ IV BY STRIKE:
       83,000       41.9%       41.9%
 
 P/C RATIO BY MONEYNESS:
-  ATM (±5%):     P/C = 0.55 (Strong Bullish)
-  Near-OTM (5-15%):     P/C = 0.57 (Strong Bullish)
-  Far-OTM (15%+):     P/C = 0.47 (Strong Bullish)
+  ATM (±5%):     P/C = 0.55
+  Near-OTM (5-15%):     P/C = 0.57
+  Far-OTM (15%+):     P/C = 0.47
 
 SECOND-ORDER GREEKS -- HOLDER SIDE (raw, no positioning assumption)
   Vanna Exposure: +7450.343574
@@ -2217,9 +2217,9 @@ IV BY STRIKE:
       73,000       49.2%       49.2%
 
 P/C RATIO BY MONEYNESS:
-  ATM (±5%):     P/C = 0.78 (Bullish)
-  Near-OTM (5-15%):     P/C = 2.02 (Strong Bearish)
-  Far-OTM (15%+):     P/C = 0.00 (Strong Bullish)
+  ATM (±5%):     P/C = 0.78
+  Near-OTM (5-15%):     P/C = 2.02
+  Far-OTM (15%+):     P/C = 0.00
 
 SECOND-ORDER GREEKS -- HOLDER SIDE (raw, no positioning assumption)
   Vanna Exposure: +160.965703
@@ -2428,9 +2428,9 @@ IV BY STRIKE:
       71,000       40.6%       40.6%
 
 P/C RATIO BY MONEYNESS:
-  ATM (±5%):     P/C = 0.66 (Strong Bullish)
-  Near-OTM (5-15%):     P/C = 1.04 (Bearish)
-  Far-OTM (15%+):     P/C = 0.00 (Strong Bullish)
+  ATM (±5%):     P/C = 0.66
+  Near-OTM (5-15%):     P/C = 1.04
+  Far-OTM (15%+):     P/C = 0.00
 
 SECOND-ORDER GREEKS -- HOLDER SIDE (raw, no positioning assumption)
   Vanna Exposure: -8.630391
@@ -2721,9 +2721,9 @@ IV BY STRIKE:
       83,000       57.9%       57.9%
 
 P/C RATIO BY MONEYNESS:
-  ATM (±5%):     P/C = 0.52 (Strong Bullish)
-  Near-OTM (5-15%):     P/C = 0.21 (Strong Bullish)
-  Far-OTM (15%+):     P/C = 0.35 (Strong Bullish)
+  ATM (±5%):     P/C = 0.52
+  Near-OTM (5-15%):     P/C = 0.21
+  Far-OTM (15%+):     P/C = 0.35
 
 SECOND-ORDER GREEKS -- HOLDER SIDE (raw, no positioning assumption)
   Vanna Exposure: +19979.717739
@@ -2930,9 +2930,9 @@ IV BY STRIKE:
       80,000       50.1%       50.1%
 
 P/C RATIO BY MONEYNESS:
-  ATM (±5%):     P/C = 0.68 (Strong Bullish)
-  Near-OTM (5-15%):     P/C = 0.12 (Strong Bullish)
-  Far-OTM (15%+):     P/C = 0.02 (Strong Bullish)
+  ATM (±5%):     P/C = 0.68
+  Near-OTM (5-15%):     P/C = 0.12
+  Far-OTM (15%+):     P/C = 0.02
 
 SECOND-ORDER GREEKS -- HOLDER SIDE (raw, no positioning assumption)
   Vanna Exposure: +9517.833364
@@ -3073,10 +3073,10 @@ CROSS-ASSET CORRELATION (30d, BTC/ETH)
 
 
 ================================================================================
-HISTORICAL CONTEXT
+HISTORICAL CONTEXT (front-month: 26JUL26)
 --------------------------------------------------------------------------------
-Net GEX          +1.96M USD     30d: n/a (0 obs)  |  90d: n/a (0 obs)
-PCR (OI)         0.298          30d: n/a (0 obs)  |  90d: n/a (0 obs)
-Total OI         2,072 coins    30d: n/a (0 obs)  |  90d: n/a (0 obs)
+Net GEX          +8.00M USD     30d: n/a (0 obs)  |  90d: n/a (0 obs)
+PCR (OI)         0.718          30d: n/a (0 obs)  |  90d: n/a (0 obs)
+Total OI         2,461 coins    30d: n/a (0 obs)  |  90d: n/a (0 obs)
 DVOL             37.53          30d: n/a (0 obs)  |  90d: n/a (0 obs)
 Funding (8h)     +0.0003%       30d: n/a (0 obs)  |  90d: n/a (0 obs)
