@@ -106,6 +106,11 @@ class DatabaseRepository:
         """
         Save raw snapshot data to the snapshots table.
 
+        Persists `mark_iv` from each book-summary item (institutional_metrics_spec.md
+        Migration M1 / Decision D11) -- the full-chain hourly capture historically
+        dropped it even though get_book_summary already returns it. NULL when the
+        item lacks the key (defensive; the live API always includes it for options).
+
         Args:
             currency: Currency symbol (ETH, BTC).
             data: List of book summary items.
@@ -125,8 +130,8 @@ class DatabaseRepository:
                     INSERT INTO snapshots (
                         captured_at, currency, instrument_name, expiration,
                         strike, option_type, open_interest, volume, volume_usd,
-                        underlying_price, mark_price, bid_price, ask_price
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        underlying_price, mark_price, bid_price, ask_price, mark_iv
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """
 
                 rows = []
@@ -158,6 +163,7 @@ class DatabaseRepository:
                         item.get("mark_price"),
                         item.get("bid_price"),
                         item.get("ask_price"),
+                        item.get("mark_iv"),
                     ))
 
                 cursor.executemany(insert_sql, rows)
