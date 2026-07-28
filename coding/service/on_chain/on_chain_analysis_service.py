@@ -4,6 +4,7 @@ On-chain analysis service.
 Orchestrates fetching and analyzing on-chain option data.
 """
 
+import dataclasses
 import logging
 import time
 from collections import defaultdict
@@ -20,6 +21,11 @@ from coding.core.analytics.chart_generator import (
     save_chart,
 )
 from coding.core.analytics.gex_dex_calculator import GexDexCalculator
+from coding.core.analytics.historical_normalizer import (
+    HistoricalNormalizer,
+    MetricSpec,
+    NormalizedMetric,
+)
 from coding.core.analytics.on_chain_analyzer import (
     OnChainMetricsCalculator,
     _to_market_metrics,
@@ -196,6 +202,15 @@ class OnChainAnalysisService:
 
         result = builder.build()
 
+        # institutional_metrics_spec.md section 1: percentile/z-score context
+        # for the front-month AVAILABLE metrics. Runs after build() (needs
+        # the typed result to read the front-month bundle) and attaches via
+        # dataclasses.replace since OnChainAnalysisResult is frozen.
+        progress("Calculating historical percentile context...")
+        normalized_metrics = self._build_normalized_metrics(analyzer, result)
+        if normalized_metrics:
+            result = dataclasses.replace(result, normalized_metrics=normalized_metrics)
+
         # Generate report (includes GEX/DEX and flow) — rendered directly
         # from the typed result (T10). analyzer.generate_report() (a pure
         # delegator to OnChainReportFormatter.render_full as of T3) is
@@ -217,6 +232,155 @@ class OnChainAnalysisService:
         if return_result:
             return report, result
         return report
+
+    # institutional_metrics_spec.md section 1: 30d/90d lookback windows.
+    # Hourly sampling -> n ~= 720 (30d) and n ~= 2,160 (90d), matching the
+    # spec's verified 2,133-distinct-BTC-snapshot-hours-in-90d figure.
+    _NORMALIZER_LOOKBACK_30D_HOURS = 720
+    _NORMALIZER_LOOKBACK_90D_HOURS = 2160
+
+    def _build_normalized_metrics(
+        self,
+        analyzer: OnChainMetricsCalculator,
+        result: OnChainAnalysisResult,
+    ) -> Dict[str, NormalizedMetric]:
+        """
+        Build percentile/z-score context for the front-month AVAILABLE
+        metrics (institutional_metrics_spec.md section 1), runs once per
+        analysis (not per expiry).
+
+        Wires exactly five of the six section-1(a) AVAILABLE metrics:
+        net GEX, PCR-OI, and total OI (front-month, i.e. this result's
+        first expiration in its stored sorted order -- the same
+        "alphabetically-first expiration string" front-month convention
+        ``get_recent_onchain_history``'s subquery already uses) plus DVOL
+        and funding (market-wide, no expiration filter).
+
+        VRP is deliberately NOT wired here. The live report's VRP
+        (MarketWideOrchestrator's DVOL-vs-realized-vol figure, see
+        market_wide_orchestrator.py's ``_calculate_vrp``) and the stored
+        ``onchain_volatility_snapshots.vrp_absolute`` history
+        (volatility_reconstruction_service.py's ``_reconstruct_vrp`` --
+        that expiration's own average ATM IV vs realized vol) are two
+        different formulas for the same metric name. Feeding one as
+        "value" against the other's history would silently produce a
+        misleading percentile -- task-C1 brief's explicit STOP condition.
+        See task-C1-report.md for the full writeup and recommended
+        follow-up (either recompute VRP per-expiration to match the
+        stored history's formula, or migrate the stored history to the
+        DVOL-based formula).
+
+        Returns:
+            Empty dict if there is no repository, no expirations, or every
+            metric's inputs were unavailable. Never raises -- a failed
+            history fetch for one metric is logged and that metric is
+            simply absent from the result (matches the codebase's existing
+            per-expiration try/except convention, e.g.
+            ``_calculate_oi_changes_and_iv_percentile``).
+        """
+        if self.repository is None:
+            return {}
+
+        expiration_names = result.expiration_names()
+        if not expiration_names:
+            return {}
+        front_month = expiration_names[0]
+
+        bundle = result.bundle(front_month)
+        if bundle is None:
+            return {}
+
+        currency = analyzer.currency
+        lookback_30d = self._NORMALIZER_LOOKBACK_30D_HOURS
+        lookback_90d = self._NORMALIZER_LOOKBACK_90D_HOURS
+        specs: List[MetricSpec] = []
+
+        try:
+            if bundle.gex_dex is not None and bundle.gex_dex.total_net_gex is not None:
+                specs.append(MetricSpec(
+                    name="net_gex", value=float(bundle.gex_dex.total_net_gex),
+                    history_30d=self.repository.get_metric_history(
+                        table="onchain_analysis_snapshots", column="total_net_gex",
+                        currency=currency, lookback_hours=lookback_30d, expiration=front_month,
+                    ),
+                    history_90d=self.repository.get_metric_history(
+                        table="onchain_analysis_snapshots", column="total_net_gex",
+                        currency=currency, lookback_hours=lookback_90d, expiration=front_month,
+                    ),
+                    unit="USD",
+                ))
+
+            pcr = bundle.analysis.put_call_ratio if bundle.analysis is not None else None
+            if pcr is not None:
+                # Total OI is well-defined even when the ratio itself is
+                # inf (call_oi == 0) -- do not couple its availability to
+                # the ratio's finiteness.
+                specs.append(MetricSpec(
+                    name="total_oi", value=float(pcr.total_call_oi + pcr.total_put_oi),
+                    history_30d=self.repository.get_metric_history(
+                        table="onchain_analysis_snapshots",
+                        column="(total_call_oi + total_put_oi)",
+                        currency=currency, lookback_hours=lookback_30d, expiration=front_month,
+                    ),
+                    history_90d=self.repository.get_metric_history(
+                        table="onchain_analysis_snapshots",
+                        column="(total_call_oi + total_put_oi)",
+                        currency=currency, lookback_hours=lookback_90d, expiration=front_month,
+                    ),
+                    unit="coins",
+                ))
+
+                if pcr.ratio is not None and pcr.ratio != float("inf"):
+                    specs.append(MetricSpec(
+                        name="pcr_oi", value=float(pcr.ratio),
+                        history_30d=self.repository.get_metric_history(
+                            table="onchain_analysis_snapshots", column="put_call_ratio_oi",
+                            currency=currency, lookback_hours=lookback_30d, expiration=front_month,
+                        ),
+                        history_90d=self.repository.get_metric_history(
+                            table="onchain_analysis_snapshots", column="put_call_ratio_oi",
+                            currency=currency, lookback_hours=lookback_90d, expiration=front_month,
+                        ),
+                        unit="ratio",
+                    ))
+
+            market_metrics = analyzer.market_metrics or {}
+            dvol = market_metrics.get("dvol")
+            if dvol is not None:
+                specs.append(MetricSpec(
+                    name="dvol", value=float(dvol),
+                    history_30d=self.repository.get_metric_history(
+                        table="volatility_index_history", column="dvol",
+                        currency=currency, lookback_hours=lookback_30d, time_column="date",
+                    ),
+                    history_90d=self.repository.get_metric_history(
+                        table="volatility_index_history", column="dvol",
+                        currency=currency, lookback_hours=lookback_90d, time_column="date",
+                    ),
+                    unit="vol pts",
+                ))
+
+            funding_8h = market_metrics.get("funding_8h")
+            if funding_8h is not None:
+                specs.append(MetricSpec(
+                    name="funding", value=float(funding_8h),
+                    history_30d=self.repository.get_metric_history(
+                        table="funding_rate_history", column="funding_rate",
+                        currency=currency, lookback_hours=lookback_30d, time_column="date",
+                    ),
+                    history_90d=self.repository.get_metric_history(
+                        table="funding_rate_history", column="funding_rate",
+                        currency=currency, lookback_hours=lookback_90d, time_column="date",
+                    ),
+                    unit="%",
+                ))
+        except Exception as exc:
+            logger.warning("Failed to build normalized metrics for %s: %s", currency, exc)
+            return {}
+
+        if not specs:
+            return {}
+        return HistoricalNormalizer().normalize_many(specs)
 
     def _fetch_greeks_and_store_gex_dex(
         self,

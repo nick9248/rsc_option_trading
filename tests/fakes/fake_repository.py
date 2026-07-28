@@ -109,6 +109,26 @@ class FakeDatabaseRepository:
             )
         return self._onchain_snapshot_history[expiration]
 
+    def get_metric_history(
+        self,
+        table: str,
+        column: str,
+        currency: str,
+        lookback_hours: int,
+        expiration: Optional[str] = None,
+        time_column: Optional[str] = None,
+    ) -> List[float]:
+        """
+        institutional_metrics_spec.md section 1: this offline fixture never
+        recorded a trailing 30d/90d metric-history table (it captures one
+        live hour), so this honestly returns no history rather than
+        fabricating one -- HistoricalNormalizer's own MIN_OBS gate then
+        renders every percentile/z line as "insufficient history", a
+        legitimate and explained golden-master delta (task-C1: new
+        percentile/z display), not a silent degraded computation.
+        """
+        return []
+
     # ── Write methods (record, never persist) ───────────────────────────────
 
     def save_flow_metrics(

@@ -11,10 +11,11 @@ this replaces the analyzer's private ``_atm_ivs``/``_recent_trades`` attributes
 ``OnChainAnalyzer`` is narrowed (T10).
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, Optional, Tuple
 
+from coding.core.analytics.historical_normalizer import NormalizedMetric
 from coding.core.analytics.results.expiry_results import ExpirationAnalysisResult
 from coding.core.analytics.results.flow_results import FlowResult
 from coding.core.analytics.results.gex_dex_results import GexDexResult
@@ -105,6 +106,13 @@ class OnChainAnalysisResult:
     parsed_instruments: Dict[str, Tuple[Dict[str, Any], ...]]  # expiration -> parsed dicts
     atm_iv_by_expiration: Dict[str, float]
     recent_trades: Tuple[Dict[str, Any], ...]
+    # institutional_metrics_spec.md section 1: percentile/z-score context for
+    # the front-month AVAILABLE metrics (net GEX, PCR-OI, total OI, DVOL,
+    # funding -- VRP is deliberately excluded, see
+    # OnChainAnalysisService._build_normalized_metrics's docstring). Default
+    # empty dict keeps every pre-existing direct OnChainAnalysisResult(...)
+    # constructor (tests, the builder) working unchanged.
+    normalized_metrics: Dict[str, NormalizedMetric] = field(default_factory=dict)
 
     def bundle(self, expiration: str) -> Optional[ExpirationBundle]:
         """Return the ``ExpirationBundle`` for ``expiration``, or ``None`` if absent."""
