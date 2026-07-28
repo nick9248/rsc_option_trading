@@ -18,12 +18,12 @@ NEAR-TERM (0-7 DTE): NEUTRAL bias | GEX +79.9M (dampening) | OI: 154,865 contrac
   26JUL26 (0d): MaxPain $64,000 (-0.6%) | P/C 0.72 | ATM IV 14.8% | RR25 -1.6% | Flow: Insufficient flow data
 
 MID-TERM (7-30 DTE): BULLISH bias | GEX +25.3M (dampening) | OI: 24,185 contracts
-  7AUG26 (12d): MaxPain $64,000 (-0.6%) | P/C 0.13 | ATM IV 35.8% | RR25 -3.7% | Flow: Insufficient flow data
-  14AUG26 (19d): MaxPain $65,000 (+1.0%) | P/C 0.30 | ATM IV 35.1% | RR25 -4.2% | Flow: Insufficient flow data
+  7AUG26 (12d): MaxPain $64,000 (-0.7%) | P/C 0.13 | ATM IV 35.8% | RR25 -3.7% | Flow: Insufficient flow data
+  14AUG26 (19d): MaxPain $65,000 (+0.8%) | P/C 0.30 | ATM IV 35.1% | RR25 -4.2% | Flow: Insufficient flow data
 
 FAR-TERM (30+ DTE): BULLISH bias | GEX +25.8M (dampening) | OI: 257,391 contracts
-  25SEP26 (61d): MaxPain $70,000 (+8.7%) | P/C 0.58 | ATM IV 36.7% | RR25 -5.0% | Flow: Insufficient flow data
-  25DEC26 (152d): MaxPain $70,000 (+8.7%) | P/C 0.56 | ATM IV 40.8% | RR25 -4.7% | Flow: Insufficient flow data
+  25SEP26 (61d): MaxPain $70,000 (+8.0%) | P/C 0.58 | ATM IV 36.7% | RR25 -5.0% | Flow: Insufficient flow data
+  25DEC26 (152d): MaxPain $70,000 (+6.9%) | P/C 0.56 | ATM IV 40.8% | RR25 -4.7% | Flow: Insufficient flow data
 
 VOL ASSESSMENT: Volatility is expensive (IV at 20th percentile, VRP +10.4pts). NOTE: 30d RV at 11th pctile — unusually calm period. VRP may compress further if realized vol reverts to mean. Sell premium in 31JUL26 where ATM IV is 36.2%. RR25 at -4.3% makes RR25 is normal — no clear rich/cheap side puts the higher-edge side to sell.
 

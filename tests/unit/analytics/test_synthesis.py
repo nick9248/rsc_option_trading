@@ -4,7 +4,7 @@ Unit tests for SynthesisMapper, ScoringEngine, and SynthesisEngine v2.0.
 
 import pytest
 from typing import Optional
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from datetime import datetime, timedelta
 
 from coding.core.analytics.synthesis import (
@@ -67,6 +67,12 @@ def make_expiry_metrics(**overrides) -> ExpiryMetrics:
         notional=500_000_000,
         max_pain=70000,
         pc_ratio=0.80,
+        # Matches make_market_wide()'s default spot_price so every
+        # pre-existing test (which never overrides this) sees identical
+        # behavior to before the carried per-expiry underlying_price fix --
+        # tests that need to prove per-expiry sourcing pass a different
+        # value explicitly.
+        underlying_price=65000.0,
         total_gex=-5_000_000,
         total_dex=-200,
         gex_environment="Negative",
@@ -915,6 +921,46 @@ class TestBuildExpiryMetrics:
         assert result.atm_iv == 0.0
         assert result.risk_reversal_25d == 0.0
 
+    def test_underlying_price_sourced_from_own_expiration_not_global_result(self):
+        """
+        CARRIED FINDING (B2 review, task C1): ExpiryMetrics.underlying_price
+        must come from bundle.analysis.underlying_price (this expiration's
+        own forward price), not result.underlying_price (the single global
+        index shared across every expiration) -- same defect class
+        bugfix_spec.md Item 7 already fixed at the report/formatter layer.
+        """
+        onchain_result = make_onchain_result("27MAR26", underlying_price=65000.0)
+        bundle = onchain_result.bundle("27MAR26")
+        # This expiration's own forward price genuinely differs from the
+        # global result.underlying_price.
+        different_analysis = ExpirationAnalysisResult(
+            expiration=bundle.analysis.expiration, underlying_price=65500.0,
+            total_instruments=bundle.analysis.total_instruments,
+            call_count=bundle.analysis.call_count, put_count=bundle.analysis.put_count,
+            strike_rows=bundle.analysis.strike_rows, max_pain=bundle.analysis.max_pain,
+            put_call_ratio=bundle.analysis.put_call_ratio,
+            volume_stats=bundle.analysis.volume_stats, moneyness=bundle.analysis.moneyness,
+            support_resistance=bundle.analysis.support_resistance,
+        )
+        skewed_bundle = ExpirationBundle(
+            expiration=bundle.expiration, analysis=different_analysis, gex_dex=bundle.gex_dex,
+            flow=bundle.flow, vol_surface=bundle.vol_surface, oi_changes=None,
+            iv_percentile=None, trend=None, flow_chart_paths={}, enriched_instruments=(),
+        )
+        skewed_result = OnChainAnalysisResult(
+            currency=onchain_result.currency, underlying_price=onchain_result.underlying_price,
+            generated_at=onchain_result.generated_at, market_metrics=onchain_result.market_metrics,
+            expirations=(skewed_bundle,), market_wide=onchain_result.market_wide,
+            parsed_instruments=onchain_result.parsed_instruments,
+            atm_iv_by_expiration=onchain_result.atm_iv_by_expiration,
+            recent_trades=onchain_result.recent_trades,
+        )
+
+        result = SynthesisMapper.build_expiry_metrics(skewed_result, "27MAR26")
+
+        assert result.underlying_price == 65500.0
+        assert result.underlying_price != skewed_result.underlying_price
+
     def test_insufficient_flow_data_propagates_gate(self):
         """bugfix_spec.md Item 6 / F6.3.4 (carried from A4 review): the
         FlowResult's sufficient_data flag must reach ExpiryMetrics so the
@@ -1023,6 +1069,59 @@ class TestSynthesisEngineRun:
         expiry = make_expiry_metrics()
         result = engine.run(market, [expiry])
         assert "ATM IV (front): ~0.0%" in result
+
+    def test_timeframe_max_pain_distance_uses_own_expiry_price_not_global_spot(self):
+        """
+        CARRIED FINDING (B2 review, task C1): the "MaxPain $X (Y%)" line's
+        distance-from-current percentage must be computed against this
+        expiry's own underlying_price, not market.spot_price -- same
+        defect class bugfix_spec.md Item 7 already fixed at the report/
+        formatter layer.
+        """
+        engine = SynthesisEngine()
+        market = make_market_wide(spot_price=65000.0)
+        # This expiry's own forward price (70000) genuinely differs from
+        # market.spot_price (65000) -- max_pain=70000 sits exactly AT its
+        # own forward (0.0% distance) but far from the global spot
+        # ((70000-65000)/65000*100 = +7.69%). Only the per-expiry-correct
+        # 0.0% figure may appear.
+        expiry = make_expiry_metrics(
+            expiry="27MAR26", dte=27, total_oi=50000,
+            max_pain=70000, underlying_price=70000.0,
+        )
+        result = engine.run(market, [expiry])
+        assert "MaxPain $70,000 (+0.0%)" in result
+        assert "+7.7%" not in result
+        assert "(+7.69%)" not in result
+
+    def test_score_max_pain_gravity_called_with_own_expiry_price_not_global_spot(self):
+        """
+        CARRIED FINDING (B2 review, task C1): all three
+        score_max_pain_gravity call sites (top/near/far-term scoring
+        loops) must pass this expiry's own underlying_price, never the
+        single global market.spot_price -- same defect class
+        bugfix_spec.md Item 7 already fixed at the report/formatter layer.
+        """
+        engine = SynthesisEngine()
+        market = make_market_wide(spot_price=65000.0)
+        expiry = make_expiry_metrics(
+            expiry="27MAR26", dte=27, total_oi=50000, underlying_price=70000.0,
+        )
+
+        with patch.object(
+            ScoringEngine, "score_max_pain_gravity",
+            wraps=ScoringEngine.score_max_pain_gravity,
+        ) as spy:
+            engine.run(market, [expiry])
+
+        assert spy.call_count >= 1
+        for call in spy.call_args_list:
+            args = call.args
+            spot_arg = args[1] if len(args) > 1 else call.kwargs.get("spot")
+            assert spot_arg == 70000.0, (
+                f"score_max_pain_gravity called with spot={spot_arg}, expected "
+                f"the expiry's own underlying_price (70000.0), not market.spot_price (65000.0)"
+            )
 
     def test_dte_zero_excluded_from_top_expiries(self):
         """Expiries with DTE=0 should be excluded from directional scoring."""

@@ -66,6 +66,15 @@ class ExpiryMetrics:
     notional: float
     max_pain: float
     pc_ratio: float
+    # CARRIED FINDING (B2 review, task C1): this expiry's OWN forward/
+    # underlying price (bundle.analysis.underlying_price -- the same
+    # source bugfix_spec.md Item 7's report_formatter fix uses), not the
+    # single global market.spot_price. _generate_timeframe_section's
+    # max-pain-distance line and all three score_max_pain_gravity call
+    # sites anchor against this field now instead of one shared spot
+    # value across every expiry -- the same defect class Item 7 already
+    # fixed at the report/formatter layer.
+    underlying_price: float
 
     # GEX/DEX
     total_gex: float
@@ -1338,7 +1347,10 @@ class SynthesisEngine:
             all_direction_scores.append(
                 self.scorer.score_dex(exp.total_dex, spot=spot, dte=exp.dte))
             all_direction_scores.append(
-                self.scorer.score_max_pain_gravity(exp.max_pain, spot, dte=exp.dte))
+                # CARRIED FINDING (B2 review, task C1): this expiry's own
+                # forward price, not the single global ``spot`` -- same
+                # defect class as bugfix_spec.md Item 7.
+                self.scorer.score_max_pain_gravity(exp.max_pain, exp.underlying_price, dte=exp.dte))
             all_direction_scores.append(
                 self.scorer.score_flow_gated(exp.flow_bias, exp.flow_trend, exp.flow_sufficient_data))
             all_direction_scores.append(
@@ -1355,7 +1367,10 @@ class SynthesisEngine:
             near_direction_scores.append(
                 self.scorer.score_dex(exp.total_dex, spot=spot, dte=exp.dte))
             near_direction_scores.append(
-                self.scorer.score_max_pain_gravity(exp.max_pain, spot, dte=exp.dte))
+                # CARRIED FINDING (B2 review, task C1): this expiry's own
+                # forward price, not the single global ``spot`` -- same
+                # defect class as bugfix_spec.md Item 7.
+                self.scorer.score_max_pain_gravity(exp.max_pain, exp.underlying_price, dte=exp.dte))
             near_direction_scores.append(
                 self.scorer.score_flow_gated(exp.flow_bias, exp.flow_trend, exp.flow_sufficient_data))
             near_direction_scores.append(
@@ -1372,7 +1387,10 @@ class SynthesisEngine:
             far_direction_scores.append(
                 self.scorer.score_dex(exp.total_dex, spot=spot, dte=exp.dte))
             far_direction_scores.append(
-                self.scorer.score_max_pain_gravity(exp.max_pain, spot, dte=exp.dte))
+                # CARRIED FINDING (B2 review, task C1): this expiry's own
+                # forward price, not the single global ``spot`` -- same
+                # defect class as bugfix_spec.md Item 7.
+                self.scorer.score_max_pain_gravity(exp.max_pain, exp.underlying_price, dte=exp.dte))
             far_direction_scores.append(
                 self.scorer.score_flow_gated(exp.flow_bias, exp.flow_trend, exp.flow_sufficient_data))
             far_direction_scores.append(
@@ -1653,7 +1671,11 @@ Perp Funding: {market.funding_rate:.4f}%  | 8h: {market.funding_8h:.4f}%
         # Add per-expiry one-liners for the top 2 by OI
         top2 = sorted(expiries, key=lambda e: e.total_oi, reverse=True)[:2]
         for exp in top2:
-            mp_dist = (exp.max_pain - spot) / spot * 100
+            # CARRIED FINDING (B2 review, task C1): this expiry's own
+            # forward price, not the single global ``spot`` shared across
+            # every expiry -- the same defect class bugfix_spec.md Item 7
+            # already fixed at the report/formatter layer.
+            mp_dist = (exp.max_pain - exp.underlying_price) / exp.underlying_price * 100
             # bugfix_spec.md Item 9 fix-review (Important #6): print the
             # correctly-signed risk_reversal_25d, relabelled "RR25" -- the
             # legacy-signed "Skew" label here contradicted the vol-surface
@@ -1871,6 +1893,11 @@ class SynthesisMapper:
             total_volume=int(total_volume),
             max_pain=float(max_pain),
             pc_ratio=float(pc_ratio),
+            # CARRIED FINDING (B2 review, task C1): this expiry's own
+            # forward price, sourced the same way Item 7's report_formatter
+            # fix does -- bundle.analysis.underlying_price, not the global
+            # result.underlying_price used above for notional.
+            underlying_price=float(analysis.underlying_price),
             total_gex=total_gex,
             total_dex=total_dex,
             gex_environment=gex_environment,
@@ -2090,6 +2117,7 @@ def build_from_current_data():
         ExpiryMetrics(
             expiry="28FEB26", dte=0, total_oi=6181,
             notional=406_145_555, max_pain=66000, pc_ratio=2.39,
+            underlying_price=65707.65,
 
             total_gex=-12_402_566, total_dex=-390.66,
             gex_environment="Negative",
@@ -2105,6 +2133,7 @@ def build_from_current_data():
         ExpiryMetrics(
             expiry="6MAR26", dte=6, total_oi=23883,
             notional=1_569_282_663, max_pain=67000, pc_ratio=1.23,
+            underlying_price=65707.65,
 
             total_gex=-7_885_127, total_dex=-1496.14,
             gex_environment="Negative",
@@ -2120,6 +2149,7 @@ def build_from_current_data():
         ExpiryMetrics(
             expiry="13MAR26", dte=13, total_oi=8785,
             notional=577_248_276, max_pain=66000, pc_ratio=0.93,
+            underlying_price=65707.65,
 
             total_gex=-13_297, total_dex=-146.97,
             gex_environment="Negative",
@@ -2135,6 +2165,7 @@ def build_from_current_data():
         ExpiryMetrics(
             expiry="27MAR26", dte=27, total_oi=149488,
             notional=9_822_511_753, max_pain=80000, pc_ratio=0.70,
+            underlying_price=65707.65,
 
             total_gex=-14_812_074, total_dex=-26914.66,
             gex_environment="Negative",
@@ -2150,6 +2181,7 @@ def build_from_current_data():
         ExpiryMetrics(
             expiry="24APR26", dte=55, total_oi=39117,
             notional=2_570_273_003, max_pain=70000, pc_ratio=0.68,
+            underlying_price=65707.65,
 
             total_gex=3_072_631, total_dex=-1179.31,
             gex_environment="Positive",
@@ -2165,6 +2197,7 @@ def build_from_current_data():
         ExpiryMetrics(
             expiry="26JUN26", dte=118, total_oi=70893,
             notional=4_658_212_431, max_pain=85000, pc_ratio=0.91,
+            underlying_price=65707.65,
 
             total_gex=-8_447_524, total_dex=-11001.86,
             gex_environment="Negative",
@@ -2180,6 +2213,7 @@ def build_from_current_data():
         ExpiryMetrics(
             expiry="25DEC26", dte=300, total_oi=45475,
             notional=2_988_048_812, max_pain=80000, pc_ratio=0.60,
+            underlying_price=65707.65,
 
             total_gex=2_890_951, total_dex=352.39,
             gex_environment="Positive",
