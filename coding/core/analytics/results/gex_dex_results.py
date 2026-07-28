@@ -51,10 +51,21 @@ class GexDexStrikeRow:
 
     # --- Additive fields (bugfix_spec.md Item 8) ---
     gamma_exposure_holder: Optional[float] = None
-    """(call_gamma + put_gamma) -- holder-side raw gamma exposure, NOT
-    scaled by S^2*0.01 the way net_gex/dealer_gamma_exposure are (this is
-    the raw OI-weighted gamma sum feeding GexDexCalculator's own S^2*0.01
-    scaling upstream -- see GexDexCalculator._calculate_gex_dex)."""
+    """(call_gamma + put_gamma) * S^2 * 0.01 -- holder-side gamma exposure,
+    same units/scaling as net_gex/dealer_gamma_exposure (USD per 1% spot
+    move). This is what ``GexDexCalculator._calculate_gex_dex`` (the real
+    production construction path) computes and passes explicitly.
+
+    bugfix_spec.md Item 8 fix-review (Important #4): the ``__post_init__``
+    fallback below -- used ONLY when a caller constructs this row directly
+    without passing the field (e.g. a test or another producer that hasn't
+    migrated) -- has no S^2 available at the row level and defaults to the
+    RAW, UNSCALED ``call_gamma + put_gamma`` sum instead. That fallback
+    value is a placeholder for callers that don't care about this field's
+    accuracy, not a second unit convention -- do not read a row's
+    ``gamma_exposure_holder`` as USD-scaled unless it came from
+    ``GexDexCalculator``. Unifying the two construction paths' units is a
+    separate, riskier follow-up, not done here."""
 
     delta_exposure_holder: Optional[float] = None
     """Alias of ``net_dex`` (same value, correctly-labelled name)."""

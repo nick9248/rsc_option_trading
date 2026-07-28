@@ -106,11 +106,20 @@ def _key_levels_and_totals_lines(result: GexDexResult, dex_unit: str) -> list:
         lines.append("                  -> NEGATIVE: dealers short gamma, amplifying volatility")
     else:
         lines.append("                  -> NEUTRAL")
+    # bugfix_spec.md Item 8 fix-review (Critical #2): this line previously
+    # asserted a directional "bullish"/"bearish" call that directly
+    # contradicted synthesis.ScoringEngine.score_dex's own docstring in
+    # this same codebase (positive DEX -> dealers short delta -> dealers
+    # BUY to hedge -> bullish; the formatter had "dealers net short delta -
+    # bearish pressure", the opposite conclusion from the same number).
+    # Ruling: describe the hedging MECHANICS only (matches bugfix_spec.md
+    # F8.3.2's own example text, which never labels this bullish/bearish
+    # either) -- do not re-derive a directional tag a second time.
     lines.append(f"  Dealer Delta:   {dealer_dex:+,.4f} {dex_unit}")
     if dealer_dex > 0:
-        lines.append("                  -> Dealers net long delta - bullish pressure")
+        lines.append("                  -> Dealers net long delta; they sell the underlying as spot rises")
     elif dealer_dex < 0:
-        lines.append("                  -> Dealers net short delta - bearish pressure")
+        lines.append("                  -> Dealers net short delta; they buy the underlying as spot rises")
     else:
         lines.append("                  -> Dealers delta-neutral")
     lines.append("")

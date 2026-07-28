@@ -647,6 +647,46 @@ class TestClassifyVolRegime:
         assert regime == VolRegime.ELEVATED
         assert "term structure stressed" in reasons[0]
 
+    def test_explosive_with_negative_gex_high_iv_and_put_side_skew(self):
+        """
+        bugfix_spec.md Item 9 fix-review Critical #1 regression test:
+        negative GEX + high IV + a NEGATIVE skew_score (puts richer, the
+        crash-correlated side under score_skew's re-signed risk-reversal
+        convention) must classify EXPLOSIVE. Before this fix, the EXPLOSIVE
+        branch still checked `skew_score >= 1` (the pre-Item-9 condition,
+        never re-signed alongside score_skew) -- a negative skew_score
+        could never satisfy it, making EXPLOSIVE unreachable on real data
+        (every expiry in the golden fixture scores skew_score <= -1, i.e.
+        puts richer, which is the empirically crash-correlated side).
+        """
+        regime, reasons = RegimeClassifier.classify_vol_regime(
+            gex_total=-3_000_000, iv_pctile_score=1, vrp_score=0,
+            skew_score=-1, spot=100000)
+        # -3M / 100k = -30 < -20
+        assert regime == VolRegime.EXPLOSIVE
+        assert "Explosive regime" in reasons[0]
+
+    def test_not_explosive_when_skew_score_is_call_side(self):
+        """
+        The old (buggy, pre-fix) condition `skew_score >= 1` fired on
+        extreme CALL-side risk reversal -- the wrong side. After the fix,
+        a positive skew_score (calls richer) must NOT trigger EXPLOSIVE
+        even with negative GEX + high IV; it falls through to ELEVATED
+        (mixed confirmation, since vrp_score/term_structure_score are 0).
+        """
+        regime, _ = RegimeClassifier.classify_vol_regime(
+            gex_total=-3_000_000, iv_pctile_score=1, vrp_score=0,
+            skew_score=1, spot=100000)
+        assert regime != VolRegime.EXPLOSIVE
+        assert regime == VolRegime.ELEVATED
+
+    def test_not_explosive_when_skew_score_neutral(self):
+        """skew_score == 0 (Normal/Balanced) must not trigger EXPLOSIVE either."""
+        regime, _ = RegimeClassifier.classify_vol_regime(
+            gex_total=-3_000_000, iv_pctile_score=1, vrp_score=0,
+            skew_score=0, spot=100000)
+        assert regime != VolRegime.EXPLOSIVE
+
 
 # =============================================================================
 # TESTS: classify_market_regime — RANGE_BOUND sub-types + TRANSITION magnitude
@@ -715,7 +755,7 @@ class TestTradeRecommendations:
                        MarketRegime.RANGE_BOUND_BEARISH]:
             result = NarrativeGenerator.generate_trade_recommendations(
                 regime=regime, vol_regime=VolRegime.NORMAL,
-                iv_pctile=80, skew=15.0, gex_total=-5_000_000,
+                iv_pctile=80, risk_reversal_25d=-15.0, gex_total=-5_000_000,
                 near_term_expiry="6MAR26", far_term_expiry="27MAR26",
                 skew_expiry="27MAR26")
             assert "Risk Reversal" not in result, f"Risk Reversal should be excluded in {regime}"
@@ -724,7 +764,7 @@ class TestTradeRecommendations:
         from coding.core.analytics.synthesis import NarrativeGenerator
         result = NarrativeGenerator.generate_trade_recommendations(
             regime=MarketRegime.RANGE_BOUND_NEUTRAL, vol_regime=VolRegime.NORMAL,
-            iv_pctile=80, skew=10.0, gex_total=0,
+            iv_pctile=80, risk_reversal_25d=-10.0, gex_total=0,
             near_term_expiry="6MAR26", far_term_expiry="27MAR26")
         assert "short put at 25-delta" in result
 
@@ -732,7 +772,7 @@ class TestTradeRecommendations:
         from coding.core.analytics.synthesis import NarrativeGenerator
         result = NarrativeGenerator.generate_trade_recommendations(
             regime=MarketRegime.RANGE_BOUND_NEUTRAL, vol_regime=VolRegime.NORMAL,
-            iv_pctile=80, skew=1.0, gex_total=0,
+            iv_pctile=80, risk_reversal_25d=-1.0, gex_total=0,
             near_term_expiry="6MAR26", far_term_expiry="27MAR26")
         assert "short call at 25-delta" in result
 

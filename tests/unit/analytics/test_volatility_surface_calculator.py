@@ -157,6 +157,23 @@ class TestVolatilitySurfaceCalculator:
         assert greeks.dealer_charm_exposure == pytest.approx(-greeks.charm_exposure_holder)
         assert greeks.skipped_instruments >= 0
 
+        # bugfix_spec.md Item 8 fix-review (Important #7 -- T8.3's other
+        # half, restored): vanna_signal/charm_signal text must be
+        # genuinely DERIVED from the DEALER field's sign, not the holder
+        # sum's -- this is the actual behavioral correctness the item
+        # fixes, and asserting only dealer == -holder (above) doesn't
+        # independently verify it (a regression that swapped which field
+        # feeds the signal text would still pass that assertion).
+        if greeks.dealer_vanna_exposure > 0:
+            assert "dealers buy underlying (bullish)" in greeks.vanna_signal
+        else:
+            assert "dealers sell underlying (bearish)" in greeks.vanna_signal
+
+        if greeks.dealer_charm_exposure > 0:
+            assert "pushing delta positive (bullish drift)" in greeks.charm_signal
+        else:
+            assert "pushing delta negative (bearish drift)" in greeks.charm_signal
+
     def test_second_order_greeks_exception_is_logged_with_instrument_context(self, caplog):
         """
         M5 (code_quality_review.md): the vanna/charm loop's ``except

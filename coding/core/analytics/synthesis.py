@@ -93,7 +93,12 @@ class ExpiryMetrics:
     pc_near_otm: float
     pc_far_otm: float
 
-    # Second-order Greeks
+    # Second-order Greeks. bugfix_spec.md Item 8 fix-review (Important #3):
+    # these are the ASSUMED-DEALER exposures (SecondOrderGreeks.
+    # dealer_vanna_exposure/dealer_charm_exposure), not the holder-side raw
+    # sum -- F8.4 requires score_* functions to consume the dealer fields,
+    # matching the report text's own dealer-derived vanna_signal/
+    # charm_signal.
     net_vanna: float
     net_charm: float
 
@@ -749,6 +754,37 @@ class RegimeClassifier:
             3. IV high AND (VRP confirms OR term structure stressed) → ELEVATED
             4. IV high alone → ELEVATED (mixed confirmation)
             5. Otherwise → NORMAL
+
+        bugfix_spec.md Item 9 / Decision D6 fix-review (Critical #1): the
+        EXPLOSIVE branch's "steep skew" condition must check the
+        crash-correlated side of ``score_skew``'s output. Before Item 9,
+        ``score_skew`` took the old put-call ``skew_25d`` (positive = puts
+        richer) and this branch checked ``skew_score >= 1`` -- correctly
+        firing on extreme PUT-side richness (the side that empirically
+        correlates with crash/explosive vol, per score_skew's own historical
+        design). Item 9 re-signed ``score_skew`` to the market
+        ``risk_reversal_25d`` convention (call - put), which FLIPS which
+        real-world condition produces a positive vs. negative score: a
+        negative score now means puts-richer (the same crash-correlated
+        condition), not a positive one. The B2 sub-task 3 commit re-signed
+        score_skew but did NOT re-sign this consumer -- an oversight
+        (flagged in task-B2-report.md, confirmed as a real regression in
+        review, fixed here): on the live golden fixture the old condition
+        made EXPLOSIVE literally unreachable (every expiry's risk reversal
+        scored negative -1, so ``skew_score >= 1`` never fired). The
+        correct condition, restoring the original semantics against the
+        NEW sign convention, is ``skew_score <= -1``.
+
+        Also note (per the same review): re-signing score_skew was not a
+        pure sign flip of otherwise-identical bands -- the threshold widths
+        themselves changed. The old put-call bands were 4/8/12 points
+        (Balanced up to 4, Heavy at 8, Extreme at 12); the new
+        RISK_REVERSAL_MILD_POINTS/STRONG_POINTS bands are 1/5 points. The
+        score now reacts to roughly 4x-2.4x smaller risk-reversal moves
+        than before at the mild/strong boundaries respectively -- a real
+        sensitivity increase, not a relabeling. Not remediated here (out of
+        this fix round's scope per the coordinator's ruling) -- flagged for
+        awareness only.
         """
         if spot <= 0:
             spot = 100000.0
@@ -758,9 +794,9 @@ class RegimeClassifier:
         if gex_normalized > 20 and iv_pctile_score <= 0:
             regime = VolRegime.SUPPRESSED
             reasons.append(f"Positive GEX (norm {gex_normalized:+.1f}) + low IV → Volatility suppressed")
-        elif gex_normalized < -20 and iv_pctile_score >= 1 and skew_score >= 1:
+        elif gex_normalized < -20 and iv_pctile_score >= 1 and skew_score <= -1:
             regime = VolRegime.EXPLOSIVE
-            reasons.append(f"Negative GEX (norm {gex_normalized:+.1f}) + high IV + steep skew → Explosive regime")
+            reasons.append(f"Negative GEX (norm {gex_normalized:+.1f}) + high IV + steep put-side skew → Explosive regime")
         elif iv_pctile_score >= 1 and (vrp_score >= 1 or term_structure_score <= -1):
             regime = VolRegime.ELEVATED
             reasons.append(f"High IV + {'VRP confirms' if vrp_score >= 1 else 'term structure stressed'} → Elevated vol")
@@ -894,7 +930,7 @@ class NarrativeGenerator:
             "Volatility is expensive (IV at {iv_pctile:.0f}th percentile, "
             "VRP {vrp:+.1f}pts). {vrp_adjustment} "
             "Sell premium in {sell_expiry} where ATM IV is {sell_iv:.1f}%. "
-            "Skew at {skew:+.1f}% makes {rich_side} puts the higher-edge side to sell."
+            "RR25 at {skew:+.1f}% makes {rich_side} puts the higher-edge side to sell."
         ),
         "sell_moderate": (
             "Volatility is moderately elevated (IV at {iv_pctile:.0f}th percentile). "
@@ -980,12 +1016,26 @@ class NarrativeGenerator:
             iv_pctile: float,
             vrp: float,
             vrp_adjustment: str,
-            skew: float,
+            risk_reversal_25d: float,
             sell_expiry: str,
             sell_iv: float,
             buy_expiry: str = "",
     ) -> str:
-        """Generate volatility assessment narrative."""
+        """
+        Generate volatility assessment narrative.
+
+        bugfix_spec.md Item 9 fix-review (Important #6): this used to take
+        the legacy put-call ``skew`` (positive = puts richer) and printed
+        it under the generic label "Skew" -- the same report bundle's GEX/
+        DEX/vol-surface sections had already switched to the RR25 (call -
+        put) convention and sign, so the SAME quantity was shown with TWO
+        CONTRADICTORY signs under an unlabelled name in one report. Now
+        takes ``risk_reversal_25d`` directly (market convention) and prints
+        it as "RR25", with the rich/cheap-side thresholds re-signed to
+        match (mechanically: substitute risk_reversal_25d = -skew into the
+        prior skew>8/skew>=4/skew<4 boundaries -- same decision boundaries,
+        opposite-signed input, no new thresholds introduced).
+        """
 
         # Determine which template — unified ±5 thresholds matching VRP scorer
         if vrp > 10:
@@ -999,14 +1049,14 @@ class NarrativeGenerator:
         else:
             template_key = "buy_strong"
 
-        # Rich/cheap side based on skew
-        if skew > 8:
+        # Rich/cheap side based on the risk reversal (re-signed: rr = -skew).
+        if risk_reversal_25d < -8:
             rich_side = "OTM puts are rich — selling put premium has edge"
-        elif skew >= 4:
+        elif risk_reversal_25d <= -4:
             rich_side = "Skew is normal — no clear rich/cheap side"
         else:
             rich_side = "OTM puts are cheap relative to calls — tail risk underpriced"
-        cheap_side = "calls" if skew > 4 else "puts"
+        cheap_side = "calls" if risk_reversal_25d < -4 else "puts"
 
         template = cls.VOL_TEMPLATES[template_key]
 
@@ -1014,7 +1064,7 @@ class NarrativeGenerator:
             iv_pctile=iv_pctile,
             vrp=vrp,
             vrp_adjustment=vrp_adjustment,
-            skew=skew,
+            skew=risk_reversal_25d,
             sell_expiry=sell_expiry,
             sell_iv=sell_iv,
             buy_expiry=buy_expiry,
@@ -1029,12 +1079,20 @@ class NarrativeGenerator:
             gex_total: float,
             largest_expiry_dte: int,
             funding_8h: float,
-            skew: float,
+            risk_reversal_25d: float,
             spot: float = 100000.0,
             fragility_multiplier: float = 1.0,
             fragility_level: str = "NONE",
     ) -> str:
-        """Generate risk factor list based on thresholds."""
+        """
+        Generate risk factor list based on thresholds.
+
+        bugfix_spec.md Item 9 fix-review (Important #6): takes
+        ``risk_reversal_25d`` (market convention) directly now, not the
+        legacy put-call ``skew`` -- the "Extreme skew" threshold below is
+        re-signed to match (rr = -skew; puts-rich extreme is now a large
+        NEGATIVE risk reversal).
+        """
 
         risks = []
 
@@ -1064,8 +1122,8 @@ class NarrativeGenerator:
                 f"— crowded {direction} at risk of squeeze"
             )
 
-        if skew > 12:
-            risks.append(f"Extreme skew ({skew:+.1f}%) — tail hedging elevated, crash risk priced in")
+        if risk_reversal_25d < -12:
+            risks.append(f"Extreme RR25 ({risk_reversal_25d:+.1f}%) — tail hedging elevated, crash risk priced in")
 
         # Fragility flag
         if fragility_multiplier < 1.0:
@@ -1084,7 +1142,7 @@ class NarrativeGenerator:
             regime: MarketRegime,
             vol_regime: VolRegime,
             iv_pctile: float,
-            skew: float,
+            risk_reversal_25d: float,
             gex_total: float,
             near_term_expiry: str,
             far_term_expiry: str,
@@ -1102,6 +1160,12 @@ class NarrativeGenerator:
             4. Calendar spreads → Term structure dislocation
             5. Risk reversal → Strong skew + directional view
             6. Cash/reduce → Transition regime
+
+        bugfix_spec.md Item 9 fix-review (Important #6): takes
+        ``risk_reversal_25d`` (market convention, call - put) directly now,
+        not the legacy put-call ``skew`` -- every threshold below is
+        re-signed to match (rr = -skew; same decision boundaries, no new
+        thresholds introduced).
         """
         recommendations = []
 
@@ -1115,13 +1179,13 @@ class NarrativeGenerator:
         if (regime in range_bound_regimes and
                 iv_pctile > 70 and
                 vol_regime != VolRegime.EXPLOSIVE):
-            # Skew-adjusted IC
-            if skew > 8:
+            # RR25-adjusted IC (re-signed: was skew > 8 / skew < 2)
+            if risk_reversal_25d < -8:
                 skew_adj = "Puts are rich — keep short put at 25-delta, push long put protection further OTM (5-delta). "
-            elif skew < 2:
+            elif risk_reversal_25d > -2:
                 skew_adj = "Calls relatively expensive — keep short call at 25-delta, push long call protection further OTM. "
             else:
-                skew_adj = "Normal skew — symmetric wings at GEX support/resistance levels. "
+                skew_adj = "Normal RR25 — symmetric wings at GEX support/resistance levels. "
 
             # Regime-specific center shift
             if regime == MarketRegime.RANGE_BOUND_BULLISH:
@@ -1151,28 +1215,28 @@ class NarrativeGenerator:
             recommendations.append(
                 f"SECONDARY — Bull Call Spread ({far_term_expiry}): "
                 f"Bullish regime supports upside exposure. Buy near-ATM, sell at call resistance. "
-                f"Skew {skew:+.1f}% makes calls relatively cheap vs puts."
+                f"RR25 {risk_reversal_25d:+.1f}% makes calls relatively cheap vs puts."
             )
         elif regime in (MarketRegime.TRENDING_DOWN, MarketRegime.VOLATILE_BEARISH):
             recommendations.append(
                 f"SECONDARY — Bear Put Spread ({far_term_expiry}): "
                 f"Bearish regime supports downside positioning. "
-                f"Steep skew ({skew:+.1f}%) makes puts expensive — use spreads to offset."
+                f"Steep RR25 ({risk_reversal_25d:+.1f}%) makes puts expensive — use spreads to offset."
             )
 
-        # Strategy 4: Skew trade — exclude bearish regimes
+        # Strategy 4: Skew trade — exclude bearish regimes (re-signed: was skew > 10)
         bearish_exclusions = (
             MarketRegime.VOLATILE_BEARISH,
             MarketRegime.TRENDING_DOWN,
             MarketRegime.RANGE_BOUND_BEARISH,
         )
-        if skew > 10 and regime not in bearish_exclusions:
+        if risk_reversal_25d < -10 and regime not in bearish_exclusions:
             skew_src = f" [{skew_expiry}]" if skew_expiry else ""
             recommendations.append(
                 f"OPPORTUNISTIC — Risk Reversal ({skew_expiry or near_term_expiry}): "
-                f"25D skew{skew_src} at {skew:+.1f}% is elevated (threshold: >10%). "
+                f"25D RR25{skew_src} at {risk_reversal_25d:+.1f}% is elevated (threshold: <-10%). "
                 f"Sell OTM put, buy OTM call. "
-                f"Verify skew on target expiry before executing — skew varies across the curve."
+                f"Verify RR25 on target expiry before executing — it varies across the curve."
             )
 
         # Strategy 5: Transition
@@ -1449,24 +1513,21 @@ class SynthesisEngine:
             sellable_near = [e for e in expiries_sorted if e.dte >= 1 and e.total_oi > 500]
         best_sell_expiry = max(sellable_near, key=lambda e: e.atm_iv) if sellable_near else meaningful_near
 
-        # bugfix_spec.md Item 9: NarrativeGenerator.generate_vol_narrative/
-        # generate_risk_factors/generate_trade_recommendations all have
-        # their OWN internal `skew` thresholds/branches (e.g. "skew > 8" =>
-        # "OTM puts are rich") written against the OLD put-call sign
-        # convention -- out of this item's scope (D6 mandates re-signing
-        # ScoringEngine.score_skew specifically, not rewriting every
-        # narrative branch that reads a skew-shaped number). Passing the
-        # negation of the new risk_reversal_25d reproduces the exact old
-        # put-call value these methods already expect, so their behavior
-        # and printed "Skew: ..." text (which never claims the RR25
-        # convention) are unchanged.
-        legacy_skew = -largest_expiry.risk_reversal_25d
-
+        # bugfix_spec.md Item 9 fix-review (Important #6): the sub-task 3
+        # commit fed these methods the NEGATED risk_reversal_25d (the old
+        # put-call sign) so their internal thresholds "kept working" --
+        # but that meant this report bundle printed the SAME quantity with
+        # TWO CONTRADICTORY signs under the generic label "Skew" (RR25
+        # correctly signed in the vol-surface section; "Skew" here still
+        # legacy-signed), for a task whose entire point was fixing exactly
+        # this kind of sign confusion. Fixed: pass risk_reversal_25d
+        # directly; NarrativeGenerator's own thresholds are re-signed to
+        # match in the same pass (see each method's docstring).
         vol_narrative = self.narrator.generate_vol_narrative(
             iv_pctile=market.iv_percentile_365d,
             vrp=effective_vrp,
             vrp_adjustment=vrp_adjustment,
-            skew=legacy_skew,
+            risk_reversal_25d=largest_expiry.risk_reversal_25d,
             sell_expiry=best_sell_expiry.expiry,
             sell_iv=best_sell_expiry.atm_iv,
             buy_expiry=meaningful_far.expiry,
@@ -1477,7 +1538,7 @@ class SynthesisEngine:
             gex_total=largest_expiry.total_gex,
             largest_expiry_dte=largest_expiry.dte,
             funding_8h=market.funding_8h,
-            skew=legacy_skew,
+            risk_reversal_25d=largest_expiry.risk_reversal_25d,
             spot=spot,
             fragility_multiplier=fragility_multiplier,
             fragility_level=fragility_level,
@@ -1488,7 +1549,7 @@ class SynthesisEngine:
             regime=market_regime,
             vol_regime=vol_regime,
             iv_pctile=market.iv_percentile_365d,
-            skew=legacy_skew,
+            risk_reversal_25d=largest_expiry.risk_reversal_25d,
             gex_total=largest_expiry.total_gex,
             near_term_expiry=best_sell_expiry.expiry,
             far_term_expiry=meaningful_far.expiry,
@@ -1527,7 +1588,7 @@ SCORING DETAIL:
   Near-term: {near_direction.name} | Far-term: {far_direction.name}
   Vol Regime: {vol_regime.value}
   Market Regime: {market_regime.value}
-  Effective VRP: {effective_vrp:+.1f}pts | Skew: {legacy_skew:+.1f}%
+  Effective VRP: {effective_vrp:+.1f}pts | RR25: {largest_expiry.risk_reversal_25d:+.1f}%
 """
 
         return synthesis
@@ -1598,14 +1659,14 @@ Perp Funding: {market.funding_rate:.4f}%  | 8h: {market.funding_8h:.4f}%
         top2 = sorted(expiries, key=lambda e: e.total_oi, reverse=True)[:2]
         for exp in top2:
             mp_dist = (exp.max_pain - spot) / spot * 100
-            # bugfix_spec.md Item 9: this "Skew" line predates the RR25
-            # convention and never claimed it -- negate risk_reversal_25d
-            # back to the legacy put-call sign so this text is unchanged.
-            legacy_skew = -exp.risk_reversal_25d
+            # bugfix_spec.md Item 9 fix-review (Important #6): print the
+            # correctly-signed risk_reversal_25d, relabelled "RR25" -- the
+            # legacy-signed "Skew" label here contradicted the vol-surface
+            # section's own (correct) RR25 sign for the same expiry/quantity.
             lines.append(
                 f"  {exp.expiry} ({exp.dte}d): MaxPain ${exp.max_pain:,.0f} ({mp_dist:+.1f}%) | "
                 f"P/C {exp.pc_ratio:.2f} | ATM IV {exp.atm_iv:.1f}% | "
-                f"Skew {legacy_skew:+.1f}% | Flow: {exp.flow_bias}"
+                f"RR25 {exp.risk_reversal_25d:+.1f}% | Flow: {exp.flow_bias}"
             )
 
         return "\n".join(lines)
@@ -1763,19 +1824,22 @@ class SynthesisMapper:
         pc_near_otm = (pc_moneyness.near_otm.ratio if pc_moneyness is not None else 0.0)
         pc_far_otm = (pc_moneyness.far_otm.ratio if pc_moneyness is not None else 0.0)
 
-        # bugfix_spec.md Item 8: second_order.net_vanna/net_charm renamed to
-        # vanna_exposure_holder/charm_exposure_holder (same values -- the
-        # holder-side raw sum, unsplit). ExpiryMetrics.net_vanna/net_charm
-        # (and score_vanna_charm, which consumes them) are intentionally
-        # NOT switched to the new dealer_* fields here -- the report-text
-        # sign flip (Item 8's actual defect) is scoped to the printed
-        # narrative only; this preserves score_vanna_charm's numeric
-        # behavior unchanged, matching the task brief's golden-delta scope
-        # ("sign-dependent lines... and the narrative text that describes
-        # them" -- not the scoring engine's inputs).
+        # bugfix_spec.md Item 8 fix-review (Important #3, overrules the
+        # original B2 sub-task 2 commit): F8.4 states plainly "score_*
+        # functions consume the dealer fields" -- a requirement, not a
+        # suggestion. score_vanna_charm's own docstring reasoning ("IV
+        # drop -> positive vanna = bullish") is dealer-hedging logic, so it
+        # must be fed the DEALER exposure (report text and scoring engine
+        # now agree on the same book), not the holder-side raw sum. This
+        # flips ExpiryMetrics.net_vanna/net_charm's sign relative to the
+        # prior sub-task-2 commit and is a real, intentional scoring
+        # behavior change -- score_vanna_charm's output can differ from
+        # before for the same underlying market state. Covered by
+        # test_synthesis.py::TestBuildExpiryMetrics (mapper wiring) and the
+        # golden master (re-verified, not assumed).
         second_order = vol.second_order_greeks if vol is not None else None
-        net_vanna = (second_order.vanna_exposure_holder if second_order is not None else 0.0)
-        net_charm = (second_order.charm_exposure_holder if second_order is not None else 0.0)
+        net_vanna = (second_order.dealer_vanna_exposure if second_order is not None else 0.0)
+        net_charm = (second_order.dealer_charm_exposure if second_order is not None else 0.0)
 
         # Flow. bugfix_spec.md Item 6 / F6.3.4 (carried from A4 review):
         # flow_sufficient_data propagates the data-sufficiency gate so the
