@@ -14,10 +14,24 @@
 -- also covers currency, and a composite (currency, timestamp DESC) index
 -- for the query pattern institutional_metrics_spec.md section 1's basis
 -- percentile actually uses. Both are added here under new names --
--- purely additive, no rename/drop of the pre-existing indexes (avoids the
--- CLAUDE.md/task-brief STOP condition for touching existing schema
--- objects; a second unique index on an empty table is a no-op until data
--- exists).
+-- additive, no rename/drop of the pre-existing indexes in THIS migration
+-- (avoids the CLAUDE.md/task-brief STOP condition for touching existing
+-- schema objects from this schema-only task).
+--
+-- *** WAVE E ACTION ITEM (not "decide whether to" -- do this) ***
+-- The two unique keys now coexisting are NOT independent constraints that
+-- both need to survive: (futures_instrument, timestamp) is strictly
+-- STRONGER than (timestamp, currency, futures_instrument), because
+-- futures_instrument functionally determines currency (e.g.
+-- "BTC-30SEP26" only ever maps to currency='BTC') -- so uq_futures_basis
+-- can never reject a row that unique_futures_basis would accept. That is
+-- also *why* adding uq_futures_basis alongside it was safe on this
+-- 0-row table -- not because "0 rows = no-op" (that only means CREATE
+-- didn't fail on existing duplicates; it says nothing about behavior once
+-- rows exist). When Wave E wires the daemon writer: DROP the now-
+-- redundant unique_futures_basis, and normalize currency casing at write
+-- time (the functional dependency above only holds if futures_instrument's
+-- currency prefix and the currency column are written in matching case).
 --
 -- Schema-only in this migration; population (the daemon writer for
 -- MarketWideCalculator.calculate_futures_basis, plus BUG 5's fractional-
