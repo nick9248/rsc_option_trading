@@ -124,12 +124,21 @@ def format_vol_surface_section(result: VolSurfaceResult, expiration: str) -> str
     for bucket, label in [(pc.atm, "ATM"), (pc.near_otm, "Near-OTM"), (pc.far_otm, "Far-OTM")]:
         rng = bucket.range_label
         ratio = bucket.ratio
-        bias = bucket.bias
 
+        # bugfix_spec.md Item 10 / C1 review Important #3: this per-
+        # moneyness-bucket bias still comes from the hard-coded 0.7/1.0/1.3
+        # thresholds (VolatilitySurfaceCalculator._calculate_pc_by_moneyness
+        # -- no verified per-bucket history source exists yet to reclassify
+        # it on a percentile basis, unlike the whole-expiration ratio).
+        # Printing it as the report's only remaining directional PCR label
+        # would leave the exact defect Item 10 exists to kill standing.
+        # Minimum viable fix until per-bucket history exists: raw ratio
+        # only, no directional tag. bucket.bias is still computed/stored
+        # (to_dict() unaffected) -- only this report line stops rendering it.
         if ratio == float("inf"):
             ratio_str = "N/A (No Call OI)"
         else:
-            ratio_str = f"P/C = {ratio:.2f} ({bias})"
+            ratio_str = f"P/C = {ratio:.2f}"
 
         lines.append(f"  {label} ({rng}):{'':>5}{ratio_str}")
     lines.append("")

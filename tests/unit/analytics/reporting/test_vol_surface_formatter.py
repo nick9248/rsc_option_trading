@@ -119,9 +119,17 @@ def test_iv_by_strike_filters_beyond_30_pct_of_spot():
 
 
 def test_pc_by_moneyness_buckets_and_na_ratio():
+    """
+    bugfix_spec.md Item 10 / C1 review Important #3: the per-bucket
+    directional label (bias) is no longer printed -- it still comes from
+    the discredited hard-coded 0.7/1.0/1.3 thresholds and no verified
+    per-bucket history exists to reclassify it, so the raw ratio alone is
+    shown until that data source exists.
+    """
     text = format_vol_surface_section(_make_result(), expiration="10MAR26")
     assert "ATM (±5%):" in text
-    assert "P/C = 1.50 (Slightly Bearish)" in text
+    assert "P/C = 1.50" in text
+    assert "Slightly Bearish" not in text
     assert "Near-OTM (5-15%):" in text
     assert "N/A (No Call OI)" in text  # near_otm ratio is inf
     assert "Far-OTM (15%+):" in text
