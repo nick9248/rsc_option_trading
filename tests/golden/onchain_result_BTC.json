@@ -2345,7 +2345,7 @@
         }
       },
       "put_call_ratio": {
-        "bias": "Strong Bullish",
+        "bias": "Insufficient history",
         "ratio": 0.29770179723213724,
         "total_call_oi": 1596.9,
         "total_put_oi": 475.4
@@ -3776,7 +3776,7 @@
         }
       },
       "put_call_ratio": {
-        "bias": "Strong Bullish",
+        "bias": "Insufficient history",
         "ratio": 0.5599901386539262,
         "total_call_oi": 58815.5,
         "total_put_oi": 32936.1
@@ -5007,7 +5007,7 @@
         }
       },
       "put_call_ratio": {
-        "bias": "Strong Bullish",
+        "bias": "Insufficient history",
         "ratio": 0.6037301587301588,
         "total_call_oi": 2520.0,
         "total_put_oi": 1521.4
@@ -6593,7 +6593,7 @@
         }
       },
       "put_call_ratio": {
-        "bias": "Strong Bullish",
+        "bias": "Insufficient history",
         "ratio": 0.576220170224015,
         "total_call_oi": 59768.3,
         "total_put_oi": 34439.7
@@ -7554,7 +7554,7 @@
         }
       },
       "put_call_ratio": {
-        "bias": "Bullish",
+        "bias": "Insufficient history",
         "ratio": 0.7181761050205991,
         "total_call_oi": 1432.1,
         "total_put_oi": 1028.5
@@ -8890,7 +8890,7 @@
         }
       },
       "put_call_ratio": {
-        "bias": "Strong Bullish",
+        "bias": "Insufficient history",
         "ratio": 0.5305665004182818,
         "total_call_oi": 15659.3,
         "total_put_oi": 8308.3
@@ -9786,7 +9786,7 @@
         }
       },
       "put_call_ratio": {
-        "bias": "Bearish",
+        "bias": "Insufficient history",
         "ratio": 1.0485504715333565,
         "total_call_oi": 1145.2,
         "total_put_oi": 1200.8
@@ -11077,7 +11077,7 @@
         }
       },
       "put_call_ratio": {
-        "bias": "Strong Bullish",
+        "bias": "Insufficient history",
         "ratio": 0.5244068117910967,
         "total_call_oi": 28485.899999999998,
         "total_put_oi": 14938.2
@@ -11983,7 +11983,7 @@
         }
       },
       "put_call_ratio": {
-        "bias": "Bearish",
+        "bias": "Insufficient history",
         "ratio": 1.0274005819592626,
         "total_call_oi": 412.40000000000003,
         "total_put_oi": 423.7
@@ -12719,7 +12719,7 @@
         }
       },
       "put_call_ratio": {
-        "bias": "Bullish",
+        "bias": "Insufficient history",
         "ratio": 0.9853747714808044,
         "total_call_oi": 109.39999999999999,
         "total_put_oi": 107.8
@@ -14178,7 +14178,7 @@
         }
       },
       "put_call_ratio": {
-        "bias": "Strong Bullish",
+        "bias": "Insufficient history",
         "ratio": 0.2853638149262847,
         "total_call_oi": 115925.7,
         "total_put_oi": 33081.0
@@ -15049,7 +15049,7 @@
         }
       },
       "put_call_ratio": {
-        "bias": "Strong Bullish",
+        "bias": "Insufficient history",
         "ratio": 0.13470202481501625,
         "total_call_oi": 19488.2,
         "total_put_oi": 2625.1

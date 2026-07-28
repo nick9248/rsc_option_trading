@@ -142,11 +142,29 @@ def test_max_pain_trend_absent_without_previous():
     assert "Trend (Max Pain):" not in text
 
 
-def test_put_call_ratio_rendered():
+def test_put_call_ratio_rendered_insufficient_history_by_default():
+    """
+    _make_analysis()'s default PutCallRatioResult fixture (used across most
+    of this file's tests) never sets percentile_90d, matching the field's
+    default -- bugfix_spec.md Item 10's "insufficient history" branch, not
+    the old hard-coded-threshold label.
+    """
     text = format_expiration_section(_make_analysis(), SPOT_PRICE, None)
     assert "Total Call OI: 50" in text
     assert "Total Put OI: 120" in text
-    assert "P/C Ratio: 2.40 (Strong Bearish)" in text
+    assert "P/C Ratio: 2.40 (n=0 - insufficient history for a percentile; absolute reading only)" in text
+
+
+def test_put_call_ratio_percentile_classification_rendered():
+    """bugfix_spec.md F10.3.3 report format, sufficient-history branch."""
+    analysis = _make_analysis(
+        put_call_ratio=PutCallRatioResult(
+            total_call_oi=50.0, total_put_oi=120.0, ratio=2.4, bias="Strong Bearish",
+            percentile_90d=98.3, history_n_90d=705,
+        )
+    )
+    text = format_expiration_section(analysis, SPOT_PRICE, None)
+    assert "P/C Ratio: 2.40 (98th pctile of its own 90d history, n=705) -> Strong Bearish" in text
 
 
 def test_put_call_ratio_na_when_infinite():

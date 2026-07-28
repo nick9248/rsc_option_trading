@@ -17,6 +17,16 @@ from coding.core.analytics.results.expiry_results import ExpirationAnalysisResul
 _SUB_SEPARATOR = "-" * 80
 
 
+def _ordinal(value: float) -> str:
+    """Format a percentile as an ordinal string ("98th", "61st", "22nd", "3rd")."""
+    n = round(value)
+    if 10 <= (n % 100) <= 20:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
 def format_trend_delta(current: float, previous: Optional[float], is_ratio: bool = False) -> str:
     """
     Format a trend arrow + delta against a previous value.
@@ -101,7 +111,23 @@ def format_expiration_section(
     lines.append(f"Total Call OI: {pcr.total_call_oi:,.0f}")
     lines.append(f"Total Put OI: {pcr.total_put_oi:,.0f}")
     if pcr.ratio != float("inf"):
-        lines.append(f"P/C Ratio: {pcr.ratio:.2f} ({pcr.bias})")
+        # bugfix_spec.md Item 10: percentile-vs-own-90d-history
+        # classification replaces the hard-coded 0.7/1.0/1.3-threshold
+        # label. When history is too short (< HistoricalNormalizer.
+        # MIN_OBS), no directional label is printed -- the absolute
+        # reading alone, per F10.3.3's edge case.
+        if pcr.percentile_90d is not None:
+            lines.append(
+                f"P/C Ratio: {pcr.ratio:.2f} "
+                f"({_ordinal(pcr.percentile_90d)} pctile of its own 90d history, "
+                f"n={pcr.history_n_90d}) -> {pcr.bias}"
+            )
+        else:
+            lines.append(
+                f"P/C Ratio: {pcr.ratio:.2f} "
+                f"(n={pcr.history_n_90d} - insufficient history for a percentile; "
+                f"absolute reading only)"
+            )
     else:
         lines.append(f"P/C Ratio: N/A (No Call OI)")
 

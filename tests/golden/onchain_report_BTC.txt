@@ -34,7 +34,7 @@ PUT/CALL RATIO (Open Interest)
 --------------------------------------------------------------------------------
 Total Call OI: 1,597
 Total Put OI: 475
-P/C Ratio: 0.30 (Strong Bullish)
+P/C Ratio: 0.30 (n=0 - insufficient history for a percentile; absolute reading only)
 Trend (Call OI):  [↑ from 1,464, +133]
 Trend (Put OI):   [↑ from 302, +173]
 Trend (P/C):      [↑ from 0.21, +0.09]
@@ -225,7 +225,7 @@ PUT/CALL RATIO (Open Interest)
 --------------------------------------------------------------------------------
 Total Call OI: 58,816
 Total Put OI: 32,936
-P/C Ratio: 0.56 (Strong Bullish)
+P/C Ratio: 0.56 (n=0 - insufficient history for a percentile; absolute reading only)
 Trend (Call OI):  [↑ from 58,804, +12]
 Trend (Put OI):   [↑ from 32,935, +1]
 Trend (P/C):      [↓ from 0.56, -0.00]
@@ -510,7 +510,7 @@ PUT/CALL RATIO (Open Interest)
 --------------------------------------------------------------------------------
 Total Call OI: 2,520
 Total Put OI: 1,521
-P/C Ratio: 0.60 (Strong Bullish)
+P/C Ratio: 0.60 (n=0 - insufficient history for a percentile; absolute reading only)
 Trend (Call OI):  [↑ from 2,517, +3]
 Trend (Put OI):   [↑ from 1,509, +12]
 Trend (P/C):      [↑ from 0.60, +0.00]
@@ -752,7 +752,7 @@ PUT/CALL RATIO (Open Interest)
 --------------------------------------------------------------------------------
 Total Call OI: 59,768
 Total Put OI: 34,440
-P/C Ratio: 0.58 (Strong Bullish)
+P/C Ratio: 0.58 (n=0 - insufficient history for a percentile; absolute reading only)
 Trend (Call OI):  [↑ from 59,456, +313]
 Trend (Put OI):   [↑ from 34,421, +19]
 Trend (P/C):      [↓ from 0.58, -0.00]
@@ -1040,7 +1040,7 @@ PUT/CALL RATIO (Open Interest)
 --------------------------------------------------------------------------------
 Total Call OI: 1,432
 Total Put OI: 1,028
-P/C Ratio: 0.72 (Bullish)
+P/C Ratio: 0.72 (n=0 - insufficient history for a percentile; absolute reading only)
 Trend (Call OI):  [↑ from 1,038, +394]
 Trend (Put OI):   [↑ from 639, +390]
 Trend (P/C):      [↑ from 0.62, +0.10]
@@ -1266,7 +1266,7 @@ PUT/CALL RATIO (Open Interest)
 --------------------------------------------------------------------------------
 Total Call OI: 15,659
 Total Put OI: 8,308
-P/C Ratio: 0.53 (Strong Bullish)
+P/C Ratio: 0.53 (n=0 - insufficient history for a percentile; absolute reading only)
 Trend (Call OI):  [↑ from 15,640, +19]
 Trend (Put OI):   [↑ from 8,305, +3]
 Trend (P/C):      [↓ from 0.53, -0.00]
@@ -1536,7 +1536,7 @@ PUT/CALL RATIO (Open Interest)
 --------------------------------------------------------------------------------
 Total Call OI: 1,145
 Total Put OI: 1,201
-P/C Ratio: 1.05 (Bearish)
+P/C Ratio: 1.05 (n=0 - insufficient history for a percentile; absolute reading only)
 Trend (Call OI):  [↑ from 891, +254]
 Trend (Put OI):   [↑ from 1,101, +100]
 Trend (P/C):      [↓ from 1.24, -0.19]
@@ -1755,7 +1755,7 @@ PUT/CALL RATIO (Open Interest)
 --------------------------------------------------------------------------------
 Total Call OI: 28,486
 Total Put OI: 14,938
-P/C Ratio: 0.52 (Strong Bullish)
+P/C Ratio: 0.52 (n=0 - insufficient history for a percentile; absolute reading only)
 Trend (Call OI):  [↑ from 28,432, +54]
 Trend (Put OI):   [↑ from 14,836, +102]
 Trend (P/C):      [↑ from 0.52, +0.00]
@@ -2037,7 +2037,7 @@ PUT/CALL RATIO (Open Interest)
 --------------------------------------------------------------------------------
 Total Call OI: 412
 Total Put OI: 424
-P/C Ratio: 1.03 (Bearish)
+P/C Ratio: 1.03 (n=0 - insufficient history for a percentile; absolute reading only)
 Trend (Call OI):  [↑ from 331, +81]
 Trend (Put OI):   [↑ from 227, +197]
 Trend (P/C):      [↑ from 0.68, +0.34]
@@ -2259,7 +2259,7 @@ PUT/CALL RATIO (Open Interest)
 --------------------------------------------------------------------------------
 Total Call OI: 109
 Total Put OI: 108
-P/C Ratio: 0.99 (Bullish)
+P/C Ratio: 0.99 (n=0 - insufficient history for a percentile; absolute reading only)
 
 VOLUME STATISTICS
 --------------------------------------------------------------------------------
@@ -2460,7 +2460,7 @@ PUT/CALL RATIO (Open Interest)
 --------------------------------------------------------------------------------
 Total Call OI: 115,926
 Total Put OI: 33,081
-P/C Ratio: 0.29 (Strong Bullish)
+P/C Ratio: 0.29 (n=0 - insufficient history for a percentile; absolute reading only)
 Trend (Call OI):  [↑ from 115,784, +142]
 Trend (Put OI):   [↑ from 32,993, +88]
 Trend (P/C):      [↑ from 0.28, +0.00]
@@ -2762,7 +2762,7 @@ PUT/CALL RATIO (Open Interest)
 --------------------------------------------------------------------------------
 Total Call OI: 19,488
 Total Put OI: 2,625
-P/C Ratio: 0.13 (Strong Bullish)
+P/C Ratio: 0.13 (n=0 - insufficient history for a percentile; absolute reading only)
 Trend (Call OI):  [↑ from 19,377, +111]
 Trend (Put OI):   [↑ from 2,476, +149]
 Trend (P/C):      [↑ from 0.13, +0.01]

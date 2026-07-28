@@ -11,7 +11,7 @@ contents are only immutable at the container level; callers must treat their
 contents as read-only by convention.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Tuple
 
 
@@ -37,12 +37,30 @@ class MaxPainResult:
 
 @dataclass(frozen=True)
 class PutCallRatioResult:
-    """Put/call ratio computed from open interest."""
+    """Put/call ratio computed from open interest.
+
+    ``bias`` is set at construction time by
+    ``OnChainMetricsCalculator.calculate_put_call_ratio`` (the old hard-
+    coded 0.7/1.0/1.3 thresholds -- ``thresholds.interpret_put_call_ratio``)
+    and then OVERWRITTEN by
+    ``OnChainAnalysisService._apply_pcr_percentile_classification``
+    (bugfix_spec.md Item 10) with the percentile-based label once that
+    expiration's own 90d history has been fetched -- core (this class'
+    producer) must not query the DB, so the percentile-aware label can
+    only be attached at the service layer, after the fact, via
+    ``dataclasses.replace``.
+
+    ``percentile_90d``/``history_n_90d`` default to None/0 so every
+    pre-existing direct constructor (tests, the legacy dict-to-dataclass
+    adapter) keeps working unchanged until the service overwrites them.
+    """
 
     total_call_oi: float
     total_put_oi: float
     ratio: float  # float("inf") when call OI == 0 (unchanged legacy semantics)
     bias: str
+    percentile_90d: Optional[float] = None
+    history_n_90d: int = 0
 
 
 @dataclass(frozen=True)

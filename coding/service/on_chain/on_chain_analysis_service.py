@@ -31,6 +31,9 @@ from coding.core.analytics.on_chain_analyzer import (
     _to_market_metrics,
     _to_trend_snapshot,
 )
+from coding.core.analytics.put_call_ratio_interpreter import (
+    interpret_put_call_ratio_percentile,
+)
 from coding.core.analytics.reporting.report_formatter import OnChainReportFormatter
 from coding.core.analytics.results.analysis_result import (
     IvPercentileResult,
@@ -202,6 +205,14 @@ class OnChainAnalysisService:
 
         result = builder.build()
 
+        # bugfix_spec.md Item 10: replace each expiration's hard-coded
+        # 0.7/1.0/1.3-threshold P/C ratio bias with a percentile-vs-own-
+        # 90d-history classification. Runs after build() (needs the typed
+        # per-expiration bundles) and reconstructs the affected bundles via
+        # dataclasses.replace since the result and its bundles are frozen.
+        progress("Reclassifying put/call ratio vs own history...")
+        result = self._apply_pcr_percentile_classification(analyzer, result)
+
         # institutional_metrics_spec.md section 1: percentile/z-score context
         # for the front-month AVAILABLE metrics. Runs after build() (needs
         # the typed result to read the front-month bundle) and attaches via
@@ -232,6 +243,96 @@ class OnChainAnalysisService:
         if return_result:
             return report, result
         return report
+
+    # bugfix_spec.md Item 10: 90-day lookback window (F10.3.1's
+    # PERCENTILE_WINDOW_DAYS), independent of section 1's dual 30d/90d
+    # windows used for the header's HISTORICAL CONTEXT block.
+    _PCR_CLASSIFICATION_LOOKBACK_HOURS = 2160
+
+    def _apply_pcr_percentile_classification(
+        self,
+        analyzer: OnChainMetricsCalculator,
+        result: OnChainAnalysisResult,
+    ) -> OnChainAnalysisResult:
+        """
+        Replace each expiration's hard-coded-threshold P/C ratio bias with
+        a percentile-vs-own-90d-history classification (bugfix_spec.md
+        Item 10).
+
+        ``OnChainMetricsCalculator.calculate_put_call_ratio`` (core, no DB
+        access) already set ``bias`` via the old
+        ``thresholds.interpret_put_call_ratio`` 0.7/1.0/1.3 thresholds --
+        this method fetches this expiration's own trailing history (the
+        one thing core is not allowed to do) and overwrites ``bias`` with
+        the percentile-based label, via ``dataclasses.replace`` since
+        ``PutCallRatioResult``/``ExpirationAnalysisResult``/
+        ``ExpirationBundle``/``OnChainAnalysisResult`` are all frozen.
+
+        Edge cases (bugfix_spec.md section 10.4):
+        - ``ratio`` non-finite (call OI == 0): bias="N/A", no percentile
+          computed (skips both the current reading and history -- N/A is
+          a data-insufficiency case, not a directional claim).
+        - History shorter than ``HistoricalNormalizer.MIN_OBS``:
+          percentile=None, bias="Insufficient history".
+        - A failed history fetch for one expiration is logged and that
+          expiration falls back to "Insufficient history" (never left at
+          the stale hard-coded label -- that would silently reintroduce
+          the exact bug this task replaces via the error path) while every
+          other expiration is still reclassified normally.
+
+        Returns:
+            ``result`` unchanged if there is no repository (matches the
+            codebase's existing "no repository -> skip DB-dependent work"
+            convention). Otherwise a new ``OnChainAnalysisResult`` with
+            every expiration's ``put_call_ratio`` reclassified.
+        """
+        if self.repository is None:
+            return result
+
+        currency = analyzer.currency
+        new_bundles = []
+        for bundle in result.expirations:
+            if bundle.analysis is None:
+                new_bundles.append(bundle)
+                continue
+
+            pcr = bundle.analysis.put_call_ratio
+            ratio = pcr.ratio
+
+            if ratio is None or ratio == float("inf"):
+                new_pcr = dataclasses.replace(
+                    pcr, bias="N/A", percentile_90d=None, history_n_90d=0,
+                )
+            else:
+                try:
+                    history_90d = self.repository.get_metric_history(
+                        table="onchain_analysis_snapshots", column="put_call_ratio_oi",
+                        currency=currency,
+                        lookback_hours=self._PCR_CLASSIFICATION_LOOKBACK_HOURS,
+                        expiration=bundle.expiration,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "PCR percentile classification failed for %s %s: %s",
+                        currency, bundle.expiration, exc,
+                    )
+                    history_90d = []
+
+                if len(history_90d) >= HistoricalNormalizer.MIN_OBS:
+                    percentile = HistoricalNormalizer.percentile(ratio, history_90d)
+                else:
+                    percentile = None
+
+                bias = interpret_put_call_ratio_percentile(percentile)
+                new_pcr = dataclasses.replace(
+                    pcr, bias=bias, percentile_90d=percentile,
+                    history_n_90d=len(history_90d),
+                )
+
+            new_analysis = dataclasses.replace(bundle.analysis, put_call_ratio=new_pcr)
+            new_bundles.append(dataclasses.replace(bundle, analysis=new_analysis))
+
+        return dataclasses.replace(result, expirations=tuple(new_bundles))
 
     # institutional_metrics_spec.md section 1: 30d/90d lookback windows.
     # Hourly sampling -> n ~= 720 (30d) and n ~= 2,160 (90d), matching the

@@ -20,6 +20,7 @@ doubling bug and the VolSurface zero-spot KeyError are already fixed, so this
 is the correct baseline, not the pre-fix one.
 """
 
+import dataclasses
 import json
 from pathlib import Path
 from typing import Any, Dict
@@ -420,7 +421,29 @@ def test_builder_result_matches_analyzer_dicts(pipeline_result):
         # deterministically from parsed_data, so calling it again here
         # reproduces the exact values the builder captured at the top of
         # fetch_and_analyze.
-        assert bundle.analysis == analyzer.analyze_expiration(expiration)
+        #
+        # bugfix_spec.md Item 10 (task C1): put_call_ratio.bias/
+        # percentile_90d/history_n_90d are the one deliberate exception.
+        # OnChainAnalysisService._apply_pcr_percentile_classification
+        # overwrites them AFTER the builder step (analyze_expiration is
+        # core -- no DB access -- so calling it fresh here always
+        # reproduces the OLD hard-coded-threshold bias, never the
+        # percentile-based one). The ratio/OI values it was computed from
+        # must still match exactly.
+        fresh_analysis = analyzer.analyze_expiration(expiration)
+        assert bundle.analysis.put_call_ratio.ratio == fresh_analysis.put_call_ratio.ratio
+        assert (
+            bundle.analysis.put_call_ratio.total_call_oi
+            == fresh_analysis.put_call_ratio.total_call_oi
+        )
+        assert (
+            bundle.analysis.put_call_ratio.total_put_oi
+            == fresh_analysis.put_call_ratio.total_put_oi
+        )
+        reconciled = dataclasses.replace(
+            bundle.analysis, put_call_ratio=fresh_analysis.put_call_ratio,
+        )
+        assert reconciled == fresh_analysis
 
     assert checked_expirations > 0, "No expirations found — fixture may be empty"
     assert result.expiration_names() == tuple(sorted(analyzer.get_expirations())), (
