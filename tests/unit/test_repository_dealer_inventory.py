@@ -90,13 +90,32 @@ class TestGetSignedTakerFlowByStrike:
 
 class TestGetTradeHourCoverage:
     def test_query_params_passed_through(self):
+        """Fix round (Important #2): table-wide (currency-wide), no
+        expiration parameter/filter at all -- (currency, since_ts) only."""
         repo = _make_repo()
         cursor = FakeCursor(fetchone_result=(10,))
 
         with _patched_cursor(repo, cursor):
-            repo.get_trade_hour_coverage(currency="ETH", expiration="27JUN26", since_ts=111)
+            repo.get_trade_hour_coverage(currency="ETH", since_ts=111)
 
-        assert cursor.captured_params[0] == ("ETH", "27JUN26", 111)
+        assert cursor.captured_params[0] == ("ETH", 111)
+
+    def test_query_excludes_null_direction_and_null_strike(self):
+        """Fix round (Minor #1): mirrors get_signed_taker_flow_by_strike's
+        own filters -- without them coverage could count an hour as
+        'present' from a row the flow query would exclude, overstating
+        reliability in exactly the direction the gate exists to guard
+        against."""
+        repo = _make_repo()
+        cursor = FakeCursor(fetchone_result=(10,))
+
+        with _patched_cursor(repo, cursor):
+            repo.get_trade_hour_coverage(currency="BTC", since_ts=0)
+
+        query = cursor.captured_queries[0]
+        assert "direction IS NOT NULL" in query
+        assert "strike IS NOT NULL" in query
+        assert "expiration" not in query  # table-wide, no per-expiry filter
 
     def test_present_hours_from_query_and_expected_hours_from_wall_clock(self):
         import time as time_module
@@ -109,7 +128,7 @@ class TestGetTradeHourCoverage:
 
         with _patched_cursor(repo, cursor):
             present_hours, expected_hours = repo.get_trade_hour_coverage(
-                currency="BTC", expiration="27MAR26", since_ts=since_ts
+                currency="BTC", since_ts=since_ts
             )
 
         assert present_hours == 5
@@ -121,7 +140,7 @@ class TestGetTradeHourCoverage:
 
         with _patched_cursor(repo, cursor):
             present_hours, _expected_hours = repo.get_trade_hour_coverage(
-                currency="BTC", expiration="27MAR26", since_ts=0
+                currency="BTC", since_ts=0
             )
 
         assert present_hours == 0
@@ -135,7 +154,7 @@ class TestGetTradeHourCoverage:
 
         with _patched_cursor(repo, cursor):
             _present, expected_hours = repo.get_trade_hour_coverage(
-                currency="BTC", expiration="27MAR26", since_ts=now_ms
+                currency="BTC", since_ts=now_ms
             )
 
         assert expected_hours == 0

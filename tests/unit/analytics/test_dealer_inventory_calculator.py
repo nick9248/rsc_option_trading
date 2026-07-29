@@ -171,6 +171,42 @@ class TestEdgeCases:
         assert coverage["n_strikes"] == 0
         assert coverage["n_violations"] == 0
         assert coverage["violation_rate"] == 0.0
+        assert coverage["legs_excluded_no_oi"] == 0
+
+    def test_coverage_report_excludes_legs_with_no_oi_reference(self):
+        """
+        Fix round (Important #3): a leg with flow but NO entry in
+        oi_by_instrument (e.g. its get_ticker() call failed transiently
+        upstream and it was dropped from instruments_with_greeks) must be
+        excluded from n_strikes/violation_rate entirely -- not defaulted to
+        a 0 OI reference, which would make ANY nonzero flow on it look like
+        a violation purely from missing data.
+        """
+        flow_rows = [
+            _flow_row(70000, "C", taker_net=50),          # has an OI reference, no violation
+            _flow_row(99999, "P", taker_net=1),           # NO OI reference at all -- must be excluded
+        ]
+        oi_by_instrument = {(70000, "C"): 100}  # 99999/P deliberately absent
+        greeks = {(70000, "C"): {"gamma": 0.00001, "delta": 0.1}}
+        calc = DealerInventoryCalculator(flow_rows, greeks, spot_price=64000, currency="BTC")
+
+        coverage = calc.coverage_report(oi_by_instrument)
+        assert coverage["n_strikes"] == 1  # only the referenced leg counted
+        assert coverage["n_violations"] == 0
+        assert coverage["violation_rate"] == pytest.approx(0.0)
+        assert coverage["legs_excluded_no_oi"] == 1
+
+    def test_coverage_report_all_legs_missing_oi_reference_gives_zero_rate_not_crash(self):
+        """Every leg lacks an OI reference -> n_strikes = 0, violation_rate =
+        0.0 (not a ZeroDivisionError, and NOT 100% violated)."""
+        flow_rows = [_flow_row(99999, "P", taker_net=500)]
+        calc = DealerInventoryCalculator(flow_rows, {}, spot_price=64000, currency="BTC")
+
+        coverage = calc.coverage_report({})
+        assert coverage["n_strikes"] == 0
+        assert coverage["n_violations"] == 0
+        assert coverage["violation_rate"] == 0.0
+        assert coverage["legs_excluded_no_oi"] == 1
 
     def test_coverage_report_worst_strikes_sorted_by_excess(self):
         flow_rows = [
@@ -189,9 +225,21 @@ class TestEdgeCases:
         assert worst[1]["strike"] == 70000
 
     def test_call_resistance_and_put_support_recomputed_on_inferred_sign(self):
+        """
+        Fix round (Minor #3): the original fixture used the SAME taker_net
+        magnitude (500) on both legs, which is a genuine tie in
+        inferred_gex (409,600.0 == 409,600.0) -- the old assertion
+        (`cr["strike"] in (70000, 60000)`) was silently accepting either
+        answer because it never noticed the fixture didn't actually
+        distinguish a winner. Rebuilt with different magnitudes (500 vs
+        200) so there is one unambiguous larger inferred_gex, and the
+        expected value is asserted exactly:
+        inferred_gex(70000) = 500 * 0.00002 * 64000^2 * 0.01 = 409,600.0
+        inferred_gex(60000) = 200 * 0.00002 * 64000^2 * 0.01 = 163,840.0
+        """
         flow_rows = [
-            _flow_row(70000, "C", taker_net=-500),  # dealer_net_c = +500 -> big positive GEX
-            _flow_row(60000, "P", taker_net=-500),  # dealer_net_p = +500 -> also positive (adds)
+            _flow_row(70000, "C", taker_net=-500),  # dealer_net_c = +500
+            _flow_row(60000, "P", taker_net=-200),  # dealer_net_p = +200
         ]
         greeks = {
             (70000, "C"): {"gamma": 0.00002, "delta": 0.5},
@@ -200,9 +248,13 @@ class TestEdgeCases:
         calc = DealerInventoryCalculator(flow_rows, greeks, spot_price=64000, currency="BTC")
         result = calc.calculate()
 
+        assert result["strike_data"][70000]["inferred_gex"] == pytest.approx(409600.0)
+        assert result["strike_data"][60000]["inferred_gex"] == pytest.approx(163840.0)
+
         cr = result["key_levels"]["call_resistance"]
         assert cr is not None
-        assert cr["strike"] in (70000, 60000)  # whichever has larger positive inferred_gex
+        assert cr["strike"] == 70000
+        assert cr["inferred_gex"] == pytest.approx(409600.0)
 
     def test_dex_uses_dealer_net_times_delta_not_oi_weighted(self):
         flow_rows = [_flow_row(70000, "C", taker_net=-40)]  # dealer_net_c = +40

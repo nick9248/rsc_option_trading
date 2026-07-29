@@ -67,8 +67,9 @@ class DealerInventoryCoverageReport:
     """
 
     n_strikes: int
-    """Number of (strike, option_type) legs considered -- i.e. len(flow_rows)
-    with a non-trivial OI reference, matching spec T2.2's per-leg count."""
+    """Number of (strike, option_type) legs considered -- flow rows WITH an
+    OI reference only (see ``legs_excluded_no_oi``), matching spec T2.2's
+    per-leg count."""
 
     n_violations: int
     violation_rate: float
@@ -80,6 +81,18 @@ class DealerInventoryCoverageReport:
     """Up to 5 worst violations, each
     {"strike", "option_type", "taker_net", "open_interest", "excess"},
     sorted by excess (|taker_net| - open_interest) descending."""
+
+    legs_excluded_no_oi: int = 0
+    """Fix round (Important #3): legs with trade flow but NO entry in
+    ``oi_by_instrument`` (as opposed to a real 0 OI) -- e.g. an instrument
+    whose ticker fetch failed transiently and was dropped from
+    ``instruments_with_greeks`` upstream. Excluded from ``n_strikes``/
+    ``violation_rate`` entirely (bugfix_spec.md section 2(c): stale/unpriced
+    legs are dropped from the calculation and counted separately, never
+    folded into the violation numerator/denominator) rather than defaulting
+    to a 0 OI reference, which would make any nonzero flow on that leg look
+    like a violation purely from missing data, not a real data-quality
+    problem."""
 
 
 @dataclass(frozen=True)

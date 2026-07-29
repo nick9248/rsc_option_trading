@@ -143,24 +143,47 @@ class DealerInventoryCalculator:
         Args:
             oi_by_instrument: Dict keyed ``(strike, option_type)`` -> open
                 interest for that leg (the current chain's OI, reused from
-                the same enriched-instruments list -- no second query).
+                the same enriched-instruments list -- no second query). A
+                leg with NO key in this dict (as opposed to a key present
+                with an explicit ``0`` OI) means "we have no OI reference for
+                this leg", not "OI is zero" -- see the exclusion below.
 
         Returns:
-            Dict with ``n_strikes`` (legs considered -- every flow row,
-            matching spec T2.2's per-leg count), ``n_violations``,
-            ``violation_rate`` (0.0 if ``n_strikes == 0``), ``worst_strikes``
-            (up to 5, sorted by excess descending).
+            Dict with ``n_strikes`` (legs actually considered -- flow rows
+            WITH an OI reference only, matching spec T2.2's per-leg count),
+            ``n_violations``, ``violation_rate`` (0.0 if ``n_strikes == 0``),
+            ``worst_strikes`` (up to 5, sorted by excess descending), and
+            ``legs_excluded_no_oi`` (fix round, Important #3 -- see below).
         """
-        n_strikes = len(self.flow_rows)
-        if n_strikes == 0:
-            return {"n_strikes": 0, "n_violations": 0, "violation_rate": 0.0, "worst_strikes": ()}
-
+        # Fix round (Important #3, bugfix_spec.md section 2(c)): a leg with
+        # NO entry in oi_by_instrument (as opposed to a real 0 OI) has no OI
+        # reference to check against at all -- `oi_by_instrument.get(key) or
+        # 0.0` used to silently default it to 0.0, which makes ANY nonzero
+        # flow on that leg look like a violation (you cannot have flow
+        # exceeding zero OI without it appearing to violate the OI bound).
+        # This is not hypothetical: OnChainAnalysisService drops an
+        # instrument from instruments_with_greeks (and therefore from
+        # oi_by_instrument) whenever its get_ticker() call raises -- an
+        # ordinary, transient API failure -- which used to be able to flip
+        # the binding D9 gate purely from network flakiness, never from a
+        # real data-quality problem. The spec's own §2(c) edge cases say
+        # stale/unpriced legs should be dropped from the calculation and
+        # counted separately in a diagnostic, not folded into the violation
+        # numerator/denominator -- exactly what this does now.
         violations = []
+        legs_excluded_no_oi = 0
+        n_strikes = 0
         for row in self.flow_rows:
             strike = row["strike"]
             option_type = (row.get("option_type") or "").upper()
+            key = (strike, option_type)
+            if key not in oi_by_instrument:
+                legs_excluded_no_oi += 1
+                continue
+
+            n_strikes += 1
             taker_net = row.get("taker_net") or 0.0
-            oi = oi_by_instrument.get((strike, option_type)) or 0.0
+            oi = oi_by_instrument.get(key) or 0.0
             excess = abs(taker_net) - oi
             if excess > 0:
                 violations.append({
@@ -176,8 +199,9 @@ class DealerInventoryCalculator:
         return {
             "n_strikes": n_strikes,
             "n_violations": len(violations),
-            "violation_rate": len(violations) / n_strikes,
+            "violation_rate": (len(violations) / n_strikes) if n_strikes else 0.0,
             "worst_strikes": tuple(violations[:_MAX_WORST_STRIKES]),
+            "legs_excluded_no_oi": legs_excluded_no_oi,
         }
 
     def _index_flow_rows(self) -> Tuple[Dict[Tuple[float, str], Dict[str, Any]], List[Dict[str, Any]]]:

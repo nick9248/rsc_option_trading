@@ -96,9 +96,9 @@ class TestD9GatePass:
         assert result.unavailable_reason is None
         assert result.total_inferred_gex != 0.0
 
-    def test_gate_passes_at_exact_boundary(self):
-        """Coverage exactly 0.95 and violation_rate exactly 0.05 -- both
-        inclusive per spec's literal `>= 0.95 AND <= 0.05`."""
+    def test_gate_passes_at_coverage_boundary(self):
+        """Coverage exactly 0.95, violation_rate 0.0 -- coverage's own
+        boundary-inclusive check per spec's literal `>= 0.95`."""
         flow_rows = [
             {"strike": 70000.0, "option_type": "C", "taker_net": -100.0, "gross_volume": 100.0, "trade_count": 10},
         ]
@@ -110,6 +110,36 @@ class TestD9GatePass:
         result = service._calculate_inferred_dealer_positioning("BTC", "31JUL26", _instruments(), 70000.0)
 
         assert result.coverage == pytest.approx(0.95)
+        assert result.render_inferred is True
+
+    def test_gate_passes_at_violation_rate_boundary(self):
+        """
+        Fix round (Minor #2): the original version of this test claimed to
+        test the `violation_rate <= 0.05` boundary but its fixture actually
+        had violation_rate = 0.0 (a single leg, no violation) -- it never
+        exercised that boundary at all. Rebuilt with 20 legs, exactly 1
+        violating (1/20 = 0.05 exactly), coverage = 1.0, so the ONLY thing
+        sitting at its boundary is violation_rate itself.
+        """
+        strikes = [70000.0 + i * 1000.0 for i in range(20)]
+        instruments = [
+            {"strike": s, "option_type": "C", "gamma": 0.00001, "delta": 0.1, "open_interest": 100.0}
+            for s in strikes
+        ]
+        flow_rows = [
+            {"strike": s, "option_type": "C", "taker_net": -50.0, "gross_volume": 50.0, "trade_count": 1}
+            for s in strikes[:19]
+        ]
+        # The 20th leg violates: |taker_net| 150 > OI 100.
+        flow_rows.append(
+            {"strike": strikes[19], "option_type": "C", "taker_net": -150.0, "gross_volume": 150.0, "trade_count": 1}
+        )
+        repo = _make_repo(first_trade_ts=_COVERAGE_STABLE_MS, flow_rows=flow_rows, coverage=(100, 100))
+        service = _make_service(repo)
+
+        result = service._calculate_inferred_dealer_positioning("BTC", "31JUL26", instruments, 70000.0)
+
+        assert result.violation_rate == pytest.approx(0.05)
         assert result.render_inferred is True
 
 
@@ -180,6 +210,27 @@ class TestGuardNeverCrashesPipeline:
 
         assert result is None
         assert any("dealer" in record.message.lower() for record in caplog.records)
+
+    def test_no_repository_configured_returns_none_without_error_log(self, caplog):
+        """
+        Fix round (Minor #4): matches the established "no repository ->
+        skip DB-dependent work" convention already used elsewhere in this
+        module (e.g. _apply_pcr_percentile_classification). Before this
+        fix, running without a repository hit the broad except-Exception
+        guard on every call (AttributeError from `None.get_first_trade_
+        timestamp(...)`), logging a full ERROR traceback for an expected,
+        gracefully-handled condition rather than an unexpected failure.
+        """
+        service = _make_service(repository=None)
+
+        import logging
+        with caplog.at_level(logging.ERROR):
+            result = service._calculate_inferred_dealer_positioning(
+                "BTC", "31JUL26", _instruments(), 70000.0
+            )
+
+        assert result is None
+        assert not any(record.levelno >= logging.ERROR for record in caplog.records)
 
 
 class TestServiceWiring:

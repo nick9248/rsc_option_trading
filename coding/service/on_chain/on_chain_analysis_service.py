@@ -883,6 +883,16 @@ class OnChainAnalysisService:
             guard) and must never abort the GEX/DEX pipeline it runs
             alongside.
         """
+        # Fix round (Minor #4): matches the established "no repository ->
+        # skip DB-dependent work" convention already used throughout this
+        # module (e.g. _apply_pcr_percentile_classification, line ~315).
+        # Without this, running without a repository configured hit the
+        # broad except-Exception guard below on every call, logging a full
+        # ERROR traceback for what is an expected, gracefully-handled
+        # condition, not an unexpected failure.
+        if self.repository is None:
+            return None
+
         try:
             coverage_stable_ms = int(
                 _DEALER_INVENTORY_COVERAGE_STABLE_DATE.timestamp() * 1000
@@ -899,9 +909,17 @@ class OnChainAnalysisService:
             )
 
             flow_rows = self.repository.get_signed_taker_flow_by_strike(currency, expiration, t0_ms)
-            present_hours, expected_hours = self.repository.get_trade_hour_coverage(
-                currency, expiration, t0_ms
-            )
+            # Fix round (Important #2, orchestrator ruling): table-wide
+            # (currency-wide) collection completeness, NOT filtered by this
+            # expiration -- matches how bugfix_spec.md section 2(a)'s own
+            # empirical validation measured coverage (across ALL trades for
+            # the currency, not one contract's own trading activity). The
+            # original per-expiry version measured contract LIQUIDITY, which
+            # inverted which expiries the spec validated as trustworthy
+            # (favored high-volume contracts, penalized the short-dated,
+            # fully-covered expiries the spec's own violation-rate study
+            # found had 0% violations).
+            present_hours, expected_hours = self.repository.get_trade_hour_coverage(currency, t0_ms)
             # expected_hours == 0 (t0 == now, or a clock skew edge case) ->
             # coverage 0.0 by convention: there is no window to have had
             # coverage over, so the honest answer is "no data", which

@@ -492,37 +492,60 @@ class DatabaseRepository:
     def get_trade_hour_coverage(
         self,
         currency: str,
-        expiration: str,
         since_ts: int,
     ) -> Tuple[int, int]:
         """
-        Trade-history hour coverage since ``since_ts`` (institutional_metrics_
-        spec.md section 2 / task C3 -- the trade-history half of decision
-        D9's gate; the other half is ``DealerInventoryCalculator.
-        coverage_report``'s violation rate).
+        Table-wide (currency-wide) trade-history hour coverage since
+        ``since_ts`` (institutional_metrics_spec.md section 2 / task C3 --
+        the trade-history half of decision D9's gate; the other half is
+        ``DealerInventoryCalculator.coverage_report``'s violation rate).
+
+        Deliberately NOT filtered by expiration (fix round, Important #2,
+        orchestrator ruling -- a deviation from the spec's own listed
+        3-argument signature, `get_trade_hour_coverage(currency, expiration,
+        since_ts)`, which this task's first pass implemented literally and
+        which turned out to measure the wrong thing). Section 2(a)'s own
+        empirical validation measured collector-wide completeness ("Trailing
+        90 days: 2,138 hours in range, 2,137 present") across ALL trades for
+        a currency, not one contract's own trading activity. Filtering by
+        expiration here measures that specific strike/expiry's LIQUIDITY (did
+        anyone trade THIS contract every hour) rather than whether the
+        collector was capturing trades AT ALL during that hour -- those are
+        different questions, and D9's gate needs the second one. The
+        per-expiry version inverted which expiries the spec's own violation-
+        rate study validated as trustworthy: short-dated, fully-covered
+        expiries (0% violations in that study) scored low on per-contract
+        hour presence and got permanently gated out, while only thin-volume,
+        high-open-interest long-dated contracts could ever pass.
+
+        ``AND direction IS NOT NULL AND strike IS NOT NULL`` mirrors
+        ``get_signed_taker_flow_by_strike``'s own filters (fix round, Minor
+        #1) -- without them this method could count an hour as "present"
+        from a row the flow query would exclude, overstating coverage in
+        exactly the direction the gate exists to guard against.
 
         Args:
             currency: Currency symbol (BTC or ETH).
-            expiration: Expiration date string.
             since_ts: Window start (T0), epoch milliseconds.
 
         Returns:
             (present_hours, expected_hours) -- present_hours is the count of
-            distinct UTC hour buckets with at least one trade since
-            since_ts; expected_hours is the wall-clock hours between
-            since_ts and now (0 if since_ts is in the future / equal to
-            now, never negative).
+            distinct UTC hour buckets with at least one trade (for this
+            currency, any expiration) since since_ts; expected_hours is the
+            wall-clock hours between since_ts and now (0 if since_ts is in
+            the future / equal to now, never negative).
         """
         query = """
             SELECT COUNT(DISTINCT DATE_TRUNC('hour', TO_TIMESTAMP(trade_timestamp / 1000)))
             FROM historical_trades
             WHERE currency = %s
-                AND expiration = %s
                 AND trade_timestamp >= %s
+                AND direction IS NOT NULL
+                AND strike IS NOT NULL
         """
 
         with self._db_cursor() as cursor:
-            cursor.execute(query, (currency, expiration, since_ts))
+            cursor.execute(query, (currency, since_ts))
             row = cursor.fetchone()
             present_hours = int(row[0]) if row and row[0] is not None else 0
 

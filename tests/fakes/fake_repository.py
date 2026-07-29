@@ -144,9 +144,12 @@ class FakeDatabaseRepository:
         return []
 
     def get_trade_hour_coverage(
-        self, currency: str, expiration: str, since_ts: int
+        self, currency: str, since_ts: int
     ) -> Tuple[int, int]:
         """
+        Fix round (Important #2): signature dropped ``expiration`` --
+        real coverage is table-wide (currency-wide) now, not per-expiry.
+
         No recorded ``historical_trades`` fixture -- honestly returns
         ``(0, 0)`` (zero present hours; zero expected hours too, since this
         fake does not reproduce the real repository's wall-clock
