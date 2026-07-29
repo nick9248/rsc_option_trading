@@ -8,7 +8,7 @@ import json
 import logging
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from coding.core.analytics.results.expiry_results import ExpirationAnalysisResult
 from coding.core.analytics.results.gex_dex_results import GexDexResult
@@ -418,6 +418,144 @@ class DatabaseRepository:
         with self._db_cursor() as cursor:
             cursor.execute(query, params)
             return cursor.fetchall()
+
+    def get_signed_taker_flow_by_strike(
+        self,
+        currency: str,
+        expiration: str,
+        since_ts: int,
+    ) -> List[Dict[str, Any]]:
+        """
+        Signed cumulative taker flow per strike/option_type since ``since_ts``
+        (institutional_metrics_spec.md section 2 -- Glassnode taker-flow
+        method, task C3). Feeds ``DealerInventoryCalculator`` after negation
+        (``dealer_net = -taker_net``); this method returns the raw taker-side
+        signed sum, never flips it (``direction`` is the taker's side by
+        Deribit convention -- spec §2(c) edge cases).
+
+        ``AND direction IS NOT NULL`` is defensive, not dictated by the
+        spec's own SQL: current data is verified clean (0 nulls across
+        2.28M+ rows), but without this filter a future null direction would
+        silently fall into the CASE's ELSE branch and be counted as a sell,
+        corrupting the signed sum. Matches the filter already established at
+        this same table for the same purpose in
+        ``get_trades_for_flow_analysis``.
+
+        Args:
+            currency: Currency symbol (BTC or ETH).
+            expiration: Expiration date string (e.g., "27MAR26").
+            since_ts: Window start (T0), epoch milliseconds.
+
+        Returns:
+            List of dicts with keys: strike, option_type, taker_net,
+            gross_volume, trade_count, first_ts.
+        """
+        query = """
+            SELECT strike, option_type,
+                   SUM(CASE WHEN direction='buy' THEN amount ELSE -amount END) AS taker_net,
+                   SUM(amount) AS gross_volume,
+                   COUNT(*) AS trade_count,
+                   MIN(trade_timestamp) AS first_ts
+            FROM historical_trades
+            WHERE currency = %s
+                AND expiration = %s
+                AND trade_timestamp >= %s
+                AND strike IS NOT NULL
+                AND direction IS NOT NULL
+            GROUP BY strike, option_type
+        """
+
+        with self._db_cursor() as cursor:
+            cursor.execute(query, (currency, expiration, since_ts))
+
+            # strike/taker_net/gross_volume come back as Decimal (NUMERIC
+            # columns) -- cast to float at the repository boundary (matches
+            # the established get_previous_oi_snapshot convention). Left
+            # uncast, DealerInventoryCalculator's arithmetic against
+            # float-valued Greeks (dealer_net * gamma) would raise
+            # `TypeError: unsupported operand type(s) for *: 'decimal.
+            # Decimal' and 'float'` -- Decimal/float compare and hash equal
+            # (dict-key lookups by (strike, option_type) are unaffected),
+            # but Decimal/float arithmetic is not allowed.
+            return [
+                {
+                    "strike": float(row[0]),
+                    "option_type": row[1],
+                    "taker_net": float(row[2]),
+                    "gross_volume": float(row[3]),
+                    "trade_count": int(row[4]),
+                    "first_ts": int(row[5]) if row[5] is not None else None,
+                }
+                for row in cursor.fetchall()
+            ]
+
+    def get_trade_hour_coverage(
+        self,
+        currency: str,
+        expiration: str,
+        since_ts: int,
+    ) -> Tuple[int, int]:
+        """
+        Trade-history hour coverage since ``since_ts`` (institutional_metrics_
+        spec.md section 2 / task C3 -- the trade-history half of decision
+        D9's gate; the other half is ``DealerInventoryCalculator.
+        coverage_report``'s violation rate).
+
+        Args:
+            currency: Currency symbol (BTC or ETH).
+            expiration: Expiration date string.
+            since_ts: Window start (T0), epoch milliseconds.
+
+        Returns:
+            (present_hours, expected_hours) -- present_hours is the count of
+            distinct UTC hour buckets with at least one trade since
+            since_ts; expected_hours is the wall-clock hours between
+            since_ts and now (0 if since_ts is in the future / equal to
+            now, never negative).
+        """
+        query = """
+            SELECT COUNT(DISTINCT DATE_TRUNC('hour', TO_TIMESTAMP(trade_timestamp / 1000)))
+            FROM historical_trades
+            WHERE currency = %s
+                AND expiration = %s
+                AND trade_timestamp >= %s
+        """
+
+        with self._db_cursor() as cursor:
+            cursor.execute(query, (currency, expiration, since_ts))
+            row = cursor.fetchone()
+            present_hours = int(row[0]) if row and row[0] is not None else 0
+
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        expected_hours = max(0, (now_ms - since_ts) // (3600 * 1000))
+
+        return present_hours, expected_hours
+
+    def get_first_trade_timestamp(self, currency: str, expiration: str) -> Optional[int]:
+        """
+        Earliest trade ever recorded for this expiry (no ``since`` filter --
+        institutional_metrics_spec.md section 2 / task C3's T0 decision:
+        ``T0 = max(first_listing_seen, coverage_start)``). ``None`` when no
+        trades exist for this expiry at all (e.g. a brand-new listing, or an
+        expiry the collector never covered).
+
+        Args:
+            currency: Currency symbol (BTC or ETH).
+            expiration: Expiration date string.
+
+        Returns:
+            Earliest trade_timestamp (epoch milliseconds), or None.
+        """
+        query = """
+            SELECT MIN(trade_timestamp)
+            FROM historical_trades
+            WHERE currency = %s AND expiration = %s
+        """
+
+        with self._db_cursor() as cursor:
+            cursor.execute(query, (currency, expiration))
+            row = cursor.fetchone()
+            return int(row[0]) if row and row[0] is not None else None
 
     def get_onchain_snapshot_history(
         self,
