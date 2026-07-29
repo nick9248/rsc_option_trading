@@ -8,7 +8,7 @@ import dataclasses
 import logging
 import time
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
@@ -20,6 +20,7 @@ from coding.core.analytics.chart_generator import (
     inject_hover_js,
     save_chart,
 )
+from coding.core.analytics.dealer_inventory_calculator import DealerInventoryCalculator
 from coding.core.analytics.gex_dex_calculator import GexDexCalculator
 from coding.core.analytics.historical_normalizer import (
     HistoricalNormalizer,
@@ -41,6 +42,12 @@ from coding.core.analytics.results.analysis_result import (
     OiChangesResult,
     OnChainAnalysisResult,
 )
+from coding.core.analytics.results.dealer_inventory_results import (
+    DealerInventoryKeyLevels,
+    DealerInventoryLevel,
+    DealerInventoryResult,
+    DealerInventoryStrikeRow,
+)
 from coding.core.analytics.thresholds import (
     OI_CHANGE_SIGNIFICANT_ABS_THRESHOLD,
     OI_CHANGE_SIGNIFICANT_PCT_THRESHOLD,
@@ -52,6 +59,18 @@ from coding.service.on_chain.analysis_builder import OnChainAnalysisBuilder
 from coding.service.on_chain.market_wide_orchestrator import MarketWideOrchestrator
 
 logger = logging.getLogger(__name__)
+
+# institutional_metrics_spec.md section 2 / task C3: T0 = max(first trade
+# seen for this expiry, 2026-04-25) -- 2026-04-25 is the start of the
+# >=99.9%-complete trailing trade-history window [verified: 0.05% missing
+# hours over the trailing 90 days as of the spec's writing]. Decision D9
+# (task-C3-brief.md, BINDING): render the inferred view only if coverage
+# since T0 is >= 95% AND the OI-bound violation rate is <= 5% -- both
+# boundary-inclusive per the spec's literal pseudocode
+# (`coverage >= 0.95 AND violation_rate <= 0.05`).
+_DEALER_INVENTORY_COVERAGE_STABLE_DATE = datetime(2026, 4, 25, tzinfo=timezone.utc)
+_DEALER_INVENTORY_COVERAGE_GATE = 0.95
+_DEALER_INVENTORY_VIOLATION_GATE = 0.05
 
 
 class OnChainAnalysisService:
@@ -807,6 +826,20 @@ class OnChainAnalysisService:
                 if builder is not None:
                     builder.set_gex_dex(expiration, gex_result)
 
+                # institutional_metrics_spec.md section 2 / task C3: runs
+                # AFTER the GEX/DEX step and reuses the SAME enriched-Greeks
+                # instruments_with_greeks list built above -- no second
+                # Greeks pass, no second API call. Additive only (D9): a
+                # gate failure or an unexpected error both degrade to "no
+                # inferred section" (dealer_result is None or
+                # render_inferred=False), never to a broken GEX/DEX section.
+                progress_callback(f"Calculating inferred dealer positioning for {expiration}...")
+                dealer_result = self._calculate_inferred_dealer_positioning(
+                    analyzer.currency, expiration, instruments_with_greeks, analyzer.index_price,
+                )
+                if dealer_result is not None and builder is not None:
+                    builder.set_dealer_inventory(expiration, dealer_result)
+
         # Aggregate GEX/DEX across all expirations after per-expiry loop
         aggregate_result = None
         if gex_dex_typed_by_expiry:
@@ -816,6 +849,147 @@ class OnChainAnalysisService:
             )
 
         return aggregate_result
+
+    def _calculate_inferred_dealer_positioning(
+        self,
+        currency: str,
+        expiration: str,
+        instruments_with_greeks: List[Dict[str, Any]],
+        spot_price: float,
+    ) -> Optional[DealerInventoryResult]:
+        """
+        institutional_metrics_spec.md section 2 (Glassnode taker-flow
+        method) / task C3. Fetches signed taker flow since T0, computes the
+        D9 gate (trade-history hour coverage AND OI-bound violation rate),
+        and returns the typed result the report formatter renders as either
+        the inferred view (gate passed) or an explicit "unavailable, falls
+        back to the assumed view" line (gate failed) -- never both, never
+        blended (D9, BINDING).
+
+        Args:
+            currency: Currency symbol (BTC or ETH).
+            expiration: Expiration date string (e.g., "31JUL26").
+            instruments_with_greeks: The SAME enriched-Greeks instrument list
+                already built for ``GexDexCalculator`` in the caller -- no
+                second Greeks pass, no second API call.
+            spot_price: Current underlying spot price (``analyzer.
+                index_price`` -- same anchor GexDexCalculator uses,
+                bugfix_spec.md Item 7).
+
+        Returns:
+            ``DealerInventoryResult``, or ``None`` if computing it raised
+            unexpectedly -- this is a purely additive computation (like
+            ``GexDexCalculator._calculate_gamma_profile``'s established
+            guard) and must never abort the GEX/DEX pipeline it runs
+            alongside.
+        """
+        try:
+            coverage_stable_ms = int(
+                _DEALER_INVENTORY_COVERAGE_STABLE_DATE.timestamp() * 1000
+            )
+            first_trade_ms = self.repository.get_first_trade_timestamp(currency, expiration)
+            # Zero-trades-ever edge case: first_trade_ms is None -- T0 still
+            # resolves to the coverage-stable date rather than leaving T0
+            # undefined, so the rest of this method (and the hour-coverage
+            # query below) always has a well-defined window to compute
+            # against instead of crashing.
+            t0_ms = (
+                coverage_stable_ms if first_trade_ms is None
+                else max(first_trade_ms, coverage_stable_ms)
+            )
+
+            flow_rows = self.repository.get_signed_taker_flow_by_strike(currency, expiration, t0_ms)
+            present_hours, expected_hours = self.repository.get_trade_hour_coverage(
+                currency, expiration, t0_ms
+            )
+            # expected_hours == 0 (t0 == now, or a clock skew edge case) ->
+            # coverage 0.0 by convention: there is no window to have had
+            # coverage over, so the honest answer is "no data", which
+            # correctly fails the gate rather than dividing by zero.
+            coverage = (present_hours / expected_hours) if expected_hours > 0 else 0.0
+
+            greeks_by_instrument: Dict[Tuple[float, str], Dict[str, float]] = {}
+            oi_by_instrument: Dict[Tuple[float, str], float] = {}
+            for item in instruments_with_greeks:
+                strike = item.get("strike")
+                option_type = (item.get("option_type") or "").upper()
+                if strike is None or option_type not in ("C", "P"):
+                    continue
+                key = (strike, option_type)
+                greeks_by_instrument[key] = {
+                    "gamma": item.get("gamma") or 0.0,
+                    "delta": item.get("delta") or 0.0,
+                }
+                oi_by_instrument[key] = item.get("open_interest") or 0.0
+
+            calculator = DealerInventoryCalculator(flow_rows, greeks_by_instrument, spot_price, currency)
+            calc_dict = calculator.calculate()
+            coverage_dict = calculator.coverage_report(oi_by_instrument)
+            violation_rate = coverage_dict["violation_rate"]
+
+            render_inferred = (
+                coverage >= _DEALER_INVENTORY_COVERAGE_GATE
+                and violation_rate <= _DEALER_INVENTORY_VIOLATION_GATE
+            )
+            unavailable_reason = None
+            if not render_inferred:
+                unavailable_reason = (
+                    f"coverage {coverage * 100:.1f}%, violations {violation_rate * 100:.1f}%"
+                )
+
+            n_signed_trades = sum(row.get("trade_count", 0) for row in flow_rows)
+
+            strike_rows = tuple(
+                DealerInventoryStrikeRow(
+                    strike=strike,
+                    dealer_net_c=data["dealer_net_c"],
+                    dealer_net_p=data["dealer_net_p"],
+                    inferred_gex=data["inferred_gex"],
+                    inferred_dex=data["inferred_dex"],
+                    call_gross_volume=data["call_gross_volume"],
+                    put_gross_volume=data["put_gross_volume"],
+                    call_trade_count=data["call_trade_count"],
+                    put_trade_count=data["put_trade_count"],
+                )
+                for strike, data in sorted(calc_dict["strike_data"].items())
+            )
+            cr = calc_dict["key_levels"]["call_resistance"]
+            ps = calc_dict["key_levels"]["put_support"]
+
+            return DealerInventoryResult(
+                strike_rows=strike_rows,
+                key_levels=DealerInventoryKeyLevels(
+                    call_resistance=(
+                        DealerInventoryLevel(strike=cr["strike"], inferred_gex=cr["inferred_gex"])
+                        if cr else None
+                    ),
+                    put_support=(
+                        DealerInventoryLevel(strike=ps["strike"], inferred_gex=ps["inferred_gex"])
+                        if ps else None
+                    ),
+                    hvl=calc_dict["key_levels"]["hvl"],
+                ),
+                total_inferred_gex=calc_dict["total_inferred_gex"],
+                total_inferred_dex=calc_dict["total_inferred_dex"],
+                spot_price=spot_price,
+                currency=currency,
+                t0_epoch_ms=t0_ms,
+                coverage=coverage,
+                violation_rate=violation_rate,
+                n_signed_trades=n_signed_trades,
+                render_inferred=render_inferred,
+                unavailable_reason=unavailable_reason,
+                stale_strikes=tuple(calc_dict.get("stale_strikes", [])),
+            )
+        except Exception:
+            logger.error(
+                f"OnChainAnalysisService: inferred dealer positioning failed "
+                f"unexpectedly for {currency} {expiration} -- degrading to "
+                "'no inferred section' rather than aborting GEX/DEX "
+                "(additive-only, institutional_metrics_spec.md section 2 / task C3)",
+                exc_info=True,
+            )
+            return None
 
     def _calculate_buy_sell_flow(
         self,

@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import Any, Dict, Optional, Tuple
 
 from coding.core.analytics.historical_normalizer import NormalizedMetric
+from coding.core.analytics.results.dealer_inventory_results import DealerInventoryResult
 from coding.core.analytics.results.expiry_results import ExpirationAnalysisResult
 from coding.core.analytics.results.flow_results import FlowResult
 from coding.core.analytics.results.gex_dex_results import GexDexResult
@@ -91,6 +92,14 @@ class ExpirationBundle:
     trend: Optional[TrendSnapshot]
     flow_chart_paths: Dict[str, str]  # {"distribution"|"net_flow"|"trend": path}
     enriched_instruments: Tuple[Dict[str, Any], ...]  # greeks-enriched raw dicts
+    # institutional_metrics_spec.md section 2 / task C3: taker-flow-inferred
+    # dealer positioning (the third, separately-labeled view alongside
+    # gex_dex's holder-side/assumed-dealer pair -- D7). Optional/defaulted
+    # so every pre-existing direct ExpirationBundle(...) constructor (tests,
+    # the builder) keeps working unchanged. None when the additive
+    # computation guard caught an unexpected error (see
+    # OnChainAnalysisService._calculate_inferred_dealer_positioning).
+    dealer_inventory: Optional[DealerInventoryResult] = None
 
 
 @dataclass(frozen=True)

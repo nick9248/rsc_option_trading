@@ -26,6 +26,7 @@ from coding.core.analytics.results.analysis_result import (
     OnChainAnalysisResult,
     TrendSnapshot,
 )
+from coding.core.analytics.results.dealer_inventory_results import DealerInventoryResult
 from coding.core.analytics.results.expiry_results import ExpirationAnalysisResult
 from coding.core.analytics.results.flow_results import FlowResult
 from coding.core.analytics.results.gex_dex_results import GexDexResult
@@ -39,6 +40,7 @@ class _ExpirationAccumulator:
 
     analysis: Optional[ExpirationAnalysisResult] = None
     gex_dex: Optional[GexDexResult] = None
+    dealer_inventory: Optional[DealerInventoryResult] = None
     flow: Optional[FlowResult] = None
     vol_surface: Optional[VolSurfaceResult] = None
     oi_changes: Optional[OiChangesResult] = None
@@ -88,6 +90,9 @@ class OnChainAnalysisBuilder:
 
     def set_gex_dex(self, expiration: str, result: GexDexResult) -> None:
         self._slot(expiration).gex_dex = result
+
+    def set_dealer_inventory(self, expiration: str, result: DealerInventoryResult) -> None:
+        self._slot(expiration).dealer_inventory = result
 
     def set_flow(self, expiration: str, result: FlowResult) -> None:
         self._slot(expiration).flow = result
@@ -141,6 +146,7 @@ class OnChainAnalysisBuilder:
                     expiration=expiration,
                     analysis=acc.analysis,
                     gex_dex=acc.gex_dex,
+                    dealer_inventory=acc.dealer_inventory,
                     flow=acc.flow,
                     vol_surface=acc.vol_surface,
                     oi_changes=acc.oi_changes,
