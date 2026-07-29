@@ -72,6 +72,32 @@ _DEALER_INVENTORY_COVERAGE_STABLE_DATE = datetime(2026, 4, 25, tzinfo=timezone.u
 _DEALER_INVENTORY_COVERAGE_GATE = 0.95
 _DEALER_INVENTORY_VIOLATION_GATE = 0.05
 
+# Fix round 2 (Important, orchestrator ruling): DealerInventoryCalculator.
+# coverage_report excludes legs with no OI reference from its
+# n_strikes/violation_rate denominator (fix round 1, Important #3) so a
+# handful of transient ticker-fetch failures can't flip the D9 gate. But
+# that fix left an edge case fail-OPEN: if EVERY leg on an expiry lacks an
+# OI reference, n_strikes == 0 and violation_rate reads 0.0 -- "zero
+# violations, clean pass" -- when the truth is "nothing was actually
+# checked". Pre-fix-round-1 behavior (defaulting missing OI to 0.0) was
+# accidentally the correct fail-SAFE direction for this specific
+# degenerate case, even though it was wrong for the "some legs excluded"
+# case fix round 1 targeted. Guarded here instead of loosening the
+# calculator's own denominator logic, because "how much of the checked set
+# is trustworthy" is a gating decision (D9's), not a math correction the
+# pure calculator should make on its own.
+#
+# 20% is a deliberate, documented starting point, not a tuned constant:
+# above roughly 1-in-5 legs excluded, the checked remainder is no longer a
+# representative sample of the expiry's book, so a "clean" violation rate
+# on it is not trustworthy enough to justify overriding the assumed
+# convention -- similar in spirit to D9's own 95%/5% thresholds (round
+# numbers chosen for interpretability, not derived from a statistical
+# significance calculation). n_strikes == 0 with any exclusions is ALWAYS
+# a hard fail regardless of this threshold (see render_inferred below) --
+# this constant only governs the partial-exclusion case.
+_DEALER_INVENTORY_MAX_EXCLUSION_RATE = 0.20
+
 
 class OnChainAnalysisService:
     """
@@ -944,16 +970,39 @@ class OnChainAnalysisService:
             calc_dict = calculator.calculate()
             coverage_dict = calculator.coverage_report(oi_by_instrument)
             violation_rate = coverage_dict["violation_rate"]
+            n_strikes_checked = coverage_dict["n_strikes"]
+            legs_excluded_no_oi = coverage_dict["legs_excluded_no_oi"]
+
+            # Fix round 2 (Important): a "clean" violation_rate computed
+            # over zero (or too few) checked legs is a vacuous pass, not a
+            # genuine one -- see the module-level comment on
+            # _DEALER_INVENTORY_MAX_EXCLUSION_RATE above for the full
+            # reasoning. total_legs_seen == 0 (no flow rows at all -- the
+            # zero-trades-ever edge case) is NOT this condition; that's
+            # already correctly gated by coverage == 0.0 below, not by
+            # exclusions.
+            total_legs_seen = n_strikes_checked + legs_excluded_no_oi
+            exclusion_rate = (legs_excluded_no_oi / total_legs_seen) if total_legs_seen > 0 else 0.0
+            insufficient_oi_reference = (
+                (n_strikes_checked == 0 and legs_excluded_no_oi > 0)
+                or exclusion_rate > _DEALER_INVENTORY_MAX_EXCLUSION_RATE
+            )
 
             render_inferred = (
                 coverage >= _DEALER_INVENTORY_COVERAGE_GATE
                 and violation_rate <= _DEALER_INVENTORY_VIOLATION_GATE
+                and not insufficient_oi_reference
             )
             unavailable_reason = None
             if not render_inferred:
                 unavailable_reason = (
                     f"coverage {coverage * 100:.1f}%, violations {violation_rate * 100:.1f}%"
                 )
+                if insufficient_oi_reference:
+                    unavailable_reason += (
+                        f", insufficient OI reference ({legs_excluded_no_oi}/{total_legs_seen} "
+                        f"legs excluded, {exclusion_rate * 100:.1f}%)"
+                    )
 
             n_signed_trades = sum(row.get("trade_count", 0) for row in flow_rows)
 

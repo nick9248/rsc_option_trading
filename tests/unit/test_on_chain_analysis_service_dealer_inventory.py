@@ -173,9 +173,99 @@ class TestD9GateFail:
         assert result.violation_rate == pytest.approx(1.0)
         assert "violations" in result.unavailable_reason
 
+    def test_all_legs_missing_oi_reference_fails_gate_not_vacuous_pass(self):
+        """
+        Fix round 2 (Important): if every flow-row leg lacks an OI
+        reference, n_strikes == 0 and violation_rate reads 0.0 -- "zero
+        violations, clean pass" -- when the truth is "nothing was actually
+        checked". Coverage passes cleanly here (100/100) to isolate this
+        specific failure mode from a coverage-driven one: this must fail
+        the gate on the exclusion condition alone.
+        """
+        # Neither strike appears in _instruments() (which only has 70000) --
+        # every flow row leg has no OI/Greeks reference at all.
+        flow_rows = [
+            {"strike": 99999.0, "option_type": "C", "taker_net": -500.0, "gross_volume": 500.0, "trade_count": 5},
+            {"strike": 88888.0, "option_type": "P", "taker_net": 300.0, "gross_volume": 300.0, "trade_count": 3},
+        ]
+        repo = _make_repo(first_trade_ts=_COVERAGE_STABLE_MS, flow_rows=flow_rows, coverage=(100, 100))
+        service = _make_service(repo)
+
+        result = service._calculate_inferred_dealer_positioning("BTC", "31JUL26", _instruments(), 70000.0)
+
+        assert result is not None
+        assert result.coverage == pytest.approx(1.0)  # coverage itself is fine
+        assert result.violation_rate == pytest.approx(0.0)  # vacuously "clean" on 0 checked legs
+        assert result.render_inferred is False  # must NOT read the vacuous 0.0 as a pass
+        assert "insufficient OI reference" in result.unavailable_reason
+        assert "2/2" in result.unavailable_reason  # both legs excluded
+
+    def test_high_exclusion_fraction_fails_gate_even_with_clean_remainder(self):
+        """
+        Fix round 2 (Important): 3 of 10 legs (30%) lack an OI reference --
+        above the 20% threshold -- even though the 7 checked legs are
+        perfectly clean (0 violations). The checked remainder is no longer
+        a representative sample of the book, so this must still fail.
+        """
+        checked_strikes = [70001.0 + i for i in range(7)]
+        instruments = [
+            {"strike": s, "option_type": "C", "gamma": 0.00002, "delta": 0.5, "open_interest": 100.0}
+            for s in checked_strikes
+        ]
+        flow_rows = [
+            {"strike": s, "option_type": "C", "taker_net": -50.0, "gross_volume": 50.0, "trade_count": 1}
+            for s in checked_strikes
+        ]
+        # 3 legs with trade history but no corresponding instrument (no OI
+        # reference at all) -- 3/10 = 30% exclusion, above the 20% threshold.
+        for s in (80001.0, 80002.0, 80003.0):
+            flow_rows.append(
+                {"strike": s, "option_type": "C", "taker_net": -50.0, "gross_volume": 50.0, "trade_count": 1}
+            )
+
+        repo = _make_repo(first_trade_ts=_COVERAGE_STABLE_MS, flow_rows=flow_rows, coverage=(100, 100))
+        service = _make_service(repo)
+
+        result = service._calculate_inferred_dealer_positioning("BTC", "31JUL26", instruments, 70000.0)
+
+        assert result.coverage == pytest.approx(1.0)
+        assert result.violation_rate == pytest.approx(0.0)  # the 7 checked legs are clean
+        assert result.render_inferred is False  # must still fail on exclusion fraction
+        assert "insufficient OI reference" in result.unavailable_reason
+        assert "3/10" in result.unavailable_reason
+        assert "30.0%" in result.unavailable_reason
+
+    def test_low_exclusion_fraction_at_or_below_threshold_does_not_block_pass(self):
+        """Sanity check for the other side of the threshold: 2 of 10 legs
+        (20%, at the threshold) excluded, clean remainder, coverage clean --
+        must still pass (threshold is `> 0.20`, not `>= 0.20`)."""
+        checked_strikes = [70001.0 + i for i in range(8)]
+        instruments = [
+            {"strike": s, "option_type": "C", "gamma": 0.00002, "delta": 0.5, "open_interest": 100.0}
+            for s in checked_strikes
+        ]
+        flow_rows = [
+            {"strike": s, "option_type": "C", "taker_net": -50.0, "gross_volume": 50.0, "trade_count": 1}
+            for s in checked_strikes
+        ]
+        for s in (80001.0, 80002.0):
+            flow_rows.append(
+                {"strike": s, "option_type": "C", "taker_net": -50.0, "gross_volume": 50.0, "trade_count": 1}
+            )
+
+        repo = _make_repo(first_trade_ts=_COVERAGE_STABLE_MS, flow_rows=flow_rows, coverage=(100, 100))
+        service = _make_service(repo)
+
+        result = service._calculate_inferred_dealer_positioning("BTC", "31JUL26", instruments, 70000.0)
+
+        assert result.render_inferred is True
+
     def test_zero_trades_expiry_gates_to_assumed_view_not_crash(self):
         """Edge case (task brief): expiry with zero trades must gate to the
-        assumed view, not crash."""
+        assumed view, not crash. Distinct from the all-legs-excluded case
+        above: zero flow rows means zero exclusions too (nothing to
+        exclude) -- this must gate on coverage == 0.0, not on the
+        exclusion-fraction check."""
         repo = _make_repo(first_trade_ts=None, flow_rows=[], coverage=(0, 50))
         service = _make_service(repo)
 
