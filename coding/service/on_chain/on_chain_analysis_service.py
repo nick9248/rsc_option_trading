@@ -96,6 +96,14 @@ _DEALER_INVENTORY_VIOLATION_GATE = 0.05
 # significance calculation). n_strikes == 0 with any exclusions is ALWAYS
 # a hard fail regardless of this threshold (see render_inferred below) --
 # this constant only governs the partial-exclusion case.
+#
+# Fix round 3 (Important): this constant and the n_strikes==0-with-
+# exclusions floor above do NOT cover a zero-trades-for-this-expiry
+# expiry (flow_rows == [] -> n_strikes_checked == 0 AND legs_excluded_no_oi
+# == 0 -- no exclusions happened because there was nothing to exclude).
+# That is a separate check (`no_trades_for_this_expiry` in
+# _calculate_inferred_dealer_positioning below) -- see its inline comment
+# for why currency-wide `coverage` cannot stand in for it.
 _DEALER_INVENTORY_MAX_EXCLUSION_RATE = 0.20
 
 
@@ -973,14 +981,25 @@ class OnChainAnalysisService:
             n_strikes_checked = coverage_dict["n_strikes"]
             legs_excluded_no_oi = coverage_dict["legs_excluded_no_oi"]
 
-            # Fix round 2 (Important): a "clean" violation_rate computed
-            # over zero (or too few) checked legs is a vacuous pass, not a
-            # genuine one -- see the module-level comment on
-            # _DEALER_INVENTORY_MAX_EXCLUSION_RATE above for the full
-            # reasoning. total_legs_seen == 0 (no flow rows at all -- the
-            # zero-trades-ever edge case) is NOT this condition; that's
-            # already correctly gated by coverage == 0.0 below, not by
-            # exclusions.
+            # Fix round 3 (Important): `coverage` (fix round 1) is now
+            # currency-wide collection completeness -- it answers "was the
+            # collector healthy", not "did THIS expiry ever trade since T0".
+            # A currently-listed expiry that has genuinely never traded
+            # since T0 has `flow_rows == []`, so n_strikes_checked == 0 AND
+            # legs_excluded_no_oi == 0 -- neither round-2 guard below fires
+            # (the hard floor needs legs_excluded_no_oi > 0; 0/0 exclusion
+            # rate is 0.0, under the threshold) -- while currency-wide
+            # coverage can still read high (the collector is fine; it just
+            # never saw a trade on THIS contract). That combination used to
+            # render_inferred=True with zero legs actually checked -- the
+            # same "validated nothing, reported clean" pattern as round 2's
+            # bug, one level up. Checked directly here (this expiry's own
+            # flow_rows, not any coverage proxy) rather than folded into the
+            # exclusion-rate check, because "this expiry has zero trade
+            # history" and "some of this expiry's legs are unpriced" are two
+            # different failure reasons that deserve two different messages.
+            no_trades_for_this_expiry = len(flow_rows) == 0
+
             total_legs_seen = n_strikes_checked + legs_excluded_no_oi
             exclusion_rate = (legs_excluded_no_oi / total_legs_seen) if total_legs_seen > 0 else 0.0
             insufficient_oi_reference = (
@@ -989,20 +1008,28 @@ class OnChainAnalysisService:
             )
 
             render_inferred = (
-                coverage >= _DEALER_INVENTORY_COVERAGE_GATE
+                not no_trades_for_this_expiry
+                and coverage >= _DEALER_INVENTORY_COVERAGE_GATE
                 and violation_rate <= _DEALER_INVENTORY_VIOLATION_GATE
                 and not insufficient_oi_reference
             )
             unavailable_reason = None
             if not render_inferred:
-                unavailable_reason = (
-                    f"coverage {coverage * 100:.1f}%, violations {violation_rate * 100:.1f}%"
-                )
-                if insufficient_oi_reference:
-                    unavailable_reason += (
-                        f", insufficient OI reference ({legs_excluded_no_oi}/{total_legs_seen} "
-                        f"legs excluded, {exclusion_rate * 100:.1f}%)"
+                if no_trades_for_this_expiry:
+                    unavailable_reason = (
+                        f"no trade history for this expiry since T0 "
+                        f"(currency-wide coverage {coverage * 100:.1f}% -- collector health, not "
+                        f"this contract's own history)"
                     )
+                else:
+                    unavailable_reason = (
+                        f"coverage {coverage * 100:.1f}%, violations {violation_rate * 100:.1f}%"
+                    )
+                    if insufficient_oi_reference:
+                        unavailable_reason += (
+                            f", insufficient OI reference ({legs_excluded_no_oi}/{total_legs_seen} "
+                            f"legs excluded, {exclusion_rate * 100:.1f}%)"
+                        )
 
             n_signed_trades = sum(row.get("trade_count", 0) for row in flow_rows)
 

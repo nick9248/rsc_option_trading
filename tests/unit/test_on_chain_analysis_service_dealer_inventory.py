@@ -264,8 +264,11 @@ class TestD9GateFail:
         """Edge case (task brief): expiry with zero trades must gate to the
         assumed view, not crash. Distinct from the all-legs-excluded case
         above: zero flow rows means zero exclusions too (nothing to
-        exclude) -- this must gate on coverage == 0.0, not on the
-        exclusion-fraction check."""
+        exclude), so this must be caught by the explicit
+        `no_trades_for_this_expiry` check (fix round 3), not by the
+        exclusion-fraction check. Uses low currency-wide coverage here too
+        (belt-and-suspenders with the round-3 test below, which uses HIGH
+        coverage specifically to isolate the new check from this one)."""
         repo = _make_repo(first_trade_ts=None, flow_rows=[], coverage=(0, 50))
         service = _make_service(repo)
 
@@ -281,6 +284,33 @@ class TestD9GateFail:
         # put leg -- one merged DealerInventoryStrikeRow, same convention as
         # GexDexStrikeRow.
         assert len(result.strike_rows) == 1
+
+    def test_zero_trades_for_this_expiry_fails_even_with_high_currency_wide_coverage(self):
+        """
+        Fix round 3 (Important): the round-1 fix made `coverage` currency-
+        wide (collector health), not per-expiry. A currently-listed expiry
+        that has genuinely never traded since T0 has empty flow_rows, so
+        n_strikes_checked == 0 AND legs_excluded_no_oi == 0 -- NEITHER
+        round-2 guard fires (the hard floor needs legs_excluded_no_oi > 0;
+        0/0 exclusion rate is 0.0, under the 20% threshold). Before this
+        fix, a HIGH currency-wide coverage (the collector is healthy) would
+        make this render_inferred=True with zero legs actually checked for
+        THIS specific expiry -- the same "validated nothing, reported
+        clean" pattern as round 2's bug, one level up. Coverage is
+        deliberately set high here (97%) to prove the fix checks this
+        expiry's own flow_rows directly, not any coverage-based proxy for
+        it.
+        """
+        repo = _make_repo(first_trade_ts=_COVERAGE_STABLE_MS, flow_rows=[], coverage=(97, 100))
+        service = _make_service(repo)
+
+        result = service._calculate_inferred_dealer_positioning("BTC", "99JUL99", _instruments(), 70000.0)
+
+        assert result is not None
+        assert result.coverage == pytest.approx(0.97)  # currency-wide coverage IS high
+        assert result.violation_rate == pytest.approx(0.0)  # vacuously "clean" -- 0 legs checked
+        assert result.render_inferred is False  # must NOT read high coverage as a pass for this expiry
+        assert "no trade history for this expiry" in result.unavailable_reason
         assert result.strike_rows[0].strike == 70000.0
         assert result.strike_rows[0].dealer_net_c == 0.0
         assert result.strike_rows[0].dealer_net_p == 0.0

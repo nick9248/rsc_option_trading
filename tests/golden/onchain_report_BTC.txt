@@ -152,7 +152,7 @@ Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
 
 DEALER POSITIONING -- TWO VIEWS
 --------------------------------------------------------------------------------
-INFERRED DEALER VIEW UNAVAILABLE (coverage 0.0%, violations 0.0%)
+INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
   -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
 
 BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
@@ -436,7 +436,7 @@ Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
 
 DEALER POSITIONING -- TWO VIEWS
 --------------------------------------------------------------------------------
-INFERRED DEALER VIEW UNAVAILABLE (coverage 0.0%, violations 0.0%)
+INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
   -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
 
 BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
@@ -684,7 +684,7 @@ Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
 
 DEALER POSITIONING -- TWO VIEWS
 --------------------------------------------------------------------------------
-INFERRED DEALER VIEW UNAVAILABLE (coverage 0.0%, violations 0.0%)
+INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
   -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
 
 BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
@@ -977,7 +977,7 @@ Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
 
 DEALER POSITIONING -- TWO VIEWS
 --------------------------------------------------------------------------------
-INFERRED DEALER VIEW UNAVAILABLE (coverage 0.0%, violations 0.0%)
+INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
   -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
 
 BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
@@ -1196,7 +1196,7 @@ Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
 
 DEALER POSITIONING -- TWO VIEWS
 --------------------------------------------------------------------------------
-INFERRED DEALER VIEW UNAVAILABLE (coverage 0.0%, violations 0.0%)
+INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
   -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
 
 BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
@@ -1483,7 +1483,7 @@ Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
 
 DEALER POSITIONING -- TWO VIEWS
 --------------------------------------------------------------------------------
-INFERRED DEALER VIEW UNAVAILABLE (coverage 0.0%, violations 0.0%)
+INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
   -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
 
 BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
@@ -1700,7 +1700,7 @@ Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
 
 DEALER POSITIONING -- TWO VIEWS
 --------------------------------------------------------------------------------
-INFERRED DEALER VIEW UNAVAILABLE (coverage 0.0%, violations 0.0%)
+INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
   -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
 
 BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
@@ -1978,7 +1978,7 @@ Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
 
 DEALER POSITIONING -- TWO VIEWS
 --------------------------------------------------------------------------------
-INFERRED DEALER VIEW UNAVAILABLE (coverage 0.0%, violations 0.0%)
+INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
   -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
 
 BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
@@ -2213,7 +2213,7 @@ Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
 
 DEALER POSITIONING -- TWO VIEWS
 --------------------------------------------------------------------------------
-INFERRED DEALER VIEW UNAVAILABLE (coverage 0.0%, violations 0.0%)
+INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
   -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
 
 BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
@@ -2431,7 +2431,7 @@ Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
 
 DEALER POSITIONING -- TWO VIEWS
 --------------------------------------------------------------------------------
-INFERRED DEALER VIEW UNAVAILABLE (coverage 0.0%, violations 0.0%)
+INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
   -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
 
 BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
@@ -2716,7 +2716,7 @@ Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
 
 DEALER POSITIONING -- TWO VIEWS
 --------------------------------------------------------------------------------
-INFERRED DEALER VIEW UNAVAILABLE (coverage 0.0%, violations 0.0%)
+INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
   -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
 
 BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
@@ -2945,7 +2945,7 @@ Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
 
 DEALER POSITIONING -- TWO VIEWS
 --------------------------------------------------------------------------------
-INFERRED DEALER VIEW UNAVAILABLE (coverage 0.0%, violations 0.0%)
+INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
   -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
 
 BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
