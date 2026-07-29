@@ -150,6 +150,11 @@ Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
     72,000   +529,308.38      +41.5325  +1,790,922.00     +146.0405  
     75,000   +173,038.34      +10.1352  +1,963,960.35     +156.1756  
 
+DEALER POSITIONING -- TWO VIEWS
+--------------------------------------------------------------------------------
+INFERRED DEALER VIEW UNAVAILABLE (coverage 0.0%, violations 0.0%)
+  -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
+
 BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
 --------------------------------------------------------------------------------
 Spot Price: $64,371.10
@@ -429,6 +434,11 @@ Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
    240,000         +0.00       +1.0930  +1,502,359.02     -864.7770  
    250,000         +0.00       -8.7720  +1,502,359.02     -873.5490  
 
+DEALER POSITIONING -- TWO VIEWS
+--------------------------------------------------------------------------------
+INFERRED DEALER VIEW UNAVAILABLE (coverage 0.0%, violations 0.0%)
+  -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
+
 BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
 --------------------------------------------------------------------------------
 Spot Price: $64,371.10
@@ -671,6 +681,11 @@ Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
    150,000         +0.00       +3.4944   +229,226.08     +717.9872  
    160,000         +0.00      +15.2189   +229,226.08     +733.2061  
    170,000         +0.00       +0.2056   +229,226.08     +733.4117  
+
+DEALER POSITIONING -- TWO VIEWS
+--------------------------------------------------------------------------------
+INFERRED DEALER VIEW UNAVAILABLE (coverage 0.0%, violations 0.0%)
+  -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
 
 BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
 --------------------------------------------------------------------------------
@@ -960,6 +975,11 @@ Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
    300,000         +0.00       +0.0019  +4,171,732.38   -4,929.4197  
    320,000         +0.00      -25.0970  +4,171,732.38   -4,954.5167  
 
+DEALER POSITIONING -- TWO VIEWS
+--------------------------------------------------------------------------------
+INFERRED DEALER VIEW UNAVAILABLE (coverage 0.0%, violations 0.0%)
+  -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
+
 BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
 --------------------------------------------------------------------------------
 Spot Price: $64,371.10
@@ -1173,6 +1193,11 @@ Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
     71,000         +0.00       +0.0000  +7,999,957.14      +63.4573  
     72,000         +0.00       +0.0000  +7,999,957.14      +63.4573  
     73,000         +0.00       +0.0000  +7,999,957.14      +63.4573  
+
+DEALER POSITIONING -- TWO VIEWS
+--------------------------------------------------------------------------------
+INFERRED DEALER VIEW UNAVAILABLE (coverage 0.0%, violations 0.0%)
+  -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
 
 BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
 --------------------------------------------------------------------------------
@@ -1456,6 +1481,11 @@ Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
    190,000         +0.00       +5.6621  +1,139,417.72     +638.4716  
    200,000         +0.00       +2.3059  +1,139,417.72     +640.7776  
 
+DEALER POSITIONING -- TWO VIEWS
+--------------------------------------------------------------------------------
+INFERRED DEALER VIEW UNAVAILABLE (coverage 0.0%, violations 0.0%)
+  -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
+
 BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
 --------------------------------------------------------------------------------
 Spot Price: $64,371.10
@@ -1667,6 +1697,11 @@ Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
     71,000         +0.00       +0.0003  -4,137,795.98     -201.3913  
     72,000         +0.00       +0.0001  -4,137,795.98     -201.3912  
     73,000         +0.00       +0.0006  -4,137,795.98     -201.3906  
+
+DEALER POSITIONING -- TWO VIEWS
+--------------------------------------------------------------------------------
+INFERRED DEALER VIEW UNAVAILABLE (coverage 0.0%, violations 0.0%)
+  -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
 
 BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
 --------------------------------------------------------------------------------
@@ -1941,6 +1976,11 @@ Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
    105,000         +0.00       +0.0934  +18,724,439.47   +3,446.3058  
    110,000         +0.00       +0.3969  +18,724,439.47   +3,446.7027  
 
+DEALER POSITIONING -- TWO VIEWS
+--------------------------------------------------------------------------------
+INFERRED DEALER VIEW UNAVAILABLE (coverage 0.0%, violations 0.0%)
+  -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
+
 BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
 --------------------------------------------------------------------------------
 Spot Price: $64,371.10
@@ -2171,6 +2211,11 @@ Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
     72,000         +0.00       +0.0000   +225,662.55      -39.8493  
     73,000         +0.00       +0.0000   +225,662.55      -39.8493  
 
+DEALER POSITIONING -- TWO VIEWS
+--------------------------------------------------------------------------------
+INFERRED DEALER VIEW UNAVAILABLE (coverage 0.0%, violations 0.0%)
+  -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
+
 BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
 --------------------------------------------------------------------------------
 Spot Price: $64,371.10
@@ -2383,6 +2428,11 @@ Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
     69,000    +76,325.82       +1.2839    -61,367.29       -3.4980  Call Resistance
     70,000       +414.36       +0.0088    -60,952.92       -3.4892  
     71,000         +0.00       +0.0000    -60,952.92       -3.4892  
+
+DEALER POSITIONING -- TWO VIEWS
+--------------------------------------------------------------------------------
+INFERRED DEALER VIEW UNAVAILABLE (coverage 0.0%, violations 0.0%)
+  -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
 
 BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
 --------------------------------------------------------------------------------
@@ -2664,6 +2714,11 @@ Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
    115,000         +0.00       -3.2000  +75,912,120.58   +2,088.1151  
    120,000         +0.00       -3.5000  +75,912,120.58   +2,084.6151  
 
+DEALER POSITIONING -- TWO VIEWS
+--------------------------------------------------------------------------------
+INFERRED DEALER VIEW UNAVAILABLE (coverage 0.0%, violations 0.0%)
+  -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
+
 BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
 --------------------------------------------------------------------------------
 Spot Price: $64,371.10
@@ -2887,6 +2942,11 @@ Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
     75,000  +1,022,732.86      +68.5913  +22,923,064.07   +1,408.7494  
     77,000   +416,435.67      +17.4066  +23,339,499.74   +1,426.1560  
     80,000         +0.00       +0.4431  +23,339,499.74   +1,426.5991  
+
+DEALER POSITIONING -- TWO VIEWS
+--------------------------------------------------------------------------------
+INFERRED DEALER VIEW UNAVAILABLE (coverage 0.0%, violations 0.0%)
+  -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
 
 BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
 --------------------------------------------------------------------------------

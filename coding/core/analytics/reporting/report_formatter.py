@@ -24,6 +24,9 @@ from datetime import datetime
 from typing import Dict, Optional, Tuple
 
 from coding.core.analytics.market_wide_calculator import FUNDING_PERIODS_PER_YEAR
+from coding.core.analytics.reporting.dealer_inventory_formatter import (
+    format_dealer_inventory_section,
+)
 from coding.core.analytics.reporting.expiry_formatter import format_expiration_section
 from coding.core.analytics.reporting.flow_formatter import format_flow_section
 from coding.core.analytics.reporting.gex_dex_formatter import (
@@ -264,6 +267,16 @@ class OnChainReportFormatter:
         extra_sections = []
         if bundle.gex_dex is not None:
             extra_sections.append(format_gex_dex_section(bundle.gex_dex, result.currency))
+        # institutional_metrics_spec.md section 2 / task C3: additive new
+        # section, placed immediately after GEX/DEX so the two "ASSUMED
+        # DEALER VIEW" labels (gex_dex_formatter's and this one's) read as
+        # the same convention (D7). Never rendered without a dealer_
+        # inventory result -- unlike gex_dex, there is no legacy fallback
+        # path for this section.
+        if bundle.dealer_inventory is not None:
+            extra_sections.append(
+                format_dealer_inventory_section(bundle.dealer_inventory, bundle.gex_dex, result.currency)
+            )
         if bundle.flow is not None:
             extra_sections.append(format_flow_section(bundle.flow, bundle.flow.lookback_hours))
         if bundle.vol_surface is not None:
