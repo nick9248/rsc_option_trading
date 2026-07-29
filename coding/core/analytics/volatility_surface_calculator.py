@@ -11,7 +11,8 @@ Computes per-expiry volatility metrics:
 
 import logging
 import math
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Tuple
 
 from coding.core.analytics.black_scholes_calculator import BlackScholesCalculator
 from coding.core.analytics.results.vol_surface_results import (
@@ -48,6 +49,32 @@ VWAP_AGGRESSION_THRESHOLD_POINTS = 1.0
 # verbatim) over the snippet, so this is 2, not 3 — noted as a spec
 # inconsistency in the Task A4 report.
 MINIMUM_TRADED_INSTRUMENTS_FOR_AGGRESSION = 2
+
+# institutional_metrics_spec.md section 3(b) -- delta-space interpolation
+# for RR25/BF25 (replaces the nearest-delta pick used by
+# _calculate_25_delta_risk_reversal, which is unaffected and stays as-is).
+MIN_ABS_DELTA_FOR_INTERPOLATION = 0.02
+MAX_ABS_DELTA_FOR_INTERPOLATION = 0.98
+TARGET_ABS_DELTA_25D = 0.25
+TARGET_ABS_DELTA_ATM = 0.50
+
+
+@dataclass(frozen=True)
+class InterpPoint:
+    """
+    One delta-space-interpolated point on the smile
+    (institutional_metrics_spec.md section 3(b)): the IV and implied strike
+    at a target |delta|, plus the bracketing |delta| pair that produced it.
+
+    ``strike`` is the midpoint of the two bracketing instruments' strikes
+    (per the volatility_skew_history schema comment: "strike implied by the
+    interpolation bracket midpoint") -- it is NOT itself delta-interpolated,
+    only the IV is.
+    """
+
+    iv: float
+    strike: float
+    bracket: Tuple[float, float]  # (|delta_a|, |delta_b|), ascending
 
 
 class VolatilitySurfaceCalculator:
@@ -249,6 +276,185 @@ class VolatilitySurfaceCalculator:
             return None
 
         return min(valid, key=lambda i: abs(i["delta"] - target_delta))
+
+    def _build_delta_points(self, option_type: str) -> List[Dict[str, float]]:
+        """
+        Build the filtered, deduplicated ``(|delta|, iv, strike)`` point set
+        for one option side, per institutional_metrics_spec.md section
+        3(b) steps 1-2:
+
+        1. Keep instruments of this ``option_type`` with a ``mark_iv`` and
+           ``delta``, that are QUOTED (``bid_price > 0 or ask_price > 0``
+           -- missing/None treated as 0), and with
+           ``0.02 <= |delta| <= 0.98``.
+        2. Sort by |delta| ascending; average IV (and strike) at equal
+           |delta| rather than keeping duplicates as separate points.
+
+        Returns:
+            List of ``{"abs_delta", "iv", "strike"}`` dicts, sorted
+            ascending by ``abs_delta``, one per distinct |delta| value.
+        """
+        points: List[Dict[str, float]] = []
+        for inst in self.instruments:
+            if inst.get("option_type") != option_type:
+                continue
+            delta = inst.get("delta")
+            mark_iv = inst.get("mark_iv")
+            if delta is None or mark_iv is None:
+                continue
+
+            bid_price = inst.get("bid_price") or 0
+            ask_price = inst.get("ask_price") or 0
+            if not (bid_price > 0 or ask_price > 0):
+                continue
+
+            abs_delta = abs(delta)
+            if not (MIN_ABS_DELTA_FOR_INTERPOLATION <= abs_delta <= MAX_ABS_DELTA_FOR_INTERPOLATION):
+                continue
+
+            points.append({
+                "abs_delta": abs_delta,
+                "iv": float(mark_iv),
+                "strike": float(inst["strike"]),
+            })
+
+        points.sort(key=lambda p: p["abs_delta"])
+
+        # Average IV/strike at equal |delta| (spec step 2) instead of
+        # keeping duplicate points, which would make bracket selection
+        # ambiguous.
+        merged: List[Dict[str, float]] = []
+        for point in points:
+            if merged and merged[-1]["abs_delta"] == point["abs_delta"]:
+                prev = merged[-1]
+                n = prev.pop("_n", 1) + 1
+                prev["iv"] = prev["iv"] + (point["iv"] - prev["iv"]) / n
+                prev["strike"] = prev["strike"] + (point["strike"] - prev["strike"]) / n
+                prev["_n"] = n
+            else:
+                merged.append(dict(point))
+
+        for point in merged:
+            point.pop("_n", None)
+
+        return merged
+
+    def interpolate_iv_at_delta(
+        self, option_type: str, target_abs_delta: float
+    ) -> Optional[InterpPoint]:
+        """
+        Interpolate IV (and implied strike) at ``target_abs_delta`` for one
+        option side, linear in delta space
+        (institutional_metrics_spec.md section 3(b) steps 3-5).
+
+        Never extrapolates: if the full chain does not reach
+        ``target_abs_delta`` on this side (no quote with |delta| <= target,
+        or none with |delta| >= target), returns None. This is the
+        replacement for ``_find_closest_delta``'s "closest, however far"
+        pick -- ``_find_closest_delta`` and ``_calculate_25_delta_risk_
+        reversal`` are unchanged and still used by other consumers.
+
+        Args:
+            option_type: "C" or "P".
+            target_abs_delta: Target |delta|, e.g. 0.25 for 25-delta, 0.50
+                for the ATM point.
+
+        Returns:
+            ``InterpPoint`` with the interpolated IV, the bracket-midpoint
+            strike, and the bracket |delta| pair used. None if the target
+            is not bracketed by this side's quoted chain.
+        """
+        points = self._build_delta_points(option_type)
+
+        below = [p for p in points if p["abs_delta"] <= target_abs_delta]
+        above = [p for p in points if p["abs_delta"] >= target_abs_delta]
+        if not below or not above:
+            return None
+
+        a = max(below, key=lambda p: p["abs_delta"])
+        b = min(above, key=lambda p: p["abs_delta"])
+
+        if a["abs_delta"] == b["abs_delta"]:
+            # Exact match (or a single point straddling both lists) --
+            # return it directly, avoiding a division by zero below.
+            return InterpPoint(
+                iv=a["iv"], strike=a["strike"],
+                bracket=(a["abs_delta"], b["abs_delta"]),
+            )
+
+        weight = (target_abs_delta - a["abs_delta"]) / (b["abs_delta"] - a["abs_delta"])
+        iv = a["iv"] + weight * (b["iv"] - a["iv"])
+        strike = (a["strike"] + b["strike"]) / 2.0  # bracket midpoint, not delta-weighted
+
+        return InterpPoint(
+            iv=iv, strike=strike,
+            bracket=(a["abs_delta"], b["abs_delta"]),
+        )
+
+    def calculate_risk_reversal_butterfly(self) -> Dict[str, Any]:
+        """
+        Calculate the full-chain, delta-interpolated 25-delta risk reversal
+        and butterfly (institutional_metrics_spec.md section 3(b)/(c),
+        Migration M3 / Task C4). Additive: does not replace
+        ``_calculate_25_delta_risk_reversal``/``skew_25d`` (nearest-delta
+        pick, kept unchanged for other consumers).
+
+        RR25 = IV(25d call) - IV(25d put)  (call - put; negative = puts
+            bid = downside skew).
+        BF25 = (IV(25d call) + IV(25d put)) / 2 - ATM_IV, where ATM_IV is
+            interpolated at |delta|=0.50, averaged across call and put
+            sides (removes the "ATM = mean of the two 25d picks"
+            degeneracy of the old nearest-delta code, F2).
+
+        Either quantity is None when its required interpolation(s) are not
+        bracketed by the chain (never extrapolated) -- see
+        ``interpolate_iv_at_delta``.
+
+        Returns:
+            Dict with ``rr_25d``, ``bf_25d``, ``call_25d_iv``,
+            ``put_25d_iv``, ``call_25d_strike``, ``put_25d_strike``,
+            ``atm_iv_interp``, ``call_bracket``, ``put_bracket``,
+            ``n_quotes_used`` (count of quoted, delta-range-filtered
+            instruments across BOTH sides that fed the interpolation --
+            the chain breadth ``volatility_skew_history.n_quotes_used``
+            persists, per spec: filter thin rows, ``n_quotes_used >= 8``,
+            out of percentile windows), and ``method`` ("linear_delta").
+        """
+        call_pt = self.interpolate_iv_at_delta("C", TARGET_ABS_DELTA_25D)
+        put_pt = self.interpolate_iv_at_delta("P", TARGET_ABS_DELTA_25D)
+        call_atm_pt = self.interpolate_iv_at_delta("C", TARGET_ABS_DELTA_ATM)
+        put_atm_pt = self.interpolate_iv_at_delta("P", TARGET_ABS_DELTA_ATM)
+
+        atm_iv_interp: Optional[float] = None
+        if call_atm_pt is not None and put_atm_pt is not None:
+            atm_iv_interp = (call_atm_pt.iv + put_atm_pt.iv) / 2.0
+
+        call_25d_iv = call_pt.iv if call_pt is not None else None
+        put_25d_iv = put_pt.iv if put_pt is not None else None
+
+        rr_25d: Optional[float] = None
+        if call_25d_iv is not None and put_25d_iv is not None:
+            rr_25d = call_25d_iv - put_25d_iv
+
+        bf_25d: Optional[float] = None
+        if call_25d_iv is not None and put_25d_iv is not None and atm_iv_interp is not None:
+            bf_25d = (call_25d_iv + put_25d_iv) / 2.0 - atm_iv_interp
+
+        n_quotes_used = len(self._build_delta_points("C")) + len(self._build_delta_points("P"))
+
+        return {
+            "rr_25d": rr_25d,
+            "bf_25d": bf_25d,
+            "call_25d_iv": call_25d_iv,
+            "put_25d_iv": put_25d_iv,
+            "call_25d_strike": call_pt.strike if call_pt is not None else None,
+            "put_25d_strike": put_pt.strike if put_pt is not None else None,
+            "atm_iv_interp": atm_iv_interp,
+            "call_bracket": call_pt.bracket if call_pt is not None else None,
+            "put_bracket": put_pt.bracket if put_pt is not None else None,
+            "n_quotes_used": n_quotes_used,
+            "method": "linear_delta",
+        }
 
     def _calculate_pc_by_moneyness(self) -> Dict[str, Any]:
         """

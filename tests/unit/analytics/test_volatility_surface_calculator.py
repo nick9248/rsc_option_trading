@@ -337,3 +337,170 @@ class TestRiskReversalSignConvention:
         r = calc._calculate_25_delta_risk_reversal()
         assert r["risk_reversal_25d"] == pytest.approx(0.0)
         assert r["interpretation"] == "Balanced"
+
+
+def _quoted_instrument(strike, option_type, delta, mark_iv, bid_price=1.0, ask_price=1.0):
+    """
+    Instrument dict for the delta-interpolation (RR25/BF25) tests
+    (institutional_metrics_spec.md section 3(b)). Unlike ``_make_instrument``,
+    includes bid_price/ask_price -- the "quoted" filter step 1 requires
+    ``bid_price > 0 or ask_price > 0``.
+    """
+    return {
+        "instrument_name": f"BTC-28MAR26-{int(strike)}-{option_type}",
+        "expiration": "28MAR26",
+        "strike": strike,
+        "option_type": option_type,
+        "open_interest": 100,
+        "volume": 10,
+        "mark_price": 0.05,
+        "mark_iv": mark_iv,
+        "delta": delta,
+        "bid_price": bid_price,
+        "ask_price": ask_price,
+    }
+
+
+class TestInterpolateIvAtDelta:
+    """
+    institutional_metrics_spec.md section 3(b): delta-space interpolation
+    for the 25-delta risk reversal / butterfly, replacing the nearest-delta
+    pick used by ``_calculate_25_delta_risk_reversal``.
+    """
+
+    def test_t3_1_interpolation_and_both_quantities(self):
+        """
+        Acceptance test T3.1. Calls (|delta|=0.30, IV=32.0), (|delta|=0.20,
+        IV=36.0); puts (|delta|=0.30, IV=40.0), (|delta|=0.20, IV=44.0).
+        Also includes one call and one put exactly at |delta|=0.50 (both
+        IV=35.0) so the ATM interpolation at |delta|=0.50 -- averaged across
+        call and put sides -- reproduces the spec's given ATM=35.0 (the
+        spec's abbreviated fixture states this as a given fact without
+        showing the points that produce it).
+
+        Expected: IV_c(0.25)=34.0, IV_p(0.25)=42.0, RR25=-8.0, BF25=+3.0.
+        """
+        instruments = [
+            _quoted_instrument(90_000 * 1.30, "C", 0.30, 32.0),
+            _quoted_instrument(90_000 * 1.20, "C", 0.20, 36.0),
+            _quoted_instrument(90_000 * 0.70, "P", -0.30, 40.0),
+            _quoted_instrument(90_000 * 0.80, "P", -0.20, 44.0),
+            _quoted_instrument(90_000, "C", 0.50, 35.0),
+            _quoted_instrument(90_000, "P", -0.50, 35.0),
+        ]
+        calc = VolatilitySurfaceCalculator(instruments, 90_000.0, "28MAR26")
+
+        call_pt = calc.interpolate_iv_at_delta("C", 0.25)
+        put_pt = calc.interpolate_iv_at_delta("P", 0.25)
+        assert call_pt.iv == pytest.approx(34.0)
+        assert put_pt.iv == pytest.approx(42.0)
+
+        result = calc.calculate_risk_reversal_butterfly()
+        assert result["rr_25d"] == pytest.approx(-8.0)
+        assert result["bf_25d"] == pytest.approx(3.0)
+        assert result["call_25d_iv"] == pytest.approx(34.0)
+        assert result["put_25d_iv"] == pytest.approx(42.0)
+        assert result["atm_iv_interp"] == pytest.approx(35.0)
+        assert result["method"] == "linear_delta"
+        assert result["n_quotes_used"] == 6
+
+    def test_t3_2_no_extrapolation(self):
+        """
+        Acceptance test T3.2. Calls only at |delta|=0.45 and |delta|=0.38 --
+        0.25 is not bracketed (both quotes are above 0.25). Must return
+        None, never extrapolate a numeric value.
+        """
+        instruments = [
+            _quoted_instrument(85_000, "C", 0.45, 30.0),
+            _quoted_instrument(88_000, "C", 0.38, 31.0),
+        ]
+        calc = VolatilitySurfaceCalculator(instruments, 90_000.0, "28MAR26")
+
+        assert calc.interpolate_iv_at_delta("C", 0.25) is None
+
+        result = calc.calculate_risk_reversal_butterfly()
+        assert result["rr_25d"] is None
+        assert result["call_25d_iv"] is None
+
+    def test_t3_3_f2_degeneracy_is_gone(self):
+        """
+        Acceptance test T3.3 -- reproduces the real 7AUG26 thin-chain case.
+        Neither side reaches 25-delta (max call |delta|=0.185, max put
+        |delta|=0.022) -- both call_25d_iv and put_25d_iv, and therefore
+        bf_25d, must be None. The old nearest-delta code returned
+        bf25=0.0000 on this exact input; asserting ``is None`` (not ``== 0``)
+        is the point of this test.
+        """
+        instruments = [
+            _quoted_instrument(0, "C", 0.185, 32.79),
+            _quoted_instrument(0, "C", 0.135, 33.50),
+            _quoted_instrument(0, "C", 0.055, 36.88),
+            _quoted_instrument(0, "P", -0.022, 50.39),
+        ]
+        calc = VolatilitySurfaceCalculator(instruments, 90_000.0, "28MAR26")
+
+        result = calc.calculate_risk_reversal_butterfly()
+        assert result["call_25d_iv"] is None
+        assert result["put_25d_iv"] is None
+        assert result["bf_25d"] is None
+        assert result["rr_25d"] is None
+
+    def test_unquoted_instrument_excluded(self):
+        """
+        Step 1 of the delta-interpolation algorithm: only instruments with
+        bid_price > 0 or ask_price > 0 are "quoted" and usable. A quote-less
+        instrument sitting exactly at the bracket must be excluded, so the
+        bracket falls back to (or fails against) the next quoted point.
+        """
+        instruments = [
+            _quoted_instrument(90_000 * 1.25, "C", 0.25, 999.0, bid_price=0, ask_price=0),
+            _quoted_instrument(90_000 * 1.30, "C", 0.30, 32.0),
+            _quoted_instrument(90_000 * 1.20, "C", 0.20, 36.0),
+        ]
+        calc = VolatilitySurfaceCalculator(instruments, 90_000.0, "28MAR26")
+
+        point = calc.interpolate_iv_at_delta("C", 0.25)
+        # The unquoted 999.0 IV at exactly 0.25 must NOT be picked directly;
+        # interpolation between the two quoted brackets (0.20/0.30) must
+        # still land on 34.0, same as T3.1.
+        assert point.iv == pytest.approx(34.0)
+
+    def test_delta_outside_valid_range_excluded(self):
+        """Step 1: 0.02 <= |delta| <= 0.98 only. A |delta|=0.99 point is
+        excluded from the bracket search entirely."""
+        instruments = [
+            _quoted_instrument(90_000 * 1.60, "C", 0.99, 10.0),
+            _quoted_instrument(90_000 * 1.30, "C", 0.30, 32.0),
+            _quoted_instrument(90_000 * 1.20, "C", 0.20, 36.0),
+        ]
+        calc = VolatilitySurfaceCalculator(instruments, 90_000.0, "28MAR26")
+
+        point = calc.interpolate_iv_at_delta("C", 0.25)
+        assert point.iv == pytest.approx(34.0)
+        assert point.bracket == (0.20, 0.30)
+
+    def test_duplicate_delta_averaged(self):
+        """Duplicate |delta| values (e.g. call and put at the same strike
+        rounding to the same |delta|) are averaged before interpolation,
+        not treated as two separate brackets."""
+        instruments = [
+            _quoted_instrument(90_000 * 1.20, "C", 0.20, 34.0),
+            _quoted_instrument(90_000 * 1.20 + 1, "C", 0.20, 38.0),  # duplicate |delta|, averages to 36.0
+            _quoted_instrument(90_000 * 1.30, "C", 0.30, 32.0),
+        ]
+        calc = VolatilitySurfaceCalculator(instruments, 90_000.0, "28MAR26")
+
+        point = calc.interpolate_iv_at_delta("C", 0.25)
+        assert point.iv == pytest.approx(34.0)  # same as T3.1's 32/36 bracket
+
+    def test_exact_delta_match_no_division_by_zero(self):
+        """target_abs_delta exactly equal to an existing quote's |delta|
+        must return that quote's IV directly, not divide by zero."""
+        instruments = [
+            _quoted_instrument(90_000 * 1.25, "C", 0.25, 33.5),
+            _quoted_instrument(90_000 * 1.40, "C", 0.40, 28.0),
+        ]
+        calc = VolatilitySurfaceCalculator(instruments, 90_000.0, "28MAR26")
+
+        point = calc.interpolate_iv_at_delta("C", 0.25)
+        assert point.iv == pytest.approx(33.5)
