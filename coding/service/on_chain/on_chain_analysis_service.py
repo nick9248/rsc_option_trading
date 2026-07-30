@@ -22,6 +22,11 @@ from coding.core.analytics.chart_generator import (
 )
 from coding.core.analytics.dealer_inventory_calculator import DealerInventoryCalculator
 from coding.core.analytics.gex_dex_calculator import GexDexCalculator
+from coding.core.analytics.market_wide_calculator import MarketWideCalculator
+from coding.core.analytics.results.market_wide_results import (
+    SkewTermStructureEntry,
+    SkewTermStructureResult,
+)
 from coding.core.analytics.historical_normalizer import (
     HistoricalNormalizer,
     MetricSpec,
@@ -780,6 +785,120 @@ class OnChainAnalysisService:
         stale_since = self._compute_historical_context_staleness(currency, front_month, tables_used)
         return metrics, front_month, stale_since
 
+    def _build_skew_term_structure(
+        self,
+        analyzer: OnChainMetricsCalculator,
+        currency: str,
+    ) -> Optional[SkewTermStructureResult]:
+        """
+        Build the SKEW TERM STRUCTURE result (institutional_metrics_spec.md
+        section 3(c), Task C4): one row per expiry with the delta-
+        interpolated RR25/BF25 computed during the vol-surface phase
+        (``analyzer._skew_by_expiry``), plus each metric's own 30d
+        percentile/regime against ``volatility_skew_history`` -- C1's
+        HistoricalNormalizer pattern, applied per-expiry (section 1's
+        "normalized against the same expiry's own history when a
+        per-expiry section renders it"). Only the 30d window is used here
+        (unlike section 1's header block, which shows a 30d/90d pair) --
+        the spec's per-row table format has one percentile per cell.
+
+        Decision D10 (binding): ``volatility_skew_history`` starts EMPTY.
+        Every percentile/regime field is expected to be None (C1's
+        "insufficient history" fallback, rendered by
+        ``format_skew_term_structure_section``) until the daemon has
+        written >= ``HistoricalNormalizer.MIN_OBS`` hourly rows for that
+        expiry. This is documented, accepted behavior, not a bug.
+
+        Returns:
+            None if there is no repository, or the vol-surface phase
+            produced no skew data at all (mirrors ``_build_normalized_
+            metrics``' "no repository -> skip" convention). A failure
+            building ONE expiration's row is logged and that expiration is
+            skipped; the rest still render (never raises).
+        """
+        if self.repository is None:
+            return None
+
+        skew_by_expiry = analyzer._skew_by_expiry
+        if not skew_by_expiry:
+            return None
+
+        now_utc = datetime.now(timezone.utc)
+        lookback_30d = self._NORMALIZER_LOOKBACK_30D_HOURS
+
+        entries: List[SkewTermStructureEntry] = []
+        for expiration, skew in skew_by_expiry.items():
+            try:
+                dte = MarketWideCalculator._calculate_days_to_expiry(expiration, now_utc)
+                if dte is None:
+                    continue
+
+                rr_25d = skew.get("rr_25d")
+                bf_25d = skew.get("bf_25d")
+
+                rr_percentile_30d: Optional[float] = None
+                rr_regime_30d: Optional[str] = None
+                rr_n_30d = 0
+                if rr_25d is not None:
+                    rr_history_30d = self.repository.get_metric_history(
+                        table="volatility_skew_history", column="rr_25d",
+                        currency=currency, lookback_hours=lookback_30d,
+                        expiration=expiration,
+                    )
+                    rr_n_30d = len(rr_history_30d)
+                    if rr_n_30d >= HistoricalNormalizer.MIN_OBS:
+                        rr_percentile_30d = HistoricalNormalizer.percentile(rr_25d, rr_history_30d)
+                        rr_regime_30d = HistoricalNormalizer.regime_label(rr_percentile_30d)
+
+                bf_percentile_30d: Optional[float] = None
+                bf_n_30d = 0
+                if bf_25d is not None:
+                    bf_history_30d = self.repository.get_metric_history(
+                        table="volatility_skew_history", column="bf_25d",
+                        currency=currency, lookback_hours=lookback_30d,
+                        expiration=expiration,
+                    )
+                    bf_n_30d = len(bf_history_30d)
+                    if bf_n_30d >= HistoricalNormalizer.MIN_OBS:
+                        bf_percentile_30d = HistoricalNormalizer.percentile(bf_25d, bf_history_30d)
+
+                entries.append(SkewTermStructureEntry(
+                    expiration=expiration, dte=dte,
+                    atm_iv_interp=skew.get("atm_iv_interp"),
+                    n_quotes_used=skew.get("n_quotes_used"),
+                    rr_25d=rr_25d, rr_percentile_30d=rr_percentile_30d,
+                    rr_regime_30d=rr_regime_30d, rr_n_30d=rr_n_30d,
+                    bf_25d=bf_25d, bf_percentile_30d=bf_percentile_30d, bf_n_30d=bf_n_30d,
+                ))
+            except ValueError as exc:
+                logger.error(
+                    "skew_term_structure history hit a whitelist violation "
+                    "(programming bug, not a data issue) for %s %s: %s",
+                    currency, expiration, exc,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to build skew term structure row for %s %s: %s",
+                    currency, expiration, exc,
+                )
+
+        if not entries:
+            return None
+
+        entries.sort(key=lambda e: e.dte)
+
+        # RR_slope = RR25(back) - RR25(front): back is the LAST entry
+        # (farthest DTE), front is the FIRST (nearest DTE) -- matches the
+        # spec's own worked numeric example exactly (section 3(c): 25JUL26
+        # -3.80 vs 25DEC26 -4.34 -> -0.54), not the surrounding prose
+        # ("over the two nearest standard expiries"), which the example
+        # contradicts if read literally. See Task C4 report.
+        rr_slope: Optional[float] = None
+        if len(entries) >= 2 and entries[0].rr_25d is not None and entries[-1].rr_25d is not None:
+            rr_slope = entries[-1].rr_25d - entries[0].rr_25d
+
+        return SkewTermStructureResult(entries=tuple(entries), rr_slope=rr_slope)
+
     def _fetch_greeks_and_store_gex_dex(
         self,
         analyzer: OnChainMetricsCalculator,
@@ -823,6 +942,17 @@ class OnChainAnalysisService:
                     item_with_greeks["vega"] = greeks.get("vega")
                     item_with_greeks["mark_iv"] = ticker.get("mark_iv")
                     item_with_greeks["underlying_price"] = ticker.get("underlying_price", analyzer.index_price)
+                    # institutional_metrics_spec.md section 3(b) step 1
+                    # (Task C4): RR25/BF25's "quoted" filter needs bid/ask.
+                    # Ticker's fields are best_bid_price/best_ask_price
+                    # (unlike book-summary's bid_price/ask_price, which the
+                    # daemon's own enrichment reads) -- normalized to the
+                    # same bid_price/ask_price keys here so
+                    # VolatilitySurfaceCalculator's filter works the same
+                    # regardless of which enrichment path produced the
+                    # instrument dict.
+                    item_with_greeks["bid_price"] = ticker.get("best_bid_price")
+                    item_with_greeks["ask_price"] = ticker.get("best_ask_price")
                     instruments_with_greeks.append(item_with_greeks)
 
                     if (i + 1) % 20 == 0:
@@ -1502,6 +1632,15 @@ class OnChainAnalysisService:
                 result = calculator.calculate()
                 if result.atm_iv is not None:
                     analyzer._atm_ivs[expiration] = result.atm_iv
+
+                # institutional_metrics_spec.md section 3 (Task C4): the
+                # delta-interpolated RR25/BF25, computed alongside ATM IV
+                # from the same calculator/instrument set -- zero
+                # additional work. Stored the same way _atm_ivs is (real
+                # cross-phase data, read later by
+                # _build_skew_term_structure for the SKEW TERM STRUCTURE
+                # report section).
+                analyzer._skew_by_expiry[expiration] = calculator.calculate_risk_reversal_butterfly()
                 if builder is not None:
                     builder.set_vol_surface(expiration, result)
 
@@ -1599,6 +1738,20 @@ class OnChainAnalysisService:
         market_wide_result = orchestrator.run(
             analyzer, currency, progress_callback, aggregate_gex_dex_result,
         )
+
+        # institutional_metrics_spec.md section 3 (Task C4): MarketWide
+        # Orchestrator has no repository/DB access (it only holds self.api)
+        # -- the SKEW TERM STRUCTURE section is DB-dependent (per-expiry
+        # percentile history), so it is built here (which HAS
+        # self.repository) and attached via dataclasses.replace, the same
+        # "post-process the frozen result" pattern
+        # _apply_pcr_percentile_classification already uses.
+        skew_term_structure = self._build_skew_term_structure(analyzer, currency)
+        if skew_term_structure is not None:
+            market_wide_result = dataclasses.replace(
+                market_wide_result, skew_term_structure=skew_term_structure,
+            )
+
         if builder is not None:
             builder.set_market_wide(market_wide_result)
 

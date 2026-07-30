@@ -33,6 +33,62 @@ class TermStructureResult:
 
 
 @dataclass(frozen=True)
+class SkewTermStructureEntry:
+    """
+    One expiration's row in the SKEW TERM STRUCTURE table
+    (institutional_metrics_spec.md section 3(c), Task C4) -- the
+    delta-interpolated RR25/BF25 for one expiry, plus each metric's own
+    30d percentile/regime (institutional_metrics_spec.md section 1's
+    HistoricalNormalizer pattern, applied per-expiry against
+    ``volatility_skew_history``).
+
+    ``rr_25d``/``bf_25d``/``atm_iv_interp`` are None exactly when
+    ``VolatilitySurfaceCalculator.calculate_risk_reversal_butterfly()``
+    returned None for that quantity (chain does not bracket the target
+    delta -- never extrapolated, section 3(b) step 5). The percentile
+    fields are None independently whenever the underlying value is None,
+    OR whenever the metric's own trailing 30d history has fewer than
+    ``HistoricalNormalizer.MIN_OBS`` observations (C1's "insufficient
+    history" pattern -- expected to be the case for a while after this
+    table starts accumulating, per Decision D10).
+    """
+
+    expiration: str
+    dte: float  # fractional days (spec's table shows e.g. "0.6d", "153.6d")
+    atm_iv_interp: Optional[float]
+    n_quotes_used: Optional[int]
+
+    rr_25d: Optional[float]
+    rr_percentile_30d: Optional[float]
+    rr_regime_30d: Optional[str]
+    rr_n_30d: int
+
+    bf_25d: Optional[float]
+    bf_percentile_30d: Optional[float]
+    bf_n_30d: int
+
+
+@dataclass(frozen=True)
+class SkewTermStructureResult:
+    """
+    Full SKEW TERM STRUCTURE across expirations
+    (institutional_metrics_spec.md section 3(c)).
+
+    ``rr_slope``: RR25(back) - RR25(front) -- back is the LAST entry
+    (farthest DTE), front is the FIRST entry (nearest DTE) of ``entries``
+    (already sorted by DTE ascending), matching the spec's own worked
+    numeric example exactly (25JUL26 -3.80 vs 25DEC26 -4.34 -> -0.54);
+    the surrounding prose ("over the two nearest standard expiries") is
+    reconciled to that numeric example, not read literally -- see the
+    Task C4 report's judgment-call note. None when fewer than 2 entries
+    have a non-None ``rr_25d``.
+    """
+
+    entries: Tuple[SkewTermStructureEntry, ...]
+    rr_slope: Optional[float]
+
+
+@dataclass(frozen=True)
 class FuturesBasisEntry:
     """Annualized basis for one futures instrument."""
 
@@ -208,6 +264,13 @@ class MarketWideResult:
     block_trades: Optional[BlockTradesResult]
     cross_asset_correlation: Optional[CrossAssetCorrelationResult]
     failed_sections: Tuple[str, ...]  # M5: names of sections whose calculation raised
+    # institutional_metrics_spec.md section 3(c) (Task C4). Additive, with
+    # a default: MarketWideOrchestrator.run() does not populate this (it
+    # has no repository/DB access) -- OnChainAnalysisService attaches it
+    # via dataclasses.replace() after run() returns (see
+    # _build_skew_term_structure), the same "post-process the frozen
+    # result" pattern _apply_pcr_percentile_classification already uses.
+    skew_term_structure: Optional[SkewTermStructureResult] = None
 
     def to_flat_dict(self) -> Dict[str, Any]:
         """

@@ -30,7 +30,14 @@ from coding.core.analytics.results.expiry_results import (
 )
 from coding.core.analytics.results.flow_results import FlowResult, FlowTotals
 from coding.core.analytics.results.gex_dex_results import GexDexKeyLevels, GexDexResult
-from coding.core.analytics.results.market_wide_results import MarketWideResult, PerpetualFundingResult
+from coding.core.analytics.results.market_wide_results import (
+    MarketWideResult,
+    PerpetualFundingResult,
+    SkewTermStructureEntry,
+    SkewTermStructureResult,
+    TermStructureEntry,
+    TermStructureResult,
+)
 
 GENERATED_AT = datetime(2026, 7, 25, 12, 0, 0)
 
@@ -308,6 +315,44 @@ def test_render_market_wide_from_result_includes_present_sections_only():
     assert "PERPETUAL FUNDING & OI" in text
     assert "FUTURES BASIS" not in text
     assert "IV TERM STRUCTURE" not in text
+
+
+def test_render_market_wide_from_result_includes_skew_term_structure_before_iv_term_structure():
+    """institutional_metrics_spec.md section 9(b): SKEW TERM STRUCTURE
+    (section 3) renders before IV TERM STRUCTURE in the market-wide order
+    (Task C4)."""
+    formatter = OnChainReportFormatter()
+    skew_entry = SkewTermStructureEntry(
+        expiration="25JUL26", dte=0.6, atm_iv_interp=18.51, n_quotes_used=14,
+        rr_25d=-3.80, rr_percentile_30d=None, rr_regime_30d=None, rr_n_30d=0,
+        bf_25d=0.90, bf_percentile_30d=None, bf_n_30d=0,
+    )
+    skew_result = SkewTermStructureResult(entries=(skew_entry,), rr_slope=None)
+    atm_ivs = {"25JUL26": 18.51}
+    term_structure = TermStructureResult(
+        entries=(TermStructureEntry(expiration="25JUL26", dte=0, atm_iv=18.51),),
+        shape="FLAT", spread=0.0, spread_signed=0.0, iv_by_dte=atm_ivs,
+    )
+    mw = MarketWideResult(
+        spot_price=95000.0, currency="BTC", dvol=None, iv_percentile_365d=None,
+        aggregate_gex_dex=None, term_structure=term_structure, futures_basis=None,
+        realized_volatility=None, variance_risk_premium=None, volatility_cone=None,
+        perpetual_funding=None, block_trades=None, cross_asset_correlation=None,
+        failed_sections=(), skew_term_structure=skew_result,
+    )
+    result = _make_result(market_wide=mw)
+    text = formatter.render_market_wide_from_result(result)
+
+    assert "SKEW TERM STRUCTURE" in text
+    assert "IV TERM STRUCTURE" in text
+    assert text.index("SKEW TERM STRUCTURE") < text.index("IV TERM STRUCTURE")
+
+
+def test_render_market_wide_from_result_omits_skew_term_structure_when_none():
+    formatter = OnChainReportFormatter()
+    result = _make_result()  # _make_empty_market_wide() -> skew_term_structure defaults to None
+    text = formatter.render_market_wide_from_result(result)
+    assert "SKEW TERM STRUCTURE" not in text
 
 
 # ---------------------------------------------------------------------------

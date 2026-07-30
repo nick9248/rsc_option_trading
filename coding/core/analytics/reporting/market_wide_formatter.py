@@ -27,12 +27,87 @@ from coding.core.analytics.results.market_wide_results import (
     FuturesBasisResult,
     PerpetualFundingResult,
     RealizedVolatilityResult,
+    SkewTermStructureEntry,
+    SkewTermStructureResult,
     TermStructureResult,
     VarianceRiskPremiumResult,
     VolatilityConeResult,
 )
 
 _SUB_SEPARATOR = "-" * 80
+
+
+def _format_rr25_cell(entry: SkewTermStructureEntry) -> str:
+    """
+    RR25 column: value, then percentile+regime when C1's HistoricalNormalizer
+    has enough accumulated 30d history, else the same "insufficient history"
+    fallback C1 established (n/a + observation count) -- volatility_skew_
+    history starts empty per Decision D10, so this is the expected state
+    for a while.
+    """
+    if entry.rr_25d is None:
+        return "insufficient chain"
+    if entry.rr_percentile_30d is not None:
+        return f"{entry.rr_25d:+.2f}  p{entry.rr_percentile_30d:.0f} {entry.rr_regime_30d}"
+    return f"{entry.rr_25d:+.2f}  n/a ({entry.rr_n_30d} obs)"
+
+
+def _format_bf25_cell(entry: SkewTermStructureEntry) -> str:
+    """
+    BF25 column: matches the spec's worked example format exactly -- value
+    + percentile, no regime word (unlike the RR25 column). Same
+    insufficient-history fallback as RR25.
+    """
+    if entry.bf_25d is None:
+        return "insufficient chain"
+    if entry.bf_percentile_30d is not None:
+        return f"{entry.bf_25d:+.2f}  p{entry.bf_percentile_30d:.0f}"
+    return f"{entry.bf_25d:+.2f}  n/a ({entry.bf_n_30d} obs)"
+
+
+def format_skew_term_structure_section(result: Optional[SkewTermStructureResult]) -> str:
+    """
+    Render the SKEW TERM STRUCTURE section (institutional_metrics_spec.md
+    section 3(c)): one row per expiry (ordered by DTE, already sorted by
+    the caller), RR25/BF25 with their own 30d percentile+regime once
+    enough history has accumulated in ``volatility_skew_history``, else
+    the C1 "insufficient history" fallback -- expected for a while after
+    this table starts accumulating fresh (Decision D10 discards the old
+    degenerate skew_25d history rather than reusing it).
+    """
+    lines = [
+        "SKEW TERM STRUCTURE (25-delta, quote convention: RR = call IV - put IV)",
+        _SUB_SEPARATOR,
+    ]
+
+    if result is None or not result.entries:
+        lines.append("  No skew data available")
+        lines.append("")
+        return "\n".join(lines)
+
+    lines.append(
+        f"  {'Expiry':<10}  {'DTE':>7}  {'ATM IV':>8}  "
+        f"{'RR25':>20}  {'BF25':>14}  {'Chain':>9}"
+    )
+
+    for entry in result.entries:
+        dte_str = f"{entry.dte:.1f}d"
+        atm_str = f"{entry.atm_iv_interp:.2f}%" if entry.atm_iv_interp is not None else "n/a"
+        chain_str = f"{entry.n_quotes_used} quotes" if entry.n_quotes_used is not None else "n/a"
+        lines.append(
+            f"  {entry.expiration:<10}  {dte_str:>7}  {atm_str:>8}  "
+            f"{_format_rr25_cell(entry):>20}  {_format_bf25_cell(entry):>14}  {chain_str:>9}"
+        )
+
+    if result.rr_slope is not None:
+        direction = (
+            "back-month more put-skewed" if result.rr_slope < 0
+            else "back-month more call-skewed"
+        )
+        lines.append(f"  RR slope (front->back): {result.rr_slope:+.2f} vol pts   [{direction}]")
+
+    lines.append("")
+    return "\n".join(lines)
 
 
 def format_term_structure_section(result: Optional[TermStructureResult]) -> str:

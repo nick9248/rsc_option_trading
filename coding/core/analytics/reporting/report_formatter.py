@@ -42,6 +42,7 @@ from coding.core.analytics.reporting.market_wide_formatter import (
     format_futures_basis_section,
     format_perpetual_funding_section,
     format_realized_volatility_section,
+    format_skew_term_structure_section,
     format_term_structure_section,
     format_volatility_cone_section,
     format_vrp_section,
@@ -66,6 +67,12 @@ _SUB_SEPARATOR = "-" * 80
 # OnChainAnalyzer.generate_report()'s legacy section_name loop verbatim.
 _MARKET_WIDE_SECTION_ORDER = (
     "aggregate_gex_dex",
+    # institutional_metrics_spec.md section 9(b)'s new market-wide order
+    # places SKEW TERM STRUCTURE (section 3) between GAMMA ROLL-OFF
+    # (section 5, not yet implemented) and IV TERM STRUCTURE -- inserted
+    # directly before iv_term_structure here since section 5 doesn't exist
+    # yet; the full section 9 reorder (with section 5) is a later task.
+    "skew_term_structure",
     "iv_term_structure",
     "futures_basis",
     "realized_volatility",
@@ -390,6 +397,10 @@ class OnChainReportFormatter:
         if mw.aggregate_gex_dex is not None:
             sections["aggregate_gex_dex"] = format_aggregate_gex_dex_section(
                 mw.aggregate_gex_dex, result.underlying_price, result.currency,
+            )
+        if mw.skew_term_structure is not None:
+            sections["skew_term_structure"] = format_skew_term_structure_section(
+                mw.skew_term_structure
             )
         if mw.term_structure is not None:
             sections["iv_term_structure"] = format_term_structure_section(mw.term_structure)

@@ -13,6 +13,7 @@ from coding.core.analytics.reporting.market_wide_formatter import (
     format_futures_basis_section,
     format_perpetual_funding_section,
     format_realized_volatility_section,
+    format_skew_term_structure_section,
     format_term_structure_section,
     format_volatility_cone_section,
     format_vrp_section,
@@ -25,12 +26,111 @@ from coding.core.analytics.results.market_wide_results import (
     FuturesBasisResult,
     PerpetualFundingResult,
     RealizedVolatilityResult,
+    SkewTermStructureEntry,
+    SkewTermStructureResult,
     TermStructureEntry,
     TermStructureResult,
     VarianceRiskPremiumResult,
     VolatilityConeResult,
     VolatilityConeWindowStats,
 )
+
+
+# ---------------------------------------------------------------------------
+# Skew term structure (institutional_metrics_spec.md section 3(c), Task C4)
+# ---------------------------------------------------------------------------
+
+def _skew_entry(expiration, dte, rr=None, rr_pctile=None, rr_regime=None, rr_n=0,
+                 bf=None, bf_pctile=None, bf_n=0, atm=None, n_quotes=None):
+    return SkewTermStructureEntry(
+        expiration=expiration, dte=dte, atm_iv_interp=atm, n_quotes_used=n_quotes,
+        rr_25d=rr, rr_percentile_30d=rr_pctile, rr_regime_30d=rr_regime, rr_n_30d=rr_n,
+        bf_25d=bf, bf_percentile_30d=bf_pctile, bf_n_30d=bf_n,
+    )
+
+
+def test_skew_term_structure_none_shows_no_data():
+    report = format_skew_term_structure_section(None)
+    assert "SKEW TERM STRUCTURE" in report
+    assert "No skew data available" in report
+
+
+def test_skew_term_structure_empty_entries_shows_no_data():
+    report = format_skew_term_structure_section(SkewTermStructureResult(entries=(), rr_slope=None))
+    assert "No skew data available" in report
+
+
+def test_skew_term_structure_with_history_shows_percentile_and_regime():
+    """Spec's worked example row format: RR25 gets value + percentile +
+    regime word; BF25 gets value + percentile only (no regime word)."""
+    entry = _skew_entry(
+        "25JUL26", dte=0.6, atm=18.51, n_quotes=14,
+        rr=-3.80, rr_pctile=12.0, rr_regime="LOW", rr_n=45,
+        bf=0.90, bf_pctile=44.0, bf_n=45,
+    )
+    result = SkewTermStructureResult(entries=(entry,), rr_slope=None)
+    report = format_skew_term_structure_section(result)
+
+    assert "25JUL26" in report
+    assert "0.6d" in report
+    assert "18.51%" in report
+    assert "-3.80" in report and "p12 LOW" in report
+    assert "+0.90" in report and "p44" in report
+    # BF25 column has no regime word after "p44" (unlike RR25's "p12 LOW") --
+    # the text immediately following "p44" on the BF25 cell must not carry
+    # a regime label the way the RR25 cell does.
+    bf_cell_end = report.split("+0.90  p44", 1)[1].split("\n")[0]
+    assert "LOW" not in bf_cell_end and "NORMAL" not in bf_cell_end
+    assert "14 quotes" in report
+
+
+def test_skew_term_structure_insufficient_history_fallback():
+    """Table starts empty (Decision D10) -- expected state: value present,
+    percentile absent, C1's "n/a (N obs)" fallback shown instead of a
+    fabricated percentile."""
+    entry = _skew_entry(
+        "25JUL26", dte=0.6, atm=18.51, n_quotes=14,
+        rr=-3.80, rr_pctile=None, rr_regime=None, rr_n=0,
+        bf=0.90, bf_pctile=None, bf_n=0,
+    )
+    result = SkewTermStructureResult(entries=(entry,), rr_slope=None)
+    report = format_skew_term_structure_section(result)
+
+    assert "n/a (0 obs)" in report
+    assert "-3.80" in report
+    assert "+0.90" in report
+    # Must never fabricate a percentile when history is insufficient.
+    assert "p0" not in report and " p " not in report
+
+
+def test_skew_term_structure_insufficient_chain_row():
+    """T3.2/T3.3: rr_25d/bf_25d None (chain does not bracket 25-delta) must
+    print 'insufficient chain', never a fabricated 0.0."""
+    entry = _skew_entry("7AUG26", dte=13.0, atm=None, n_quotes=4, rr=None, bf=None)
+    result = SkewTermStructureResult(entries=(entry,), rr_slope=None)
+    report = format_skew_term_structure_section(result)
+
+    assert "insufficient chain" in report
+    assert "0.00" not in report
+
+
+def test_skew_term_structure_rr_slope_rendered():
+    entries = (
+        _skew_entry("25JUL26", dte=0.6, rr=-3.80, bf=0.90),
+        _skew_entry("25DEC26", dte=153.6, rr=-4.34, bf=2.85),
+    )
+    result = SkewTermStructureResult(entries=entries, rr_slope=-0.54)
+    report = format_skew_term_structure_section(result)
+
+    assert "RR slope (front->back): -0.54 vol pts" in report
+    assert "back-month more put-skewed" in report
+
+
+def test_skew_term_structure_no_slope_line_when_none():
+    entry = _skew_entry("25JUL26", dte=0.6, rr=-3.80, bf=0.90)
+    result = SkewTermStructureResult(entries=(entry,), rr_slope=None)
+    report = format_skew_term_structure_section(result)
+    assert "RR slope" not in report
 
 
 # ---------------------------------------------------------------------------

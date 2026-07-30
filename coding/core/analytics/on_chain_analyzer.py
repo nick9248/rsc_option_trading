@@ -200,6 +200,12 @@ class OnChainMetricsCalculator:
         self.market_metrics: Dict[str, Any] = {}  # DVOL, funding rate, IV rank/percentile
         self._recent_trades: List[Dict[str, Any]] = []  # For block trade detection
         self._atm_ivs: Dict[str, float] = {}  # ATM IV per expiration (for term structure)
+        # institutional_metrics_spec.md section 3 (Task C4): delta-
+        # interpolated RR25/BF25 dict (VolatilitySurfaceCalculator.
+        # calculate_risk_reversal_butterfly()'s return shape) per
+        # expiration, populated during the same vol-surface phase that
+        # fills _atm_ivs -- feeds the SKEW TERM STRUCTURE report section.
+        self._skew_by_expiry: Dict[str, Dict[str, Any]] = {}
 
         if data:
             self.forward_price_by_expiration = self._extract_forward_prices(data)

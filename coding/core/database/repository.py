@@ -2514,6 +2514,18 @@ class DatabaseRepository:
         ("onchain_volatility_snapshots", "vrp_absolute"): "snapshot_hour",
         ("volatility_index_history", "dvol"): "date",
         ("funding_rate_history", "funding_rate"): "date",
+        # institutional_metrics_spec.md section 3(c) (Task C4): RR25/BF25
+        # term-structure percentile history.
+        ("volatility_skew_history", "rr_25d"): "snapshot_hour",
+        ("volatility_skew_history", "bf_25d"): "snapshot_hour",
+    }
+
+    # institutional_metrics_spec.md section 3(c): "so section 1 can filter
+    # thin rows out of the percentile window (WHERE n_quotes_used >= 8)".
+    # A per-table extra WHERE clause, not a second whitelist mechanism --
+    # get_metric_history appends this for the one table that needs it.
+    _METRIC_HISTORY_EXTRA_FILTER = {
+        "volatility_skew_history": "n_quotes_used >= 8",
     }
 
     def get_metric_history(
@@ -2558,12 +2570,15 @@ class DatabaseRepository:
                 f"Allowed pairs: {sorted(self._METRIC_HISTORY_WHITELIST)}"
             )
         col = self._METRIC_HISTORY_WHITELIST[key] if time_column is None else time_column
+        extra_filter = self._METRIC_HISTORY_EXTRA_FILTER.get(table)
+        extra_clause = f" AND {extra_filter}" if extra_filter else ""
 
         if expiration is not None:
             sql = (
                 f"SELECT {column} FROM {table} "
                 f"WHERE currency = %s AND expiration = %s "
-                f"AND {col} >= NOW() - INTERVAL '1 hour' * %s "
+                f"AND {col} >= NOW() - INTERVAL '1 hour' * %s"
+                f"{extra_clause} "
                 f"ORDER BY {col} ASC"
             )
             params = (currency, expiration, lookback_hours)
@@ -2571,7 +2586,8 @@ class DatabaseRepository:
             sql = (
                 f"SELECT {column} FROM {table} "
                 f"WHERE currency = %s "
-                f"AND {col} >= NOW() - INTERVAL '1 hour' * %s "
+                f"AND {col} >= NOW() - INTERVAL '1 hour' * %s"
+                f"{extra_clause} "
                 f"ORDER BY {col} ASC"
             )
             params = (currency, lookback_hours)

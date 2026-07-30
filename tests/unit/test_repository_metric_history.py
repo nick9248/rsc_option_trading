@@ -143,6 +143,61 @@ class TestResultShape:
         assert result == []
 
 
+class TestVolatilitySkewHistoryWhitelist:
+    """
+    institutional_metrics_spec.md section 3(c): rr_25d/bf_25d are
+    whitelisted for percentile windows via the SAME generic reader,
+    additionally filtered ``WHERE n_quotes_used >= 8`` so thin-chain rows
+    (the class of degeneracy this whole table replaces, F2) never feed a
+    percentile.
+    """
+
+    def test_rr_25d_and_bf_25d_are_whitelisted(self):
+        repo = _make_repo()
+        ctx, mock_cursor = _patched(repo, [])
+        try:
+            repo.get_metric_history(
+                table="volatility_skew_history", column="rr_25d",
+                currency="BTC", lookback_hours=720, expiration="25JUL26",
+            )
+            repo.get_metric_history(
+                table="volatility_skew_history", column="bf_25d",
+                currency="BTC", lookback_hours=720, expiration="25JUL26",
+            )
+        finally:
+            ctx.stop()
+        assert mock_cursor.execute.call_count == 2
+
+    def test_query_filters_on_n_quotes_used(self):
+        repo = _make_repo()
+        ctx, mock_cursor = _patched(repo, [])
+        try:
+            repo.get_metric_history(
+                table="volatility_skew_history", column="rr_25d",
+                currency="BTC", lookback_hours=720, expiration="25JUL26",
+            )
+        finally:
+            ctx.stop()
+        sql, params = mock_cursor.execute.call_args[0]
+        assert "n_quotes_used >= 8" in sql
+        assert "rr_25d" in sql and "volatility_skew_history" in sql
+
+    def test_other_whitelisted_tables_unaffected_by_the_extra_filter(self):
+        """The n_quotes_used filter is specific to volatility_skew_history
+        -- it must not leak into other tables' queries."""
+        repo = _make_repo()
+        ctx, mock_cursor = _patched(repo, [])
+        try:
+            repo.get_metric_history(
+                table="onchain_analysis_snapshots", column="total_net_gex",
+                currency="BTC", lookback_hours=720, expiration="25JUL26",
+            )
+        finally:
+            ctx.stop()
+        sql, _ = mock_cursor.execute.call_args[0]
+        assert "n_quotes_used" not in sql
+
+
 class TestGetMetricFreshness:
     def test_returns_max_timestamp(self):
         repo = _make_repo()
