@@ -14,7 +14,9 @@ from typing import Any, Dict, List, Optional
 
 from coding.core.analytics.black_scholes_calculator import BlackScholesCalculator
 from coding.core.analytics.gex_dex_calculator import GexDexCalculator
+from coding.core.analytics.market_wide_calculator import MarketWideCalculator
 from coding.core.analytics.on_chain_analyzer import OnChainMetricsCalculator
+from coding.core.analytics.volatility_surface_calculator import VolatilitySurfaceCalculator
 from coding.core.config import SUPPORTED_CURRENCIES
 from coding.core.database.repository import DatabaseRepository
 from coding.service.data_collection.hourly_aggregation_service import HourlyAggregationService
@@ -675,6 +677,18 @@ class ProspectiveCollector:
                         forward_price=forward_price,
                     )
 
+                    # institutional_metrics_spec.md Migration M3 / section 3
+                    # (Task C4): full-chain delta-interpolated RR25/BF25,
+                    # persisted to volatility_skew_history. gex_instruments
+                    # is this expiry's full enriched chain (already holds
+                    # mark_iv, delta, bid_price/ask_price) -- zero
+                    # additional API cost. Isolated in its own try/except
+                    # (own helper) so a failure here never blocks the
+                    # GEX/DEX save above, which just succeeded.
+                    self._calculate_and_save_skew(
+                        currency, hour, expiration, gex_instruments, forward_price,
+                    )
+
                     snapshots_saved += 1
 
                 except (AttributeError, TypeError):
@@ -766,6 +780,54 @@ class ProspectiveCollector:
             logger.error(f"    On-chain analysis failed: {e}", exc_info=True)
             raise
 
+    def _calculate_and_save_skew(
+        self,
+        currency: str,
+        hour: datetime,
+        expiration: str,
+        gex_instruments: List[Dict],
+        forward_price: float,
+    ) -> None:
+        """
+        Compute the delta-interpolated RR25/BF25 term-structure row for one
+        expiration and persist it to ``volatility_skew_history``
+        (institutional_metrics_spec.md Migration M3 / section 3, Task C4).
+
+        Spot anchor is ``forward_price`` (this expiry's own forward), not
+        the index -- bugfix_spec.md Item 7 anchor table: 25d strike
+        selection and ATM IV are settlement-space, matching the existing
+        convention in ``on_chain_analysis_service.py``'s
+        ``VolatilitySurfaceCalculator`` call site.
+
+        Isolated in its own try/except: a failure here (bad chain shape,
+        DB hiccup) is logged and skipped -- it must never take down the
+        GEX/DEX save this method runs immediately after, which already
+        succeeded by the time this is called.
+        """
+        try:
+            surface_calc = VolatilitySurfaceCalculator(
+                instruments=gex_instruments,
+                spot_price=forward_price,
+                expiration=expiration,
+            )
+            skew = surface_calc.calculate_risk_reversal_butterfly()
+
+            now_utc = datetime.now(timezone.utc)
+            dte_days = MarketWideCalculator._calculate_days_to_expiry(expiration, now_utc)
+            dte_years = (dte_days / 365.0) if dte_days is not None else None
+
+            self.repo.save_volatility_skew(
+                snapshot_hour=hour,
+                currency=currency,
+                expiration=expiration,
+                dte_years=dte_years,
+                skew=skew,
+            )
+        except Exception as e:
+            logger.warning(
+                f"    Failed to compute/save RR25/BF25 skew for {expiration}: {e}"
+            )
+
     def _enrich_with_greeks(
         self,
         instruments: List[Dict],
@@ -774,7 +836,10 @@ class ProspectiveCollector:
     ) -> List[Dict]:
         """
         Promote greeks from the nested 'greeks' dict in the raw book-summary items
-        to the top level of each instrument dict.
+        to the top level of each instrument dict. Also carries bid_price/ask_price
+        from the same raw item (needed by VolatilitySurfaceCalculator's RR25/BF25
+        "quoted" filter, institutional_metrics_spec.md section 3(b) step 1 --
+        parse_instruments() strips these from the top-level parsed dict).
 
         Falls back to Black-Scholes when the API omits greeks (delta/gamma are 0
         or absent). This is required before feeding GexDexCalculator, which reads
@@ -814,12 +879,19 @@ class ProspectiveCollector:
                             vega = vega or calc["vega"]
                             theta = theta or calc["theta"]
 
+            # institutional_metrics_spec.md section 3(b) step 1 (Task C4):
+            # the RR25/BF25 delta-interpolation's "quoted" filter needs
+            # bid_price/ask_price, which parse_instruments() already
+            # stripped from `inst`. Pulled from the same raw book-summary
+            # item greeks came from -- no extra API call.
             enriched.append({
                 **inst,
                 "delta": delta or 0,
                 "gamma": gamma or 0,
                 "vega": vega or 0,
                 "theta": theta or 0,
+                "bid_price": raw.get("bid_price"),
+                "ask_price": raw.get("ask_price"),
             })
 
         return enriched

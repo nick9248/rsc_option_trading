@@ -1627,6 +1627,84 @@ class DatabaseRepository:
             })
             logger.info(f"Saved volatility snapshot for {currency} {expiration} at {snapshot_hour}")
 
+    def save_volatility_skew(
+        self,
+        snapshot_hour,
+        currency: str,
+        expiration: str,
+        dte_years: Optional[float],
+        skew: Dict[str, Any],
+    ) -> None:
+        """
+        Persist one delta-interpolated RR25/BF25 term-structure row to
+        ``volatility_skew_history`` (migration 018 /
+        institutional_metrics_spec.md Migration M3, section 3, Task C4).
+
+        Decision D10 (BINDING, migration 018's header): this table is a
+        fresh series, unrelated to and NOT backfilled from the degenerate
+        ``onchain_volatility_snapshots.skew_25d``/``call_25d_iv``/
+        ``put_25d_iv`` history -- that history is untouched.
+
+        Args:
+            snapshot_hour: Timestamp of the snapshot hour.
+            currency: Currency symbol (e.g., "BTC", "ETH").
+            expiration: Expiration date string (e.g., "25JUL26").
+            dte_years: Days-to-expiry in years, or None if it could not be
+                computed (never blocks the write -- the row is still
+                persisted with a NULL dte_years).
+            skew: The dict returned by ``VolatilitySurfaceCalculator.
+                calculate_risk_reversal_butterfly()`` -- rr_25d, bf_25d,
+                call_25d_iv, put_25d_iv, call_25d_strike, put_25d_strike,
+                atm_iv_interp, n_quotes_used, method. Any of the
+                interpolated values may be None (T3.2/T3.3: chain does not
+                bracket the target delta) -- written as SQL NULL, never
+                coerced to 0. ``call_bracket``/``put_bracket`` (also in the
+                dict) are not persisted -- the schema has no column for
+                them; they exist for report/debugging use only.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO volatility_skew_history (
+                    snapshot_hour, currency, expiration, dte_years,
+                    atm_iv_interp, call_25d_iv, put_25d_iv,
+                    call_25d_strike, put_25d_strike,
+                    rr_25d, bf_25d, n_quotes_used, interp_method
+                ) VALUES (
+                    %(snapshot_hour)s, %(currency)s, %(expiration)s, %(dte_years)s,
+                    %(atm_iv_interp)s, %(call_25d_iv)s, %(put_25d_iv)s,
+                    %(call_25d_strike)s, %(put_25d_strike)s,
+                    %(rr_25d)s, %(bf_25d)s, %(n_quotes_used)s, %(interp_method)s
+                )
+                ON CONFLICT (snapshot_hour, currency, expiration) DO UPDATE SET
+                    dte_years = EXCLUDED.dte_years,
+                    atm_iv_interp = EXCLUDED.atm_iv_interp,
+                    call_25d_iv = EXCLUDED.call_25d_iv,
+                    put_25d_iv = EXCLUDED.put_25d_iv,
+                    call_25d_strike = EXCLUDED.call_25d_strike,
+                    put_25d_strike = EXCLUDED.put_25d_strike,
+                    rr_25d = EXCLUDED.rr_25d,
+                    bf_25d = EXCLUDED.bf_25d,
+                    n_quotes_used = EXCLUDED.n_quotes_used,
+                    interp_method = EXCLUDED.interp_method
+            """, {
+                "snapshot_hour": snapshot_hour,
+                "currency": currency,
+                "expiration": expiration,
+                "dte_years": dte_years,
+                "atm_iv_interp": skew.get("atm_iv_interp"),
+                "call_25d_iv": skew.get("call_25d_iv"),
+                "put_25d_iv": skew.get("put_25d_iv"),
+                "call_25d_strike": skew.get("call_25d_strike"),
+                "put_25d_strike": skew.get("put_25d_strike"),
+                "rr_25d": skew.get("rr_25d"),
+                "bf_25d": skew.get("bf_25d"),
+                "n_quotes_used": skew.get("n_quotes_used"),
+                "interp_method": skew.get("method", "linear_delta"),
+            })
+            logger.info(
+                f"Saved volatility skew (RR25/BF25) for {currency} {expiration} at {snapshot_hour}"
+            )
+
     def get_volatility_snapshots_for_percentile_backfill(
         self,
         currency: str,
