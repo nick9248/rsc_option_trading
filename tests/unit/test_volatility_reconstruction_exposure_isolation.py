@@ -76,6 +76,49 @@ class TestExposureAggregatesNeverRaise:
         assert result["vex_peak_strike"] == 64000.0
 
 
+class TestSkippedInstrumentsLogged:
+    """
+    Task C5 review fix (Important #2): skipped_instruments was computed by
+    ExposureProfileCalculator but silently discarded here -- a missing
+    mark_iv, bad option_type, or unparseable instrument name all skipped
+    with zero diagnostics. Now logged as a warning when non-zero.
+    """
+
+    def test_nonzero_skipped_count_logs_warning(self, caplog):
+        service = VolatilityReconstructionService.__new__(VolatilityReconstructionService)
+        service.repo = MagicMock()
+
+        instruments = [
+            _instrument("BTC-02APR26-64000-C", 64000, "C", oi=1000),
+            # Missing mark_iv -- skipped by the calculator.
+            {"instrument_name": "BTC-02APR26-70000-C", "strike": 70000,
+             "option_type": "C", "mark_iv": None, "open_interest": 100},
+        ]
+        with caplog.at_level("WARNING"):
+            service._calculate_exposure_aggregates(
+                "BTC", datetime(2026, 1, 1), "02APR26", instruments, 64000.0,
+            )
+
+        assert any(
+            "1 instrument(s) skipped" in r.message for r in caplog.records
+        )
+
+    def test_zero_skipped_count_does_not_log(self, caplog):
+        service = VolatilityReconstructionService.__new__(VolatilityReconstructionService)
+        service.repo = MagicMock()
+
+        instruments = [
+            _instrument("BTC-02APR26-64000-C", 64000, "C", oi=1000),
+            _instrument("BTC-02APR26-64000-P", 64000, "P", oi=400),
+        ]
+        with caplog.at_level("WARNING"):
+            service._calculate_exposure_aggregates(
+                "BTC", datetime(2026, 1, 1), "02APR26", instruments, 64000.0,
+            )
+
+        assert not any("instrument(s) skipped" in r.message for r in caplog.records)
+
+
 class TestReconstructOneIsolation:
     """
     _reconstruct_one's pre-existing save (atm_iv, net_vanna, VRP, market

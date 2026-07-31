@@ -1284,6 +1284,20 @@ class OnChainAnalysisService:
             holder = calculator.calculate(side_convention="holder")
             dealer = calculator.calculate(side_convention="assumed_dealer")
 
+            # Task C5 review fix (Important #2): skipped_instruments was
+            # computed by the calculator but silently discarded here -- see
+            # VolatilityReconstructionService._calculate_exposure_aggregates's
+            # matching fix (the daemon persistence path) for the full
+            # rationale (M5 defect class). Both calls skip the same
+            # instruments; holder's count is used for the log.
+            skipped = holder["skipped_instruments"]
+            if skipped > 0:
+                logger.warning(
+                    f"Vanna/charm exposure profile for {currency} {expiration}: "
+                    f"{skipped} instrument(s) skipped (missing/invalid strike, "
+                    "option_type, mark_iv, or unparseable instrument name)"
+                )
+
             # Both calls iterate the SAME instruments list -- side_convention
             # only changes the per-leg sign weight, never which instruments
             # are skipped or which strikes survive the zero-OI-both-legs

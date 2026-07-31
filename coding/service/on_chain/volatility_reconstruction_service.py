@@ -213,6 +213,26 @@ class VolatilityReconstructionService:
             )
             holder = calculator.calculate(side_convention="holder")
             dealer = calculator.calculate(side_convention="assumed_dealer")
+
+            # Task C5 review fix (Important #2): skipped_instruments was
+            # computed by the calculator but silently discarded here -- a
+            # missing mark_iv, bad option_type, or unparseable instrument
+            # name all skipped with zero diagnostics, producing a
+            # plausible-looking "VEX = 0.00M" with no signal anything was
+            # wrong (the same M5 defect class already fixed once in
+            # VolatilitySurfaceCalculator._calculate_second_order_greeks).
+            # Both calls skip the same instruments (side_convention doesn't
+            # affect which instruments are skipped), so either count works;
+            # holder's is used for the log.
+            skipped = holder["skipped_instruments"]
+            if skipped > 0:
+                logger.warning(
+                    f"VEX/CEX exposure aggregates for {currency} {expiration} "
+                    f"at {snapshot_hour}: {skipped} instrument(s) skipped "
+                    "(missing/invalid strike, option_type, mark_iv, or "
+                    "unparseable instrument name)"
+                )
+
             return {
                 "vex_holder": holder["total_vex"],
                 "cex_holder": holder["total_cex"],

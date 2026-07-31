@@ -66,6 +66,33 @@ class TestHappyPath:
         assert result.peak_vanna_strike is None
 
 
+class TestSkippedInstrumentsLogged:
+    """
+    Task C5 review fix (Important #2): skipped_instruments was computed by
+    ExposureProfileCalculator but silently discarded in the report path
+    too. Now logged as a warning when non-zero.
+    """
+
+    def test_nonzero_skipped_count_logs_warning(self, caplog):
+        service = _make_service()
+        instruments = _instruments() + [
+            # Missing mark_iv -- skipped by the calculator.
+            {"instrument_name": "BTC-27MAR27-70000-C", "strike": 70000,
+             "option_type": "C", "mark_iv": None, "open_interest": 100},
+        ]
+        with caplog.at_level("WARNING"):
+            service._calculate_exposure_profile("BTC", "02APR26", instruments, 64000.0)
+
+        assert any("1 instrument(s) skipped" in r.message for r in caplog.records)
+
+    def test_zero_skipped_count_does_not_log(self, caplog):
+        service = _make_service()
+        with caplog.at_level("WARNING"):
+            service._calculate_exposure_profile("BTC", "02APR26", _instruments(), 64000.0)
+
+        assert not any("instrument(s) skipped" in r.message for r in caplog.records)
+
+
 class TestAdditiveOnlyGuard:
     """A failure computing VEX/CEX must never crash the caller -- it
     degrades to None, matching _calculate_inferred_dealer_positioning's

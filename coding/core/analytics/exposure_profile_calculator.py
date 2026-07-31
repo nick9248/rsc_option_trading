@@ -159,7 +159,20 @@ class ExposureProfileCalculator:
                 continue
 
             mark_iv = item.get("mark_iv")
-            if mark_iv is None or mark_iv <= 0:
+            if mark_iv is None:
+                skipped_instruments += 1
+                continue
+            try:
+                mark_iv = float(mark_iv)
+            except (TypeError, ValueError):
+                skipped_instruments += 1
+                continue
+            # Minor #2 (Task C5 review): `mark_iv <= 0` is False for NaN
+            # (any comparison against NaN is False), so a NaN mark_iv would
+            # otherwise slip through and propagate into d1/vanna/charm as
+            # NaN -- silently, no exception raised -- all the way into a
+            # persisted NUMERIC column. Checked explicitly.
+            if mark_iv <= 0 or math.isnan(mark_iv):
                 skipped_instruments += 1
                 continue
 
@@ -182,7 +195,15 @@ class ExposureProfileCalculator:
                     d2 = d1 - sigma * math.sqrt(tau)
                     vanna = self._bs.calculate_vanna(d1, d2, sigma)
                     charm = self._bs.calculate_charm(d1, d2, tau)
-                except (ValueError, ZeroDivisionError) as exc:
+                except (TypeError, ValueError, ZeroDivisionError) as exc:
+                    # Minor #1 (Task C5 review): TypeError must be caught
+                    # here too -- a non-numeric strike (e.g. a malformed
+                    # string) raises TypeError inside _calculate_d1's
+                    # `spot / strike`, not ValueError. Without it in this
+                    # tuple, ONE bad instrument's TypeError propagated out
+                    # of calculate() entirely, aborting the WHOLE profile
+                    # (every strike, not just the bad one) -- contradicting
+                    # this class's own per-instrument-skip design.
                     logger.warning(
                         "Skipping vanna/charm for instrument %s: %s",
                         instrument_name or "<unknown>", exc,

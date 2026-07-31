@@ -279,3 +279,60 @@ class TestEdgeCases:
                                           valuation_time_utc=valuation_time, currency="BTC")
         result = calc.calculate(side_convention="holder")
         assert result["peak_vanna_strike"] == 64000
+
+
+class TestReviewFixRound1:
+    """
+    Task C5 review fixes: Minor #1 (a non-numeric strike must be skipped,
+    not abort the whole profile) and Minor #2 (a NaN mark_iv must be
+    skipped explicitly, not silently propagate NaN into vex/cex).
+    """
+
+    def _future_valuation_time(self):
+        from datetime import timedelta
+        expiry_time = datetime(2026, 4, 2, 8, 0, 0)
+        return expiry_time - timedelta(days=0.25 * 365)
+
+    def test_non_numeric_strike_skips_only_that_instrument(self):
+        """
+        Before the fix: _calculate_d1's `spot / strike` raised TypeError
+        for a non-numeric strike, which was NOT in the (ValueError,
+        ZeroDivisionError) except tuple -- it propagated out of
+        calculate() entirely, aborting the WHOLE profile (every other
+        strike lost too), not just the one bad instrument.
+        """
+        valuation_time = self._future_valuation_time()
+        instruments = [
+            {"instrument_name": "BTC-02APR26-BAD-C", "strike": "not-a-number",
+             "option_type": "C", "mark_iv": 40.0, "open_interest": 100},
+            _instrument("BTC-02APR26-64000-C", 64000, "C", mark_iv=40.0, open_interest=1000),
+        ]
+        calc = ExposureProfileCalculator(instruments, spot_price=64000,
+                                          valuation_time_utc=valuation_time, currency="BTC")
+        result = calc.calculate(side_convention="holder")
+
+        # Must not raise -- and the GOOD instrument's strike must still be
+        # present, proving only the bad one was skipped.
+        assert 64000 in result["strike_data"]
+        assert result["skipped_instruments"] == 1
+
+    def test_nan_mark_iv_skipped_not_propagated(self):
+        """
+        Before the fix: `mark_iv <= 0` is False for NaN (any comparison
+        against NaN is False), so a NaN mark_iv slipped through into
+        sigma -> d1 -> vanna/charm as NaN, with no exception raised (NaN
+        arithmetic doesn't raise) -- silently corrupting vex/cex.
+        """
+        valuation_time = self._future_valuation_time()
+        instruments = [
+            {"instrument_name": "BTC-02APR26-64000-C", "strike": 64000,
+             "option_type": "C", "mark_iv": float("nan"), "open_interest": 1000},
+        ]
+        calc = ExposureProfileCalculator(instruments, spot_price=64000,
+                                          valuation_time_utc=valuation_time, currency="BTC")
+        result = calc.calculate(side_convention="holder")
+
+        assert result["strike_data"] == {}
+        assert result["skipped_instruments"] == 1
+        assert not math.isnan(result["total_vex"])
+        assert result["total_vex"] == 0.0
