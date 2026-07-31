@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+from coding.core.analytics.results.delta_flow_results import FlowBucket
 from coding.core.analytics.results.expiry_results import ExpirationAnalysisResult
 from coding.core.analytics.results.gex_dex_results import GexDexResult
 from coding.core.database.config import ConnectionPool, DatabaseConfig
@@ -488,6 +489,186 @@ class DatabaseRepository:
                 }
                 for row in cursor.fetchall()
             ]
+
+    def get_trades_for_delta_flow(
+        self,
+        currency: str,
+        start_ts: int,
+        end_ts: int,
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch trades for signed delta-weighted flow computation
+        (institutional_metrics_spec.md section 6 / task C7 --
+        ``DeltaFlowCalculator.enrich_trade``/``compute_hourly_buckets``).
+
+        ``historical_trades`` has no delta column; the returned rows carry
+        every column ``DeltaFlowCalculator`` needs to recompute BS delta
+        itself (``iv``, ``strike``, ``index_price``, ``instrument_name`` for
+        its expiry) plus ``direction``/``amount`` for the signed-
+        contribution math and ``expiration`` as the per-expiry grouping
+        key. Raw types returned uncast (matches ``get_trades_for_flow_
+        analysis``'s convention at this same table) -- ``DeltaFlowCalculator.
+        enrich_trade`` does its own float casting.
+
+        ``AND direction IS NOT NULL AND strike IS NOT NULL`` mirrors the
+        established filter at this same table
+        (``get_signed_taker_flow_by_strike`` / ``get_trades_for_flow_
+        analysis``) -- defensive; current data is verified clean (0 nulls
+        over the last 7 days) but a future null direction must never
+        silently reach ``DeltaFlowCalculator``'s own direction check in a
+        way that's hard to attribute back to a query gap.
+
+        Args:
+            currency: Currency symbol (BTC or ETH).
+            start_ts: Window start (hour bucket start), epoch milliseconds,
+                inclusive.
+            end_ts: Window end (hour bucket end), epoch milliseconds,
+                exclusive.
+
+        Returns:
+            List of dicts with keys: trade_id, trade_timestamp,
+            instrument_name, expiration, strike, option_type, direction,
+            amount, price, index_price, iv.
+        """
+        query = """
+            SELECT
+                trade_id, trade_timestamp, instrument_name, expiration,
+                strike, option_type, direction, amount, price, index_price, iv
+            FROM historical_trades
+            WHERE currency = %s
+                AND trade_timestamp >= %s
+                AND trade_timestamp < %s
+                AND direction IS NOT NULL
+                AND strike IS NOT NULL
+            ORDER BY trade_timestamp ASC
+        """
+
+        with self._db_cursor() as cursor:
+            cursor.execute(query, (currency, start_ts, end_ts))
+
+            columns = [
+                "trade_id", "trade_timestamp", "instrument_name", "expiration",
+                "strike", "option_type", "direction", "amount", "price",
+                "index_price", "iv",
+            ]
+
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+    def save_delta_flow_hourly(
+        self,
+        currency: str,
+        snapshot_hour: datetime,
+        bucket: FlowBucket,
+    ) -> None:
+        """
+        Upsert one ``flow_delta_hourly`` row (institutional_metrics_spec.md
+        section 6 / infra_spec.md section 2 -- task C7). One row per
+        ``(snapshot_hour, currency, expiration)`` -- ``expiration == "ALL"``
+        is the currency-level rollup.
+
+        ``ON CONFLICT ... DO UPDATE`` (not ``DO NOTHING``) mirrors the
+        ``onchain_analysis_snapshots``/``hourly_snapshots`` convention at
+        this same ``(snapshot_hour, currency, expiration)`` unique key: a
+        daemon re-run for an hour that already has a row (crash/restart, or
+        trades that arrived late) must REFRESH the aggregate from the
+        latest trade data, not freeze at whatever partial data existed on
+        the first attempt.
+
+        Args:
+            currency: Currency symbol (BTC or ETH).
+            snapshot_hour: UTC hour bucket, already hour-aligned by the
+                caller -- matches the convention established for
+                ``hourly_snapshots``/``onchain_analysis_snapshots``.
+            bucket: ``FlowBucket`` to persist.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO flow_delta_hourly (
+                    snapshot_hour, currency, expiration,
+                    hiro_usd, premium_usd, gross_delta_usd,
+                    net_contracts, gross_contracts,
+                    trade_count, buy_count, sell_count, skipped_count
+                ) VALUES (
+                    %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s,
+                    %s, %s, %s, %s
+                )
+                ON CONFLICT (snapshot_hour, currency, expiration) DO UPDATE SET
+                    hiro_usd = EXCLUDED.hiro_usd,
+                    premium_usd = EXCLUDED.premium_usd,
+                    gross_delta_usd = EXCLUDED.gross_delta_usd,
+                    net_contracts = EXCLUDED.net_contracts,
+                    gross_contracts = EXCLUDED.gross_contracts,
+                    trade_count = EXCLUDED.trade_count,
+                    buy_count = EXCLUDED.buy_count,
+                    sell_count = EXCLUDED.sell_count,
+                    skipped_count = EXCLUDED.skipped_count
+            """, (
+                snapshot_hour, currency, bucket.expiration,
+                bucket.hiro_usd, bucket.premium_usd, bucket.gross_delta_usd,
+                bucket.net_contracts, bucket.gross_contracts,
+                bucket.trade_count, bucket.buy_count, bucket.sell_count, bucket.skipped_count,
+            ))
+
+    def get_delta_flow_summary(
+        self,
+        currency: str,
+        since: datetime,
+    ) -> List[Dict[str, Any]]:
+        """
+        Sum ``flow_delta_hourly`` rows since ``since``, grouped by
+        expiration (institutional_metrics_spec.md section 6 / task C7 --
+        the report's "DELTA-ADJUSTED FLOW (24h)" section reads this instead
+        of recomputing from raw trades at report time).
+
+        Returns ``[]`` when no rows exist in the window (e.g. the feature
+        just shipped, or the daemon hasn't run yet) -- never a fabricated
+        zero-valued summary row. A currency/hour that genuinely had zero
+        trades still has a real, persisted "ALL" row with trade_count == 0
+        (``ProspectiveCollector._persist_delta_flow`` writes it
+        explicitly) -- that is a legitimate SUM input, not degenerate.
+
+        Args:
+            currency: Currency symbol (BTC or ETH).
+            since: Window start (inclusive) -- report callers pass
+                ``now - timedelta(hours=24)``.
+
+        Returns:
+            List of dicts with keys: expiration, hiro_usd, premium_usd,
+            gross_delta_usd, net_contracts, gross_contracts, trade_count,
+            buy_count, sell_count, skipped_count.
+        """
+        query = """
+            SELECT
+                expiration,
+                SUM(hiro_usd), SUM(premium_usd), SUM(gross_delta_usd),
+                SUM(net_contracts), SUM(gross_contracts),
+                SUM(trade_count), SUM(buy_count), SUM(sell_count), SUM(skipped_count)
+            FROM flow_delta_hourly
+            WHERE currency = %s
+                AND snapshot_hour >= %s
+            GROUP BY expiration
+        """
+
+        _INT_COLUMNS = ("trade_count", "buy_count", "sell_count", "skipped_count")
+
+        with self._db_cursor() as cursor:
+            cursor.execute(query, (currency, since))
+
+            columns = [
+                "expiration", "hiro_usd", "premium_usd", "gross_delta_usd",
+                "net_contracts", "gross_contracts", "trade_count", "buy_count",
+                "sell_count", "skipped_count",
+            ]
+
+            results = []
+            for row in cursor.fetchall():
+                row_dict: Dict[str, Any] = {"expiration": row[0]}
+                for col, val in zip(columns[1:], row[1:]):
+                    row_dict[col] = int(val) if col in _INT_COLUMNS else float(val)
+                results.append(row_dict)
+            return results
 
     def get_trade_hour_coverage(
         self,
