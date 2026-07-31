@@ -107,10 +107,26 @@ class SecondOrderGreeks:
     ``vanna_exposure_holder``/``charm_exposure_holder`` -- the "holder"
     name they should always have had (see ``GexDexCalculator``'s class
     docstring for the one convention this refers back to).
-    ``dealer_vanna_exposure``/``dealer_charm_exposure`` (the negation) are
-    new -- ``vanna_signal``/``charm_signal`` are now derived from these,
-    not the holder sum (the pre-Item-8 defect: the printed dealer
-    narrative was keyed off the holder-side number, backwards).
+    ``dealer_vanna_exposure``/``dealer_charm_exposure`` are new --
+    ``vanna_signal``/``charm_signal`` are derived from these, not the
+    holder sum (the pre-Item-8 defect: the printed dealer narrative was
+    keyed off the holder-side number, backwards).
+
+    Task C5 review fix round 1 (Important #1) + round 2 (Important, the
+    round-1 fix's own regression): ``dealer_vanna_exposure``/
+    ``dealer_charm_exposure`` are the call/put-SPLIT assumed-dealer
+    convention (+1 call, -1 put -- SqueezeMetrics, matching
+    ``GexDexCalculator`` and ``ExposureProfileCalculator``'s per-strike
+    VEX/CEX), NOT a blanket negation of the holder-side sum -- negation was
+    the pre-round-1-fix convention and only coincides with the split on a
+    100%-call or 100%-put book. These two fields are REQUIRED (no default)
+    precisely so nothing can silently fall back to the retired negation
+    convention the way ``__post_init__``'s old default did -- round 1's fix
+    corrected the one real production call site
+    (``VolatilitySurfaceCalculator._calculate_second_order_greeks``) but
+    left a negation-based default on this shared model, which several test
+    fixtures were (silently, incorrectly) relying on. Every construction
+    site must now compute and pass its own explicit dealer values.
     """
 
     vanna_exposure_holder: float
@@ -120,17 +136,15 @@ class SecondOrderGreeks:
     skipped_instruments: int  # M5: replaces the silent `except: continue`
 
     # --- Additive fields (bugfix_spec.md Item 8) ---
-    dealer_vanna_exposure: Optional[float] = None
-    """-vanna_exposure_holder -- the assumed-dealer view."""
+    dealer_vanna_exposure: float
+    """Call/put-split assumed-dealer vanna (+1 call, -1 put) -- NOT
+    -vanna_exposure_holder (that was the retired convention; see class
+    docstring). Required: no default, so a caller must explicitly decide
+    what "dealer" means here rather than inherit a hidden fallback."""
 
-    dealer_charm_exposure: Optional[float] = None
-    """-charm_exposure_holder -- the assumed-dealer view."""
-
-    def __post_init__(self) -> None:
-        if self.dealer_vanna_exposure is None:
-            object.__setattr__(self, "dealer_vanna_exposure", -self.vanna_exposure_holder)
-        if self.dealer_charm_exposure is None:
-            object.__setattr__(self, "dealer_charm_exposure", -self.charm_exposure_holder)
+    dealer_charm_exposure: float
+    """Call/put-split assumed-dealer charm (+1 call, -1 put) -- NOT
+    -charm_exposure_holder. See ``dealer_vanna_exposure``'s docstring."""
 
 
 @dataclass(frozen=True)

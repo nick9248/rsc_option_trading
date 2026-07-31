@@ -336,3 +336,27 @@ class TestReviewFixRound1:
         assert result["skipped_instruments"] == 1
         assert not math.isnan(result["total_vex"])
         assert result["total_vex"] == 0.0
+
+    def test_infinite_mark_iv_skipped_not_propagated(self):
+        """
+        Round-2 review follow-up: the round-1 NaN guard (`mark_iv <= 0 or
+        math.isnan(mark_iv)`) does NOT catch +/-inf -- `float("inf")`
+        passes both checks (isnan is specifically NaN, not infinite), then
+        d1's `sigma**2` / `sigma*sqrt(tau)` terms produce inf/inf = NaN
+        anyway, silently reproducing the exact NUMERIC-column-poisoning
+        failure the guard was supposed to close. math.isfinite() closes
+        both cases.
+        """
+        valuation_time = self._future_valuation_time()
+        instruments = [
+            {"instrument_name": "BTC-02APR26-64000-C", "strike": 64000,
+             "option_type": "C", "mark_iv": float("inf"), "open_interest": 1000},
+        ]
+        calc = ExposureProfileCalculator(instruments, spot_price=64000,
+                                          valuation_time_utc=valuation_time, currency="BTC")
+        result = calc.calculate(side_convention="holder")
+
+        assert result["strike_data"] == {}
+        assert result["skipped_instruments"] == 1
+        assert not math.isnan(result["total_vex"])
+        assert result["total_vex"] == 0.0

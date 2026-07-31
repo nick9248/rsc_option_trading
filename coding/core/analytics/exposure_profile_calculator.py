@@ -167,12 +167,18 @@ class ExposureProfileCalculator:
             except (TypeError, ValueError):
                 skipped_instruments += 1
                 continue
-            # Minor #2 (Task C5 review): `mark_iv <= 0` is False for NaN
-            # (any comparison against NaN is False), so a NaN mark_iv would
-            # otherwise slip through and propagate into d1/vanna/charm as
-            # NaN -- silently, no exception raised -- all the way into a
-            # persisted NUMERIC column. Checked explicitly.
-            if mark_iv <= 0 or math.isnan(mark_iv):
+            # Minor #2 (Task C5 review round 1) + round-2 follow-up:
+            # `mark_iv <= 0` is False for NaN (any comparison against NaN
+            # is False), so a NaN mark_iv would otherwise slip through and
+            # propagate into d1/vanna/charm as NaN -- silently, no
+            # exception raised -- all the way into a persisted NUMERIC
+            # column. The round-1 fix added an explicit math.isnan() check
+            # but +/-inf passes BOTH `mark_iv <= 0` and math.isnan (isnan
+            # is specifically NaN, not infinite) -- inf/inf in the d1
+            # calculation then produces NaN anyway, reproducing the exact
+            # failure the guard was meant to close. math.isfinite() closes
+            # both cases in one predicate (False for NaN AND +/-inf).
+            if not math.isfinite(mark_iv) or mark_iv <= 0:
                 skipped_instruments += 1
                 continue
 

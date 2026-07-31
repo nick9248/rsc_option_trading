@@ -432,6 +432,12 @@ def _make_vol_surface_result() -> VolSurfaceResult:
         ),
         second_order_greeks=SecondOrderGreeks(
             vanna_exposure_holder=0.001234, charm_exposure_holder=-0.005678,
+            # Task C5 review fix round 2: dealer_vanna_exposure/
+            # dealer_charm_exposure are now REQUIRED (no default) --
+            # explicit values here, deliberately NOT the negation of the
+            # holder sum above, so this fixture cannot be mistaken for
+            # (or silently drift back to) the retired negation convention.
+            dealer_vanna_exposure=0.002468, dealer_charm_exposure=-0.003456,
             vanna_signal="IV drop → dealers buy underlying (bullish)",
             charm_signal="Time decay pushing delta negative (bearish drift)",
             skipped_instruments=2,
@@ -477,8 +483,8 @@ def test_vol_surface_result_to_dict_matches_legacy_reader_keys():
     # vanna_exposure_holder/charm_exposure_holder; dealer_* added.
     assert d["second_order_greeks"]["vanna_exposure_holder"] == 0.001234
     assert d["second_order_greeks"]["charm_exposure_holder"] == -0.005678
-    assert d["second_order_greeks"]["dealer_vanna_exposure"] == -0.001234
-    assert d["second_order_greeks"]["dealer_charm_exposure"] == 0.005678
+    assert d["second_order_greeks"]["dealer_vanna_exposure"] == 0.002468
+    assert d["second_order_greeks"]["dealer_charm_exposure"] == -0.003456
     assert d["second_order_greeks"]["vanna_signal"] == "IV drop → dealers buy underlying (bullish)"
 
     pc = d["pc_by_moneyness"]

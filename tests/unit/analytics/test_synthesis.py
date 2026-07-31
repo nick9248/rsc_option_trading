@@ -249,6 +249,16 @@ def make_onchain_result(
             ),
             second_order_greeks=SecondOrderGreeks(
                 vanna_exposure_holder=0.001, charm_exposure_holder=50.0, vanna_signal="N/A", charm_signal="N/A",
+                # Task C5 review fix round 2: dealer_vanna_exposure/
+                # dealer_charm_exposure are now REQUIRED (no default) --
+                # explicit values here, deliberately NOT the negation of
+                # the holder sum above, so this fixture cannot be mistaken
+                # for (or silently drift back to) the retired negation
+                # convention. These TestBuildExpiryMetrics tests exercise
+                # the MAPPING (ExpiryMetrics.net_vanna/net_charm sourced
+                # from these dealer_* fields), not the split derivation
+                # itself (test_volatility_surface_calculator.py's job).
+                dealer_vanna_exposure=0.002, dealer_charm_exposure=25.0,
                 skipped_instruments=0,
             ),
             atm_iv=50.0, vwap_iv=None, mark_iv_average=None, traded_instrument_count=0,

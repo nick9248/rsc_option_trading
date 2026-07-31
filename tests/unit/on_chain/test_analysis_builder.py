@@ -230,6 +230,12 @@ class TestOnChainAnalysisBuilder:
             pc_by_moneyness=PutCallByMoneyness(atm=bucket, near_otm=bucket, far_otm=bucket),
             second_order_greeks=SecondOrderGreeks(
                 vanna_exposure_holder=0.0, charm_exposure_holder=0.0, vanna_signal="N/A", charm_signal="N/A",
+                # Task C5 review fix round 2: dealer_vanna_exposure/
+                # dealer_charm_exposure are now REQUIRED (no default) --
+                # explicit here (0.0, same as the holder sum, but only
+                # because this fixture is testing atm_iv wiring, not the
+                # vanna/charm split itself).
+                dealer_vanna_exposure=0.0, dealer_charm_exposure=0.0,
                 skipped_instruments=0,
             ),
             spot_price=90000.0,
