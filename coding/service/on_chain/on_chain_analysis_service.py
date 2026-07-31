@@ -25,6 +25,8 @@ from coding.core.analytics.exposure_profile_calculator import ExposureProfileCal
 from coding.core.analytics.gex_dex_calculator import GexDexCalculator
 from coding.core.analytics.market_wide_calculator import MarketWideCalculator
 from coding.core.analytics.results.market_wide_results import (
+    GammaRolloffResult,
+    GammaRolloffRow,
     SkewTermStructureEntry,
     SkewTermStructureResult,
 )
@@ -247,7 +249,9 @@ class OnChainAnalysisService:
         self._fetch_market_metrics(analyzer, progress, builder)
 
         # Always fetch Greeks for GEX/DEX
-        aggregate_gex_dex_result = self._fetch_greeks_and_store_gex_dex(analyzer, progress, builder)
+        aggregate_gex_dex_result, gamma_rolloff_result = self._fetch_greeks_and_store_gex_dex(
+            analyzer, progress, builder
+        )
 
         # Always fetch buy/sell flow
         self._calculate_buy_sell_flow(analyzer, progress, builder)
@@ -260,7 +264,8 @@ class OnChainAnalysisService:
 
         # Calculate market-wide metrics (term structure, basis, RV, VRP, etc.)
         self._calculate_market_wide_metrics(
-            analyzer, currency, progress, builder, aggregate_gex_dex_result
+            analyzer, currency, progress, builder, aggregate_gex_dex_result,
+            gamma_rolloff_result,
         )
 
         # Fetch previous DB snapshots for trend comparison
@@ -914,7 +919,7 @@ class OnChainAnalysisService:
         analyzer: OnChainMetricsCalculator,
         progress_callback: Callable[[str], None],
         builder: Optional[OnChainAnalysisBuilder] = None,
-    ) -> Optional[Any]:
+    ) -> Tuple[Optional[Any], Optional[GammaRolloffResult]]:
         """
         Fetch Greeks for all instruments and store GEX/DEX data in analyzer.
 
@@ -924,10 +929,16 @@ class OnChainAnalysisService:
             builder: T6 dual-write target (typed aggregate result).
 
         Returns:
-            The typed aggregate ``GexDexResult`` (or ``None`` if no
-            expiration produced enriched instruments) — the caller threads
-            it into ``_calculate_market_wide_metrics``, which needs it for
-            ``MarketWideResult.aggregate_gex_dex``.
+            ``(aggregate_result, gamma_rolloff_result)``:
+              - The typed aggregate ``GexDexResult`` (or ``None`` if no
+                expiration produced enriched instruments) — the caller
+                threads it into ``_calculate_market_wide_metrics``, which
+                needs it for ``MarketWideResult.aggregate_gex_dex``.
+              - The typed ``GammaRolloffResult`` (institutional_metrics_
+                spec.md section 5, Task C6; ``None`` on the same "no data"
+                condition, or if building it failed -- see
+                ``_build_gamma_rolloff``) — threaded the same way for
+                ``MarketWideResult.gamma_rolloff``.
         """
         gex_dex_typed_by_expiry: Dict[str, Any] = {}
 
@@ -1036,7 +1047,68 @@ class OnChainAnalysisService:
                 gex_dex_typed_by_expiry, analyzer.index_price, analyzer.currency
             )
 
-        return aggregate_result
+        # institutional_metrics_spec.md section 5 / Task C6: net GEX
+        # per-expiry roll-off, from the SAME gex_dex_typed_by_expiry map
+        # aggregate_across_expirations just consumed -- a separate,
+        # independently-guarded call (own try/except inside
+        # _build_gamma_rolloff), so a failure here can never suppress the
+        # aggregate GEX/DEX result above or vice versa (task brief's
+        # isolation constraint).
+        progress_callback("Calculating gamma roll-off profile...")
+        gamma_rolloff_result = self._build_gamma_rolloff(
+            gex_dex_typed_by_expiry, datetime.now(timezone.utc),
+        )
+
+        return aggregate_result, gamma_rolloff_result
+
+    def _build_gamma_rolloff(
+        self,
+        gex_dex_typed_by_expiry: Dict[str, Any],
+        now_utc: datetime,
+    ) -> Optional[GammaRolloffResult]:
+        """
+        Build the GAMMA ROLL-OFF result (institutional_metrics_spec.md
+        section 5, Task C6) from the per-expiry ``GexDexResult.
+        total_net_gex`` values already computed in the loop above.
+
+        Additive only, mirrors ``_calculate_exposure_profile``'s and
+        ``_calculate_inferred_dealer_positioning``'s established guard
+        (task C5 review): any failure here degrades to ``None`` rather
+        than propagating, so a bug in this presentation-only aggregation
+        can never crash the GEX/DEX phase it runs alongside. ``None`` is
+        also returned (no error) when there is no per-expiry GEX/DEX data
+        at all -- mirrors ``aggregate_result``'s own ``if gex_dex_typed_
+        by_expiry:`` gate immediately above.
+        """
+        if not gex_dex_typed_by_expiry:
+            return None
+        try:
+            per_expiry_net_gex = {
+                expiration: result.total_net_gex
+                for expiration, result in gex_dex_typed_by_expiry.items()
+            }
+            profile = GexDexCalculator.calculate_rolloff_profile(per_expiry_net_gex, now_utc)
+            rows = tuple(
+                GammaRolloffRow(
+                    expiration=row["expiration"],
+                    dte_days=row["dte_days"],
+                    net_gex=row["net_gex"],
+                    share_pct=row["share_pct"],
+                    cum_share_pct=row["cum_share_pct"],
+                    cum_net_gex=row["cum_net_gex"],
+                )
+                for row in profile["rows"]
+            )
+            return GammaRolloffResult(
+                rows=rows,
+                gamma_cliff_7d=profile["gamma_cliff_7d"],
+                cum_share_7d=profile["cum_share_7d"],
+                cum_share_30d=profile["cum_share_30d"],
+                gross_total=profile["gross_total"],
+            )
+        except Exception as exc:
+            logger.error(f"Failed to build gamma roll-off profile: {exc}", exc_info=True)
+            return None
 
     def _calculate_inferred_dealer_positioning(
         self,
@@ -1852,6 +1924,7 @@ class OnChainAnalysisService:
         progress_callback: Callable[[str], None],
         builder: Optional[OnChainAnalysisBuilder] = None,
         aggregate_gex_dex_result: Optional[Any] = None,
+        gamma_rolloff_result: Optional[GammaRolloffResult] = None,
     ) -> None:
         """
         Calculate all market-wide metrics and store in the builder.
@@ -1872,6 +1945,17 @@ class OnChainAnalysisService:
                 ``_fetch_greeks_and_store_gex_dex`` -- computed in a different
                 phase but a field of the same ``MarketWideResult`` this
                 orchestrator assembles.
+            gamma_rolloff_result: Typed ``GammaRolloffResult``
+                (institutional_metrics_spec.md section 5, Task C6) from
+                ``_fetch_greeks_and_store_gex_dex`` (via
+                ``_build_gamma_rolloff``) -- same "computed in a different
+                phase, attached post-hoc" situation as
+                ``aggregate_gex_dex_result``.
+                ``MarketWideOrchestrator.run()`` has no access to the
+                per-expiry ``total_net_gex`` map this needs, so it is
+                attached here via ``dataclasses.replace`` after ``run()``
+                returns, the same pattern ``skew_term_structure`` (below)
+                already uses.
         """
         orchestrator = MarketWideOrchestrator(self.api)
         market_wide_result = orchestrator.run(
@@ -1889,6 +1973,15 @@ class OnChainAnalysisService:
         if skew_term_structure is not None:
             market_wide_result = dataclasses.replace(
                 market_wide_result, skew_term_structure=skew_term_structure,
+            )
+
+        # institutional_metrics_spec.md section 5 (Task C6): same post-hoc
+        # attach pattern as skew_term_structure above -- gamma_rolloff_result
+        # was computed in a different phase (_fetch_greeks_and_store_gex_dex)
+        # that MarketWideOrchestrator.run() has no access to.
+        if gamma_rolloff_result is not None:
+            market_wide_result = dataclasses.replace(
+                market_wide_result, gamma_rolloff=gamma_rolloff_result,
             )
 
         if builder is not None:

@@ -34,6 +34,7 @@ from coding.core.analytics.reporting.exposure_profile_formatter import (
 from coding.core.analytics.reporting.flow_formatter import format_flow_section
 from coding.core.analytics.reporting.gex_dex_formatter import (
     format_aggregate_gex_dex_section,
+    format_gamma_rolloff_section,
     format_gex_dex_section,
 )
 from coding.core.analytics.reporting.historical_context_formatter import (
@@ -70,11 +71,11 @@ _SUB_SEPARATOR = "-" * 80
 # OnChainAnalyzer.generate_report()'s legacy section_name loop verbatim.
 _MARKET_WIDE_SECTION_ORDER = (
     "aggregate_gex_dex",
-    # institutional_metrics_spec.md section 9(b)'s new market-wide order
-    # places SKEW TERM STRUCTURE (section 3) between GAMMA ROLL-OFF
-    # (section 5, not yet implemented) and IV TERM STRUCTURE -- inserted
-    # directly before iv_term_structure here since section 5 doesn't exist
-    # yet; the full section 9 reorder (with section 5) is a later task.
+    # institutional_metrics_spec.md section 9(b)'s new market-wide order:
+    # AGGREGATE GEX/DEX -> GAMMA ROLL-OFF (section 5, Task C6) -> SKEW TERM
+    # STRUCTURE (section 3) -> IV TERM STRUCTURE. The remaining reorder
+    # items (FORWARD VOL, block-trade M2 regrouping, etc.) are later tasks.
+    "gamma_rolloff",
     "skew_term_structure",
     "iv_term_structure",
     "futures_basis",
@@ -415,6 +416,8 @@ class OnChainReportFormatter:
             sections["aggregate_gex_dex"] = format_aggregate_gex_dex_section(
                 mw.aggregate_gex_dex, result.underlying_price, result.currency,
             )
+        if mw.gamma_rolloff is not None:
+            sections["gamma_rolloff"] = format_gamma_rolloff_section(mw.gamma_rolloff)
         if mw.skew_term_structure is not None:
             sections["skew_term_structure"] = format_skew_term_structure_section(
                 mw.skew_term_structure

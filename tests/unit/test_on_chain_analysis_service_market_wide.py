@@ -123,13 +123,14 @@ def _make_api(
     return api
 
 
-def _run(frozen_clock, api, analyzer) -> "MarketWideResult":  # noqa: F821 (typing only)
+def _run(frozen_clock, api, analyzer, gamma_rolloff_result=None) -> "MarketWideResult":  # noqa: F821 (typing only)
     frozen_clock(FROZEN_EPOCH)
     service = OnChainAnalysisService(api_service=api, repository=None)
     builder = OnChainAnalysisBuilder("BTC", analyzer.underlying_price, {})
     service._calculate_market_wide_metrics(
         analyzer, "BTC", progress_callback=lambda m: None,
         builder=builder, aggregate_gex_dex_result=None,
+        gamma_rolloff_result=gamma_rolloff_result,
     )
     return builder.build().market_wide
 
@@ -219,3 +220,32 @@ class TestCrossAssetCorrelationGate:
         assert mw.cross_asset_correlation is not None
         assert mw.cross_asset_correlation.price_correlation is not None
         assert mw.cross_asset_correlation.dvol_correlation is not None
+
+
+class TestGammaRolloffAttachment:
+    """
+    institutional_metrics_spec.md section 5 (Task C6): MarketWideOrchestrator
+    has no access to per-expiry total_net_gex (that only exists in
+    _fetch_greeks_and_store_gex_dex, a different phase) -- the caller
+    computes GammaRolloffResult separately and _calculate_market_wide_metrics
+    attaches it post-hoc via dataclasses.replace, the same pattern
+    skew_term_structure already uses.
+    """
+
+    def test_gamma_rolloff_result_attached_when_provided(self, frozen_clock):
+        from coding.core.analytics.results.market_wide_results import GammaRolloffResult
+
+        gamma_rolloff = GammaRolloffResult(
+            rows=(), gamma_cliff_7d=False, cum_share_7d=None, cum_share_30d=None,
+            gross_total=0.0,
+        )
+        api = _make_api()
+        mw = _run(frozen_clock, api, _FakeAnalyzer(), gamma_rolloff_result=gamma_rolloff)
+
+        assert mw.gamma_rolloff is gamma_rolloff
+
+    def test_gamma_rolloff_stays_none_when_not_provided(self, frozen_clock):
+        api = _make_api()
+        mw = _run(frozen_clock, api, _FakeAnalyzer())
+
+        assert mw.gamma_rolloff is None

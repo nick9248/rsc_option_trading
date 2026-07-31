@@ -31,6 +31,8 @@ from coding.core.analytics.results.expiry_results import (
 from coding.core.analytics.results.flow_results import FlowResult, FlowTotals
 from coding.core.analytics.results.gex_dex_results import GexDexKeyLevels, GexDexResult
 from coding.core.analytics.results.market_wide_results import (
+    GammaRolloffResult,
+    GammaRolloffRow,
     MarketWideResult,
     PerpetualFundingResult,
     SkewTermStructureEntry,
@@ -353,6 +355,56 @@ def test_render_market_wide_from_result_omits_skew_term_structure_when_none():
     result = _make_result()  # _make_empty_market_wide() -> skew_term_structure defaults to None
     text = formatter.render_market_wide_from_result(result)
     assert "SKEW TERM STRUCTURE" not in text
+
+
+def test_render_market_wide_from_result_includes_gamma_rolloff_after_aggregate_gex_dex():
+    """institutional_metrics_spec.md section 9(b): GAMMA ROLL-OFF (section
+    5) renders immediately after AGGREGATE GEX/DEX and before SKEW TERM
+    STRUCTURE (Task C6)."""
+    formatter = OnChainReportFormatter()
+    aggregate_gex_dex = GexDexResult(
+        strike_rows=(), cumulative_gex={}, cumulative_dex={},
+        key_levels=GexDexKeyLevels(call_resistance=None, put_support=None, hvl=None, gamma_flip=None),
+        spot_price=95000.0, total_net_gex=100_000_000.0, total_net_dex=0.0, currency="BTC",
+        expiration_count=1,
+    )
+    gamma_rolloff = GammaRolloffResult(
+        rows=(
+            GammaRolloffRow(
+                expiration="25JUL26", dte_days=0.6, net_gex=100_000_000.0,
+                share_pct=100.0, cum_share_pct=100.0, cum_net_gex=100_000_000.0,
+            ),
+        ),
+        gamma_cliff_7d=True, cum_share_7d=100.0, cum_share_30d=100.0,
+        gross_total=100_000_000.0,
+    )
+    skew_entry = SkewTermStructureEntry(
+        expiration="25JUL26", dte=0.6, atm_iv_interp=18.51, n_quotes_used=14,
+        rr_25d=-3.80, rr_percentile_30d=None, rr_regime_30d=None, rr_n_30d=0,
+        bf_25d=0.90, bf_percentile_30d=None, bf_n_30d=0,
+    )
+    skew_result = SkewTermStructureResult(entries=(skew_entry,), rr_slope=None)
+    mw = MarketWideResult(
+        spot_price=95000.0, currency="BTC", dvol=None, iv_percentile_365d=None,
+        aggregate_gex_dex=aggregate_gex_dex, term_structure=None, futures_basis=None,
+        realized_volatility=None, variance_risk_premium=None, volatility_cone=None,
+        perpetual_funding=None, block_trades=None, cross_asset_correlation=None,
+        failed_sections=(), skew_term_structure=skew_result, gamma_rolloff=gamma_rolloff,
+    )
+    result = _make_result(market_wide=mw)
+    text = formatter.render_market_wide_from_result(result)
+
+    assert "GAMMA ROLL-OFF" in text
+    assert "GAMMA CLIFF" in text
+    assert text.index("MARKET-WIDE GEX/DEX LEVELS") < text.index("GAMMA ROLL-OFF")
+    assert text.index("GAMMA ROLL-OFF") < text.index("SKEW TERM STRUCTURE")
+
+
+def test_render_market_wide_from_result_omits_gamma_rolloff_when_none():
+    formatter = OnChainReportFormatter()
+    result = _make_result()  # _make_empty_market_wide() -> gamma_rolloff defaults to None
+    text = formatter.render_market_wide_from_result(result)
+    assert "GAMMA ROLL-OFF" not in text
 
 
 # ---------------------------------------------------------------------------

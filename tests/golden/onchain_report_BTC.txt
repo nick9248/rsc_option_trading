@@ -3463,6 +3463,27 @@ GAMMA PROFILE (re-priced, sticky-strike):
   Other crossings:          none
 
 
+GAMMA ROLL-OFF
+--------------------------------------------------------------------------------
+Expiry           DTE   Net GEX (USD, signed)    Share  Cumulative
+26JUL26         0.6d           +7,999,957.14     5.7%        5.7%
+27JUL26         1.6d           -4,137,795.98     3.0%        8.7%
+28JUL26         2.6d             +225,662.55     0.2%        8.9%
+29JUL26         3.6d              -60,952.92     0.0%        8.9%
+31JUL26         5.6d          +75,912,120.58    54.5%       63.4%   <-- 7d
+7AUG26         12.6d          +23,339,499.74    16.7%       80.1%
+14AUG26        19.6d           +1,963,960.35     1.4%       81.5%
+28AUG26        33.6d          +18,724,439.47    13.4%       94.9%
+25SEP26        61.6d           +4,171,732.38     3.0%       97.9%
+25DEC26       152.6d           +1,502,359.02     1.1%       99.0%
+26MAR27       243.6d           +1,139,417.72     0.8%       99.8%
+25JUN27       334.6d             +229,226.08     0.2%      100.0%
+--------------------------------------------------------------------------------
+63.4% of gamma mass expires within 7 days  ** GAMMA CLIFF ** (threshold 30% -- presentation flag, not a trading signal)
+Signed net contribution rolling off in 7d: +79,938,991.36 USD
+Cumulative gamma mass within 30 days: 81.5%
+
+
 SKEW TERM STRUCTURE (25-delta, quote convention: RR = call IV - put IV)
 --------------------------------------------------------------------------------
   Expiry          DTE    ATM IV                        RR25                   BF25      Chain
