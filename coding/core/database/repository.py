@@ -1570,6 +1570,14 @@ class DatabaseRepository:
             "iv_percentile_expiry", "iv_percentile_365d", "iv_rank_365d",
             "expected_daily_move", "expected_weekly_move", "expected_monthly_move",
             "pc_atm_ratio", "pc_near_otm_ratio", "pc_far_otm_ratio",
+            # institutional_metrics_spec.md section 4 / Task C5 (Migration
+            # 019's 6 new columns) -- per-expiry VEX/CEX aggregates. Legacy
+            # net_vanna/net_charm above are untouched (frozen, migration
+            # 019's own header comment) -- these are additive, not a
+            # replacement.
+            "vex_holder", "cex_holder",
+            "vex_assumed_dealer", "cex_assumed_dealer",
+            "vex_peak_strike", "cex_peak_strike",
         ]
         values = {field: metrics.get(field) for field in fields}
 
@@ -1584,6 +1592,9 @@ class DatabaseRepository:
                     iv_percentile_expiry, iv_percentile_365d, iv_rank_365d,
                     expected_daily_move, expected_weekly_move, expected_monthly_move,
                     pc_atm_ratio, pc_near_otm_ratio, pc_far_otm_ratio,
+                    vex_holder, cex_holder,
+                    vex_assumed_dealer, cex_assumed_dealer,
+                    vex_peak_strike, cex_peak_strike,
                     underlying_price
                 ) VALUES (
                     %(snapshot_hour)s, %(currency)s, %(expiration)s,
@@ -1594,6 +1605,9 @@ class DatabaseRepository:
                     %(iv_percentile_expiry)s, %(iv_percentile_365d)s, %(iv_rank_365d)s,
                     %(expected_daily_move)s, %(expected_weekly_move)s, %(expected_monthly_move)s,
                     %(pc_atm_ratio)s, %(pc_near_otm_ratio)s, %(pc_far_otm_ratio)s,
+                    %(vex_holder)s, %(cex_holder)s,
+                    %(vex_assumed_dealer)s, %(cex_assumed_dealer)s,
+                    %(vex_peak_strike)s, %(cex_peak_strike)s,
                     %(underlying_price)s
                 )
                 ON CONFLICT (snapshot_hour, currency, expiration) DO UPDATE SET
@@ -1617,6 +1631,12 @@ class DatabaseRepository:
                     pc_atm_ratio = EXCLUDED.pc_atm_ratio,
                     pc_near_otm_ratio = EXCLUDED.pc_near_otm_ratio,
                     pc_far_otm_ratio = EXCLUDED.pc_far_otm_ratio,
+                    vex_holder = EXCLUDED.vex_holder,
+                    cex_holder = EXCLUDED.cex_holder,
+                    vex_assumed_dealer = EXCLUDED.vex_assumed_dealer,
+                    cex_assumed_dealer = EXCLUDED.cex_assumed_dealer,
+                    vex_peak_strike = EXCLUDED.vex_peak_strike,
+                    cex_peak_strike = EXCLUDED.cex_peak_strike,
                     underlying_price = EXCLUDED.underlying_price
             """, {
                 "snapshot_hour": snapshot_hour,

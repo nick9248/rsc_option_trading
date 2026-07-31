@@ -21,6 +21,7 @@ from collections import Counter
 from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional
 
+from coding.core.analytics.exposure_profile_calculator import ExposureProfileCalculator
 from coding.core.analytics.volatility_surface_calculator import VolatilitySurfaceCalculator
 from coding.core.analytics.vrp_calculator import VRPCalculator
 from coding.core.database.repository import DatabaseRepository
@@ -145,8 +146,91 @@ class VolatilityReconstructionService:
             **market_metrics,
         }
 
+        # institutional_metrics_spec.md section 4 / Task C5: per-strike
+        # VEX/CEX aggregates (Migration 019's 6 new columns). Task C4's
+        # review lesson (Important #2) applied proactively here:
+        # _calculate_exposure_aggregates is isolated in its OWN try/except
+        # (never raises) and runs AFTER the pre-existing `metrics` dict
+        # above is already fully built -- a failure computing VEX/CEX can
+        # never suppress the atm_iv/net_vanna/VRP/market-metrics save this
+        # method already performs.
+        metrics.update(
+            self._calculate_exposure_aggregates(
+                currency, snapshot_hour, expiration, instruments, underlying_price,
+            )
+        )
+
         self.repo.save_volatility_snapshot(snapshot_hour, currency, expiration, metrics, underlying_price)
         return True
+
+    def _calculate_exposure_aggregates(
+        self,
+        currency: str,
+        snapshot_hour: datetime,
+        expiration: str,
+        instruments: List[Dict[str, Any]],
+        underlying_price: float,
+    ) -> Dict[str, Optional[float]]:
+        """
+        Per-expiry VEX/CEX aggregates (holder-side raw + assumed-dealer
+        view), persisted to the 6 columns Migration 019 added to
+        ``onchain_volatility_snapshots`` (institutional_metrics_spec.md
+        section 4, Task C5). Peak strikes use the HOLDER-side convention
+        (matching migration 019's own column comments).
+
+        Isolated in its own try/except (Task C4 review Important #2 lesson,
+        applied proactively): this computation must never prevent the
+        caller's pre-existing ``save_volatility_snapshot`` call (atm_iv,
+        net_vanna, VRP, market metrics) from running with the rest of the
+        row's fields. All 6 fields default to None on any failure -- every
+        column is nullable, so this degrades to a partial row, never a
+        dropped one.
+
+        Args:
+            currency: Currency symbol.
+            snapshot_hour: Naive-UTC hour this row is for -- used directly
+                as ``valuation_time_utc`` (ExposureProfileCalculator needs
+                naive-UTC to match BlackScholesCalculator.
+                parse_instrument_name's 08:00-UTC-naive expiry convention;
+                snapshot_hour already is naive-UTC throughout this pipeline).
+            expiration: Expiration date string, for logging only.
+            instruments: Same instrument list already fetched for this
+                (hour, expiration) slice and fed to VolatilitySurfaceCalculator
+                above -- no extra DB query.
+            underlying_price: Spot price anchor (S in the VEX/CEX formulas).
+
+        Returns:
+            Dict with vex_holder, cex_holder, vex_assumed_dealer,
+            cex_assumed_dealer, vex_peak_strike, cex_peak_strike -- all
+            None if the computation failed.
+        """
+        try:
+            calculator = ExposureProfileCalculator(
+                instruments=instruments,
+                spot_price=underlying_price,
+                valuation_time_utc=snapshot_hour,
+                currency=currency,
+            )
+            holder = calculator.calculate(side_convention="holder")
+            dealer = calculator.calculate(side_convention="assumed_dealer")
+            return {
+                "vex_holder": holder["total_vex"],
+                "cex_holder": holder["total_cex"],
+                "vex_assumed_dealer": dealer["total_vex"],
+                "cex_assumed_dealer": dealer["total_cex"],
+                "vex_peak_strike": holder["peak_vanna_strike"],
+                "cex_peak_strike": holder["peak_charm_strike"],
+            }
+        except Exception as e:
+            logger.warning(
+                f"Failed to compute VEX/CEX exposure aggregates for {currency} "
+                f"{expiration} at {snapshot_hour}: {e}"
+            )
+            return {
+                "vex_holder": None, "cex_holder": None,
+                "vex_assumed_dealer": None, "cex_assumed_dealer": None,
+                "vex_peak_strike": None, "cex_peak_strike": None,
+            }
 
     @staticmethod
     def _extract_underlying_price(instruments: List[Dict[str, Any]]) -> float:
