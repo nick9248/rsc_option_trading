@@ -18,6 +18,7 @@ from typing import Any, Dict, Optional, Tuple
 from coding.core.analytics.historical_normalizer import NormalizedMetric
 from coding.core.analytics.results.dealer_inventory_results import DealerInventoryResult
 from coding.core.analytics.results.expiry_results import ExpirationAnalysisResult
+from coding.core.analytics.results.exposure_profile_results import ExposureProfileResult
 from coding.core.analytics.results.flow_results import FlowResult
 from coding.core.analytics.results.gex_dex_results import GexDexResult
 from coding.core.analytics.results.market_wide_results import MarketWideResult
@@ -100,6 +101,15 @@ class ExpirationBundle:
     # computation guard caught an unexpected error (see
     # OnChainAnalysisService._calculate_inferred_dealer_positioning).
     dealer_inventory: Optional[DealerInventoryResult] = None
+
+    # institutional_metrics_spec.md section 4 \ task C5: per-strike
+    # vanna/charm exposure profile (VEX/CEX), holder-side/assumed-dealer
+    # pair -- same D7 convention as gex_dex/dealer_inventory above.
+    # Optional/defaulted so every pre-existing direct ExpirationBundle(...)
+    # constructor (tests, the builder) keeps working unchanged. None when
+    # the additive computation guard caught an unexpected error (see
+    # OnChainAnalysisService._calculate_exposure_profile).
+    exposure_profile: Optional[ExposureProfileResult] = None
 
 
 @dataclass(frozen=True)

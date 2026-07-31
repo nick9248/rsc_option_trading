@@ -132,6 +132,29 @@ class TestOnChainAnalysisBuilder:
         assert bundle.vol_surface is None
         assert bundle.oi_changes is None
         assert bundle.iv_percentile is None
+        assert bundle.exposure_profile is None
+
+    def test_set_exposure_profile_stored_on_bundle(self):
+        """institutional_metrics_spec.md section 4 / task C5."""
+        from coding.core.analytics.results.exposure_profile_results import (
+            ExposureProfileResult,
+        )
+
+        builder = OnChainAnalysisBuilder(
+            currency="BTC", underlying_price=90000.0,
+            parsed_instruments={"28MAR26": [{"strike": 90000.0}]},
+        )
+        builder.set_expiration_analysis("28MAR26", _make_analysis())
+        exposure = ExposureProfileResult(
+            strike_rows=(), spot_price=90000.0, currency="BTC",
+            total_vex_holder=1.0, total_cex_holder=-1.0,
+            total_vex_assumed_dealer=0.5, total_cex_assumed_dealer=-0.5,
+        )
+        builder.set_exposure_profile("28MAR26", exposure)
+
+        result = builder.build()
+        bundle = result.bundle("28MAR26")
+        assert bundle.exposure_profile == exposure
 
     def test_missing_sections_default_to_none_not_raise(self):
         """A partial run (a failed phase) must still produce a usable result."""
@@ -149,6 +172,7 @@ class TestOnChainAnalysisBuilder:
         assert result.recent_trades == ()
         bundle = result.bundle("28MAR26")
         assert bundle.gex_dex is None and bundle.flow is None and bundle.vol_surface is None
+        assert bundle.dealer_inventory is None and bundle.exposure_profile is None
 
     def test_expiration_without_analysis_is_skipped(self):
         """Matches OnChainAnalyzer.generate_report()'s `if not analysis: continue` —

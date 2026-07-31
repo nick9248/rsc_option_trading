@@ -135,15 +135,29 @@ def test_pc_by_moneyness_buckets_and_na_ratio():
     assert "Far-OTM (15%+):" in text
 
 
-def test_second_order_greeks_rendered():
-    text = format_vol_surface_section(_make_result(), expiration="10MAR26")
-    # bugfix_spec.md Item 8: holder-side raw sums, clearly labelled and
-    # separated from the assumed-dealer view (the negation).
-    assert "SECOND-ORDER GREEKS -- HOLDER SIDE (raw, no positioning assumption)" in text
-    assert "Vanna Exposure: +0.001234" in text
-    assert "Charm Exposure: -0.005678" in text
-    assert "ASSUMED DEALER VIEW  (assumption: dealers short customer vanna/charm)" in text
-    assert "Dealer Vanna:   -0.001234" in text
-    assert "Dealer Charm:   +0.005678" in text
-    assert "Vanna Signal: IV drop → dealers buy underlying (bullish)" in text
-    assert "Charm Signal: Time decay pushing delta negative (bearish drift)" in text
+def test_second_order_greeks_text_removed_superseded_by_exposure_profile_section():
+    """
+    institutional_metrics_spec.md section 4(c) / task C5: "Report --
+    replaces the aggregate vanna/charm advice block entirely." The old
+    "SECOND-ORDER GREEKS" text (aggregate scalar, tau via gamma-inversion)
+    no longer renders here -- superseded by the new per-strike "VANNA /
+    CHARM PROFILE" section (exposure_profile_formatter.format_exposure_
+    profile_section, wired in by report_formatter.py). This is a
+    text-rendering removal only: VolSurfaceResult.second_order_greeks
+    itself is untouched (still feeds synthesis.py's scoring engine) --
+    verified directly on the result object, not through this formatter.
+    """
+    result = _make_result()
+    text = format_vol_surface_section(result, expiration="10MAR26")
+
+    assert "SECOND-ORDER GREEKS" not in text
+    assert "Vanna Exposure" not in text
+    assert "ASSUMED DEALER VIEW" not in text
+    assert "Vanna Signal" not in text
+
+    # The underlying data model is unchanged.
+    second = result.second_order_greeks
+    assert second.vanna_exposure_holder == 0.001234
+    assert second.charm_exposure_holder == -0.005678
+    assert second.dealer_vanna_exposure == -0.001234
+    assert second.dealer_charm_exposure == 0.005678

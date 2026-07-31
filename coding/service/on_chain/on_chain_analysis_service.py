@@ -21,6 +21,7 @@ from coding.core.analytics.chart_generator import (
     save_chart,
 )
 from coding.core.analytics.dealer_inventory_calculator import DealerInventoryCalculator
+from coding.core.analytics.exposure_profile_calculator import ExposureProfileCalculator
 from coding.core.analytics.gex_dex_calculator import GexDexCalculator
 from coding.core.analytics.market_wide_calculator import MarketWideCalculator
 from coding.core.analytics.results.market_wide_results import (
@@ -52,6 +53,10 @@ from coding.core.analytics.results.dealer_inventory_results import (
     DealerInventoryLevel,
     DealerInventoryResult,
     DealerInventoryStrikeRow,
+)
+from coding.core.analytics.results.exposure_profile_results import (
+    ExposureProfileResult,
+    ExposureStrikeRow,
 )
 from coding.core.analytics.thresholds import (
     OI_CHANGE_SIGNIFICANT_ABS_THRESHOLD,
@@ -1009,6 +1014,20 @@ class OnChainAnalysisService:
                 if dealer_result is not None and builder is not None:
                     builder.set_dealer_inventory(expiration, dealer_result)
 
+                # institutional_metrics_spec.md section 4 / task C5:
+                # per-strike vanna/charm exposure profile (VEX/CEX), same
+                # enriched-Greeks instruments_with_greeks list, no second
+                # Greeks pass. Additive only (matches the dealer-positioning
+                # call immediately above): a failure degrades to "no
+                # exposure-profile section" (exposure_result is None), never
+                # to a broken GEX/DEX section.
+                progress_callback(f"Calculating vanna/charm exposure profile for {expiration}...")
+                exposure_result = self._calculate_exposure_profile(
+                    analyzer.currency, expiration, instruments_with_greeks, analyzer.index_price,
+                )
+                if exposure_result is not None and builder is not None:
+                    builder.set_exposure_profile(expiration, exposure_result)
+
         # Aggregate GEX/DEX across all expirations after per-expiry loop
         aggregate_result = None
         if gex_dex_typed_by_expiry:
@@ -1216,6 +1235,97 @@ class OnChainAnalysisService:
                 f"unexpectedly for {currency} {expiration} -- degrading to "
                 "'no inferred section' rather than aborting GEX/DEX "
                 "(additive-only, institutional_metrics_spec.md section 2 / task C3)",
+                exc_info=True,
+            )
+            return None
+
+    def _calculate_exposure_profile(
+        self,
+        currency: str,
+        expiration: str,
+        instruments_with_greeks: List[Dict[str, Any]],
+        spot_price: float,
+    ) -> Optional[ExposureProfileResult]:
+        """
+        institutional_metrics_spec.md section 4 (Task C5): per-strike
+        vanna (VEX) / charm (CEX) exposure profile, holder-side raw +
+        assumed-dealer view together (Decision D7, established Wave B/task
+        B2 -- same convention as GexDexCalculator/DealerInventoryCalculator,
+        no third convention invented here).
+
+        Args:
+            currency: Currency symbol (BTC or ETH).
+            expiration: Expiration date string (e.g., "31JUL26").
+            instruments_with_greeks: The SAME enriched-Greeks instrument list
+                already built for GexDexCalculator/dealer positioning above
+                -- no second Greeks pass, no second API call.
+            spot_price: ``analyzer.index_price`` -- same anchor
+                GexDexCalculator uses (bugfix_spec.md Item 7).
+
+        Returns:
+            ``ExposureProfileResult``, or ``None`` if computing it raised
+            unexpectedly -- this is a purely additive computation (like
+            ``_calculate_inferred_dealer_positioning``'s established guard)
+            and must never abort the GEX/DEX pipeline it runs alongside.
+        """
+        try:
+            # Report-time valuation instant -- naive-UTC to match
+            # BlackScholesCalculator.parse_instrument_name's 08:00-UTC-naive
+            # expiry convention (institutional_metrics_spec.md section 4(b)'s
+            # known latent bug: naive-LOCAL vs naive-UTC would silently
+            # misprice tau by 1-2 hours on this machine).
+            valuation_time_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+            calculator = ExposureProfileCalculator(
+                instruments=instruments_with_greeks,
+                spot_price=spot_price,
+                valuation_time_utc=valuation_time_utc,
+                currency=currency,
+            )
+            holder = calculator.calculate(side_convention="holder")
+            dealer = calculator.calculate(side_convention="assumed_dealer")
+
+            # Both calls iterate the SAME instruments list -- side_convention
+            # only changes the per-leg sign weight, never which instruments
+            # are skipped or which strikes survive the zero-OI-both-legs
+            # filter. strike_data KEYS and every non-vex/cex field (OI,
+            # vanna, charm) are therefore identical between the two calls by
+            # construction; only "vex"/"cex" differ.
+            strike_rows = tuple(
+                ExposureStrikeRow(
+                    strike=strike,
+                    call_oi=row["call_oi"],
+                    put_oi=row["put_oi"],
+                    call_vanna=row["call_vanna"],
+                    put_vanna=row["put_vanna"],
+                    call_charm=row["call_charm"],
+                    put_charm=row["put_charm"],
+                    vex_holder=row["vex"],
+                    cex_holder=row["cex"],
+                    vex_assumed_dealer=dealer["strike_data"][strike]["vex"],
+                    cex_assumed_dealer=dealer["strike_data"][strike]["cex"],
+                )
+                for strike, row in sorted(holder["strike_data"].items())
+            )
+
+            return ExposureProfileResult(
+                strike_rows=strike_rows,
+                spot_price=spot_price,
+                currency=currency,
+                total_vex_holder=holder["total_vex"],
+                total_cex_holder=holder["total_cex"],
+                total_vex_assumed_dealer=dealer["total_vex"],
+                total_cex_assumed_dealer=dealer["total_cex"],
+                peak_vanna_strike=holder["peak_vanna_strike"],
+                peak_charm_strike=holder["peak_charm_strike"],
+                skipped_instruments=holder["skipped_instruments"],
+            )
+        except Exception:
+            logger.error(
+                f"OnChainAnalysisService: vanna/charm exposure profile "
+                f"failed unexpectedly for {currency} {expiration} -- "
+                "degrading to 'no exposure-profile section' rather than "
+                "aborting GEX/DEX (additive-only, "
+                "institutional_metrics_spec.md section 4 / task C5)",
                 exc_info=True,
             )
             return None

@@ -143,22 +143,19 @@ def format_vol_surface_section(result: VolSurfaceResult, expiration: str) -> str
         lines.append(f"  {label} ({rng}):{'':>5}{ratio_str}")
     lines.append("")
 
-    # bugfix_spec.md Item 8: holder-side raw sums (no positioning
-    # assumption) and the assumed-dealer view (negation), explicitly
-    # labelled and separated -- the signals below are derived from the
-    # DEALER fields (see VolatilitySurfaceCalculator._calculate_second_
-    # order_greeks), not the holder sum, so the narrative names the actor
-    # only where the assumption is stated.
-    second = result.second_order_greeks
-    lines.append("SECOND-ORDER GREEKS -- HOLDER SIDE (raw, no positioning assumption)")
-    lines.append(f"  Vanna Exposure: {second.vanna_exposure_holder:+.6f}")
-    lines.append(f"  Charm Exposure: {second.charm_exposure_holder:+.6f}")
-    lines.append("")
-    lines.append("ASSUMED DEALER VIEW  (assumption: dealers short customer vanna/charm)")
-    lines.append(f"  Dealer Vanna:   {second.dealer_vanna_exposure:+.6f}")
-    lines.append(f"  Dealer Charm:   {second.dealer_charm_exposure:+.6f}")
-    lines.append(f"  Vanna Signal: {second.vanna_signal}")
-    lines.append(f"  Charm Signal: {second.charm_signal}")
-    lines.append("")
+    # institutional_metrics_spec.md section 4(c) / task C5: "Report --
+    # replaces the aggregate vanna/charm advice block entirely." The
+    # "SECOND-ORDER GREEKS" text that used to render here (holder-side raw
+    # + assumed-dealer aggregate scalar, tau via gamma-inversion) is
+    # superseded by the new per-strike "VANNA / CHARM PROFILE" section
+    # (coding/core/analytics/reporting/exposure_profile_formatter.py,
+    # wired in by report_formatter.py immediately after GEX/DEX and dealer
+    # inventory), which uses true instrument-name-derived tau instead of
+    # the gamma-inversion this aggregate scalar depends on (spec 4(b)).
+    # ``result.second_order_greeks`` itself is UNCHANGED -- this is a
+    # text-rendering removal only, not a data-model change. It still feeds
+    # synthesis.py's ScoringEngine.score_vanna_charm via ExpiryMetrics.
+    # net_vanna/net_charm (bugfix_spec.md Item 8 fix-review Important #3),
+    # which this task does not touch.
 
     return "\n".join(lines)

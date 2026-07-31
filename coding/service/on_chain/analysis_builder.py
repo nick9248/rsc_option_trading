@@ -28,6 +28,7 @@ from coding.core.analytics.results.analysis_result import (
 )
 from coding.core.analytics.results.dealer_inventory_results import DealerInventoryResult
 from coding.core.analytics.results.expiry_results import ExpirationAnalysisResult
+from coding.core.analytics.results.exposure_profile_results import ExposureProfileResult
 from coding.core.analytics.results.flow_results import FlowResult
 from coding.core.analytics.results.gex_dex_results import GexDexResult
 from coding.core.analytics.results.market_wide_results import MarketWideResult
@@ -41,6 +42,7 @@ class _ExpirationAccumulator:
     analysis: Optional[ExpirationAnalysisResult] = None
     gex_dex: Optional[GexDexResult] = None
     dealer_inventory: Optional[DealerInventoryResult] = None
+    exposure_profile: Optional[ExposureProfileResult] = None
     flow: Optional[FlowResult] = None
     vol_surface: Optional[VolSurfaceResult] = None
     oi_changes: Optional[OiChangesResult] = None
@@ -93,6 +95,9 @@ class OnChainAnalysisBuilder:
 
     def set_dealer_inventory(self, expiration: str, result: DealerInventoryResult) -> None:
         self._slot(expiration).dealer_inventory = result
+
+    def set_exposure_profile(self, expiration: str, result: ExposureProfileResult) -> None:
+        self._slot(expiration).exposure_profile = result
 
     def set_flow(self, expiration: str, result: FlowResult) -> None:
         self._slot(expiration).flow = result
@@ -147,6 +152,7 @@ class OnChainAnalysisBuilder:
                     analysis=acc.analysis,
                     gex_dex=acc.gex_dex,
                     dealer_inventory=acc.dealer_inventory,
+                    exposure_profile=acc.exposure_profile,
                     flow=acc.flow,
                     vol_surface=acc.vol_surface,
                     oi_changes=acc.oi_changes,

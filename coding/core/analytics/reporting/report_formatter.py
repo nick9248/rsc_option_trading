@@ -28,6 +28,9 @@ from coding.core.analytics.reporting.dealer_inventory_formatter import (
     format_dealer_inventory_section,
 )
 from coding.core.analytics.reporting.expiry_formatter import format_expiration_section
+from coding.core.analytics.reporting.exposure_profile_formatter import (
+    format_exposure_profile_section,
+)
 from coding.core.analytics.reporting.flow_formatter import format_flow_section
 from coding.core.analytics.reporting.gex_dex_formatter import (
     format_aggregate_gex_dex_section,
@@ -283,6 +286,20 @@ class OnChainReportFormatter:
         if bundle.dealer_inventory is not None:
             extra_sections.append(
                 format_dealer_inventory_section(bundle.dealer_inventory, bundle.gex_dex, result.currency)
+            )
+        # institutional_metrics_spec.md section 4 / task C5: per-strike
+        # vanna/charm exposure profile, placed alongside the other
+        # exposure-family sections (GEX/DEX, dealer inventory) so the
+        # "holder-side raw / assumed-dealer view" convention reads as one
+        # continuous block. Replaces the old aggregate "SECOND-ORDER
+        # GREEKS" text that used to render inside format_vol_surface_section
+        # (spec 4(c): "replaces the aggregate vanna/charm advice block
+        # entirely") -- VolSurfaceResult.second_order_greeks itself is
+        # unchanged and still feeds synthesis.py's scoring engine, only its
+        # TEXT rendering moved here with true per-strike numbers.
+        if bundle.exposure_profile is not None:
+            extra_sections.append(
+                format_exposure_profile_section(bundle.exposure_profile, result.currency)
             )
         if bundle.flow is not None:
             extra_sections.append(format_flow_section(bundle.flow, bundle.flow.lookback_hours))
