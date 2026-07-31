@@ -864,7 +864,20 @@ class ProspectiveCollector:
                 if mark_iv and strike and name:
                     parsed = bs.parse_instrument_name(name)
                     if parsed:
-                        tte = bs.calculate_time_to_expiry(datetime.now(), parsed["expiry_time"])
+                        # institutional_metrics_spec.md section 4(b), "Known
+                        # latent bug to fix in the same change": parsed
+                        # expiry_time is naive-UTC (BlackScholesCalculator.
+                        # parse_instrument_name always builds it at 08:00
+                        # UTC settlement). datetime.now() here was naive
+                        # LOCAL time -- on this machine (CET/CEST) that is a
+                        # 1-2 hour τ error, material for 0-DTE options,
+                        # feeding directly into this BS-fallback greeks path
+                        # (and therefore into GexDexCalculator and the new
+                        # ExposureProfileCalculator, both of which consume
+                        # this enriched instrument list). Fixed to naive-UTC
+                        # so both sides of the subtraction agree.
+                        now_utc_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+                        tte = bs.calculate_time_to_expiry(now_utc_naive, parsed["expiry_time"])
                         if tte > 0:
                             iv_decimal = float(mark_iv) / 100.0
                             calc = bs.calculate_greeks(
