@@ -831,6 +831,11 @@ class OnChainAnalysisService:
             try:
                 dte = MarketWideCalculator._calculate_days_to_expiry(expiration, now_utc)
                 if dte is None:
+                    logger.warning(
+                        "Skipping skew term structure row for %s %s: "
+                        "expiration string did not parse as a date",
+                        currency, expiration,
+                    )
                     continue
 
                 rr_25d = skew.get("rr_25d")
@@ -1632,20 +1637,30 @@ class OnChainAnalysisService:
                 result = calculator.calculate()
                 if result.atm_iv is not None:
                     analyzer._atm_ivs[expiration] = result.atm_iv
-
-                # institutional_metrics_spec.md section 3 (Task C4): the
-                # delta-interpolated RR25/BF25, computed alongside ATM IV
-                # from the same calculator/instrument set -- zero
-                # additional work. Stored the same way _atm_ivs is (real
-                # cross-phase data, read later by
-                # _build_skew_term_structure for the SKEW TERM STRUCTURE
-                # report section).
-                analyzer._skew_by_expiry[expiration] = calculator.calculate_risk_reversal_butterfly()
                 if builder is not None:
                     builder.set_vol_surface(expiration, result)
 
             except Exception as e:
                 logger.warning(f"Failed to calculate volatility surface for {expiration}: {e}")
+                continue
+
+            # institutional_metrics_spec.md section 3 (Task C4): the
+            # delta-interpolated RR25/BF25, computed alongside ATM IV from
+            # the same calculator/instrument set -- zero additional work.
+            # Task C4 review Important #2: this runs AFTER set_vol_surface
+            # above (which already succeeded) and in its OWN try/except --
+            # a failure here must never drop the vol-surface result that
+            # was already stored, matching the daemon's own isolation
+            # (ProspectiveCollector._calculate_and_save_skew). Stored the
+            # same way _atm_ivs is (real cross-phase data, read later by
+            # _build_skew_term_structure for the SKEW TERM STRUCTURE
+            # report section).
+            try:
+                analyzer._skew_by_expiry[expiration] = calculator.calculate_risk_reversal_butterfly()
+            except Exception as skew_exc:
+                logger.warning(
+                    f"Failed to calculate RR25/BF25 skew for {expiration}: {skew_exc}"
+                )
 
     def _calculate_vwap_iv(
         self,

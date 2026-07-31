@@ -2615,6 +2615,10 @@ class DatabaseRepository:
         "onchain_volatility_snapshots": "snapshot_hour",
         "volatility_index_history": "date",
         "funding_rate_history": "date",
+        # Task C4 review Minor #2: was added to _METRIC_HISTORY_WHITELIST
+        # (get_metric_history) but not here, which meant the "STALE:
+        # history ends {ts}" mechanism could never cover this table.
+        "volatility_skew_history": "snapshot_hour",
     }
 
     def get_metric_freshness(

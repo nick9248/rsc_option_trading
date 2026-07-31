@@ -504,3 +504,77 @@ class TestInterpolateIvAtDelta:
 
         point = calc.interpolate_iv_at_delta("C", 0.25)
         assert point.iv == pytest.approx(33.5)
+
+    def test_bracket_too_wide_returns_none_even_though_bracketed(self):
+        """
+        Task C4 review Important #1 -- reproduces the real BTC 26JUL26
+        pathology: 0.25 IS bracketed (a=0.10 <= 0.25 <= b=0.40), but the
+        bracket spans 0.30 -- wider than MAX_ABS_DELTA_BRACKET_WIDTH (0.20)
+        -- a chord across most of the smile, not a genuine 25-delta read.
+        Must return None, not a fabricated interpolated value.
+        """
+        instruments = [
+            _quoted_instrument(90_000 * 1.10, "C", 0.10, 50.0),
+            _quoted_instrument(90_000 * 1.40, "C", 0.40, 30.0),
+        ]
+        calc = VolatilitySurfaceCalculator(instruments, 90_000.0, "28MAR26")
+
+        assert calc.interpolate_iv_at_delta("C", 0.25) is None
+
+        result = calc.calculate_risk_reversal_butterfly()
+        assert result["call_25d_iv"] is None
+        assert result["rr_25d"] is None
+
+    def test_bracket_at_max_width_is_accepted(self):
+        """Width exactly equal to MAX_ABS_DELTA_BRACKET_WIDTH (0.20) is
+        still a genuine read -- only WIDER than the threshold is rejected."""
+        instruments = [
+            _quoted_instrument(90_000 * 1.15, "C", 0.15, 40.0),
+            _quoted_instrument(90_000 * 1.35, "C", 0.35, 30.0),
+        ]
+        calc = VolatilitySurfaceCalculator(instruments, 90_000.0, "28MAR26")
+
+        point = calc.interpolate_iv_at_delta("C", 0.25)
+        assert point is not None
+        assert point.bracket == (0.15, 0.35)
+
+    def test_bracket_barely_over_max_width_is_rejected(self):
+        instruments = [
+            _quoted_instrument(90_000 * 1.14, "C", 0.14, 40.0),
+            _quoted_instrument(90_000 * 1.35, "C", 0.35, 30.0),
+        ]
+        calc = VolatilitySurfaceCalculator(instruments, 90_000.0, "28MAR26")
+
+        assert calc.interpolate_iv_at_delta("C", 0.25) is None
+
+    def test_missing_strike_key_does_not_raise(self):
+        """Task C4 review Important #2 root cause: a real-world instrument
+        dict missing the 'strike' key entirely must be skipped, like a
+        missing delta/mark_iv, not raise KeyError."""
+        instrument_missing_strike = _quoted_instrument(90_000 * 1.20, "C", 0.20, 36.0)
+        del instrument_missing_strike["strike"]
+        instruments = [
+            instrument_missing_strike,
+            _quoted_instrument(90_000 * 1.30, "C", 0.30, 32.0),
+        ]
+        calc = VolatilitySurfaceCalculator(instruments, 90_000.0, "28MAR26")
+
+        # The strike-less instrument is excluded entirely -- with only one
+        # remaining quoted point (0.30), 0.25 is not bracketed (no point
+        # with |delta| <= 0.25).
+        assert calc.interpolate_iv_at_delta("C", 0.25) is None
+
+    def test_none_strike_value_does_not_raise(self):
+        """Same as above, but the key is present with a None value
+        (e.g. an API response that omits strike for a non-option
+        instrument accidentally routed through) -- float(None) must never
+        be reached."""
+        instrument_none_strike = _quoted_instrument(90_000 * 1.20, "C", 0.20, 36.0)
+        instrument_none_strike["strike"] = None
+        instruments = [
+            instrument_none_strike,
+            _quoted_instrument(90_000 * 1.30, "C", 0.30, 32.0),
+        ]
+        calc = VolatilitySurfaceCalculator(instruments, 90_000.0, "28MAR26")
+
+        assert calc.interpolate_iv_at_delta("C", 0.25) is None

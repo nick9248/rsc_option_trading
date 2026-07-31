@@ -58,6 +58,29 @@ MAX_ABS_DELTA_FOR_INTERPOLATION = 0.98
 TARGET_ABS_DELTA_25D = 0.25
 TARGET_ABS_DELTA_ATM = 0.50
 
+# Task C4 review (Important #1): a bracket that DOES straddle the target
+# delta is not automatically a genuine local read of it -- observed live on
+# BTC 26JUL26 (a very short-dated, thin expiry): the put side's nearest
+# quotes above/below |delta|=0.25 were at |delta|=0.18 and |delta|=0.63
+# (n_quotes_used=12), a chord spanning most of the smile from near-the-money
+# calls-side territory across the ATM boundary into deep ITM -- not a 25-
+# delta quote by any reasonable reading, yet it satisfies "0.25 is
+# bracketed" and would otherwise be persisted as a legitimate observation
+# into volatility_skew_history, where Decision D10 means it can never be
+# backfilled or corrected retroactively.
+#
+# Real desks quote delta "pillars" roughly 0.10-0.15 apart (10/25/40-delta
+# conventions) -- a bracket materially wider than one pillar-spacing means
+# the chain has a genuine hole around the target, not merely one sparse-but-
+# legitimate neighbor. 0.20 was chosen empirically against the real BTC
+# golden-master fixture (12 expirations): every legitimate row's bracket
+# width is <= 0.14 (worst case: 27JUL26's calls at 0.136 / puts at 0.139,
+# a genuinely thin but locally-read expiry); only 26JUL26's brackets (0.297
+# call / 0.450 put) are pathological. 0.20 sits with margin above every
+# legitimate observed width and well below both pathological ones, so it
+# does not require an exact/fragile cutoff to separate the two populations.
+MAX_ABS_DELTA_BRACKET_WIDTH = 0.20
+
 
 @dataclass(frozen=True)
 class InterpPoint:
@@ -300,7 +323,14 @@ class VolatilitySurfaceCalculator:
                 continue
             delta = inst.get("delta")
             mark_iv = inst.get("mark_iv")
-            if delta is None or mark_iv is None:
+            strike = inst.get("strike")
+            # Task C4 review (Important #2 root cause): a missing/None
+            # strike must be skipped like a missing delta/mark_iv, not
+            # reach ``float(inst["strike"])`` below -- that raised KeyError
+            # (key absent) or TypeError (``float(None)``) on real-world
+            # instrument dicts that don't carry a strike, which propagated
+            # out of calculate_risk_reversal_butterfly() uncaught.
+            if delta is None or mark_iv is None or strike is None:
                 continue
 
             bid_price = inst.get("bid_price") or 0
@@ -315,7 +345,7 @@ class VolatilitySurfaceCalculator:
             points.append({
                 "abs_delta": abs_delta,
                 "iv": float(mark_iv),
-                "strike": float(inst["strike"]),
+                "strike": float(strike),
             })
 
         points.sort(key=lambda p: p["abs_delta"])
@@ -362,7 +392,15 @@ class VolatilitySurfaceCalculator:
         Returns:
             ``InterpPoint`` with the interpolated IV, the bracket-midpoint
             strike, and the bracket |delta| pair used. None if the target
-            is not bracketed by this side's quoted chain.
+            is not bracketed by this side's quoted chain, OR if it IS
+            bracketed but the bracket is wider than
+            ``MAX_ABS_DELTA_BRACKET_WIDTH`` (Task C4 review Important #1):
+            a wide bracket means the chain has a hole around
+            ``target_abs_delta``, not a genuine local quote to interpolate
+            from -- treated identically to "not bracketed at all" so it is
+            never persisted to ``volatility_skew_history`` (Decision D10:
+            that history cannot be corrected retroactively) and never
+            silently rendered as a real 25-delta/ATM read.
         """
         points = self._build_delta_points(option_type)
 
@@ -373,6 +411,9 @@ class VolatilitySurfaceCalculator:
 
         a = max(below, key=lambda p: p["abs_delta"])
         b = min(above, key=lambda p: p["abs_delta"])
+
+        if (b["abs_delta"] - a["abs_delta"]) > MAX_ABS_DELTA_BRACKET_WIDTH:
+            return None
 
         if a["abs_delta"] == b["abs_delta"]:
             # Exact match (or a single point straddling both lists) --
@@ -407,8 +448,10 @@ class VolatilitySurfaceCalculator:
             degeneracy of the old nearest-delta code, F2).
 
         Either quantity is None when its required interpolation(s) are not
-        bracketed by the chain (never extrapolated) -- see
-        ``interpolate_iv_at_delta``.
+        bracketed by the chain (never extrapolated), OR when a bracket
+        exists but is wider than ``MAX_ABS_DELTA_BRACKET_WIDTH`` (Task C4
+        review Important #1 -- a wide bracket is a hole in the chain, not
+        a genuine local read) -- see ``interpolate_iv_at_delta``.
 
         Returns:
             Dict with ``rr_25d``, ``bf_25d``, ``call_25d_iv``,

@@ -85,9 +85,19 @@ def format_skew_term_structure_section(result: Optional[SkewTermStructureResult]
         lines.append("")
         return "\n".join(lines)
 
+    # Task C4 review Minor #1: column widths must fit the WIDEST rendered
+    # cell, not just the T3.1-style numeric-only examples. Worst case:
+    # RR25 = sign+2 decimals (up to 7: e.g. "-100.00") + "  p" + up to 3
+    # percentile digits ("p100") + " " + the longest regime label
+    # ("EXTREME HIGH"/"EXTREME LOW", 12/11 chars) = ~26. BF25 has no
+    # regime word but the "insufficient chain"/"n/a (N obs)" fallback
+    # strings (19/~19 chars) are the binding constraint there.
+    _RR25_WIDTH = 26
+    _BF25_WIDTH = 21
+
     lines.append(
         f"  {'Expiry':<10}  {'DTE':>7}  {'ATM IV':>8}  "
-        f"{'RR25':>20}  {'BF25':>14}  {'Chain':>9}"
+        f"{'RR25':>{_RR25_WIDTH}}  {'BF25':>{_BF25_WIDTH}}  {'Chain':>9}"
     )
 
     for entry in result.entries:
@@ -96,7 +106,8 @@ def format_skew_term_structure_section(result: Optional[SkewTermStructureResult]
         chain_str = f"{entry.n_quotes_used} quotes" if entry.n_quotes_used is not None else "n/a"
         lines.append(
             f"  {entry.expiration:<10}  {dte_str:>7}  {atm_str:>8}  "
-            f"{_format_rr25_cell(entry):>20}  {_format_bf25_cell(entry):>14}  {chain_str:>9}"
+            f"{_format_rr25_cell(entry):>{_RR25_WIDTH}}  "
+            f"{_format_bf25_cell(entry):>{_BF25_WIDTH}}  {chain_str:>9}"
         )
 
     if result.rr_slope is not None:
