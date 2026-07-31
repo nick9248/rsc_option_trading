@@ -13,9 +13,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from coding.core.analytics.black_scholes_calculator import BlackScholesCalculator
+from coding.core.analytics.delta_flow_calculator import DeltaFlowCalculator
 from coding.core.analytics.gex_dex_calculator import GexDexCalculator
 from coding.core.analytics.market_wide_calculator import MarketWideCalculator
 from coding.core.analytics.on_chain_analyzer import OnChainMetricsCalculator
+from coding.core.analytics.results.delta_flow_results import FlowBucket
 from coding.core.analytics.volatility_surface_calculator import VolatilitySurfaceCalculator
 from coding.core.config import SUPPORTED_CURRENCIES
 from coding.core.database.repository import DatabaseRepository
@@ -65,6 +67,11 @@ class ProspectiveCollector:
         self.aggregation_service = HourlyAggregationService(repository=self.repo)
         self._forward_harness = ForwardTestingHarness(repository=self.repo)
         self._volatility_reconstruction = VolatilityReconstructionService(repository=self.repo)
+        # institutional_metrics_spec.md section 6 / task C7: signed delta-
+        # weighted taker flow (HIRO analog). Pure calculator, no
+        # repository/api dependency of its own -- shares this collector's
+        # repository only via _persist_delta_flow's own read/write calls.
+        self._delta_flow_calculator = DeltaFlowCalculator()
         # Straddle scanner (increment 2): reuses the same live api connection
         # and repository as the rest of this collector (THE ONE DATA SOURCE
         # RULE — see straddle_scan_service.py module docstring).
@@ -365,9 +372,89 @@ class ProspectiveCollector:
         except Exception as e:
             logger.error(f"    Error fetching OHLCV: {e}")
 
+        # 7. Compute and persist signed delta-weighted taker flow (HIRO
+        # analog) for this hour (institutional_metrics_spec.md section 6 /
+        # infra_spec.md section 2 -- task C7). Own try/except, isolated
+        # from steps 1-6 above -- a failure here can never suppress, or be
+        # suppressed by, an unrelated step's exception (task-C7-brief.md
+        # daemon/report isolation constraint). Reads this hour's trades
+        # from historical_trades directly (already stored by step 1 above,
+        # or by an earlier daemon run for this same hour) rather than
+        # reusing whatever trade list step 1 fetched from the API, since
+        # step 1 may have partially failed or only fetched a subset.
+        logger.info(f"  Computing {currency} delta-weighted flow...")
+        try:
+            self._persist_delta_flow(currency, hour)
+        except Exception as e:
+            logger.error(f"    Error computing delta flow: {e}")
+
         return {
             "trades": trades,
             "instruments": instruments
+        }
+
+    def _persist_delta_flow(self, currency: str, hour: datetime) -> Dict[str, Any]:
+        """
+        Compute + persist signed delta-weighted taker flow (institutional_
+        metrics_spec.md section 6 / infra_spec.md section 2 -- task C7) for
+        the given hour: one row per expiration that actually had a trade
+        this hour, plus a currency-level ``"ALL"`` rollup.
+
+        The ``"ALL"`` row is written even when zero trades exist for this
+        currency/hour (an all-zero, ``trade_count == 0`` bucket) --
+        ``DeltaFlowCalculator.compute_hourly_buckets`` deliberately returns
+        ``{}`` for an empty trade list (core stays pure; it does not decide
+        what an absence should mean). A missing row must never be the only
+        signal for "zero trading activity this hour" -- that is
+        indistinguishable from "the daemon did not run this hour at all"
+        (task-C7-brief.md gate-exhaustiveness requirement). If the
+        calculator DID produce an "ALL" bucket (even an all-skipped,
+        ``trade_count == 0`` one, e.g. every trade had bad IV), that bucket
+        is persisted as-is -- never overwritten by a fabricated zero-skip
+        synthetic one, so ``skipped_count`` survives to the DB.
+
+        Per-expiration rows are written ONLY for expirations that actually
+        appeared in this hour's trades (enriched or skipped). An expiration
+        with genuinely zero trades never gets a fabricated row -- unlike
+        C3's "all-legs-excluded reads as a clean pass" failure mode, there
+        is no cross-reference to "the current chain" here to synthesize a
+        false zero-trade entry for a listed-but-untraded expiry from.
+
+        Args:
+            currency: Currency symbol (BTC or ETH).
+            hour: Hour bucket start (matches the ``hour`` value already
+                used for ``hourly_snapshots``/``onchain_analysis_snapshots``
+                elsewhere in this collector).
+
+        Returns:
+            Dict with ``expirations_written``, ``total_trade_count``,
+            ``total_skipped_count`` -- for the caller's logging/result dict
+            (not currently surfaced in ``collect_hour``'s result, matching
+            ``_fetch_dvol``/``_fetch_funding_rate``'s existing "log only"
+            convention for this class of per-currency step).
+        """
+        hour_start_ms = int(hour.timestamp() * 1000)
+        hour_end_ms = hour_start_ms + 3600 * 1000
+
+        trades = self.repo.get_trades_for_delta_flow(currency, hour_start_ms, hour_end_ms)
+        buckets = self._delta_flow_calculator.compute_hourly_buckets(trades)
+
+        if "ALL" not in buckets:
+            buckets = dict(buckets)
+            buckets["ALL"] = FlowBucket(
+                expiration="ALL", hiro_usd=0.0, premium_usd=0.0, gross_delta_usd=0.0,
+                net_contracts=0.0, gross_contracts=0.0, trade_count=0, buy_count=0,
+                sell_count=0, skipped_count=0,
+            )
+
+        for bucket in buckets.values():
+            self.repo.save_delta_flow_hourly(currency=currency, snapshot_hour=hour, bucket=bucket)
+
+        all_bucket = buckets["ALL"]
+        return {
+            "expirations_written": len(buckets),
+            "total_trade_count": all_bucket.trade_count,
+            "total_skipped_count": all_bucket.skipped_count,
         }
 
     def _fetch_trades(
