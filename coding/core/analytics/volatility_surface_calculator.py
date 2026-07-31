@@ -587,6 +587,19 @@ class VolatilitySurfaceCalculator:
 
         Results are aggregated across all instruments, weighted by OI.
 
+        Task C5 review (orchestrator ruling, Important #1): the
+        ASSUMED-DEALER view is the call/put-SPLIT convention (+1 call, -1
+        put -- SqueezeMetrics, the same convention GexDexCalculator already
+        uses for gamma/delta and ExposureProfileCalculator now uses for
+        per-strike VEX/CEX) -- NOT a blanket negation of the holder-side
+        sum. Negation and the call/put split are only equal when every
+        instrument in the aggregate is a call (or every one is a put);
+        they diverge on any mixed call/put aggregate, which is the normal
+        case. This aggregate scalar and ExposureProfileCalculator's
+        per-strike total must agree on what "dealer vanna/charm" means --
+        this was a real defect the review caught, not just a style
+        preference.
+
         Returns:
             Dict with net_vanna, net_charm, vanna_signal, charm_signal,
             skipped_instruments (count of instruments with oi > 0 that were
@@ -596,6 +609,11 @@ class VolatilitySurfaceCalculator:
         """
         net_vanna = 0.0
         net_charm = 0.0
+        # Task C5 review fix: call/put-split assumed-dealer accumulators,
+        # computed in the SAME pass as the holder-side sum above (no second
+        # loop, no second Greeks derivation).
+        dealer_vanna = 0.0
+        dealer_charm = 0.0
         skipped_instruments = 0
 
         for inst in self.instruments:
@@ -630,8 +648,19 @@ class VolatilitySurfaceCalculator:
                 d1 = _bs.d1_from_delta(float(delta), option_type)
                 d2 = d1 - sigma * math.sqrt(tau)
 
-                net_vanna += _bs.calculate_vanna(d1, d2, sigma) * float(oi)
-                net_charm += _bs.calculate_charm(d1, d2, tau) * float(oi)
+                vanna_i = _bs.calculate_vanna(d1, d2, sigma)
+                charm_i = _bs.calculate_charm(d1, d2, tau)
+
+                net_vanna += vanna_i * float(oi)
+                net_charm += charm_i * float(oi)
+
+                # Task C5 review fix (Important #1): call/put-split
+                # dealer-side sign, matching GexDexCalculator's own
+                # SqueezeMetrics convention (+1 call / -1 put) instead of
+                # negating the holder sum -- see this method's docstring.
+                dealer_side = 1.0 if option_type.upper() in ("C", "CALL") else -1.0
+                dealer_vanna += dealer_side * vanna_i * float(oi)
+                dealer_charm += dealer_side * charm_i * float(oi)
 
             except Exception as e:
                 # M5 (code_quality_review.md): this used to be a bare
@@ -649,16 +678,14 @@ class VolatilitySurfaceCalculator:
 
         # bugfix_spec.md Item 8: net_vanna/net_charm above are the HOLDER-side
         # raw sums (Sigma over ALL instruments, no call/put positioning
-        # split) -- pure arithmetic, no assumption. The assumed-dealer view
-        # (SqueezeMetrics heuristic: dealers are short whatever holders
-        # hold) is the negation. The narrative below describes the DEALER's
-        # action, so it must be derived from the dealer-side (negated)
-        # value -- using the holder sum directly here was the pre-Item-8
-        # defect (GexDexCalculator's docstring states the one convention
-        # this whole module follows).
-        dealer_vanna = -net_vanna
-        dealer_charm = -net_charm
-
+        # split) -- pure arithmetic, no assumption. dealer_vanna/dealer_charm
+        # (accumulated above, call/put-split) are the assumed-dealer view --
+        # the narrative below describes the DEALER's action, so it is
+        # derived from the dealer-side value, matching Item 8's original
+        # intent (using the holder sum directly for the narrative was the
+        # pre-Item-8 defect). Task C5 review fix: this dealer-side value is
+        # now the call/put SPLIT, not blanket negation -- see this method's
+        # docstring for why the two conventions diverge on mixed books.
         if dealer_vanna > 0:
             vanna_signal = "IV drop → dealers buy underlying (bullish)"
         else:

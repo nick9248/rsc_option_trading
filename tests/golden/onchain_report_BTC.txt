@@ -155,7 +155,8 @@ DEALER POSITIONING -- TWO VIEWS
 INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
   -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
 
-VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets)
+VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets --
+                       assumption: dealers long calls / short puts)
 --------------------------------------------------------------------------------
     Strike     Call OI      Put OI              VEX (USD/vol pt)                 CEX (USD/day)
     ------     -------      ------              ----------------                 -------------
@@ -451,7 +452,8 @@ DEALER POSITIONING -- TWO VIEWS
 INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
   -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
 
-VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets)
+VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets --
+                       assumption: dealers long calls / short puts)
 --------------------------------------------------------------------------------
     Strike     Call OI      Put OI              VEX (USD/vol pt)                 CEX (USD/day)
     ------     -------      ------              ----------------                 -------------
@@ -755,7 +757,8 @@ DEALER POSITIONING -- TWO VIEWS
 INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
   -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
 
-VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets)
+VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets --
+                       assumption: dealers long calls / short puts)
 --------------------------------------------------------------------------------
     Strike     Call OI      Put OI              VEX (USD/vol pt)                 CEX (USD/day)
     ------     -------      ------              ----------------                 -------------
@@ -1083,7 +1086,8 @@ DEALER POSITIONING -- TWO VIEWS
 INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
   -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
 
-VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets)
+VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets --
+                       assumption: dealers long calls / short puts)
 --------------------------------------------------------------------------------
     Strike     Call OI      Put OI              VEX (USD/vol pt)                 CEX (USD/day)
     ------     -------      ------              ----------------                 -------------
@@ -1360,7 +1364,8 @@ DEALER POSITIONING -- TWO VIEWS
 INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
   -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
 
-VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets)
+VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets --
+                       assumption: dealers long calls / short puts)
 --------------------------------------------------------------------------------
     Strike     Call OI      Put OI              VEX (USD/vol pt)                 CEX (USD/day)
     ------     -------      ------              ----------------                 -------------
@@ -1668,7 +1673,8 @@ DEALER POSITIONING -- TWO VIEWS
 INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
   -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
 
-VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets)
+VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets --
+                       assumption: dealers long calls / short puts)
 --------------------------------------------------------------------------------
     Strike     Call OI      Put OI              VEX (USD/vol pt)                 CEX (USD/day)
     ------     -------      ------              ----------------                 -------------
@@ -1934,7 +1940,8 @@ DEALER POSITIONING -- TWO VIEWS
 INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
   -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
 
-VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets)
+VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets --
+                       assumption: dealers long calls / short puts)
 --------------------------------------------------------------------------------
     Strike     Call OI      Put OI              VEX (USD/vol pt)                 CEX (USD/day)
     ------     -------      ------              ----------------                 -------------
@@ -2232,7 +2239,8 @@ DEALER POSITIONING -- TWO VIEWS
 INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
   -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
 
-VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets)
+VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets --
+                       assumption: dealers long calls / short puts)
 --------------------------------------------------------------------------------
     Strike     Call OI      Put OI              VEX (USD/vol pt)                 CEX (USD/day)
     ------     -------      ------              ----------------                 -------------
@@ -2514,7 +2522,8 @@ DEALER POSITIONING -- TWO VIEWS
 INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
   -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
 
-VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets)
+VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets --
+                       assumption: dealers long calls / short puts)
 --------------------------------------------------------------------------------
     Strike     Call OI      Put OI              VEX (USD/vol pt)                 CEX (USD/day)
     ------     -------      ------              ----------------                 -------------
@@ -2751,7 +2760,8 @@ DEALER POSITIONING -- TWO VIEWS
 INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
   -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
 
-VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets)
+VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets --
+                       assumption: dealers long calls / short puts)
 --------------------------------------------------------------------------------
     Strike     Call OI      Put OI              VEX (USD/vol pt)                 CEX (USD/day)
     ------     -------      ------              ----------------                 -------------
@@ -3050,7 +3060,8 @@ DEALER POSITIONING -- TWO VIEWS
 INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
   -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
 
-VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets)
+VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets --
+                       assumption: dealers long calls / short puts)
 --------------------------------------------------------------------------------
     Strike     Call OI      Put OI              VEX (USD/vol pt)                 CEX (USD/day)
     ------     -------      ------              ----------------                 -------------
@@ -3335,7 +3346,8 @@ DEALER POSITIONING -- TWO VIEWS
 INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
   -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
 
-VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets)
+VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets --
+                       assumption: dealers long calls / short puts)
 --------------------------------------------------------------------------------
     Strike     Call OI      Put OI              VEX (USD/vol pt)                 CEX (USD/day)
     ------     -------      ------              ----------------                 -------------

@@ -18,10 +18,18 @@ No interpretive sentence -- per spec 4(c), "the numbers and their peaks are
 the output."
 
 Decision D7 (BINDING, established Wave B/task B2): holder-side raw is the
-primary number, assumed-dealer view alongside in brackets -- same
-convention/vocabulary as ``gex_dex_formatter``'s "EXPOSURES -- HOLDER SIDE"
-/ "ASSUMED DEALER VIEW" blocks and ``vol_surface_formatter``'s
-(now-removed) second-order-greeks block, reused unchanged.
+primary number, assumed-dealer view alongside in brackets. The label states
+the assumption explicitly, matching ``gex_dex_formatter``'s bar ("ASSUMED
+DEALER VIEW  (assumption: dealers long calls / short puts for gamma, short
+customer delta)") rather than just borrowing the word "dealer" -- Task C5
+review (Important #1) caught an earlier draft of this label that dropped
+the stated assumption. The assumption itself -- dealers long calls / short
+puts (the call/put-SPLIT convention, SqueezeMetrics) -- is now also what
+``VolatilitySurfaceCalculator._calculate_second_order_greeks``'s aggregate
+``dealer_vanna_exposure``/``dealer_charm_exposure`` compute (same review,
+same fix): the old (removed) vol-surface text block used blanket negation
+instead, which silently disagreed with this section's per-strike numbers
+on any mixed call/put book.
 """
 
 from typing import Optional
@@ -57,7 +65,8 @@ def format_exposure_profile_section(result: ExposureProfileResult, currency: str
     del currency  # not rendered -- VEX/CEX are always USD, see docstring
 
     lines = []
-    lines.append("VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets)")
+    lines.append("VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets --")
+    lines.append("                       assumption: dealers long calls / short puts)")
     lines.append(_SEPARATOR)
     lines.append(
         f"{'Strike':>10}  {'Call OI':>10}  {'Put OI':>10}  "

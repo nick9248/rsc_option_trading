@@ -9,8 +9,10 @@ INSTRUMENT; use ``result.merged_iv_by_strike()`` for the legacy per-strike
 """
 
 import logging
+import math
 
 import pytest
+from coding.core.analytics.black_scholes_calculator import BlackScholesCalculator
 from coding.core.analytics.volatility_surface_calculator import VolatilitySurfaceCalculator
 
 
@@ -151,10 +153,42 @@ class TestVolatilitySurfaceCalculator:
         # Values should be non-zero with our test data
         assert greeks.vanna_exposure_holder != 0
         assert greeks.charm_exposure_holder != 0
-        # bugfix_spec.md Item 8: dealer_* is the exact negation of the
-        # holder-side sum.
-        assert greeks.dealer_vanna_exposure == pytest.approx(-greeks.vanna_exposure_holder)
-        assert greeks.dealer_charm_exposure == pytest.approx(-greeks.charm_exposure_holder)
+
+        # Task C5 review fix (Important #1, orchestrator ruling): dealer_*
+        # is the call/put-SPLIT convention (+1 call, -1 put -- SqueezeMetrics,
+        # matching GexDexCalculator and ExposureProfileCalculator), NOT a
+        # blanket negation of the holder-side sum -- the two only coincide
+        # when every instrument is the same option_type, which this mixed
+        # call/put fixture deliberately is not. Independently re-derived
+        # here via the SAME public BlackScholesCalculator methods and the
+        # SAME documented tau-derivation formula
+        # (VolatilitySurfaceCalculator._calculate_second_order_greeks's own
+        # docstring), in a separate accumulation loop from production code.
+        bs = BlackScholesCalculator()
+        expected_dealer_vanna = 0.0
+        expected_dealer_charm = 0.0
+        for inst in sample_instruments:
+            oi = inst["open_interest"]
+            sigma = inst["mark_iv"] / 100.0
+            gamma_f = inst["gamma"]
+            vega_f = inst["vega"]
+            raw_vega = vega_f * 100.0
+            tau = raw_vega / (90000 ** 2 * gamma_f * sigma)
+            d1 = bs.d1_from_delta(inst["delta"], inst["option_type"])
+            d2 = d1 - sigma * math.sqrt(tau)
+            vanna_i = bs.calculate_vanna(d1, d2, sigma)
+            charm_i = bs.calculate_charm(d1, d2, tau)
+            side = 1.0 if inst["option_type"].upper() in ("C", "CALL") else -1.0
+            expected_dealer_vanna += side * vanna_i * oi
+            expected_dealer_charm += side * charm_i * oi
+
+        assert greeks.dealer_vanna_exposure == pytest.approx(expected_dealer_vanna)
+        assert greeks.dealer_charm_exposure == pytest.approx(expected_dealer_charm)
+        # Regression guard: the two conventions must genuinely diverge on
+        # this mixed call/put book -- proves the fix isn't a no-op / didn't
+        # silently fall back to negation.
+        assert greeks.dealer_vanna_exposure != pytest.approx(-greeks.vanna_exposure_holder)
+        assert greeks.dealer_charm_exposure != pytest.approx(-greeks.charm_exposure_holder)
         assert greeks.skipped_instruments >= 0
 
         # bugfix_spec.md Item 8 fix-review (Important #7 -- T8.3's other

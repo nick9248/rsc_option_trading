@@ -2498,11 +2498,11 @@
         },
         "second_order_greeks": {
           "charm_exposure_holder": -2642.7754346676516,
-          "charm_signal": "Time decay pushing delta positive (bullish drift)",
-          "dealer_charm_exposure": 2642.7754346676516,
-          "dealer_vanna_exposure": -849.6672459301476,
+          "charm_signal": "Time decay pushing delta negative (bearish drift)",
+          "dealer_charm_exposure": -4233.299419493006,
+          "dealer_vanna_exposure": 1258.6491650000398,
           "vanna_exposure_holder": 849.6672459301476,
-          "vanna_signal": "IV drop \u2192 dealers sell underlying (bearish)"
+          "vanna_signal": "IV drop \u2192 dealers buy underlying (bullish)"
         },
         "skew_25d": {
           "call_25d_iv": 34.07,
@@ -4149,11 +4149,11 @@
         },
         "second_order_greeks": {
           "charm_exposure_holder": -7002.859332927225,
-          "charm_signal": "Time decay pushing delta positive (bullish drift)",
-          "dealer_charm_exposure": 7002.859332927225,
-          "dealer_vanna_exposure": -17656.84947709887,
+          "charm_signal": "Time decay pushing delta negative (bearish drift)",
+          "dealer_charm_exposure": -11585.859175609485,
+          "dealer_vanna_exposure": 20741.306439735552,
           "vanna_exposure_holder": 17656.84947709887,
-          "vanna_signal": "IV drop \u2192 dealers sell underlying (bearish)"
+          "vanna_signal": "IV drop \u2192 dealers buy underlying (bullish)"
         },
         "skew_25d": {
           "call_25d_iv": 39.32,
@@ -5276,10 +5276,10 @@
         "second_order_greeks": {
           "charm_exposure_holder": 1.7152334131662634,
           "charm_signal": "Time decay pushing delta negative (bearish drift)",
-          "dealer_charm_exposure": -1.7152334131662634,
-          "dealer_vanna_exposure": -272.50680409994004,
+          "dealer_charm_exposure": -206.09846529039123,
+          "dealer_vanna_exposure": 659.3969811182188,
           "vanna_exposure_holder": 272.50680409994004,
-          "vanna_signal": "IV drop \u2192 dealers sell underlying (bearish)"
+          "vanna_signal": "IV drop \u2192 dealers buy underlying (bullish)"
         },
         "skew_25d": {
           "call_25d_iv": 41.15,
@@ -6976,11 +6976,11 @@
         },
         "second_order_greeks": {
           "charm_exposure_holder": -18627.591004422564,
-          "charm_signal": "Time decay pushing delta positive (bullish drift)",
-          "dealer_charm_exposure": 18627.591004422564,
-          "dealer_vanna_exposure": -17096.319113454858,
+          "charm_signal": "Time decay pushing delta negative (bearish drift)",
+          "dealer_charm_exposure": -21250.404256403268,
+          "dealer_vanna_exposure": 17891.334302323357,
           "vanna_exposure_holder": 17096.319113454858,
-          "vanna_signal": "IV drop \u2192 dealers sell underlying (bearish)"
+          "vanna_signal": "IV drop \u2192 dealers buy underlying (bullish)"
         },
         "skew_25d": {
           "call_25d_iv": 35.32,
@@ -7753,8 +7753,8 @@
         "second_order_greeks": {
           "charm_exposure_holder": 10039.503066593628,
           "charm_signal": "Time decay pushing delta negative (bearish drift)",
-          "dealer_charm_exposure": -10039.503066593628,
-          "dealer_vanna_exposure": 49.116275976386106,
+          "dealer_charm_exposure": -59961.976568373015,
+          "dealer_vanna_exposure": 942.032092657487,
           "vanna_exposure_holder": -49.116275976386106,
           "vanna_signal": "IV drop \u2192 dealers buy underlying (bullish)"
         },
@@ -9228,11 +9228,11 @@
         },
         "second_order_greeks": {
           "charm_exposure_holder": -1221.6137403487483,
-          "charm_signal": "Time decay pushing delta positive (bullish drift)",
-          "dealer_charm_exposure": 1221.6137403487483,
-          "dealer_vanna_exposure": -3828.7680498606164,
+          "charm_signal": "Time decay pushing delta negative (bearish drift)",
+          "dealer_charm_exposure": -2055.652427112732,
+          "dealer_vanna_exposure": 5514.23046484196,
           "vanna_exposure_holder": 3828.7680498606164,
-          "vanna_signal": "IV drop \u2192 dealers sell underlying (bearish)"
+          "vanna_signal": "IV drop \u2192 dealers buy underlying (bullish)"
         },
         "skew_25d": {
           "call_25d_iv": 40.3,
@@ -9980,10 +9980,10 @@
         "second_order_greeks": {
           "charm_exposure_holder": 761.6442225305971,
           "charm_signal": "Time decay pushing delta negative (bearish drift)",
-          "dealer_charm_exposure": -761.6442225305971,
-          "dealer_vanna_exposure": -133.82509170512256,
+          "dealer_charm_exposure": -28267.580765377064,
+          "dealer_vanna_exposure": 793.7167782445558,
           "vanna_exposure_holder": 133.82509170512256,
-          "vanna_signal": "IV drop \u2192 dealers sell underlying (bearish)"
+          "vanna_signal": "IV drop \u2192 dealers buy underlying (bullish)"
         },
         "skew_25d": {
           "call_25d_iv": 23.5,
@@ -11405,11 +11405,11 @@
         },
         "second_order_greeks": {
           "charm_exposure_holder": -12172.666412749868,
-          "charm_signal": "Time decay pushing delta positive (bullish drift)",
-          "dealer_charm_exposure": 12172.666412749868,
-          "dealer_vanna_exposure": -7450.3435742049205,
+          "charm_signal": "Time decay pushing delta negative (bearish drift)",
+          "dealer_charm_exposure": -34285.685001542064,
+          "dealer_vanna_exposure": 16063.921491328143,
           "vanna_exposure_holder": 7450.3435742049205,
-          "vanna_signal": "IV drop \u2192 dealers sell underlying (bearish)"
+          "vanna_signal": "IV drop \u2192 dealers buy underlying (bullish)"
         },
         "skew_25d": {
           "call_25d_iv": 34.16,
@@ -12181,11 +12181,11 @@
         },
         "second_order_greeks": {
           "charm_exposure_holder": -2597.805843302025,
-          "charm_signal": "Time decay pushing delta positive (bullish drift)",
-          "dealer_charm_exposure": 2597.805843302025,
-          "dealer_vanna_exposure": -160.96570252070887,
+          "charm_signal": "Time decay pushing delta negative (bearish drift)",
+          "dealer_charm_exposure": -5527.953298283045,
+          "dealer_vanna_exposure": 228.21040665059815,
           "vanna_exposure_holder": 160.96570252070887,
-          "vanna_signal": "IV drop \u2192 dealers sell underlying (bearish)"
+          "vanna_signal": "IV drop \u2192 dealers buy underlying (bullish)"
         },
         "skew_25d": {
           "call_25d_iv": 28.08,
@@ -12901,8 +12901,8 @@
         "second_order_greeks": {
           "charm_exposure_holder": 340.6529379948699,
           "charm_signal": "Time decay pushing delta negative (bearish drift)",
-          "dealer_charm_exposure": -340.6529379948699,
-          "dealer_vanna_exposure": 8.630390709078926,
+          "dealer_charm_exposure": -1585.1455021488841,
+          "dealer_vanna_exposure": 78.94640142781428,
           "vanna_exposure_holder": -8.630390709078926,
           "vanna_signal": "IV drop \u2192 dealers buy underlying (bullish)"
         },
@@ -14551,11 +14551,11 @@
         },
         "second_order_greeks": {
           "charm_exposure_holder": -219916.81359351717,
-          "charm_signal": "Time decay pushing delta positive (bullish drift)",
-          "dealer_charm_exposure": 219916.81359351717,
-          "dealer_vanna_exposure": -19979.717738717904,
+          "charm_signal": "Time decay pushing delta negative (bearish drift)",
+          "dealer_charm_exposure": -357218.9635646546,
+          "dealer_vanna_exposure": 28108.050292497675,
           "vanna_exposure_holder": 19979.717738717904,
-          "vanna_signal": "IV drop \u2192 dealers sell underlying (bearish)"
+          "vanna_signal": "IV drop \u2192 dealers buy underlying (bullish)"
         },
         "skew_25d": {
           "call_25d_iv": 34.65,
@@ -15227,11 +15227,11 @@
         },
         "second_order_greeks": {
           "charm_exposure_holder": -48635.00832704017,
-          "charm_signal": "Time decay pushing delta positive (bullish drift)",
-          "dealer_charm_exposure": 48635.00832704017,
-          "dealer_vanna_exposure": -9517.833363769872,
+          "charm_signal": "Time decay pushing delta negative (bearish drift)",
+          "dealer_charm_exposure": -61488.91879847701,
+          "dealer_vanna_exposure": 11749.731148947387,
           "vanna_exposure_holder": 9517.833363769872,
-          "vanna_signal": "IV drop \u2192 dealers sell underlying (bearish)"
+          "vanna_signal": "IV drop \u2192 dealers buy underlying (bullish)"
         },
         "skew_25d": {
           "call_25d_iv": 34.1,

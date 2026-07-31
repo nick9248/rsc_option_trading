@@ -42,15 +42,21 @@ def _make_result(**overrides) -> ExposureProfileResult:
     return ExposureProfileResult(**defaults)
 
 
-def test_section_header_and_no_interpretive_sentence():
-    """Spec 4(c): 'No interpretive sentence. The numbers and their peaks
-    are the output.'"""
+def test_section_header_states_the_assumption_and_has_no_interpretive_sentence():
+    """
+    Spec 4(c): 'No interpretive sentence. The numbers and their peaks are
+    the output.' Task C5 review (Important #1): the label must STATE the
+    assumption (matching gex_dex_formatter's bar), not just borrow the
+    word "dealer" -- so "dealers long calls / short puts" appearing here is
+    correct and expected, unlike a directional/advisory claim (bullish/
+    bearish), which must still be absent.
+    """
     text = format_exposure_profile_section(_make_result(), currency="BTC")
-    assert "VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets)" in text
+    assert "VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets --" in text
+    assert "assumption: dealers long calls / short puts" in text
     # No directional/advisory language like the old aggregate block had.
     assert "bullish" not in text.lower()
     assert "bearish" not in text.lower()
-    assert "dealers" not in text.lower()
 
 
 def test_holder_value_with_bracketed_dealer_value_per_strike():
