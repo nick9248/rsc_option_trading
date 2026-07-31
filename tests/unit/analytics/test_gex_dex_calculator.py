@@ -750,3 +750,191 @@ class TestHolderDealerSignConvention:
         r = GexDexCalculator([], 100_000.0, "BTC").calculate()
         assert r.gamma_exposure_holder_total == 0.0
         assert r.dealer_gamma_exposure_total == 0.0
+
+
+class TestCalculateRolloffProfile:
+    """
+    institutional_metrics_spec.md section 5 / Task C6 acceptance tests
+    (T5.1-T5.3), verbatim numeric cases from the spec.
+
+    ``now_utc`` is constructed so ``_calculate_days_to_expiry``'s exact
+    fractional-day math reproduces the spec's own illustrative DTEs
+    (0.6d / 6.6d / 34.6d) exactly: 25JUL26, 31JUL26, and 28AUG26 are all
+    08:00 UTC settlements 0, 6, and 34 calendar days apart respectively, so
+    anchoring ``now_utc`` 0.6 days before 25JUL26's settlement reproduces
+    all three DTEs from one offset.
+    """
+
+    _EXPIRY_25JUL26 = datetime(2026, 7, 25, 8, 0, 0, tzinfo=timezone.utc)
+    NOW_UTC = _EXPIRY_25JUL26 - timedelta(days=0.6)
+
+    def test_t5_1_shares_and_cliff_flag(self):
+        per_expiry_net_gex = {
+            "25JUL26": 30_000_000.0,
+            "31JUL26": 50_000_000.0,
+            "28AUG26": 20_000_000.0,
+        }
+
+        result = GexDexCalculator.calculate_rolloff_profile(per_expiry_net_gex, self.NOW_UTC)
+
+        rows = {r["expiration"]: r for r in result["rows"]}
+        assert rows["25JUL26"]["dte_days"] == pytest.approx(0.6, abs=1e-6)
+        assert rows["31JUL26"]["dte_days"] == pytest.approx(6.6, abs=1e-6)
+        assert rows["28AUG26"]["dte_days"] == pytest.approx(34.6, abs=1e-6)
+
+        assert rows["25JUL26"]["share_pct"] == pytest.approx(30.0)
+        assert rows["31JUL26"]["share_pct"] == pytest.approx(50.0)
+        assert rows["28AUG26"]["share_pct"] == pytest.approx(20.0)
+
+        assert rows["25JUL26"]["cum_share_pct"] == pytest.approx(30.0)
+        assert rows["31JUL26"]["cum_share_pct"] == pytest.approx(80.0)
+        assert rows["28AUG26"]["cum_share_pct"] == pytest.approx(100.0)
+
+        assert result["cum_share_7d"] == pytest.approx(80.0)
+        assert result["gamma_cliff_7d"] is True
+
+    def test_t5_2_mixed_signs(self):
+        """
+        Shares are computed on |net_gex| (still sum to 100%); cum_net_gex is
+        signed and non-monotone -- that is correct, not a bug (spec 5(c)
+        edge case "Mixed signs").
+        """
+        per_expiry_net_gex = {
+            "25JUL26": 30_000_000.0,
+            "31JUL26": -50_000_000.0,
+            "28AUG26": 20_000_000.0,
+        }
+
+        result = GexDexCalculator.calculate_rolloff_profile(per_expiry_net_gex, self.NOW_UTC)
+
+        assert result["gross_total"] == pytest.approx(100_000_000.0)
+
+        rows = {r["expiration"]: r for r in result["rows"]}
+        assert rows["25JUL26"]["share_pct"] == pytest.approx(30.0)
+        assert rows["31JUL26"]["share_pct"] == pytest.approx(50.0)
+        assert rows["28AUG26"]["share_pct"] == pytest.approx(20.0)
+
+        assert result["cum_share_7d"] == pytest.approx(80.0)
+        assert result["gamma_cliff_7d"] is True
+
+        # Net total across all expiries is 0; the 7d bucket's own signed
+        # contribution is -20,000,000 (the spec's exact worked value).
+        assert rows["28AUG26"]["cum_net_gex"] == pytest.approx(0.0)
+        assert rows["31JUL26"]["cum_net_gex"] == pytest.approx(-20_000_000.0)
+
+    def test_t5_3_empty_book_no_zero_division(self):
+        """All net_gex == 0 -> gross_total == 0 -> shares None, no flag, no
+        ZeroDivisionError (spec 5(c) edge case)."""
+        per_expiry_net_gex = {
+            "25JUL26": 0.0,
+            "31JUL26": 0.0,
+            "28AUG26": 0.0,
+        }
+
+        result = GexDexCalculator.calculate_rolloff_profile(per_expiry_net_gex, self.NOW_UTC)
+
+        assert result["gross_total"] == 0.0
+        assert result["gamma_cliff_7d"] is False
+        assert result["cum_share_7d"] is None
+        assert result["cum_share_30d"] is None
+        for row in result["rows"]:
+            assert row["share_pct"] is None
+            assert row["cum_share_pct"] is None
+
+    def test_zero_expiries(self):
+        """No expiries at all -- degenerate form of the empty-book case."""
+        result = GexDexCalculator.calculate_rolloff_profile({}, self.NOW_UTC)
+
+        assert result["rows"] == []
+        assert result["gross_total"] == 0.0
+        assert result["gamma_cliff_7d"] is False
+        assert result["cum_share_7d"] is None
+        assert result["cum_share_30d"] is None
+
+    def test_one_expiry_only_within_7d_flags(self):
+        result = GexDexCalculator.calculate_rolloff_profile(
+            {"25JUL26": 10_000_000.0}, self.NOW_UTC,
+        )
+
+        assert result["rows"][0]["share_pct"] == pytest.approx(100.0)
+        assert result["cum_share_7d"] == pytest.approx(100.0)
+        assert result["gamma_cliff_7d"] is True
+
+    def test_one_expiry_only_beyond_7d_does_not_flag(self):
+        result = GexDexCalculator.calculate_rolloff_profile(
+            {"28AUG26": 10_000_000.0}, self.NOW_UTC,
+        )
+
+        assert result["rows"][0]["share_pct"] == pytest.approx(100.0)
+        assert result["cum_share_7d"] == pytest.approx(0.0)
+        assert result["gamma_cliff_7d"] is False
+
+    def test_all_expiries_beyond_7_days_no_flag(self):
+        """Both expiries land >7 days but <=30 days from NOW_UTC (day
+        offsets +10/+20 from 25JUL26, i.e. dte ~10.6d/20.6d)."""
+        far_1 = (self._EXPIRY_25JUL26 + timedelta(days=10)).strftime("%d%b%y").upper()
+        far_2 = (self._EXPIRY_25JUL26 + timedelta(days=20)).strftime("%d%b%y").upper()
+        per_expiry_net_gex = {far_1: 40_000_000.0, far_2: 60_000_000.0}
+
+        result = GexDexCalculator.calculate_rolloff_profile(per_expiry_net_gex, self.NOW_UTC)
+
+        assert result["cum_share_7d"] == pytest.approx(0.0)
+        assert result["gamma_cliff_7d"] is False
+        assert result["cum_share_30d"] == pytest.approx(100.0)
+
+    def test_all_expiries_within_7_days_flags(self):
+        """25JUL26 (dte 0.6d) and 31JUL26 (dte 6.6d) both sit inside the 7d
+        window."""
+        per_expiry_net_gex = {"25JUL26": 40_000_000.0, "31JUL26": 60_000_000.0}
+
+        result = GexDexCalculator.calculate_rolloff_profile(per_expiry_net_gex, self.NOW_UTC)
+
+        assert result["cum_share_7d"] == pytest.approx(100.0)
+        assert result["gamma_cliff_7d"] is True
+
+    def test_boundary_exactly_30_percent_does_not_flag(self):
+        """Spec: FLAG when cum_share(<=7d) > 30.0 -- strictly greater than,
+        exactly 30.0 must not flag."""
+        per_expiry_net_gex = {"25JUL26": 30_000_000.0, "28AUG26": 70_000_000.0}
+
+        result = GexDexCalculator.calculate_rolloff_profile(per_expiry_net_gex, self.NOW_UTC)
+
+        assert result["cum_share_7d"] == pytest.approx(30.0)
+        assert result["gamma_cliff_7d"] is False
+
+    def test_expiry_past_settlement_still_in_chain_clamps_to_zero_dte(self):
+        """Spec 5(c) edge case: an expiry already past its 08:00 UTC
+        settlement but still present in the chain gets dte=0.0 and is
+        included in the 7d bucket (never a negative DTE)."""
+        past_expiry_net_gex = {"20JUL26": 5_000_000.0, "28AUG26": 5_000_000.0}
+
+        result = GexDexCalculator.calculate_rolloff_profile(past_expiry_net_gex, self.NOW_UTC)
+
+        rows = {r["expiration"]: r for r in result["rows"]}
+        assert rows["20JUL26"]["dte_days"] == 0.0
+        assert result["cum_share_7d"] == pytest.approx(50.0)
+        assert result["gamma_cliff_7d"] is True
+
+    def test_unparseable_expiration_label_is_skipped_not_raised(self):
+        """Defensive: an unparseable expiration string must not raise --
+        it is skipped (mirrors _build_gamma_legs' own parse-failure
+        handling), never surfacing a crash from a presentation-only
+        aggregation."""
+        per_expiry_net_gex = {"NOT-A-DATE": 10_000_000.0, "25JUL26": 30_000_000.0}
+
+        result = GexDexCalculator.calculate_rolloff_profile(per_expiry_net_gex, self.NOW_UTC)  # must not raise
+
+        expirations = {r["expiration"] for r in result["rows"]}
+        assert expirations == {"25JUL26"}
+        assert result["gross_total"] == pytest.approx(30_000_000.0)
+
+    def test_idempotent_pure_function(self):
+        """Pure: calling twice with the same inputs returns identical output
+        (no shared mutable state, unlike the pre-fix GexDexCalculator.calculate()
+        double-counting bug this spec explicitly warns about)."""
+        per_expiry_net_gex = {"25JUL26": 30_000_000.0, "31JUL26": -50_000_000.0, "28AUG26": 20_000_000.0}
+
+        first = GexDexCalculator.calculate_rolloff_profile(per_expiry_net_gex, self.NOW_UTC)
+        second = GexDexCalculator.calculate_rolloff_profile(per_expiry_net_gex, self.NOW_UTC)
+
+        assert first == second

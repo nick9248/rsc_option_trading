@@ -630,3 +630,146 @@ class GexDexCalculator:
             gamma_profile=no_data_gamma_profile,
         )
 
+    @staticmethod
+    def _parse_expiry_dte_days(expiration: str, now_utc: datetime) -> Optional[float]:
+        """
+        Exact fractional days from ``now_utc`` to this expiry's 08:00 UTC
+        settlement -- same "DDMONYY" / settlement-hour convention already
+        used by ``_build_gamma_legs`` in this class (bugfix_spec.md Item 5).
+        May be negative if the expiry's settlement already passed.
+        ``None`` if ``expiration`` does not parse.
+        """
+        try:
+            expiry_dt = datetime.strptime(expiration, "%d%b%y").replace(
+                hour=_DERIBIT_SETTLEMENT_HOUR_UTC, minute=0, second=0,
+                microsecond=0, tzinfo=timezone.utc,
+            )
+        except ValueError:
+            return None
+        return (expiry_dt - now_utc).total_seconds() / 86400.0
+
+    @staticmethod
+    def calculate_rolloff_profile(
+        per_expiry_net_gex: Dict[str, float], now_utc: datetime,
+    ) -> Dict[str, Any]:
+        """
+        Net GEX per-expiry roll-off (institutional_metrics_spec.md section 5
+        / Task C6): % of gamma MASS expiring at each expiry, the cumulative
+        decay curve across expiries (chronological order), and a "GAMMA
+        CLIFF" presentation flag when more than 30% of gamma mass rolls off
+        within 7 days.
+
+        Pure aggregation over per-expiry ``total_net_gex`` values the
+        GEX/DEX calculator already produces (each individually correct as
+        of the strike_data-reset fix in ``calculate()`` -- BUG 1,
+        metric_verification_report.md -- so no re-computation of Greeks
+        happens here). Takes a dict, returns a dict; never mutates its
+        input, never raises on degenerate input.
+
+        Sign handling (spec 5(b)): signed net GEX cannot be turned into a
+        share directly (it crosses zero, so a naive ratio can exceed 100%
+        or go negative) -- shares are computed on a gross MAGNITUDE
+        denominator (``Sigma |net_gex(e)|``) while the cumulative signed
+        USD contribution (``cum_net_gex``) is reported separately and can
+        be non-monotone when signs differ across expiries. That is correct,
+        not a bug -- see the T5.2 mixed-sign acceptance test.
+
+        Args:
+            per_expiry_net_gex: {expiration_label: total_net_gex} for every
+                expiry with data (label must parse as "DDMONYY", e.g.
+                "25JUL26" -- the same convention every other DTE-computing
+                method in this codebase uses). An unparseable label is
+                skipped (logged), never raised -- mirrors
+                ``_build_gamma_legs``' own parse-failure handling.
+            now_utc: reference instant for DTE. Must be timezone-aware UTC.
+
+        Returns:
+            dict with keys:
+              ``rows``: list of ``{expiration, dte_days, net_gex, share_pct,
+                cum_share_pct, cum_net_gex}``, sorted by ``dte_days``
+                ascending (chronological). ``share_pct``/``cum_share_pct``
+                are ``None`` for every row when ``gross_total`` is 0 (spec
+                5(c) "no OI anywhere" edge case) -- never a
+                ``ZeroDivisionError``.
+              ``gamma_cliff_7d``: ``True`` when ``cum_share_7d > 30.0``
+                (strictly greater -- spec 5(b)). Always ``False`` when
+                ``gross_total`` is 0 or there are no expiries.
+              ``cum_share_7d`` / ``cum_share_30d``: cumulative share (%) of
+                gamma mass expiring within 7 / 30 days respectively (``dte
+                <= D``). ``None`` when ``gross_total`` is 0.
+              ``gross_total``: ``Sigma |net_gex(e)|`` (additive field, not
+                individually named in the spec's fix-spec list but needed
+                to distinguish "no gamma anywhere" from "some gamma, none
+                within 7d" -- both produce ``gamma_cliff_7d=False`` but only
+                the former should render "no gamma" instead of a table).
+
+        Edge cases (spec 5(c), all covered by tests):
+            - Zero expiries / all-zero net GEX -> ``gross_total == 0`` ->
+              all shares ``None``, ``gamma_cliff_7d = False``, no crash.
+            - An expiry already past its 08:00 UTC settlement but still
+              present in the chain -> ``dte_days`` clamps to ``0.0`` (never
+              negative) and is included in the 7d bucket.
+            - Mixed signs -> shares still sum to 100% (computed on ``| |``)
+              while ``cum_net_gex`` may be non-monotone -- correct.
+        """
+        parsed: List[Dict[str, Any]] = []
+        for expiration, net_gex in per_expiry_net_gex.items():
+            dte_exact = GexDexCalculator._parse_expiry_dte_days(expiration, now_utc)
+            if dte_exact is None:
+                logger.warning(
+                    "calculate_rolloff_profile: skipping expiry %r -- "
+                    "unparseable expiration label",
+                    expiration,
+                )
+                continue
+            # Spec 5(c): already past settlement but still in the chain ->
+            # clamp to 0.0 (never negative) and keep it in the 7d bucket.
+            dte_days = max(dte_exact, 0.0)
+            parsed.append({"expiration": expiration, "dte_days": dte_days, "net_gex": net_gex})
+
+        parsed.sort(key=lambda p: p["dte_days"])
+
+        gross_total = sum(abs(p["net_gex"]) for p in parsed)
+
+        rows: List[Dict[str, Any]] = []
+        cum_share_pct = 0.0
+        cum_net_gex = 0.0
+        for p in parsed:
+            cum_net_gex += p["net_gex"]
+            if gross_total > 0:
+                share_pct: Optional[float] = 100.0 * abs(p["net_gex"]) / gross_total
+                cum_share_pct += share_pct
+                row_cum_share_pct: Optional[float] = cum_share_pct
+            else:
+                share_pct = None
+                row_cum_share_pct = None
+            rows.append({
+                "expiration": p["expiration"],
+                "dte_days": p["dte_days"],
+                "net_gex": p["net_gex"],
+                "share_pct": share_pct,
+                "cum_share_pct": row_cum_share_pct,
+                "cum_net_gex": cum_net_gex,
+            })
+
+        if gross_total > 0:
+            cum_share_7d: Optional[float] = sum(
+                r["share_pct"] for r in rows if r["dte_days"] <= 7.0
+            )
+            cum_share_30d: Optional[float] = sum(
+                r["share_pct"] for r in rows if r["dte_days"] <= 30.0
+            )
+            gamma_cliff_7d = cum_share_7d > 30.0
+        else:
+            cum_share_7d = None
+            cum_share_30d = None
+            gamma_cliff_7d = False
+
+        return {
+            "rows": rows,
+            "gamma_cliff_7d": gamma_cliff_7d,
+            "cum_share_7d": cum_share_7d,
+            "cum_share_30d": cum_share_30d,
+            "gross_total": gross_total,
+        }
+
