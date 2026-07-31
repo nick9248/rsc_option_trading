@@ -5,6 +5,7 @@ Unit tests for coding.core.analytics.reporting.gex_dex_formatter
 
 from coding.core.analytics.reporting.gex_dex_formatter import (
     format_aggregate_gex_dex_section,
+    format_gamma_rolloff_section,
     format_gex_dex_section,
 )
 from coding.core.analytics.results.gex_dex_results import (
@@ -12,6 +13,10 @@ from coding.core.analytics.results.gex_dex_results import (
     GexDexLevel,
     GexDexResult,
     GexDexStrikeRow,
+)
+from coding.core.analytics.results.market_wide_results import (
+    GammaRolloffResult,
+    GammaRolloffRow,
 )
 
 
@@ -158,3 +163,126 @@ def test_aggregate_gex_dex_section_has_expiration_count_and_no_strike_table():
     assert "Spot Price: $93,000.00" in text
     assert "GEX/DEX BY STRIKE" not in text  # no per-strike table in the aggregate section
     assert "Dealer Gamma:   +500,000.00 USD per 1% move" in text
+
+
+class TestFormatGammaRolloffSection:
+    """
+    institutional_metrics_spec.md section 5 / Task C6 report rendering.
+    Uses the spec's own T5.1/T5.2 worked numbers directly.
+    """
+
+    def _t5_1_result(self) -> GammaRolloffResult:
+        return GammaRolloffResult(
+            rows=(
+                GammaRolloffRow(
+                    expiration="25JUL26", dte_days=0.6, net_gex=30_000_000.0,
+                    share_pct=30.0, cum_share_pct=30.0, cum_net_gex=30_000_000.0,
+                ),
+                GammaRolloffRow(
+                    expiration="31JUL26", dte_days=6.6, net_gex=50_000_000.0,
+                    share_pct=50.0, cum_share_pct=80.0, cum_net_gex=80_000_000.0,
+                ),
+                GammaRolloffRow(
+                    expiration="28AUG26", dte_days=34.6, net_gex=20_000_000.0,
+                    share_pct=20.0, cum_share_pct=100.0, cum_net_gex=100_000_000.0,
+                ),
+            ),
+            gamma_cliff_7d=True, cum_share_7d=80.0, cum_share_30d=100.0,
+            gross_total=100_000_000.0,
+        )
+
+    def test_header_and_table_rows(self):
+        text = format_gamma_rolloff_section(self._t5_1_result())
+        assert "GAMMA ROLL-OFF" in text
+        assert "25JUL26" in text and "31JUL26" in text and "28AUG26" in text
+        assert "30.0%" in text
+        assert "80.0%" in text
+        assert "100.0%" in text
+
+    def test_gamma_cliff_flag_rendered_with_disclaimer(self):
+        text = format_gamma_rolloff_section(self._t5_1_result())
+        assert "GAMMA CLIFF" in text
+        assert "80.0% of gamma mass expires within 7 days" in text
+        # Spec 5(b): "It is a presentation flag, not a trading signal --
+        # state that on the line."
+        assert "not a trading signal" in text
+
+    def test_signed_net_contribution_line_uses_7d_boundary_cum_net_gex(self):
+        text = format_gamma_rolloff_section(self._t5_1_result())
+        assert "+80,000,000" in text
+
+    def test_seven_day_boundary_row_marked(self):
+        """The last row within the 7d window (31JUL26, dte 6.6) gets the
+        boundary marker; the first (25JUL26, also <=7d) does not."""
+        text = format_gamma_rolloff_section(self._t5_1_result())
+        line_31jul = next(l for l in text.splitlines() if "31JUL26" in l)
+        line_25jul = next(l for l in text.splitlines() if "25JUL26" in l)
+        assert "7d" in line_31jul
+        assert "<-- 7d" not in line_25jul
+
+    def test_mixed_signs_no_flag_disclaimer_when_not_flagged(self):
+        """T5.2: shares still on |net_gex| (sum to 100%), cum_net_gex signed
+        and non-monotone; when NOT flagged, no GAMMA CLIFF text and the
+        signed 7d contribution is negative."""
+        result = GammaRolloffResult(
+            rows=(
+                GammaRolloffRow(
+                    expiration="25JUL26", dte_days=0.6, net_gex=30_000_000.0,
+                    share_pct=30.0, cum_share_pct=30.0, cum_net_gex=30_000_000.0,
+                ),
+                GammaRolloffRow(
+                    expiration="31JUL26", dte_days=6.6, net_gex=-50_000_000.0,
+                    share_pct=50.0, cum_share_pct=80.0, cum_net_gex=-20_000_000.0,
+                ),
+                GammaRolloffRow(
+                    expiration="28AUG26", dte_days=34.6, net_gex=20_000_000.0,
+                    share_pct=20.0, cum_share_pct=100.0, cum_net_gex=0.0,
+                ),
+            ),
+            gamma_cliff_7d=True, cum_share_7d=80.0, cum_share_30d=100.0,
+            gross_total=100_000_000.0,
+        )
+        text = format_gamma_rolloff_section(result)
+        assert "signed" in text.lower()
+        assert "-20,000,000" in text
+
+    def test_no_flag_below_threshold(self):
+        result = GammaRolloffResult(
+            rows=(
+                GammaRolloffRow(
+                    expiration="28AUG26", dte_days=34.6, net_gex=100_000_000.0,
+                    share_pct=100.0, cum_share_pct=100.0, cum_net_gex=100_000_000.0,
+                ),
+            ),
+            gamma_cliff_7d=False, cum_share_7d=0.0, cum_share_30d=100.0,
+            gross_total=100_000_000.0,
+        )
+        text = format_gamma_rolloff_section(result)
+        assert "GAMMA CLIFF" not in text
+        # No expiry rolls off within 7d -- signed contribution is 0.
+        assert "0" in text.split("Signed net contribution")[1].splitlines()[0]
+
+    def test_no_gamma_edge_case_renders_placeholder_not_crash(self):
+        """Spec 5(c): gross_total == 0 -> print 'no gamma', no table, no
+        flag, no crash on the None share values."""
+        result = GammaRolloffResult(
+            rows=(
+                GammaRolloffRow(
+                    expiration="25JUL26", dte_days=0.6, net_gex=0.0,
+                    share_pct=None, cum_share_pct=None, cum_net_gex=0.0,
+                ),
+            ),
+            gamma_cliff_7d=False, cum_share_7d=None, cum_share_30d=None,
+            gross_total=0.0,
+        )
+        text = format_gamma_rolloff_section(result)  # must not raise
+        assert "no gamma" in text.lower()
+        assert "GAMMA CLIFF" not in text
+
+    def test_zero_expiries_renders_placeholder_not_crash(self):
+        result = GammaRolloffResult(
+            rows=(), gamma_cliff_7d=False, cum_share_7d=None, cum_share_30d=None,
+            gross_total=0.0,
+        )
+        text = format_gamma_rolloff_section(result)  # must not raise
+        assert "no gamma" in text.lower()

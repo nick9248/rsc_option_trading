@@ -89,6 +89,49 @@ class SkewTermStructureResult:
 
 
 @dataclass(frozen=True)
+class GammaRolloffRow:
+    """
+    One expiry's row in the GAMMA ROLL-OFF table
+    (institutional_metrics_spec.md section 5, Task C6).
+
+    ``share_pct``/``cum_share_pct`` are computed on ``|net_gex|`` (a
+    gross-magnitude denominator, section 5(b)) and are ``None`` for every
+    row when the book has no gamma anywhere (``GammaRolloffResult.
+    gross_total == 0``). ``net_gex``/``cum_net_gex`` stay signed -- the
+    column header this feeds must say "signed" (section 5(c)).
+    """
+
+    expiration: str
+    dte_days: float
+    net_gex: float
+    share_pct: Optional[float]
+    cum_share_pct: Optional[float]
+    cum_net_gex: float
+
+
+@dataclass(frozen=True)
+class GammaRolloffResult:
+    """
+    Full GAMMA ROLL-OFF profile across all expiries
+    (institutional_metrics_spec.md section 5, Task C6): built from
+    ``GexDexCalculator.calculate_rolloff_profile``'s dict return, rows
+    sorted chronologically (ascending DTE).
+
+    ``gamma_cliff_7d`` is a presentation flag ("more than 30% of gamma mass
+    expires within 7 days"), not a trading signal -- see
+    ``format_gamma_rolloff_section``, which states that explicitly on the
+    rendered line. ``cum_share_7d``/``cum_share_30d`` are ``None`` exactly
+    when ``gross_total == 0`` (no gamma anywhere).
+    """
+
+    rows: Tuple[GammaRolloffRow, ...]
+    gamma_cliff_7d: bool
+    cum_share_7d: Optional[float]
+    cum_share_30d: Optional[float]
+    gross_total: float
+
+
+@dataclass(frozen=True)
 class FuturesBasisEntry:
     """Annualized basis for one futures instrument."""
 
@@ -271,6 +314,15 @@ class MarketWideResult:
     # _build_skew_term_structure), the same "post-process the frozen
     # result" pattern _apply_pcr_percentile_classification already uses.
     skew_term_structure: Optional[SkewTermStructureResult] = None
+
+    # institutional_metrics_spec.md section 5 (Task C6). Additive, with a
+    # default: MarketWideOrchestrator.run() does not populate this (it has
+    # no access to the per-expiry total_net_gex map -- that only exists
+    # inside OnChainAnalysisService._fetch_greeks_and_store_gex_dex, a
+    # different phase) -- OnChainAnalysisService attaches it via
+    # dataclasses.replace() after run() returns, the same "post-process the
+    # frozen result" pattern skew_term_structure already uses.
+    gamma_rolloff: Optional[GammaRolloffResult] = None
 
     def to_flat_dict(self) -> Dict[str, Any]:
         """

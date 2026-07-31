@@ -34,6 +34,7 @@ presentation-only, not a value change.
 """
 
 from coding.core.analytics.results.gex_dex_results import GexDexResult
+from coding.core.analytics.results.market_wide_results import GammaRolloffResult
 
 _SEPARATOR = "-" * 80
 
@@ -275,4 +276,66 @@ def format_aggregate_gex_dex_section(result: GexDexResult, spot_price: float, cu
 
     lines.extend(_key_levels_and_totals_lines(result, currency))
 
+    return "\n".join(lines)
+
+
+def format_gamma_rolloff_section(result: GammaRolloffResult) -> str:
+    """
+    Render the GAMMA ROLL-OFF section (institutional_metrics_spec.md
+    section 5, Task C6): market-wide, placed immediately after AGGREGATE
+    GEX/DEX per the spec's report layout.
+
+    ``result.gross_total == 0`` (no gamma anywhere -- e.g. no expiries, or
+    every per-expiry ``total_net_gex`` is 0) renders a short "no gamma"
+    placeholder instead of a table (spec 5(c) edge case) -- there is
+    nothing to divide by, and printing a table of ``None`` shares would be
+    misleading, not just ugly.
+
+    Net GEX is always USD (bugfix_spec.md Item 8 / GexDexCalculator class
+    docstring) -- no currency/unit parameter needed here, unlike the
+    GEX/DEX sections, which also render a DEX column in the underlying
+    currency.
+    """
+    lines = ["GAMMA ROLL-OFF", _SEPARATOR]
+
+    if result.gross_total <= 0:
+        lines.append("no gamma (no open interest / net GEX anywhere across expiries)")
+        lines.append(_SEPARATOR)
+        lines.append("")
+        return "\n".join(lines)
+
+    # The 7d boundary row is the LAST row (chronological order) with
+    # dte_days <= 7.0 -- the mockup in spec 5(c) marks only that one row,
+    # not every row inside the window.
+    boundary_idx = None
+    for i, row in enumerate(result.rows):
+        if row.dte_days <= 7.0:
+            boundary_idx = i
+
+    lines.append(
+        f"{'Expiry':<12} {'DTE':>7}  {'Net GEX (USD, signed)':>22}  "
+        f"{'Share':>7}  {'Cumulative':>10}"
+    )
+    for i, row in enumerate(result.rows):
+        marker = "   <-- 7d" if i == boundary_idx else ""
+        lines.append(
+            f"{row.expiration:<12} {row.dte_days:>6.1f}d  {row.net_gex:>+22,.2f}  "
+            f"{row.share_pct:>6.1f}%  {row.cum_share_pct:>9.1f}%{marker}"
+        )
+    lines.append(_SEPARATOR)
+
+    net_contrib_7d = result.rows[boundary_idx].cum_net_gex if boundary_idx is not None else 0.0
+
+    flag_suffix = (
+        "  ** GAMMA CLIFF ** (threshold 30% -- presentation flag, not a trading signal)"
+        if result.gamma_cliff_7d
+        else " (below the 30% threshold; presentation flag, not a trading signal)"
+    )
+    lines.append(
+        f"{result.cum_share_7d:.1f}% of gamma mass expires within 7 days{flag_suffix}"
+    )
+    lines.append(f"Signed net contribution rolling off in 7d: {net_contrib_7d:+,.2f} USD")
+    if result.cum_share_30d is not None:
+        lines.append(f"Cumulative gamma mass within 30 days: {result.cum_share_30d:.1f}%")
+    lines.append("")
     return "\n".join(lines)
