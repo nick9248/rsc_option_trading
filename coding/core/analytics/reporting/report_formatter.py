@@ -27,6 +27,7 @@ from coding.core.analytics.market_wide_calculator import FUNDING_PERIODS_PER_YEA
 from coding.core.analytics.reporting.dealer_inventory_formatter import (
     format_dealer_inventory_section,
 )
+from coding.core.analytics.reporting.delta_flow_formatter import format_delta_flow_section
 from coding.core.analytics.reporting.expiry_formatter import format_expiration_section
 from coding.core.analytics.reporting.exposure_profile_formatter import (
     format_exposure_profile_section,
@@ -468,8 +469,8 @@ class OnChainReportFormatter:
             blocks.append(market_wide_text)
 
         # institutional_metrics_spec.md section 1: front-month percentile/
-        # z-score context. Appended last, after market-wide -- absent
-        # entirely (format_historical_context_section returns "") when
+        # z-score context. Appended after market-wide -- absent entirely
+        # (format_historical_context_section returns "") when
         # result.normalized_metrics is empty (e.g. no repository, or an
         # offline fixture with no recorded trailing history).
         historical_context_text = format_historical_context_section(
@@ -479,5 +480,18 @@ class OnChainReportFormatter:
         )
         if historical_context_text:
             blocks.append(historical_context_text)
+
+        # institutional_metrics_spec.md section 6 / task C7: signed delta-
+        # weighted taker flow (HIRO analog), summed from the daemon-
+        # persisted flow_delta_hourly table. Appended LAST -- absent
+        # entirely (format_delta_flow_section returns "") when
+        # result.delta_flow_buckets is empty (no repository, or the window
+        # has no persisted rows yet), same "no data -> no section"
+        # convention as historical context above.
+        delta_flow_text = format_delta_flow_section(
+            result.delta_flow_buckets, result.delta_flow_lookback_hours,
+        )
+        if delta_flow_text:
+            blocks.append(delta_flow_text)
 
         return "\n".join(blocks)

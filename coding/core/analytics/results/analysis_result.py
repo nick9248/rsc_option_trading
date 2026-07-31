@@ -17,6 +17,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from coding.core.analytics.historical_normalizer import NormalizedMetric
 from coding.core.analytics.results.dealer_inventory_results import DealerInventoryResult
+from coding.core.analytics.results.delta_flow_results import FlowBucket
 from coding.core.analytics.results.expiry_results import ExpirationAnalysisResult
 from coding.core.analytics.results.exposure_profile_results import ExposureProfileResult
 from coding.core.analytics.results.flow_results import FlowResult
@@ -143,6 +144,19 @@ class OnChainAnalysisResult:
     # threshold (institutional_metrics_spec.md section 1(c)) -- None means
     # either fresh, or freshness could not be determined.
     normalized_metrics_stale_since: Optional[datetime] = None
+
+    # institutional_metrics_spec.md section 6 / task C7: signed delta-
+    # weighted, premium-weighted taker flow (HIRO analog), summed over
+    # delta_flow_lookback_hours from the persisted flow_delta_hourly table
+    # (OnChainAnalysisService._build_delta_flow_summary) -- NOT recomputed
+    # from raw trades at report time. One FlowBucket per expiration that
+    # traded in the window, plus exactly one with expiration == "ALL" (the
+    # currency-level total). Empty tuple (default) when there is no
+    # repository, or flow_delta_hourly has no rows yet for this window --
+    # matches the codebase's "no data -> no section" convention; see
+    # format_delta_flow_section.
+    delta_flow_buckets: Tuple[FlowBucket, ...] = ()
+    delta_flow_lookback_hours: float = 24.0
 
     def bundle(self, expiration: str) -> Optional[ExpirationBundle]:
         """Return the ``ExpirationBundle`` for ``expiration``, or ``None`` if absent."""

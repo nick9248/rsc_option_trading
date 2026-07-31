@@ -56,6 +56,7 @@ from coding.core.analytics.results.dealer_inventory_results import (
     DealerInventoryResult,
     DealerInventoryStrikeRow,
 )
+from coding.core.analytics.results.delta_flow_results import FlowBucket
 from coding.core.analytics.results.exposure_profile_results import (
     ExposureProfileResult,
     ExposureStrikeRow,
@@ -295,6 +296,20 @@ class OnChainAnalysisService:
                 normalized_metrics=normalized_metrics,
                 normalized_metrics_front_month=normalized_metrics_front_month,
                 normalized_metrics_stale_since=normalized_metrics_stale_since,
+            )
+
+        # institutional_metrics_spec.md section 6 / task C7: signed delta-
+        # weighted taker flow (HIRO analog), summed from the daemon-
+        # persisted flow_delta_hourly table over the trailing 24h -- not
+        # recomputed from raw trades here. Additive, same dataclasses.
+        # replace pattern as normalized_metrics above.
+        progress("Calculating delta-adjusted flow summary...")
+        delta_flow_buckets, delta_flow_lookback_hours = self._build_delta_flow_summary(currency)
+        if delta_flow_buckets:
+            result = dataclasses.replace(
+                result,
+                delta_flow_buckets=delta_flow_buckets,
+                delta_flow_lookback_hours=delta_flow_lookback_hours,
             )
 
         # Generate report (includes GEX/DEX and flow) — rendered directly
@@ -794,6 +809,45 @@ class OnChainAnalysisService:
         metrics = HistoricalNormalizer().normalize_many(specs)
         stale_since = self._compute_historical_context_staleness(currency, front_month, tables_used)
         return metrics, front_month, stale_since
+
+    # institutional_metrics_spec.md section 6 / task C7: report window for
+    # the DELTA-ADJUSTED FLOW section, matching BuySellFlowAnalyzer's own
+    # 24h flow window (on_chain_analysis_service.py's
+    # _calculate_buy_sell_flow) so the two flow sections describe the same
+    # lookback even though they read different tables.
+    _DELTA_FLOW_LOOKBACK_HOURS = 24.0
+
+    def _build_delta_flow_summary(self, currency: str) -> Tuple[Tuple[FlowBucket, ...], float]:
+        """
+        Sum the persisted ``flow_delta_hourly`` rows over the trailing
+        ``_DELTA_FLOW_LOOKBACK_HOURS`` for ``currency`` (institutional_
+        metrics_spec.md section 6 / task C7). Reads pre-aggregated data via
+        ``DatabaseRepository.get_delta_flow_summary`` -- never recomputes
+        BS delta from raw trades at report time (the daemon already did
+        that once, hourly, per ``ProspectiveCollector._persist_delta_flow``).
+
+        Returns ``((), _DELTA_FLOW_LOOKBACK_HOURS)`` when there is no
+        repository, or when the window has no rows yet (feature just
+        shipped, or the daemon hasn't run in this window, or a real DB
+        error) -- ``format_delta_flow_section`` renders "" for an empty
+        buckets tuple, matching the codebase's "no data -> no section"
+        convention. This is never confused with "genuine zero trading
+        activity": that case still has a real ``skipped_count == 0``
+        ``trade_count == 0`` "ALL" row persisted by the daemon, which DOES
+        come back from ``get_delta_flow_summary`` and IS rendered.
+        """
+        if self.repository is None:
+            return (), self._DELTA_FLOW_LOOKBACK_HOURS
+
+        since = datetime.now() - timedelta(hours=self._DELTA_FLOW_LOOKBACK_HOURS)
+        try:
+            rows = self.repository.get_delta_flow_summary(currency=currency, since=since)
+        except Exception as exc:
+            logger.warning("Failed to build delta flow summary for %s: %s", currency, exc)
+            return (), self._DELTA_FLOW_LOOKBACK_HOURS
+
+        buckets = tuple(FlowBucket(**row) for row in rows)
+        return buckets, self._DELTA_FLOW_LOOKBACK_HOURS
 
     def _build_skew_term_structure(
         self,
