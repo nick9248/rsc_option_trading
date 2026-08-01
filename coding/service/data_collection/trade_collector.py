@@ -191,6 +191,13 @@ class TradeCollector:
                 strike = float(parts[2]) if len(parts) > 2 else None
                 option_type = parts[3] if len(parts) > 3 else None
 
+                # institutional_metrics_spec.md section 9 / Migration M2
+                # (Task D1): block_rfq_id arrives on the wire as an int but
+                # the column is VARCHAR(64) -- stringify, keeping None as
+                # None (str(None) would write the literal "None").
+                block_rfq_id = trade.get("block_rfq_id")
+                block_rfq_id = str(block_rfq_id) if block_rfq_id is not None else None
+
                 # Prepare trade data
                 trade_data = {
                     "trade_id": trade.get("trade_id"),
@@ -206,7 +213,18 @@ class TradeCollector:
                     "direction": trade.get("direction"),
                     "iv": trade.get("iv"),
                     "mark_price": trade.get("mark_price"),
-                    "index_price": trade.get("index_price")
+                    "index_price": trade.get("index_price"),
+                    # institutional_metrics_spec.md section 9 / Migration M2:
+                    # present only on block/combo trades (~0.5% BTC / 0.14%
+                    # ETH per the spec's live audit) -- absent on the wire
+                    # for everything else, so default explicitly to None
+                    # rather than letting a missing key raise.
+                    "block_trade_id": trade.get("block_trade_id"),
+                    "block_trade_leg_count": trade.get("block_trade_leg_count"),
+                    "combo_id": trade.get("combo_id"),
+                    "block_rfq_id": block_rfq_id,
+                    "liquidation": trade.get("liquidation"),
+                    "contracts": trade.get("contracts"),
                 }
 
                 # Insert with ON CONFLICT DO NOTHING (deduplication by trade_id)
@@ -214,11 +232,15 @@ class TradeCollector:
                     INSERT INTO historical_trades (
                         trade_id, trade_seq, trade_timestamp, instrument_name,
                         currency, expiration, strike, option_type,
-                        price, amount, direction, iv, mark_price, index_price
+                        price, amount, direction, iv, mark_price, index_price,
+                        block_trade_id, block_trade_leg_count, combo_id,
+                        block_rfq_id, liquidation, contracts
                     ) VALUES (
                         %(trade_id)s, %(trade_seq)s, %(trade_timestamp)s, %(instrument_name)s,
                         %(currency)s, %(expiration)s, %(strike)s, %(option_type)s,
-                        %(price)s, %(amount)s, %(direction)s, %(iv)s, %(mark_price)s, %(index_price)s
+                        %(price)s, %(amount)s, %(direction)s, %(iv)s, %(mark_price)s, %(index_price)s,
+                        %(block_trade_id)s, %(block_trade_leg_count)s, %(combo_id)s,
+                        %(block_rfq_id)s, %(liquidation)s, %(contracts)s
                     )
                     ON CONFLICT (trade_id) DO NOTHING
                     RETURNING trade_id
