@@ -623,6 +623,24 @@ class ProspectiveCollector:
                     strike = float(parts[2])
                     option_type = parts[3]
 
+            # institutional_metrics_spec.md section 9 / Migration M2 (Task
+            # D1 review round 2): this is a SECOND writer into
+            # historical_trades alongside TradeCollector._store_trades --
+            # both run in the same daemon process and race on the same
+            # unique constraint, so this INSERT must carry the same new
+            # columns or any trade this collector wins the race on
+            # permanently NULLs block_trade_id (unbackfillable by
+            # construction). Mirrors trade_collector.py's extraction
+            # exactly, including the block_rfq_id int-to-VARCHAR(64)
+            # stringification.
+            block_trade_id = trade.get("block_trade_id")
+            block_trade_leg_count = trade.get("block_trade_leg_count")
+            combo_id = trade.get("combo_id")
+            block_rfq_id = trade.get("block_rfq_id")
+            block_rfq_id = str(block_rfq_id) if block_rfq_id is not None else None
+            liquidation = trade.get("liquidation")
+            contracts = trade.get("contracts")
+
             # Insert into historical_trades
             cursor.execute("""
                 INSERT INTO historical_trades (
@@ -640,9 +658,16 @@ class ProspectiveCollector:
                     direction,
                     iv,
                     mark_price,
-                    index_price
+                    index_price,
+                    block_trade_id,
+                    block_trade_leg_count,
+                    combo_id,
+                    block_rfq_id,
+                    liquidation,
+                    contracts
                 ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s
                 )
                 ON CONFLICT (trade_id, trade_timestamp) DO NOTHING
             """, (
@@ -660,7 +685,13 @@ class ProspectiveCollector:
                 direction,
                 iv,
                 mark_price,
-                index_price
+                index_price,
+                block_trade_id,
+                block_trade_leg_count,
+                combo_id,
+                block_rfq_id,
+                liquidation,
+                contracts
             ))
 
             conn.commit()
