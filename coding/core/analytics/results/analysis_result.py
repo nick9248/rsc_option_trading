@@ -20,6 +20,7 @@ from coding.core.analytics.results.dealer_inventory_results import DealerInvento
 from coding.core.analytics.results.delta_flow_results import FlowBucket
 from coding.core.analytics.results.expiry_results import ExpirationAnalysisResult
 from coding.core.analytics.results.exposure_profile_results import ExposureProfileResult
+from coding.core.analytics.results.fixed_strike_vol_results import FixedStrikeVolResult
 from coding.core.analytics.results.flow_results import FlowResult
 from coding.core.analytics.results.gex_dex_results import GexDexResult
 from coding.core.analytics.results.market_wide_results import MarketWideResult
@@ -111,6 +112,17 @@ class ExpirationBundle:
     # the additive computation guard caught an unexpected error (see
     # OnChainAnalysisService._calculate_exposure_profile).
     exposure_profile: Optional[ExposureProfileResult] = None
+
+    # institutional_metrics_spec.md section 7 / Task C8: fixed-strike vol
+    # change matrix (day-over-day IV change per strike vs the ATM move,
+    # sticky-strike/sticky-delta/repriced attribution). Optional/defaulted
+    # so every pre-existing direct ExpirationBundle(...) constructor
+    # (tests, the builder) keeps working unchanged. None when there is no
+    # repository, or building the matrix raised unexpectedly (see
+    # OnChainAnalysisService._calculate_fixed_strike_vol_matrix) -- distinct
+    # from a present result with regime == "INDETERMINATE" (a normal,
+    # renderable "insufficient history" outcome, not an error).
+    fixed_strike_vol: Optional[FixedStrikeVolResult] = None
 
 
 @dataclass(frozen=True)

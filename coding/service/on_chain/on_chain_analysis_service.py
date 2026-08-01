@@ -22,6 +22,10 @@ from coding.core.analytics.chart_generator import (
 )
 from coding.core.analytics.dealer_inventory_calculator import DealerInventoryCalculator
 from coding.core.analytics.exposure_profile_calculator import ExposureProfileCalculator
+from coding.core.analytics.fixed_strike_vol_calculator import (
+    FixedStrikeVolCalculator,
+    compute_nearest_strike_atm_iv,
+)
 from coding.core.analytics.gex_dex_calculator import GexDexCalculator
 from coding.core.analytics.market_wide_calculator import MarketWideCalculator
 from coding.core.analytics.results.market_wide_results import (
@@ -61,6 +65,7 @@ from coding.core.analytics.results.exposure_profile_results import (
     ExposureProfileResult,
     ExposureStrikeRow,
 )
+from coding.core.analytics.results.fixed_strike_vol_results import FixedStrikeVolResult
 from coding.core.analytics.thresholds import (
     OI_CHANGE_SIGNIFICANT_ABS_THRESHOLD,
     OI_CHANGE_SIGNIFICANT_PCT_THRESHOLD,
@@ -1048,6 +1053,13 @@ class OnChainAnalysisService:
         """
         gex_dex_typed_by_expiry: Dict[str, Any] = {}
 
+        # institutional_metrics_spec.md section 7 / Task C8: resolved ONCE
+        # for the whole per-expiry loop, from a UTC-explicit clock read
+        # (never this local machine's naive datetime.now(), which is not
+        # UTC -- see _calculate_fixed_strike_vol_matrix's docstring and
+        # this campaign's repeated day-boundary lesson).
+        fixed_strike_vol_today_utc = datetime.now(timezone.utc).date()
+
         for expiration in analyzer.get_expirations():
             instruments = analyzer.parsed_data.get(expiration, [])
             if not instruments:
@@ -1144,6 +1156,25 @@ class OnChainAnalysisService:
                 )
                 if exposure_result is not None and builder is not None:
                     builder.set_exposure_profile(expiration, exposure_result)
+
+                # institutional_metrics_spec.md section 7 / task C8:
+                # fixed-strike vol change matrix, same enriched-Greeks
+                # instruments_with_greeks list ("today" is read live from
+                # it), no second API call. Additive only (matches the
+                # exposure-profile call immediately above): a failure
+                # degrades to "no fixed-strike-vol section"
+                # (fixed_strike_vol_result is None), never to a broken
+                # GEX/DEX section. A present result with
+                # regime == "INDETERMINATE" (insufficient/stale prior
+                # history) is NOT a failure -- it is still set on the
+                # builder and rendered with an explicit message.
+                progress_callback(f"Calculating fixed-strike vol change matrix for {expiration}...")
+                fixed_strike_vol_result = self._calculate_fixed_strike_vol_matrix(
+                    analyzer.currency, expiration, instruments_with_greeks,
+                    analyzer.index_price, fixed_strike_vol_today_utc,
+                )
+                if fixed_strike_vol_result is not None and builder is not None:
+                    builder.set_fixed_strike_vol(expiration, fixed_strike_vol_result)
 
         # Aggregate GEX/DEX across all expirations after per-expiry loop
         aggregate_result = None
@@ -1518,6 +1549,112 @@ class OnChainAnalysisService:
                 "degrading to 'no exposure-profile section' rather than "
                 "aborting GEX/DEX (additive-only, "
                 "institutional_metrics_spec.md section 4 / task C5)",
+                exc_info=True,
+            )
+            return None
+
+    def _calculate_fixed_strike_vol_matrix(
+        self,
+        currency: str,
+        expiration: str,
+        instruments_with_greeks: List[Dict[str, Any]],
+        spot_today: float,
+        today_date_utc,
+    ) -> Optional[FixedStrikeVolResult]:
+        """
+        institutional_metrics_spec.md section 7 (Task C8): fixed-strike vol
+        change matrix -- day-over-day IV change per strike vs the ATM move,
+        with sticky-strike/sticky-delta/repriced attribution.
+
+        "Today" is read LIVE from ``instruments_with_greeks`` (spec section
+        7(a): "today can be computed live") -- the SAME enriched Greeks
+        list already built for GEX/DEX/dealer-inventory/exposure-profile
+        above, no second API call. "Prior" (exactly ``today_date_utc - 1
+        day``, never the nearest available date) comes from
+        ``DatabaseRepository.get_chain_iv_at``. ATM IV is computed
+        identically on both sides via ``compute_nearest_strike_atm_iv``
+        (neither historical source carries ``delta``, so the delta-
+        interpolated ATM read used elsewhere is not available here -- see
+        that function's docstring for why using the SAME method on both
+        days matters).
+
+        Additive only, mirrors ``_calculate_exposure_profile``'s/
+        ``_calculate_inferred_dealer_positioning``'s established guard: an
+        unexpected error (e.g. a DB failure) degrades to ``None`` -- no
+        section rendered at all -- never aborting the GEX/DEX phase this
+        runs alongside. This is DISTINCT from the calculator legitimately
+        returning ``regime == "INDETERMINATE"`` (missing/stale prior data,
+        the expected common case per section 11 judgment call #4) -- that
+        is a normal, fully-formed result that DOES get rendered, with an
+        explicit "insufficient history" message rather than a fabricated
+        table (task-C8-brief.md's graceful-fallback requirement).
+
+        Args:
+            currency: Currency symbol (BTC or ETH).
+            expiration: Expiration date string (e.g., "31JUL26").
+            instruments_with_greeks: The SAME enriched-Greeks instrument
+                list already built for GEX/DEX/dealer/exposure-profile
+                above.
+            spot_today: ``analyzer.index_price`` -- same anchor
+                GexDexCalculator uses (bugfix_spec.md Item 7).
+            today_date_utc: UTC calendar ``date`` for "today", resolved
+                once by the caller (``_fetch_greeks_and_store_gex_dex``)
+                from ``datetime.now(timezone.utc)`` -- never derived from
+                this (non-UTC) local machine's naive clock, per this
+                campaign's repeated day-boundary lesson (Tasks C4/C5/C7 fix
+                rounds).
+
+        Returns:
+            ``FixedStrikeVolResult``, or ``None`` if there is no
+            repository or building the matrix raised unexpectedly.
+        """
+        if self.repository is None:
+            return None
+        try:
+            today_rows = [
+                {
+                    "strike": inst.get("strike"),
+                    "option_type": inst.get("option_type"),
+                    "mark_iv": inst.get("mark_iv"),
+                }
+                for inst in instruments_with_greeks
+            ]
+            atm_iv_today = compute_nearest_strike_atm_iv(today_rows, spot_today)
+
+            prior_date = today_date_utc - timedelta(days=1)
+            chain_prior = self.repository.get_chain_iv_at(currency, expiration, prior_date)
+            prior_rows = chain_prior["rows"]
+            spot_prior = chain_prior["underlying_price"]
+            atm_iv_prior = compute_nearest_strike_atm_iv(prior_rows, spot_prior)
+
+            calculator = FixedStrikeVolCalculator(
+                today_rows=today_rows,
+                prior_rows=prior_rows,
+                spot_today=spot_today,
+                spot_prior=spot_prior,
+                atm_iv_today=atm_iv_today,
+                atm_iv_prior=atm_iv_prior,
+                today_date=today_date_utc,
+                # The repository was queried for EXACTLY prior_date -- that
+                # is the date we attempted, whether or not it found any
+                # rows. Passing it through here (rather than None on an
+                # empty prior_rows) is what lets FixedStrikeVolCalculator
+                # distinguish "queried the right date, found nothing"
+                # (stale_prior=False, regime degrades to INDETERMINATE only
+                # because there is nothing to evaluate) from "never had a
+                # prior snapshot at all" (stale_prior=True) -- both render
+                # as insufficient history, but with different messages.
+                prior_date=prior_date,
+                expiration=expiration,
+            )
+            return calculator.calculate()
+        except Exception:
+            logger.error(
+                f"OnChainAnalysisService: fixed-strike vol matrix failed "
+                f"unexpectedly for {currency} {expiration} -- degrading to "
+                "'no fixed-strike-vol section' rather than aborting GEX/DEX "
+                "(additive-only, institutional_metrics_spec.md section 7 / "
+                "task C8)",
                 exc_info=True,
             )
             return None

@@ -156,6 +156,32 @@ class TestOnChainAnalysisBuilder:
         bundle = result.bundle("28MAR26")
         assert bundle.exposure_profile == exposure
 
+    def test_set_fixed_strike_vol_stored_on_bundle(self):
+        """institutional_metrics_spec.md section 7 / task C8."""
+        from datetime import date
+
+        from coding.core.analytics.results.fixed_strike_vol_results import (
+            FixedStrikeVolResult,
+        )
+
+        builder = OnChainAnalysisBuilder(
+            currency="BTC", underlying_price=90000.0,
+            parsed_instruments={"28MAR26": [{"strike": 90000.0}]},
+        )
+        builder.set_expiration_analysis("28MAR26", _make_analysis())
+        fixed_strike_vol = FixedStrikeVolResult(
+            expiration="28MAR26", today_date=date(2026, 7, 31),
+            prior_date=date(2026, 7, 30), expected_prior_date=date(2026, 7, 30),
+            stale_prior=False, spot_today=90000.0, spot_prior=90000.0,
+            spot_move_pct=0.0, atm_iv_today=30.0, atm_iv_prior=30.0, d_atm=0.0,
+            rows=(), n_strikes_matched=0, n_strikes_unmatched=0, regime="INDETERMINATE",
+        )
+        builder.set_fixed_strike_vol("28MAR26", fixed_strike_vol)
+
+        result = builder.build()
+        bundle = result.bundle("28MAR26")
+        assert bundle.fixed_strike_vol == fixed_strike_vol
+
     def test_missing_sections_default_to_none_not_raise(self):
         """A partial run (a failed phase) must still produce a usable result."""
         builder = OnChainAnalysisBuilder(
@@ -173,6 +199,7 @@ class TestOnChainAnalysisBuilder:
         bundle = result.bundle("28MAR26")
         assert bundle.gex_dex is None and bundle.flow is None and bundle.vol_surface is None
         assert bundle.dealer_inventory is None and bundle.exposure_profile is None
+        assert bundle.fixed_strike_vol is None
 
     def test_expiration_without_analysis_is_skipped(self):
         """Matches OnChainAnalyzer.generate_report()'s `if not analysis: continue` —

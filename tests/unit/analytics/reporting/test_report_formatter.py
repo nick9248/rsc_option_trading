@@ -8,7 +8,7 @@ OnChainAnalyzer.generate_report()'s single flat "\n".join(lines) output byte
 for byte (proven end-to-end by the golden-master characterization suite).
 """
 
-from datetime import datetime
+from datetime import date, datetime
 
 from coding.core.analytics.reporting.report_formatter import (
     ExpirationRenderInput,
@@ -28,6 +28,7 @@ from coding.core.analytics.results.expiry_results import (
     SupportResistanceResult,
     VolumeStatsResult,
 )
+from coding.core.analytics.results.fixed_strike_vol_results import FixedStrikeVolResult
 from coding.core.analytics.results.flow_results import FlowResult, FlowTotals
 from coding.core.analytics.results.gex_dex_results import GexDexKeyLevels, GexDexResult
 from coding.core.analytics.results.market_wide_results import (
@@ -290,6 +291,31 @@ def test_render_expiration_from_result_includes_gex_dex_section_when_present():
     text = formatter.render_expiration_from_result(result, "10MAR26")
     assert "GEX/DEX ANALYSIS" in text
     assert "+1,234.50" in text
+
+
+def test_render_expiration_from_result_includes_fixed_strike_vol_section_when_present():
+    """institutional_metrics_spec.md section 7 / Task C8: even an
+    INDETERMINATE (insufficient-history) result must render its explicit
+    message, not silently disappear -- unlike gex_dex/vol_surface's plain
+    'no data -> no section' convention, a PRESENT bundle.fixed_strike_vol
+    is never dropped regardless of its regime."""
+    formatter = OnChainReportFormatter()
+    fixed_strike_vol = FixedStrikeVolResult(
+        expiration="10MAR26", today_date=date(2026, 7, 31),
+        prior_date=None, expected_prior_date=date(2026, 7, 30),
+        stale_prior=True, spot_today=95000.0, spot_prior=None,
+        spot_move_pct=None, atm_iv_today=None, atm_iv_prior=None, d_atm=None,
+        rows=(), n_strikes_matched=0, n_strikes_unmatched=0, regime="INDETERMINATE",
+    )
+    bundle = ExpirationBundle(
+        expiration="10MAR26", analysis=_make_analysis("10MAR26"), gex_dex=None, flow=None,
+        vol_surface=None, oi_changes=None, iv_percentile=None, trend=None,
+        flow_chart_paths={}, enriched_instruments=(), fixed_strike_vol=fixed_strike_vol,
+    )
+    result = _make_result(expirations=(bundle,))
+    text = formatter.render_expiration_from_result(result, "10MAR26")
+    assert "FIXED-STRIKE VOL CHANGE" in text
+    assert "no comparable prior snapshot" in text
 
 
 def test_render_market_wide_from_result_empty_returns_empty_string():

@@ -32,6 +32,9 @@ from coding.core.analytics.reporting.expiry_formatter import format_expiration_s
 from coding.core.analytics.reporting.exposure_profile_formatter import (
     format_exposure_profile_section,
 )
+from coding.core.analytics.reporting.fixed_strike_vol_formatter import (
+    format_fixed_strike_vol_section,
+)
 from coding.core.analytics.reporting.flow_formatter import format_flow_section
 from coding.core.analytics.reporting.gex_dex_formatter import (
     format_aggregate_gex_dex_section,
@@ -307,6 +310,17 @@ class OnChainReportFormatter:
             extra_sections.append(format_flow_section(bundle.flow, bundle.flow.lookback_hours))
         if bundle.vol_surface is not None:
             extra_sections.append(format_vol_surface_section(bundle.vol_surface, expiration))
+
+        # institutional_metrics_spec.md section 7 / task C8: fixed-strike
+        # vol change matrix, placed right after vol surface -- both
+        # describe this expiry's IV smile, so the two read as one
+        # continuous block. format_fixed_strike_vol_section renders even
+        # an INDETERMINATE (insufficient/stale history) result with an
+        # explicit message rather than "" -- unlike the "no data -> no
+        # section" convention every other extra_sections entry here uses,
+        # a present bundle.fixed_strike_vol is never silently dropped.
+        if bundle.fixed_strike_vol is not None:
+            extra_sections.append(format_fixed_strike_vol_section(bundle.fixed_strike_vol))
 
         # OI changes + IV percentile concatenate into ONE block with no
         # separator between them (matches the legacy in-service
