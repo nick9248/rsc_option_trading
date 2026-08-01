@@ -13,7 +13,10 @@ from datetime import date, timedelta
 
 import pytest
 
-from coding.core.analytics.fixed_strike_vol_calculator import FixedStrikeVolCalculator
+from coding.core.analytics.fixed_strike_vol_calculator import (
+    FixedStrikeVolCalculator,
+    compute_nearest_strike_atm_iv,
+)
 
 TODAY = date(2026, 7, 31)
 YESTERDAY = TODAY - timedelta(days=1)
@@ -476,3 +479,50 @@ class TestDegenerateDataCases:
         assert result.rows == ()
         assert result.n_strikes_matched == 0
         assert result.n_strikes_unmatched == 1
+
+
+class TestComputeNearestStrikeAtmIv:
+    """
+    Neither ``daily_oi_snapshots`` nor (currently, until deployed)
+    ``snapshots`` carries a ``delta`` column, so the delta-interpolated ATM
+    read used elsewhere (``VolatilitySurfaceCalculator.
+    interpolate_iv_at_delta`` at |delta|=0.50, section 3(b)) is not
+    available for this historical source. This helper computes ATM IV the
+    same way on BOTH the today and prior chain -- nearest call/put strike to
+    spot, averaged -- so the day-over-day ATM comparison is never a mix of
+    two different ATM definitions.
+    """
+
+    def test_averages_closest_call_and_put(self):
+        rows = [
+            {"strike": 95000, "option_type": "C", "mark_iv": 30.0},
+            {"strike": 97000, "option_type": "C", "mark_iv": 32.0},  # closest call
+            {"strike": 97000, "option_type": "P", "mark_iv": 34.0},  # closest put
+            {"strike": 99000, "option_type": "P", "mark_iv": 28.0},
+        ]
+        atm = compute_nearest_strike_atm_iv(rows, spot=97100.0)
+        assert atm == pytest.approx((32.0 + 34.0) / 2.0)
+
+    def test_calls_only_returns_call_iv_alone(self):
+        rows = [{"strike": 97000, "option_type": "C", "mark_iv": 32.0}]
+        atm = compute_nearest_strike_atm_iv(rows, spot=97000.0)
+        assert atm == pytest.approx(32.0)
+
+    def test_empty_rows_returns_none(self):
+        assert compute_nearest_strike_atm_iv([], spot=97000.0) is None
+
+    def test_none_spot_returns_none(self):
+        rows = [{"strike": 97000, "option_type": "C", "mark_iv": 32.0}]
+        assert compute_nearest_strike_atm_iv(rows, spot=None) is None
+
+    def test_zero_spot_returns_none(self):
+        rows = [{"strike": 97000, "option_type": "C", "mark_iv": 32.0}]
+        assert compute_nearest_strike_atm_iv(rows, spot=0.0) is None
+
+    def test_rows_with_null_mark_iv_are_ignored(self):
+        rows = [
+            {"strike": 97000, "option_type": "C", "mark_iv": None},
+            {"strike": 98000, "option_type": "C", "mark_iv": 31.0},
+        ]
+        atm = compute_nearest_strike_atm_iv(rows, spot=97000.0)
+        assert atm == pytest.approx(31.0)

@@ -46,6 +46,54 @@ ATM_MOVE_THRESHOLD = 1.0  # vol points
 _RegimeKey = tuple  # (strike: float, option_type: str)
 
 
+def compute_nearest_strike_atm_iv(
+    rows: List[Dict[str, Any]], spot: Optional[float]
+) -> Optional[float]:
+    """
+    ATM IV as the average of the closest call and put ``mark_iv`` to
+    ``spot`` -- the nearest-strike convention
+    (``VolatilitySurfaceCalculator._calculate_atm_iv`` uses the identical
+    formula on the live chain).
+
+    Neither ``daily_oi_snapshots`` nor (currently) ``snapshots`` carries a
+    ``delta`` column, so section 3(b)'s delta-interpolated ATM read
+    (|delta|=0.50) is not available for this task's historical data source.
+    This helper is used for BOTH the today and prior chain in
+    ``OnChainAnalysisService._build_fixed_strike_vol_matrix`` -- applying
+    the SAME ATM definition on both days, rather than e.g. delta-
+    interpolating "today" (where delta happens to be available from the
+    live chain) against a nearest-strike "prior" (where it is not), which
+    would silently compare two different quantities under one ``ΔATM``
+    label.
+
+    Args:
+        rows: Chain rows, each with at least ``strike``, ``option_type``,
+            ``mark_iv``. Rows with a ``None``/missing ``mark_iv`` are
+            ignored.
+        spot: Underlying price to measure distance from. ``None`` or
+            non-positive returns ``None`` -- "nearest to spot" is undefined
+            without a usable spot.
+
+    Returns:
+        Average of the closest call's and closest put's ``mark_iv``, or
+        just one side's if only calls or only puts have a usable
+        ``mark_iv``. ``None`` if ``rows`` has no usable entries at all.
+    """
+    if spot is None or spot <= 0:
+        return None
+
+    calls = [r for r in rows if r.get("option_type") == "C" and r.get("mark_iv") is not None]
+    puts = [r for r in rows if r.get("option_type") == "P" and r.get("mark_iv") is not None]
+
+    atm_ivs = []
+    for group in (calls, puts):
+        if group:
+            closest = min(group, key=lambda r: abs(float(r["strike"]) - spot))
+            atm_ivs.append(float(closest["mark_iv"]))
+
+    return sum(atm_ivs) / len(atm_ivs) if atm_ivs else None
+
+
 class FixedStrikeVolCalculator:
     """
     Pure: two dated chain slices -> per-strike IV deltas and a sticky-regime
