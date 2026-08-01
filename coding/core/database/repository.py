@@ -1331,6 +1331,150 @@ class DatabaseRepository:
 
             return result
 
+    # institutional_metrics_spec.md section 7(b): the snapshots fallback
+    # anchors to this UTC hour, matching Deribit's daily settlement
+    # convention -- the same anchor migration M8 would eventually pin
+    # daily_oi_snapshots to (not yet implemented; see get_chain_iv_at's
+    # docstring).
+    _FIXED_STRIKE_VOL_ANCHOR_HOUR_UTC = 8
+
+    def get_chain_iv_at(
+        self,
+        currency: str,
+        expiration: str,
+        snapshot_date,
+    ) -> Dict[str, Any]:
+        """
+        Fetch the full per-strike ``mark_iv`` chain for one (currency,
+        expiration) on EXACTLY ``snapshot_date`` (institutional_metrics_
+        spec.md section 7 / Task C8's fixed-strike vol change matrix).
+
+        Never substitutes the nearest available date -- that decision
+        belongs to the caller (``FixedStrikeVolCalculator``'s stale-prior
+        guard, T7.3), which needs to know the exact requested date came up
+        empty, not silently receive a plausible-looking older snapshot
+        mislabelled as "yesterday".
+
+        Reads ``daily_oi_snapshots`` first (real per-strike ``mark_iv``
+        history, though GUI-triggered and therefore sparse/irregular --
+        [verified 2026-08-01] 92 distinct dates all-time, non-consecutive,
+        most recent two entries 7 days apart). Falls back to ``snapshots``
+        (the daemon's full ~900-instrument hourly chain, ``mark_iv``
+        populated by migration 017 / Decision D11) only when
+        ``daily_oi_snapshots`` has no rows for this exact date -- picks the
+        hour closest to ``_FIXED_STRIKE_VOL_ANCHOR_HOUR_UTC`` (08:00 UTC).
+
+        [Verified 2026-08-01] As of this task, ``snapshots.mark_iv`` is
+        100% NULL across all 6.2M+ rows in the live database -- the write
+        path (``save_snapshot`` persisting ``item.get("mark_iv")``) exists
+        in code (this branch) but has not yet reached the deployed VPS
+        daemon, so this fallback is currently unreachable with real data.
+        Implemented anyway per institutional_metrics_spec.md section 11
+        judgment call #4: "ship the calculator + the stale-prior guard now
+        and let it light up as the daemon fills in."
+
+        ``snapshots.captured_at`` is written via naive ``datetime.now()``
+        by the VPS collector; the VPS OS/DB clock is confirmed UTC
+        elsewhere in this campaign (task-C7-report.md's Important #2), so
+        it is treated as a UTC-labeled timestamp here, consistent with that
+        established finding -- never re-derived from this (non-UTC) local
+        dev machine's clock.
+
+        Args:
+            currency: Currency symbol.
+            expiration: Expiration date string, e.g. "26MAR27".
+            snapshot_date: The exact calendar date (UTC) to fetch --
+                a ``datetime.date``.
+
+        Returns:
+            Dict with:
+            - "rows": list of ``{"strike": float, "option_type": str,
+              "mark_iv": float}``, empty if nothing found on either table
+              for this exact date.
+            - "underlying_price": float or None -- averaged across
+              whichever rows had a non-null value (neither table
+              guarantees exactly one distinct underlying_price per
+              snapshot); None if every row's underlying_price was null.
+            - "source": "daily_oi_snapshots" | "snapshots" | None.
+        """
+        rows, underlying_price = self._get_daily_oi_chain_iv(currency, expiration, snapshot_date)
+        if rows:
+            return {"rows": rows, "underlying_price": underlying_price, "source": "daily_oi_snapshots"}
+
+        rows, underlying_price = self._get_hourly_snapshot_chain_iv(currency, expiration, snapshot_date)
+        if rows:
+            return {"rows": rows, "underlying_price": underlying_price, "source": "snapshots"}
+
+        return {"rows": [], "underlying_price": None, "source": None}
+
+    def _get_daily_oi_chain_iv(
+        self, currency: str, expiration: str, snapshot_date,
+    ) -> tuple:
+        """Primary source for ``get_chain_iv_at`` -- see its docstring."""
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                SELECT strike, option_type, mark_iv, underlying_price
+                FROM daily_oi_snapshots
+                WHERE currency = %s
+                  AND expiration = %s
+                  AND snapshot_date = %s
+                  AND mark_iv IS NOT NULL
+                ORDER BY strike, option_type
+            """, (currency, expiration, snapshot_date))
+            return self._rows_and_avg_underlying_price(cursor.fetchall())
+
+    def _get_hourly_snapshot_chain_iv(
+        self, currency: str, expiration: str, snapshot_date,
+    ) -> tuple:
+        """Fallback source for ``get_chain_iv_at`` -- see its docstring."""
+        anchor_ts = datetime(
+            snapshot_date.year, snapshot_date.month, snapshot_date.day,
+            self._FIXED_STRIKE_VOL_ANCHOR_HOUR_UTC, 0, 0,
+        )
+        day_start = datetime(snapshot_date.year, snapshot_date.month, snapshot_date.day)
+        day_end = day_start + timedelta(days=1)
+
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                SELECT strike, option_type, mark_iv, underlying_price
+                FROM snapshots
+                WHERE currency = %s
+                  AND expiration = %s
+                  AND mark_iv IS NOT NULL
+                  AND captured_at = (
+                      SELECT captured_at
+                      FROM snapshots
+                      WHERE currency = %s
+                        AND captured_at >= %s
+                        AND captured_at < %s
+                      ORDER BY ABS(EXTRACT(EPOCH FROM (captured_at - %s)))
+                      LIMIT 1
+                  )
+                ORDER BY strike, option_type
+            """, (currency, expiration, currency, day_start, day_end, anchor_ts))
+            return self._rows_and_avg_underlying_price(cursor.fetchall())
+
+    @staticmethod
+    def _rows_and_avg_underlying_price(fetched_rows) -> tuple:
+        """Shared shaping for both ``get_chain_iv_at`` sources: strike/
+        option_type/mark_iv rows plus the underlying_price averaged across
+        whichever rows had a non-null value."""
+        rows = []
+        underlying_prices = []
+        for strike, option_type, mark_iv, underlying_price in fetched_rows:
+            rows.append({
+                "strike": float(strike),
+                "option_type": option_type,
+                "mark_iv": float(mark_iv),
+            })
+            if underlying_price is not None:
+                underlying_prices.append(float(underlying_price))
+
+        avg_underlying = (
+            sum(underlying_prices) / len(underlying_prices) if underlying_prices else None
+        )
+        return rows, avg_underlying
+
     def save_funding_rate(
         self,
         currency: str,
