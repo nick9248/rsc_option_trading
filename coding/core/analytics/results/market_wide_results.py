@@ -132,6 +132,55 @@ class GammaRolloffResult:
 
 
 @dataclass(frozen=True)
+class ForwardVolBucket:
+    """
+    One adjacent-expiry pair's row in the FORWARD VOL table
+    (institutional_metrics_spec.md section 8, Task C9): forward variance
+    between the nearer (``t1_days``) and farther (``t2_days``) expiry,
+    via variance additivity (r = q = 0).
+
+    ``fwd_vol_pct`` is ``None`` exactly when ``negative_variance`` is
+    ``True`` (the calendar-spread-arb/data-error signal -- genuine
+    implied vol cannot produce a negative forward variance; it signals a
+    stale ATM IV on one leg, not a trade). ``event_premium`` is
+    ``Optional[float]``: ``None`` whenever neither immediate neighbour
+    bucket has a usable (non-negative-variance) forward vol to compare
+    against -- covers both "only 2 expiries, no neighbours at all" and
+    "the only neighbour is itself negative-variance".
+    """
+
+    from_expiry: str
+    to_expiry: str
+    t1_days: float
+    t2_days: float
+    sigma1_pct: float
+    sigma2_pct: float
+    fwd_var: float
+    fwd_vol_pct: Optional[float]
+    negative_variance: bool
+    event_premium: Optional[float]
+    flags: Tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ForwardVolResult:
+    """
+    Full FORWARD VOL curve across adjacent expiry pairs
+    (institutional_metrics_spec.md section 8, Task C9).
+
+    ``has_negative_variance`` drives the report's "DATA QUALITY" header
+    warning (spec section 8(c) edge cases) -- derived, not independently
+    settable, so it can never desync from the buckets it summarizes.
+    """
+
+    buckets: Tuple[ForwardVolBucket, ...]
+
+    @property
+    def has_negative_variance(self) -> bool:
+        return any(b.negative_variance for b in self.buckets)
+
+
+@dataclass(frozen=True)
 class FuturesBasisEntry:
     """Annualized basis for one futures instrument."""
 
@@ -323,6 +372,16 @@ class MarketWideResult:
     # dataclasses.replace() after run() returns, the same "post-process the
     # frozen result" pattern skew_term_structure already uses.
     gamma_rolloff: Optional[GammaRolloffResult] = None
+
+    # institutional_metrics_spec.md section 8 (Task C9). Additive, with a
+    # default, same "post-process the frozen result via dataclasses.
+    # replace()" pattern as skew_term_structure/gamma_rolloff above --
+    # OnChainAnalysisService attaches it after MarketWideOrchestrator.run()
+    # returns. Unlike skew_term_structure, this one needs no repository
+    # (no percentile history lookups, pure live-chain calculation) -- it
+    # is attached the same way purely to stay consistent with the
+    # established pattern, not because it has the same DB dependency.
+    forward_vol: Optional[ForwardVolResult] = None
 
     def to_flat_dict(self) -> Dict[str, Any]:
         """

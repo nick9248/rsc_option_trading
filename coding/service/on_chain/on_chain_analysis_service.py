@@ -29,6 +29,8 @@ from coding.core.analytics.fixed_strike_vol_calculator import (
 from coding.core.analytics.gex_dex_calculator import GexDexCalculator
 from coding.core.analytics.market_wide_calculator import MarketWideCalculator
 from coding.core.analytics.results.market_wide_results import (
+    ForwardVolBucket,
+    ForwardVolResult,
     GammaRolloffResult,
     GammaRolloffRow,
     SkewTermStructureEntry,
@@ -1024,6 +1026,114 @@ class OnChainAnalysisService:
             rr_slope = entries[-1].rr_25d - entries[0].rr_25d
 
         return SkewTermStructureResult(entries=tuple(entries), rr_slope=rr_slope)
+
+    def _build_forward_vol_curve(
+        self,
+        analyzer: OnChainMetricsCalculator,
+        currency: str,
+    ) -> Optional[ForwardVolResult]:
+        """
+        Build the FORWARD VOL result (institutional_metrics_spec.md
+        section 8, Task C9): forward/event vol between adjacent
+        expiries, from the SAME chain-derived per-expiry ATM IV
+        (``analyzer._skew_by_expiry[...]["atm_iv_interp"]``)
+        ``_build_skew_term_structure`` already reuses -- this never
+        recomputes ATM IV from scratch.
+
+        Unlike ``_build_skew_term_structure``, this needs NO repository:
+        there is no percentile-history lookup, only a pure calculation
+        over live per-expiry ATM IV/DTE (spec: "No new persistence -- the
+        inputs are already stored by M3, so the history is derivable").
+        It therefore runs even when ``self.repository`` is ``None``.
+
+        Timezone (task brief's repeated lesson, cost fix rounds in C4,
+        C5, C7, and a SECOND round in C8): ``now_utc`` is resolved ONCE
+        here and reused for every expiry's DTE in this call, via
+        ``MarketWideCalculator._calculate_days_to_expiry`` -- the EXACT
+        same method (same clock convention, same 08:00 UTC settlement
+        anchor) ``_build_skew_term_structure`` already uses for this same
+        ``skew_by_expiry`` data. A shared expiry's DTE can therefore never
+        desync between the SKEW TERM STRUCTURE and FORWARD VOL sections
+        (the paired-method check the brief calls out explicitly).
+
+        Isolation: a parse failure for one expiration's label is caught
+        and that expiration is excluded from candidacy (logged, never
+        raised) -- isolated per-expiry, the same way
+        ``_build_skew_term_structure`` isolates its per-expiry try/except,
+        so one bad label cannot suppress the other expiries' rows. The
+        pure-calculator call itself is wrapped separately so a bug in
+        ``calculate_forward_vol_curve`` cannot be blamed on (or hide
+        behind) a DTE-parsing failure, and vice versa.
+
+        Returns:
+            ``None`` when there is no skew data at all (mirrors
+            ``_build_skew_term_structure``'s own gate), or when fewer
+            than 2 expiries survive with both a usable ATM IV and a
+            parseable DTE (spec: "Fewer than 2 expiries with ATM IV ->
+            section omitted").
+        """
+        # getattr, not a direct attribute access: unlike
+        # _build_skew_term_structure (which is gated on self.repository
+        # being set BEFORE it ever touches analyzer._skew_by_expiry), this
+        # method has no repository gate, so it must not assume every
+        # caller's analyzer already carries this attribute (e.g. a test
+        # double, or a real analyzer whose vol-surface phase never ran) --
+        # isolation lesson from the task brief: this new call must not be
+        # able to raise into a caller that never populated it.
+        skew_by_expiry = getattr(analyzer, "_skew_by_expiry", None)
+        if not skew_by_expiry:
+            return None
+
+        now_utc = datetime.now(timezone.utc)
+        atm_by_expiry: Dict[str, Tuple[Optional[float], Optional[float]]] = {}
+        for expiration, skew in skew_by_expiry.items():
+            try:
+                dte = MarketWideCalculator._calculate_days_to_expiry(expiration, now_utc)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to compute DTE for forward vol row %s %s: %s",
+                    currency, expiration, exc,
+                )
+                continue
+            if dte is None:
+                logger.warning(
+                    "Skipping forward vol row for %s %s: expiration string "
+                    "did not parse as a date",
+                    currency, expiration,
+                )
+                continue
+            atm_by_expiry[expiration] = (skew.get("atm_iv_interp"), dte)
+
+        if len(atm_by_expiry) < 2:
+            return None
+
+        try:
+            curve = MarketWideCalculator.calculate_forward_vol_curve(atm_by_expiry)
+        except Exception as exc:
+            logger.error(
+                "Failed to calculate forward vol curve for %s: %s", currency, exc, exc_info=True,
+            )
+            return None
+
+        buckets = tuple(
+            ForwardVolBucket(
+                from_expiry=b["from_expiry"],
+                to_expiry=b["to_expiry"],
+                t1_days=b["t1_days"],
+                t2_days=b["t2_days"],
+                sigma1_pct=b["sigma1_pct"],
+                sigma2_pct=b["sigma2_pct"],
+                fwd_var=b["fwd_var"],
+                fwd_vol_pct=b["fwd_vol_pct"],
+                negative_variance=b["negative_variance"],
+                event_premium=b["event_premium"],
+                flags=tuple(b["flags"]),
+            )
+            for b in curve["buckets"]
+        )
+        if not buckets:
+            return None
+        return ForwardVolResult(buckets=buckets)
 
     def _fetch_greeks_and_store_gex_dex(
         self,
@@ -2363,6 +2473,19 @@ class OnChainAnalysisService:
         if gamma_rolloff_result is not None:
             market_wide_result = dataclasses.replace(
                 market_wide_result, gamma_rolloff=gamma_rolloff_result,
+            )
+
+        # institutional_metrics_spec.md section 8 (Task C9): same post-hoc
+        # attach pattern as skew_term_structure/gamma_rolloff above, for
+        # consistency -- unlike skew_term_structure, forward_vol has no
+        # repository dependency (pure live-chain calculation), so it could
+        # in principle live inside MarketWideOrchestrator.run() instead;
+        # attaching it here anyway keeps every market-wide section that
+        # depends on analyzer._skew_by_expiry built in the same place.
+        forward_vol_result = self._build_forward_vol_curve(analyzer, currency)
+        if forward_vol_result is not None:
+            market_wide_result = dataclasses.replace(
+                market_wide_result, forward_vol=forward_vol_result,
             )
 
         if builder is not None:
