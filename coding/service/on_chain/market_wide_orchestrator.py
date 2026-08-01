@@ -31,6 +31,7 @@ from coding.core.analytics.market_wide_calculator import (
 )
 from coding.core.analytics.on_chain_analyzer import OnChainMetricsCalculator
 from coding.core.analytics.results.market_wide_results import (
+    Block,
     BlockTrade,
     BlockTradesResult,
     CrossAssetCorrelationResult,
@@ -43,7 +44,10 @@ from coding.core.analytics.results.market_wide_results import (
     VolatilityConeResult,
     VolatilityConeWindowStats,
 )
-from coding.core.analytics.thresholds import BLOCK_TRADE_NOTIONAL_THRESHOLD_USD
+from coding.core.analytics.thresholds import (
+    BLOCK_TRADE_ID_TRACKED_SINCE,
+    BLOCK_TRADE_NOTIONAL_THRESHOLD_USD,
+)
 from coding.service.deribit.deribit_api_service import DeribitApiService
 
 logger = logging.getLogger(__name__)
@@ -403,7 +407,11 @@ class MarketWideOrchestrator:
 
         progress_callback("Detecting block trades...")
         _, block_data = calc.detect_block_trades(recent_trades)
-        block_trades_tuple = tuple(
+        # institutional_metrics_spec.md section 9 / Migration M2 (Task D1):
+        # "large_prints" already excludes any trade with a block_trade_id
+        # (see MarketWideCalculator.detect_block_trades) -- no double
+        # counting between this tuple and `blocks` below.
+        large_prints_tuple = tuple(
             BlockTrade(
                 timestamp=bt.get("timestamp"),
                 instrument_name=bt.get("instrument", ""),
@@ -412,16 +420,31 @@ class MarketWideOrchestrator:
                 notional=bt.get("notional", 0.0),
                 implied_volatility=bt.get("iv"),
             )
-            for bt in block_data.get("block_trades", [])
+            for bt in block_data.get("large_prints", [])
+        )
+        blocks_tuple = tuple(
+            Block(
+                block_trade_id=b["block_trade_id"],
+                leg_count=b["leg_count"],
+                observed_leg_count=b["observed_leg_count"],
+                combo_id=b.get("combo_id"),
+                combined_premium_usd=b.get("combined_premium_usd", 0.0),
+                total_amount=b.get("total_amount", 0.0),
+                instruments=b.get("instruments", ()),
+                timestamp=b.get("timestamp"),
+            )
+            for b in block_data.get("blocks", [])
         )
         # notional_threshold matches detect_block_trades' own default;
         # total_detected approximates the (already top-10-truncated)
         # displayed count -- the calculator does not expose the
         # pre-truncation total externally.
         return BlockTradesResult(
-            trades=block_trades_tuple,
+            trades=large_prints_tuple,
             notional_threshold=BLOCK_TRADE_NOTIONAL_THRESHOLD_USD,
-            total_detected=len(block_trades_tuple),
+            total_detected=len(large_prints_tuple),
+            blocks=blocks_tuple,
+            tracked_since=BLOCK_TRADE_ID_TRACKED_SINCE,
         )
 
     # -- Phase 8: cross-asset correlation ------------------------------------

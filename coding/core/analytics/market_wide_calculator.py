@@ -699,38 +699,153 @@ class MarketWideCalculator:
         notional_threshold: float = BLOCK_TRADE_NOTIONAL_THRESHOLD_USD,
     ) -> Tuple[str, Dict]:
         """
-        Detect and report block trades (large notional trades).
+        Detect and report block trades, grouped by ``block_trade_id``
+        (institutional_metrics_spec.md section 9 / Migration M2, Task D1),
+        plus a separately-labelled "large prints" list of large single-leg
+        screen prints (the old notional-filter heuristic).
+
+        A trade carrying a ``block_trade_id`` is a genuine block/combo leg
+        and is grouped into ``structured["blocks"]`` (one row per block,
+        not per leg); it is EXCLUDED from ``structured["large_prints"]``
+        even if its own notional clears the threshold, so the two lists
+        never double-count the same trade.
+
+        History is not backfillable: block_trade_id was never persisted to
+        historical_trades before migration 022
+        (``BLOCK_TRADE_ID_TRACKED_SINCE``). This method only ever sees
+        trades from the current live-fetched window, so it states that
+        date as the section's start date rather than implying no data
+        exists.
 
         Args:
             trades: Recent trade records from API.
-            notional_threshold: Minimum notional value in USD.
+            notional_threshold: Minimum notional value in USD for the
+                large-prints list.
 
         Returns:
-            Tuple of (formatted report string, dict with block_trades list).
+            Tuple of (formatted report string, dict with "blocks" and
+            "large_prints" lists).
         """
+        from coding.core.analytics.thresholds import BLOCK_TRADE_ID_TRACKED_SINCE
+
         lines = []
         sub_separator = "-" * 80
-        structured: Dict = {"block_trades": []}
+        structured: Dict = {"blocks": [], "large_prints": []}
 
-        lines.append("BLOCK TRADES (>${:,.0f} notional)".format(notional_threshold))
+        lines.append("BLOCK TRADES")
         lines.append(sub_separator)
+        lines.append(
+            f"  Tracked since {BLOCK_TRADE_ID_TRACKED_SINCE} "
+            "(block_trade_id was not captured before this date; history is not backfillable)"
+        )
 
         if not trades:
             lines.append("  No recent trade data available")
             lines.append("")
+            lines.append(
+                "LARGE PRINTS (screen prints, not blocks; >${:,.0f} notional)".format(
+                    notional_threshold
+                )
+            )
+            lines.append(sub_separator)
+            lines.append("  No recent trade data available")
+            lines.append("")
             return "\n".join(lines), structured
 
-        block_trades = []
+        # -- Group legs by block_trade_id -----------------------------------
+        groups: Dict[str, List[Dict[str, Any]]] = {}
         for trade in trades:
+            block_id = trade.get("block_trade_id")
+            if block_id:
+                groups.setdefault(block_id, []).append(trade)
+
+        blocks = []
+        for block_id, legs in groups.items():
+            observed_leg_count = len(legs)
+            # gate exhaustiveness: block_trade_leg_count can be null/missing
+            # on a leg -- fall back to the observed count rather than
+            # crashing or reporting 0.
+            declared_leg_count = next(
+                (leg.get("block_trade_leg_count") for leg in legs
+                 if leg.get("block_trade_leg_count")),
+                None,
+            )
+            leg_count = declared_leg_count if declared_leg_count else observed_leg_count
+
+            combo_id = next((leg.get("combo_id") for leg in legs if leg.get("combo_id")), None)
+
+            combined_premium_usd = sum(
+                (leg.get("price") or 0) * (leg.get("amount") or 0)
+                * (leg.get("index_price", self.spot_price) or 0)
+                for leg in legs
+            )
+            total_amount = sum(leg.get("amount") or 0 for leg in legs)
+
+            timestamps = [leg.get("timestamp") for leg in legs if leg.get("timestamp")]
+
+            blocks.append({
+                "block_trade_id": block_id,
+                "leg_count": leg_count,
+                "observed_leg_count": observed_leg_count,
+                "combo_id": combo_id,
+                "combined_premium_usd": combined_premium_usd,
+                "total_amount": total_amount,
+                "instruments": tuple(leg.get("instrument_name", "") for leg in legs),
+                "timestamp": min(timestamps) if timestamps else None,
+            })
+
+        # Sort by combined premium descending
+        blocks.sort(key=lambda b: b["combined_premium_usd"], reverse=True)
+        structured["blocks"] = blocks
+
+        if not blocks:
+            lines.append("  No blocks detected in recent activity")
+        else:
+            lines.append(
+                f"  {'Block ID':>16}  {'Legs':>4}  {'Structure':>24}  "
+                f"{'Premium (USD)':>16}  {'Time':>12}"
+            )
+            lines.append(
+                f"  {'--------':>16}  {'----':>4}  {'---------':>24}  "
+                f"{'-------------':>16}  {'----':>12}"
+            )
+            for b in blocks:
+                ts = b["timestamp"]
+                time_str = datetime.fromtimestamp(ts / 1000).strftime("%H:%M:%S") if ts else "N/A"
+                structure = b["combo_id"] or "N/A"
+                leg_str = (
+                    str(b["leg_count"])
+                    if b["leg_count"] == b["observed_leg_count"]
+                    else f"{b['observed_leg_count']}/{b['leg_count']}"
+                )
+                lines.append(
+                    f"  {b['block_trade_id']:>16}  {leg_str:>4}  {structure:>24}  "
+                    f"${b['combined_premium_usd']:>15,.0f}  {time_str:>12}"
+                )
+        lines.append("")
+
+        # -- Large prints: old notional filter, excluding block legs --------
+        lines.append(
+            "LARGE PRINTS (screen prints, not blocks; >${:,.0f} notional)".format(
+                notional_threshold
+            )
+        )
+        lines.append(sub_separator)
+
+        large_prints = []
+        for trade in trades:
+            if trade.get("block_trade_id"):
+                # already counted in `blocks` above -- never double-count.
+                continue
+
             amount = trade.get("amount", 0)
-            price = trade.get("price", 0)
             index_price = trade.get("index_price", self.spot_price)
 
             # Notional = amount × underlying price
             notional = amount * index_price
 
             if notional >= notional_threshold:
-                block_trades.append({
+                large_prints.append({
                     "timestamp": trade.get("timestamp"),
                     "instrument": trade.get("instrument_name", ""),
                     "size": amount,
@@ -740,14 +855,14 @@ class MarketWideCalculator:
                     "iv": trade.get("iv"),
                 })
 
-        if not block_trades:
-            lines.append("  No block trades detected in recent activity")
+        if not large_prints:
+            lines.append("  No large prints detected in recent activity")
             lines.append("")
             return "\n".join(lines), structured
 
         # Sort by notional descending
-        block_trades.sort(key=lambda x: x["notional"], reverse=True)
-        structured["block_trades"] = block_trades[:10]
+        large_prints.sort(key=lambda x: x["notional"], reverse=True)
+        structured["large_prints"] = large_prints[:10]
 
         lines.append(
             f"  {'Time':>12}  {'Instrument':>25}  {'Size':>8}  "
@@ -758,19 +873,19 @@ class MarketWideCalculator:
             f"{'---':>5}  {'--------':>14}  {'--':>6}"
         )
 
-        for bt in block_trades[:10]:
-            ts = bt["timestamp"]
+        for lp in large_prints[:10]:
+            ts = lp["timestamp"]
             if ts:
                 time_str = datetime.fromtimestamp(ts / 1000).strftime("%H:%M:%S")
             else:
                 time_str = "N/A"
 
-            iv_str = f"{bt['iv']:.1f}%" if bt["iv"] else "N/A"
+            iv_str = f"{lp['iv']:.1f}%" if lp["iv"] else "N/A"
 
             lines.append(
-                f"  {time_str:>12}  {bt['instrument']:>25}  "
-                f"{bt['amount']:>8.1f}  {bt['direction']:>5}  "
-                f"${bt['notional']:>13,.0f}  {iv_str:>6}"
+                f"  {time_str:>12}  {lp['instrument']:>25}  "
+                f"{lp['amount']:>8.1f}  {lp['direction']:>5}  "
+                f"${lp['notional']:>13,.0f}  {iv_str:>6}"
             )
 
         lines.append("")

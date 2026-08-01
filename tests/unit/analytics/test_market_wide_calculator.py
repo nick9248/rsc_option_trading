@@ -240,7 +240,10 @@ class TestFundingRateExtractionAndTrend:
         assert "Instantaneous funding: 0.0000%" in report
         assert "Funding (8h): not available" in report
 
-    def test_block_trade_detection(self, calculator):
+    def test_large_print_detection_excludes_block_legs(self, calculator):
+        """The notional-filter ("large prints") list must not include a
+        trade that is part of a block, even if its own notional clears the
+        threshold -- that trade is already counted in `blocks`."""
         trades = [
             {
                 "instrument_name": "BTC-28MAR26-90000-C",
@@ -260,21 +263,226 @@ class TestFundingRateExtractionAndTrend:
                 "timestamp": int(time.time() * 1000),
                 "iv": 70.0,
             },
+            {
+                # part of a block AND above the notional threshold --
+                # must appear in `blocks`, NOT in the large-prints list.
+                "instrument_name": "BTC-28MAR26-95000-C",
+                "amount": 10.0,
+                "price": 0.05,
+                "index_price": 90000,
+                "direction": "buy",
+                "timestamp": int(time.time() * 1000),
+                "iv": 65.0,
+                "block_trade_id": "BLOCK-1",
+                "block_trade_leg_count": 1,
+            },
         ]
 
         report, structured = calculator.detect_block_trades(trades, notional_threshold=100_000)
 
-        assert "BLOCK TRADES" in report
-        # 5.0 * 90000 = 450000 > threshold
+        assert "LARGE PRINTS" in report
+        assert "screen prints" in report.lower()
+        # 5.0 * 90000 = 450000 > threshold, no block_trade_id -> large print
         assert "BTC-28MAR26-90000-C" in report
         # 0.5 * 90000 = 45000 < threshold - should NOT appear
         assert "BTC-28MAR26-80000-P" not in report
-        assert len(structured["block_trades"]) == 1
+        assert len(structured["large_prints"]) == 1
+        assert structured["large_prints"][0]["instrument"] == "BTC-28MAR26-90000-C"
+        # the block leg (95000-C) must NOT show up in large_prints, even
+        # though 10.0 * 90000 = 900000 clears the threshold.
+        large_print_instruments = [t["instrument"] for t in structured["large_prints"]]
+        assert "BTC-28MAR26-95000-C" not in large_print_instruments
+        assert len(structured["blocks"]) == 1
 
     def test_block_trade_no_data(self, calculator):
         report, structured = calculator.detect_block_trades([])
         assert "No recent trade data" in report
-        assert structured["block_trades"] == []
+        assert structured["large_prints"] == []
+        assert structured["blocks"] == []
+
+    def test_t9_1_block_grouping_fixture(self, calculator):
+        """institutional_metrics_spec.md T9.1: 3 legs sharing a
+        block_trade_id (leg_count=3), 2 unrelated trades with
+        block_trade_id=NULL and notional > $100k. Block section lists 1
+        block (3 legs, combined premium = sum(price*amount*index_price)
+        over the 3 legs); large-prints list shows 2 entries; no
+        double-counting."""
+        index_price = 90000
+        block_legs = [
+            {
+                "instrument_name": "BTC-31JUL26-63000-C",
+                "amount": 12.5,
+                "price": 0.0008,
+                "index_price": index_price,
+                "direction": "buy",
+                "timestamp": 1785546525278,
+                "iv": 13.35,
+                "block_trade_id": "BLOCK-281688",
+                "block_trade_leg_count": 3,
+                "combo_id": "BTC-STRD-31JUL26-63000",
+            },
+            {
+                "instrument_name": "BTC-31JUL26-63000-P",
+                "amount": 12.5,
+                "price": 0.0033,
+                "index_price": index_price,
+                "direction": "buy",
+                "timestamp": 1785546525279,
+                "iv": 21.21,
+                "block_trade_id": "BLOCK-281688",
+                "block_trade_leg_count": 3,
+                "combo_id": "BTC-STRD-31JUL26-63000",
+            },
+            {
+                "instrument_name": "BTC-31JUL26-64000-C",
+                "amount": 12.5,
+                "price": 0.0015,
+                "index_price": index_price,
+                "direction": "sell",
+                "timestamp": 1785546525280,
+                "iv": 18.0,
+                "block_trade_id": "BLOCK-281688",
+                "block_trade_leg_count": 3,
+                "combo_id": "BTC-STRD-31JUL26-63000",
+            },
+        ]
+        large_prints = [
+            {
+                "instrument_name": "BTC-28MAR26-90000-C",
+                "amount": 5.0,
+                "price": 0.05,
+                "index_price": index_price,
+                "direction": "buy",
+                "timestamp": int(time.time() * 1000),
+                "iv": 65.0,
+            },
+            {
+                "instrument_name": "BTC-28MAR26-95000-P",
+                "amount": 3.0,
+                "price": 0.04,
+                "index_price": index_price,
+                "direction": "sell",
+                "timestamp": int(time.time() * 1000),
+                "iv": 68.0,
+            },
+        ]
+        trades = block_legs + large_prints
+
+        report, structured = calculator.detect_block_trades(trades, notional_threshold=100_000)
+
+        assert len(structured["blocks"]) == 1
+        block = structured["blocks"][0]
+        assert block["block_trade_id"] == "BLOCK-281688"
+        assert block["leg_count"] == 3
+        assert block["observed_leg_count"] == 3
+        assert block["combo_id"] == "BTC-STRD-31JUL26-63000"
+        expected_premium = sum(
+            leg["price"] * leg["amount"] * leg["index_price"] for leg in block_legs
+        )
+        assert block["combined_premium_usd"] == pytest.approx(expected_premium)
+
+        assert len(structured["large_prints"]) == 2
+        large_print_instruments = {t["instrument"] for t in structured["large_prints"]}
+        assert large_print_instruments == {"BTC-28MAR26-90000-C", "BTC-28MAR26-95000-P"}
+        # no double-counting: none of the block's own instruments leak
+        # into the large-prints list.
+        block_instruments = {leg["instrument_name"] for leg in block_legs}
+        assert not (block_instruments & large_print_instruments)
+
+        assert "BLOCK TRADES" in report
+        assert "BLOCK-281688" in report
+        assert "LARGE PRINTS" in report
+
+    def test_no_blocks_in_window_states_start_date_not_no_data(self, calculator):
+        """Gate exhaustiveness: trades exist but none share a
+        block_trade_id -- must render as an empty block section that
+        states the tracked-since date, not a generic "no data" message
+        (that message is reserved for the "trades list itself is empty"
+        case, already covered by test_block_trade_no_data)."""
+        trades = [
+            {
+                "instrument_name": "BTC-28MAR26-90000-C",
+                "amount": 1.0,
+                "price": 0.05,
+                "index_price": 90000,
+                "direction": "buy",
+                "timestamp": int(time.time() * 1000),
+                "iv": 65.0,
+            },
+        ]
+
+        report, structured = calculator.detect_block_trades(trades, notional_threshold=100_000)
+
+        assert structured["blocks"] == []
+        assert "tracked since" in report.lower()
+        from coding.core.analytics.thresholds import BLOCK_TRADE_ID_TRACKED_SINCE
+        assert BLOCK_TRADE_ID_TRACKED_SINCE in report
+
+    def test_block_with_single_observed_leg(self, calculator):
+        """Edge case: a block_trade_id appears on only one trade in the
+        fetched window (e.g. the group's other legs fell outside the
+        lookback window, or block_trade_leg_count genuinely is 1). Must
+        not crash and must report the leg counts it actually has."""
+        trades = [
+            {
+                "instrument_name": "BTC-28MAR26-90000-C",
+                "amount": 1.0,
+                "price": 0.05,
+                "index_price": 90000,
+                "direction": "buy",
+                "timestamp": int(time.time() * 1000),
+                "iv": 65.0,
+                "block_trade_id": "BLOCK-LONE",
+                "block_trade_leg_count": 1,
+            },
+        ]
+
+        report, structured = calculator.detect_block_trades(trades, notional_threshold=100_000)
+
+        assert len(structured["blocks"]) == 1
+        block = structured["blocks"][0]
+        assert block["leg_count"] == 1
+        assert block["observed_leg_count"] == 1
+        assert "BLOCK-LONE" in report
+
+    def test_block_with_missing_companion_fields(self, calculator):
+        """Edge case: block_trade_leg_count and combo_id are null/missing
+        on the legs (companion fields are not guaranteed). Must fall back
+        to the observed leg count and render without a combo name, not
+        raise."""
+        trades = [
+            {
+                "instrument_name": "BTC-28MAR26-90000-C",
+                "amount": 1.0,
+                "price": 0.05,
+                "index_price": 90000,
+                "direction": "buy",
+                "timestamp": int(time.time() * 1000),
+                "iv": 65.0,
+                "block_trade_id": "BLOCK-NOMETA",
+                "block_trade_leg_count": None,
+                "combo_id": None,
+            },
+            {
+                "instrument_name": "BTC-28MAR26-91000-P",
+                "amount": 1.0,
+                "price": 0.03,
+                "index_price": 90000,
+                "direction": "sell",
+                "timestamp": int(time.time() * 1000) + 1,
+                "iv": 60.0,
+                "block_trade_id": "BLOCK-NOMETA",
+            },
+        ]
+
+        report, structured = calculator.detect_block_trades(trades, notional_threshold=100_000)
+
+        assert len(structured["blocks"]) == 1
+        block = structured["blocks"][0]
+        assert block["observed_leg_count"] == 2
+        assert block["leg_count"] == 2  # falls back to observed count
+        assert block["combo_id"] is None
+        assert "BLOCK-NOMETA" in report
 
     def test_cross_asset_correlation(self, calculator):
         own_prices = _make_price_history(35, base_price=90000)

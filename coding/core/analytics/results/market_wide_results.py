@@ -313,12 +313,56 @@ class BlockTrade:
 
 
 @dataclass(frozen=True)
-class BlockTradesResult:
-    """Detected block trades (top 10 by notional)."""
+class Block:
+    """
+    One full block trade: every leg sharing a ``block_trade_id``, grouped
+    into a single row (institutional_metrics_spec.md section 9 / Migration
+    M2, Task D1) -- not one row per leg like the old notional-filter list.
 
-    trades: Tuple[BlockTrade, ...]  # top 10
+    Not backfillable: only trades fetched after migration 022 (see
+    ``BlockTradesResult.tracked_since``) can carry ``block_trade_id``.
+    """
+
+    block_trade_id: str
+    leg_count: int  # API-declared block_trade_leg_count when present and
+    # consistent across observed legs; falls back to observed_leg_count
+    # when the field is null/missing (gate exhaustiveness: companion
+    # fields are not guaranteed present on every leg).
+    observed_leg_count: int  # legs actually present in the fetched trade
+    # window -- may be less than leg_count if the window truncated the
+    # group (e.g. legs straddling the pagination boundary).
+    combo_id: Optional[str]  # combo structure name (e.g.
+    # "BTC-STRD-31JUL26-63000") when present on any leg; None otherwise.
+    combined_premium_usd: float  # sum(price * amount * index_price) over
+    # observed legs -- premium in USD, NOT the same quantity as
+    # BlockTrade.notional (amount * index_price, underlying notional).
+    total_amount: float
+    instruments: Tuple[str, ...]
+    timestamp: Optional[int]  # earliest observed leg timestamp, ms epoch
+
+
+@dataclass(frozen=True)
+class BlockTradesResult:
+    """
+    Market-wide block-trade section (institutional_metrics_spec.md section
+    9 / Migration M2, Task D1): ``blocks`` groups trades by
+    ``block_trade_id`` (one row per block); ``trades`` is the pre-existing
+    notional-filter list, relabelled "large prints" in the rendered report
+    since it measures large single-leg screen prints, not true blocks. A
+    trade belonging to a block is excluded from ``trades`` -- the two
+    lists never double-count the same trade.
+    """
+
+    trades: Tuple[BlockTrade, ...]  # large prints (screen prints, not
+    # blocks): top 10 by notional, EXCLUDING any trade with a
+    # block_trade_id (already counted in `blocks`).
     notional_threshold: float
     total_detected: int
+    blocks: Tuple[Block, ...] = ()
+    # institutional_metrics_spec.md section 9(c): "the block section must
+    # state its start date" -- history is not backfillable, so this is a
+    # fixed string (BLOCK_TRADE_ID_TRACKED_SINCE), not derived per-render.
+    tracked_since: str = ""
 
 
 @dataclass(frozen=True)

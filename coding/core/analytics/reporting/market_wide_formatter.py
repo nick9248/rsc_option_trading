@@ -378,17 +378,68 @@ def format_perpetual_funding_section(result: Optional[PerpetualFundingResult]) -
 
 
 def format_block_trades_section(result: Optional[BlockTradesResult]) -> str:
-    """Render the BLOCK TRADES section."""
-    threshold = result.notional_threshold if result is not None else 100_000.0
-    lines = [f"BLOCK TRADES (>${threshold:,.0f} notional)", _SUB_SEPARATOR]
+    """
+    Render the BLOCK TRADES section (institutional_metrics_spec.md section
+    9 / Migration M2, Task D1): one row per block (grouped by
+    ``block_trade_id``, showing leg count / combined premium / combo
+    structure), followed by a clearly separated LARGE PRINTS section for
+    the pre-existing notional-filter list -- explicitly labelled "screen
+    prints, not blocks" so the two are never confused. A trade that is
+    part of a block never also appears in large prints (no double
+    counting; enforced upstream by ``MarketWideCalculator.
+    detect_block_trades``).
 
+    History is not backfillable: block_trade_id was never persisted
+    before migration 022, so the block section states ``tracked_since``
+    as its effective start date rather than implying "no data" when the
+    window happens to contain zero blocks.
+    """
     if result is None:
-        lines.append("  No recent trade data available")
-        lines.append("")
+        lines = ["BLOCK TRADES", _SUB_SEPARATOR, "  No recent trade data available", ""]
         return "\n".join(lines)
 
+    lines = ["BLOCK TRADES", _SUB_SEPARATOR]
+    if result.tracked_since:
+        lines.append(
+            f"  Tracked since {result.tracked_since} "
+            "(block_trade_id was not captured before this date; history is not backfillable)"
+        )
+
+    if not result.blocks:
+        lines.append("  No blocks detected in recent activity")
+    else:
+        lines.append(
+            f"  {'Block ID':>16}  {'Legs':>4}  {'Structure':>24}  "
+            f"{'Premium (USD)':>16}  {'Time':>12}"
+        )
+        lines.append(
+            f"  {'--------':>16}  {'----':>4}  {'---------':>24}  "
+            f"{'-------------':>16}  {'----':>12}"
+        )
+        for block in result.blocks:
+            if block.timestamp:
+                time_str = datetime.fromtimestamp(block.timestamp / 1000).strftime("%H:%M:%S")
+            else:
+                time_str = "N/A"
+            structure = block.combo_id or "N/A"
+            leg_str = (
+                str(block.leg_count)
+                if block.leg_count == block.observed_leg_count
+                else f"{block.observed_leg_count}/{block.leg_count}"
+            )
+            lines.append(
+                f"  {block.block_trade_id:>16}  {leg_str:>4}  {structure:>24}  "
+                f"${block.combined_premium_usd:>15,.0f}  {time_str:>12}"
+            )
+    lines.append("")
+
+    lines.append(
+        f"LARGE PRINTS (screen prints, not blocks; >${result.notional_threshold:,.0f} notional)"
+    )
+    lines.append(_SUB_SEPARATOR)
+
     if not result.trades:
-        lines.append("  No block trades detected in recent activity")
+        lines.append("  No large prints detected in recent activity")
         lines.append("")
         return "\n".join(lines)
 

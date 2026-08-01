@@ -271,6 +271,38 @@ class TestCalculateBlockTrades:
         assert result is not None
         assert result.total_detected == 1
         assert result.trades[0].notional == 500_000.0
+        assert result.blocks == ()
+
+    def test_block_grouped_legs_produce_a_block_and_are_excluded_from_large_prints(self):
+        """institutional_metrics_spec.md section 9 / Migration M2 (Task D1):
+        legs sharing block_trade_id must be grouped into typed Block rows
+        and must not also appear in the large-prints (`trades`) tuple, even
+        when a leg's own notional clears the threshold."""
+        orchestrator = MarketWideOrchestrator(api=MagicMock())
+        trades = [
+            {"amount": 12.5, "price": 0.0008, "index_price": 62892.69,
+             "instrument_name": "BTC-1AUG26-63000-C", "direction": "buy",
+             "timestamp": 1785546525278, "iv": 13.35,
+             "block_trade_id": "BLOCK-282155", "block_trade_leg_count": 2,
+             "combo_id": "BTC-STRD-1AUG26-63000"},
+            {"amount": 12.5, "price": 0.0033, "index_price": 62892.69,
+             "instrument_name": "BTC-1AUG26-63000-P", "direction": "buy",
+             "timestamp": 1785546525279, "iv": 21.21,
+             "block_trade_id": "BLOCK-282155", "block_trade_leg_count": 2,
+             "combo_id": "BTC-STRD-1AUG26-63000"},
+        ]
+        result = orchestrator._calculate_block_trades(
+            _FakeAnalyzer(recent_trades=trades), _calc(), progress_callback=lambda m: None,
+        )
+        assert result is not None
+        assert len(result.blocks) == 1
+        block = result.blocks[0]
+        assert block.block_trade_id == "BLOCK-282155"
+        assert block.leg_count == 2
+        assert block.combo_id == "BTC-STRD-1AUG26-63000"
+        # no double-counting: block legs must not also show up as large prints
+        assert result.trades == ()
+        assert result.tracked_since != ""
 
 
 class TestCalculateCrossAssetCorrelation:

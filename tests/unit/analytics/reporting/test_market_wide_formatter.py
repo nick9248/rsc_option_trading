@@ -19,6 +19,7 @@ from coding.core.analytics.reporting.market_wide_formatter import (
     format_vrp_section,
 )
 from coding.core.analytics.results.market_wide_results import (
+    Block,
     BlockTrade,
     BlockTradesResult,
     CrossAssetCorrelationResult,
@@ -350,12 +351,23 @@ def test_block_trades_no_data():
 
 
 def test_block_trades_none_detected():
-    result = BlockTradesResult(trades=(), notional_threshold=100_000.0, total_detected=0)
+    """institutional_metrics_spec.md section 9 / Migration M2 (Task D1):
+    no blocks in the window is an empty section that states the
+    tracked-since date -- not a bare "no data" message (that message is
+    reserved for the None-result / no-recent-trades case above)."""
+    result = BlockTradesResult(
+        trades=(), notional_threshold=100_000.0, total_detected=0,
+        blocks=(), tracked_since="2026-08-02",
+    )
     text = format_block_trades_section(result)
-    assert "No block trades detected in recent activity" in text
+    assert "No blocks detected in recent activity" in text
+    assert "2026-08-02" in text
+    assert "No large prints detected in recent activity" in text
 
 
 def test_block_trades_rendered():
+    """`trades` (large prints) and `blocks` render as two clearly
+    separated, distinctly labelled sections."""
     result = BlockTradesResult(
         trades=(
             BlockTrade(
@@ -364,11 +376,36 @@ def test_block_trades_rendered():
             ),
         ),
         notional_threshold=100_000.0, total_detected=1,
+        blocks=(
+            Block(
+                block_trade_id="BLOCK-281688", leg_count=3, observed_leg_count=3,
+                combo_id="BTC-STRD-31JUL26-63000", combined_premium_usd=1234.5,
+                total_amount=37.5,
+                instruments=("BTC-31JUL26-63000-C", "BTC-31JUL26-63000-P", "BTC-31JUL26-64000-C"),
+                timestamp=1785546525278,
+            ),
+        ),
+        tracked_since="2026-08-02",
     )
     text = format_block_trades_section(result)
-    assert "BLOCK TRADES (>$100,000 notional)" in text
+
+    assert "BLOCK TRADES" in text
+    assert "BLOCK-281688" in text
+    assert "BTC-STRD-31JUL26-63000" in text
+    assert "2026-08-02" in text
+
+    assert "LARGE PRINTS" in text
+    assert "screen prints" in text.lower()
     assert "BTC-28FEB26-100000-C" in text
     assert "70.0%" in text
+
+    # the two sections are clearly separated: BLOCK TRADES precedes
+    # LARGE PRINTS, and the block's own instrument names never appear in
+    # the large-prints section (no double-counting rendered).
+    assert text.index("BLOCK TRADES") < text.index("LARGE PRINTS")
+    large_prints_text = text[text.index("LARGE PRINTS"):]
+    for instrument in result.blocks[0].instruments:
+        assert instrument not in large_prints_text
 
 
 # ---------------------------------------------------------------------------

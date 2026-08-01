@@ -177,4 +177,16 @@ Selling"; at or below this it is "Heavy Selling"."""
 # construction, each carried an independent 100_000 literal.
 BLOCK_TRADE_NOTIONAL_THRESHOLD_USD = 100_000.0
 """Minimum notional (contracts x index price) for a single trade to be
-surfaced as a "block trade" in the market-wide report."""
+surfaced in the "large prints" (screen prints, not blocks) list in the
+market-wide report."""
+
+# institutional_metrics_spec.md section 9 / Migration M2 (Task D1):
+# block_trade_id was added to historical_trades by migration 022, applied
+# 2026-08-02. History is NOT backfillable -- block_trade_id was never
+# captured before this date, so the block-trade report section must state
+# this as its effective start date rather than imply "no data".
+BLOCK_TRADE_ID_TRACKED_SINCE = "2026-08-02"
+"""Date migration 022 (block_trade_id + companion columns) was applied.
+Printed verbatim in the block-trade report section per the spec's
+"state its start date" requirement -- not derived from any row's
+timestamp, since no row before this date has the field."""
