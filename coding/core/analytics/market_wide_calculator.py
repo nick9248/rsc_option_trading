@@ -14,6 +14,7 @@ Computes metrics that span across all expirations:
 
 import logging
 import math
+import statistics
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -51,6 +52,12 @@ MINIMUM_PRICE_HISTORY_DAYS_FOR_VOL_CONE = 35
 # points: levels corr 0.9858 vs log-change corr 0.8922). This threshold is
 # on the CHANGE series (after differencing), not the level series.
 MINIMUM_CORRELATION_OBSERVATIONS = 10
+
+# institutional_metrics_spec.md section 8 (Task C9): "anomalously high"
+# forward vol vs. its immediate neighbouring calendar segments, in vol
+# points (percent, not decimal) — matches the spec's own ">5.0 vol pts"
+# language literally.
+FORWARD_VOL_EVENT_PREMIUM_THRESHOLD_PTS = 5.0
 
 # bugfix_spec.md Item 4 (F4.3) — the real get_funding_chart_data point shape
 # is {"data": [{"timestamp":..., "index_price":..., "interest_8h":...}, ...]}.
@@ -164,6 +171,136 @@ class MarketWideCalculator:
 
         lines.append("")
         return "\n".join(lines), structured
+
+    @staticmethod
+    def calculate_forward_vol_curve(
+        atm_by_expiry: Dict[str, Tuple[Optional[float], Optional[float]]],
+    ) -> Dict[str, Any]:
+        """
+        Forward/event vol between adjacent expiries
+        (institutional_metrics_spec.md section 8, Task C9): variance
+        additivity along the term structure (r = q = 0):
+
+            sigma_fwd^2(T1->T2) = (sigma2^2 * T2 - sigma1^2 * T1) / (T2 - T1)
+
+        Pure function -- reuses the caller's already-computed per-expiry
+        ATM IV (section 3's ``atm_iv_interp``) and time-to-expiry. Touches
+        no clock and recomputes no ATM IV itself, so it carries none of
+        this campaign's repeated naive-local-vs-UTC risk; the caller is
+        responsible for producing ``dte_days`` with a single, UTC-explicit
+        ``datetime.now(timezone.utc)`` read (see
+        ``OnChainAnalysisService._build_forward_vol_curve``), the same
+        clock convention ``_build_skew_term_structure`` already uses for
+        this same per-expiry data (so the two sections' DTE for a shared
+        expiry can never desync).
+
+        Args:
+            atm_by_expiry: ``{expiration_label: (atm_iv_pct, dte_days)}``.
+                ``atm_iv_pct``: ATM IV in percent (e.g. ``40.0`` for 40%),
+                    or ``None``/non-positive when unavailable for that
+                    expiry (thin/no-quote chain).
+                ``dte_days``: time-to-expiry in days, or any consistently-
+                    used unit -- the ratio in the formula cancels units
+                    (T8.3 unit-invariance acceptance test). ``None``/
+                    non-positive means unusable (already expired, or a
+                    parse failure upstream).
+
+        Judgment calls made here (not spelled out verbatim in the spec;
+        flagged for review in the task report):
+          - An expiry with a missing/non-positive ATM IV or DTE is
+            EXCLUDED from candidacy entirely -- it can never be either leg
+            of any bucket -- rather than only dropping the one pair that
+            touches it. A thin/stale middle expiry therefore does not
+            sever the term structure into two disconnected halves; the
+            two flanking valid expiries still form a bucket bridging the
+            gap. This is a narrower, per-PAIR concern for exactly-tied
+            DTE (T2 == T1): only THAT pair is skipped, since the tied
+            entry itself is still valid and can pair with its other
+            neighbour.
+          - "Event premium" compares a bucket only against its immediate
+            neighbour bucket(s) (previous/next in the output list, not
+            transitively further out), using whichever of those has a
+            non-None ``fwd_vol_pct`` (a neighbour with negative variance
+            is excluded from the median, never treated as 0). ``None``
+            when no neighbour has a usable value -- covers both the
+            explicit "only 2 expiries" spec case and the "both neighbours
+            negative-variance" case the spec does not enumerate directly.
+          - The >5.0 vol-pt threshold is applied to the signed
+            (bucket - median(neighbours)) difference, i.e. only
+            anomalously HIGH forward vol is flagged, matching the spec's
+            "anomalously high" framing -- not its absolute value.
+
+        Returns:
+            ``{"buckets": [...]}`` where each bucket dict has keys
+            ``from_expiry``, ``to_expiry``, ``t1_days``, ``t2_days``,
+            ``sigma1_pct``, ``sigma2_pct``, ``fwd_var`` (decimal²,
+            negative when the calendar-spread arb/data-error flag is
+            set), ``fwd_vol_pct`` (``None`` exactly when
+            ``negative_variance`` is ``True``), ``negative_variance``
+            (bool), ``event_premium`` (``Optional[float]``, vol pts), and
+            ``flags`` (``list[str]``, any of ``"NEGATIVE_VARIANCE"`` /
+            ``"EVENT_PREMIUM"``). Buckets are ordered by ``t1_days``
+            ascending. ``[]`` when fewer than 2 usable expiries remain
+            after filtering, or every adjacent pair among the survivors
+            ties on DTE.
+        """
+        valid: List[Tuple[str, float, float]] = []
+        for expiration, pair in atm_by_expiry.items():
+            atm_iv_pct, dte_days = pair
+            if atm_iv_pct is None or dte_days is None:
+                continue
+            if atm_iv_pct <= 0 or dte_days <= 0:
+                continue
+            valid.append((expiration, float(atm_iv_pct), float(dte_days)))
+        valid.sort(key=lambda row: row[2])
+
+        if len(valid) < 2:
+            return {"buckets": []}
+
+        buckets: List[Dict[str, Any]] = []
+        for (exp1, sigma1_pct, t1), (exp2, sigma2_pct, t2) in zip(valid, valid[1:]):
+            if t2 == t1:
+                # Edge case: division by zero — skip only THIS pair, the
+                # tied entry can still pair with its other neighbour.
+                continue
+
+            sigma1 = sigma1_pct / 100.0
+            sigma2 = sigma2_pct / 100.0
+            fwd_var = (sigma2 ** 2 * t2 - sigma1 ** 2 * t1) / (t2 - t1)
+            negative_variance = fwd_var < 0
+            fwd_vol_pct = None if negative_variance else math.sqrt(fwd_var) * 100.0
+
+            buckets.append({
+                "from_expiry": exp1,
+                "to_expiry": exp2,
+                "t1_days": t1,
+                "t2_days": t2,
+                "sigma1_pct": sigma1_pct,
+                "sigma2_pct": sigma2_pct,
+                "fwd_var": fwd_var,
+                "fwd_vol_pct": fwd_vol_pct,
+                "negative_variance": negative_variance,
+                "event_premium": None,  # filled below once the full bucket list exists
+                "flags": ["NEGATIVE_VARIANCE"] if negative_variance else [],
+            })
+
+        for i, bucket in enumerate(buckets):
+            if bucket["fwd_vol_pct"] is None:
+                continue
+            neighbour_vols = [
+                buckets[j]["fwd_vol_pct"]
+                for j in (i - 1, i + 1)
+                if 0 <= j < len(buckets) and buckets[j]["fwd_vol_pct"] is not None
+            ]
+            if not neighbour_vols:
+                continue
+            median_neighbour = statistics.median(neighbour_vols)
+            premium = bucket["fwd_vol_pct"] - median_neighbour
+            bucket["event_premium"] = premium
+            if premium > FORWARD_VOL_EVENT_PREMIUM_THRESHOLD_PTS:
+                bucket["flags"].append("EVENT_PREMIUM")
+
+        return {"buckets": buckets}
 
     def calculate_futures_basis(
         self,
