@@ -157,6 +157,15 @@ class OnChainAnalysisResult:
     # format_delta_flow_section.
     delta_flow_buckets: Tuple[FlowBucket, ...] = ()
     delta_flow_lookback_hours: float = 24.0
+    # Review fix (Important #4): coverage/recency signal -- how many
+    # hourly "ALL" rows are actually present in the window
+    # (DatabaseRepository.get_delta_flow_coverage), and the most recently
+    # persisted hour when it is stale (more than
+    # OnChainAnalysisService._DELTA_FLOW_STALENESS_THRESHOLD_HOURS behind
+    # "now"), else None. Mirrors normalized_metrics_stale_since's
+    # convention above.
+    delta_flow_hours_present: int = 0
+    delta_flow_stale_since: Optional[datetime] = None
 
     def bundle(self, expiration: str) -> Optional[ExpirationBundle]:
         """Return the ``ExpirationBundle`` for ``expiration``, or ``None`` if absent."""

@@ -6,8 +6,19 @@ Renders the signed directional (HIRO) flow and premium (Decision D8:
 signed delta is the PRIMARY metric) side by side with the unsigned gross
 |delta| hedging-impact magnitude -- both are always shown together, never
 just one, per the brief's scope item 3.
+
+Review fix (Minor #3): uses the ASCII label "Delta" rather than the U+0394
+"Δ" character in rendered output -- this machine's default console codec
+is cp1252, which raises ``UnicodeEncodeError`` on that character. The
+report is always written to files with explicit ``encoding="utf-8"``
+(``on_chain_analysis_service.py``'s report-save path), so the Unicode
+character itself was never unsafe for the FILE -- but any caller that
+prints this string straight to a cp1252 console (a very real path: ad hoc
+debugging, some log handlers) would crash. ASCII-safe wins with no loss of
+information.
 """
 
+from datetime import datetime
 from typing import Optional, Sequence
 
 from coding.core.analytics.results.delta_flow_results import FlowBucket
@@ -25,7 +36,7 @@ def _format_lookback_label(lookback_hours: float) -> str:
 def _format_row(label: str, bucket: FlowBucket) -> str:
     return (
         f"{label:<16}{bucket.hiro_usd:>+20,.0f}{bucket.premium_usd:>+16,.0f}"
-        f"{bucket.gross_delta_usd:>+22,.0f}"
+        f"{bucket.gross_delta_usd:>+24,.0f}"
     )
 
 
@@ -33,7 +44,12 @@ def _find_total(buckets: Sequence[FlowBucket]) -> Optional[FlowBucket]:
     return next((b for b in buckets if b.expiration == _ALL_KEY), None)
 
 
-def format_delta_flow_section(buckets: Sequence[FlowBucket], lookback_hours: float) -> str:
+def format_delta_flow_section(
+    buckets: Sequence[FlowBucket],
+    lookback_hours: float,
+    hours_present: int = 0,
+    stale_since: Optional[datetime] = None,
+) -> str:
     """
     Render the DELTA-ADJUSTED FLOW section.
 
@@ -44,6 +60,19 @@ def format_delta_flow_section(buckets: Sequence[FlowBucket], lookback_hours: flo
             expiration string.
         lookback_hours: Window length in hours (the report caller's SUM
             window over ``flow_delta_hourly``, typically 24).
+        hours_present: Review fix (Important #4) -- how many hourly "ALL"
+            rows actually exist in the window (``DatabaseRepository.
+            get_delta_flow_coverage``). Always rendered as a "Coverage:"
+            line, distinct from the staleness note below -- a currency
+            whose feature just shipped and has only accumulated a few
+            hours of history is informative to disclose even when the
+            daemon is NOT currently lagging.
+        stale_since: Review fix (Important #4) -- the most recently
+            persisted hour, set ONLY when it is more than
+            ``OnChainAnalysisService._DELTA_FLOW_STALENESS_THRESHOLD_HOURS``
+            behind "now" (mirrors ``format_historical_context_section``'s
+            "STALE: history ends {ts}" convention/placement). ``None``
+            means fresh -- no staleness note is printed.
 
     Returns "" when ``buckets`` is empty, or when it has no ``"ALL"`` entry
     (a per-expiration-only shape the report cannot trust to have a total) --
@@ -67,9 +96,16 @@ def format_delta_flow_section(buckets: Sequence[FlowBucket], lookback_hours: flo
     lines = [
         f"DELTA-ADJUSTED FLOW ({_format_lookback_label(lookback_hours)}, taker-signed, USD notional)",
         _SEPARATOR,
-        f"{'':<16}{'Directional (HIRO)':>20}{'Premium':>16}{'Gross |Δ| notional':>22}",
-        _format_row("Total", total),
     ]
+
+    if stale_since is not None:
+        lines.append(f"STALE: most recent persisted hour {stale_since.strftime('%Y-%m-%d %H:%M')}")
+
+    lookback_label = _format_lookback_label(lookback_hours)
+    lines.append(f"Coverage: {hours_present}/{lookback_label} hourly rows persisted")
+
+    lines.append(f"{'':<16}{'Directional (HIRO)':>20}{'Premium':>16}{'Gross |Delta| notional':>24}")
+    lines.append(_format_row("Total", total))
     for bucket in per_expiration:
         lines.append(_format_row(f"  {bucket.expiration}", bucket))
 

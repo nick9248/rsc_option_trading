@@ -670,6 +670,54 @@ class DatabaseRepository:
                 results.append(row_dict)
             return results
 
+    def get_delta_flow_coverage(
+        self,
+        currency: str,
+        since: datetime,
+    ) -> Dict[str, Any]:
+        """
+        Coverage/recency signal for ``flow_delta_hourly`` (institutional_
+        metrics_spec.md section 6 / task C7 review fix, Important #4 --
+        task-C7-brief.md explicitly named "a currency with a stale/lagging
+        daemon" as a case to handle, and the original implementation
+        didn't). ``get_delta_flow_summary``'s SUMs alone cannot disclose a
+        gap: a daemon down for 12h still produces a confident-looking
+        total over whatever rows DID land, with the report header still
+        claiming the full lookback window.
+
+        Counts ONLY ``expiration == 'ALL'`` rows -- ``ProspectiveCollector.
+        _persist_delta_flow``'s always-write-ALL invariant guarantees
+        exactly one such row per hour the daemon actually ran, so this is
+        a clean "how many of the expected hours are present" signal.
+        Counting per-expiration rows too would overstate presence
+        (multiple rows can exist for the same hour, one per traded
+        expiration).
+
+        Args:
+            currency: Currency symbol (BTC or ETH).
+            since: Window start (inclusive) -- callers pass the SAME value
+                given to ``get_delta_flow_summary``, so both describe the
+                same window.
+
+        Returns:
+            Dict with ``hours_present`` (int, 0 if none) and
+            ``max_snapshot_hour`` (the most recently persisted hour, or
+            ``None`` if no rows at all since ``since``).
+        """
+        query = """
+            SELECT COUNT(*), MAX(snapshot_hour)
+            FROM flow_delta_hourly
+            WHERE currency = %s AND expiration = 'ALL' AND snapshot_hour >= %s
+        """
+
+        with self._db_cursor() as cursor:
+            cursor.execute(query, (currency, since))
+            row = cursor.fetchone()
+
+        hours_present = int(row[0]) if row and row[0] is not None else 0
+        max_snapshot_hour = row[1] if row else None
+        return {"hours_present": hours_present, "max_snapshot_hour": max_snapshot_hour}
+
     def get_trade_hour_coverage(
         self,
         currency: str,

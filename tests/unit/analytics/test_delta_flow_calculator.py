@@ -156,6 +156,37 @@ class TestEnrichTradeDegenerateCases:
         calc = DeltaFlowCalculator()
         assert calc.enrich_trade(_valid_trade(strike=None)) is None
 
+    @pytest.mark.parametrize("bad_strike", [0, -1, -100.0])
+    def test_strike_zero_or_negative_is_skipped(self, bad_strike):
+        """Review fix, Important #5: strike <= 0 is a second, previously-
+        unguarded door into the same 'silent bad-input -> plausible-looking
+        clean zero' failure class as invalid iv. BlackScholesCalculator.
+        calculate_greeks has a bare except that catches the resulting
+        math.log(spot/strike) failure and returns all-zero greeks instead
+        of raising -- without this explicit gate, enrich_trade would
+        return an EnrichedTrade with delta=0.0/hiro_usd=0.0 (indistinguishable
+        from a real zero-delta trade) instead of skipping."""
+        calc = DeltaFlowCalculator()
+        assert calc.enrich_trade(_valid_trade(strike=bad_strike)) is None
+
+    def test_strike_zero_never_reaches_black_scholes_as_a_fabricated_zero_delta(self):
+        """Direct proof the gate fires BEFORE calculate_greeks's bare
+        except can silently produce a plausible-looking zero -- if this
+        gate were missing, calculate_greeks(strike_price=0, ...) would
+        raise inside math.log(spot/0) and its own except would swallow it,
+        returning delta=0.0 as if that were a legitimate answer."""
+        calc = DeltaFlowCalculator()
+        # Sanity: confirm calculate_greeks itself DOES silently swallow a
+        # zero-strike failure (the underlying hazard this gate closes).
+        swallowed = calc.black_scholes.calculate_greeks(
+            spot_price=_SPOT, strike_price=0.0, time_to_expiry=1.0,
+            implied_volatility=0.8, option_type="call",
+        )
+        assert swallowed["delta"] == 0.0  # confirms the silent-swallow hazard exists
+
+        result = calc.enrich_trade(_valid_trade(strike=0.0))
+        assert result is None  # enrich_trade must never reach that swallow path
+
     @pytest.mark.parametrize("bad_option_type", [None, "", "X", "call"])
     def test_invalid_option_type_is_skipped(self, bad_option_type):
         calc = DeltaFlowCalculator()
@@ -189,6 +220,23 @@ class TestEnrichTradeDegenerateCases:
     def test_missing_trade_timestamp_is_skipped(self):
         calc = DeltaFlowCalculator()
         assert calc.enrich_trade(_valid_trade(trade_timestamp=None)) is None
+
+    def test_null_price_is_skipped(self):
+        """Review fix, Minor #1: a None price must be skipped, never
+        coerced to 0.0 -- a silent coercion would understate premium_usd
+        while leaving skipped_count unchanged, breaking the invariant that
+        trade_count/skipped_count unambiguously describes every column in
+        a FlowBucket row."""
+        calc = DeltaFlowCalculator()
+        assert calc.enrich_trade(_valid_trade(price=None)) is None
+
+    def test_zero_price_is_not_skipped(self):
+        """price == 0.0 is a legitimately possible value (a worthless
+        option) -- distinct from a MISSING value. Only None is gated."""
+        calc = DeltaFlowCalculator()
+        enriched = calc.enrich_trade(_valid_trade(price=0.0))
+        assert enriched is not None
+        assert enriched.premium_usd == 0.0
 
 
 class TestEnrichTradeExpiredOption:

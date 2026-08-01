@@ -4,6 +4,8 @@ Tests for format_delta_flow_section (institutional_metrics_spec.md section
 Decision D8).
 """
 
+from datetime import datetime
+
 from coding.core.analytics.reporting.delta_flow_formatter import format_delta_flow_section
 from coding.core.analytics.results.delta_flow_results import FlowBucket
 
@@ -101,3 +103,61 @@ class TestFormatDeltaFlowSection:
         buckets = (_bucket("ALL"),)
         text = format_delta_flow_section(buckets, lookback_hours=1.5)
         assert "1.5h" in text
+
+    def test_no_delta_unicode_character_in_output(self):
+        """Review fix, Minor #3: this machine's default console codec is
+        cp1252, which raises UnicodeEncodeError on U+0394 (Δ). ASCII-safe
+        'Delta' label carries the same information with no console-crash
+        risk for any caller that prints this string directly."""
+        buckets = (_bucket("ALL"),)
+        text = format_delta_flow_section(buckets, lookback_hours=24.0)
+
+        assert "Δ" not in text
+        assert "Delta" in text
+        text.encode("cp1252")  # must not raise
+
+    def test_coverage_line_always_present(self):
+        buckets = (_bucket("ALL"),)
+        text = format_delta_flow_section(buckets, lookback_hours=24.0, hours_present=24)
+        assert "Coverage: 24/24h hourly rows persisted" in text
+
+    def test_coverage_line_present_even_when_thin(self):
+        """A currency whose feature just shipped and has only accumulated
+        a few hours of history -- informative to disclose even though the
+        daemon is NOT lagging (distinct from the staleness note)."""
+        buckets = (_bucket("ALL"),)
+        text = format_delta_flow_section(buckets, lookback_hours=24.0, hours_present=3)
+        assert "Coverage: 3/24h hourly rows persisted" in text
+        assert "STALE" not in text
+
+    def test_no_staleness_note_when_stale_since_is_none(self):
+        buckets = (_bucket("ALL"),)
+        text = format_delta_flow_section(buckets, lookback_hours=24.0, hours_present=24, stale_since=None)
+        assert "STALE" not in text
+
+    def test_staleness_note_rendered_when_stale_since_given(self):
+        """A daemon down for 12h: hours_present alone (a count) doesn't
+        disclose HOW STALE -- the explicit STALE line, mirroring
+        format_historical_context_section's 'STALE: history ends {ts}'
+        convention, must name the actual gap."""
+        stale_ts = datetime(2026, 7, 31, 2, 0, 0)
+        buckets = (_bucket("ALL"),)
+        text = format_delta_flow_section(
+            buckets, lookback_hours=24.0, hours_present=12, stale_since=stale_ts,
+        )
+
+        assert "STALE" in text
+        assert "2026-07-31 02:00" in text
+        assert "Coverage: 12/24h hourly rows persisted" in text
+
+    def test_staleness_note_appears_before_the_data_table(self):
+        """Mirrors historical context's placement: the disclosure comes
+        right after the header, before any numbers, so a reader can't
+        miss it by skimming straight to the totals."""
+        stale_ts = datetime(2026, 7, 31, 2, 0, 0)
+        buckets = (_bucket("ALL"),)
+        text = format_delta_flow_section(
+            buckets, lookback_hours=24.0, hours_present=12, stale_since=stale_ts,
+        )
+
+        assert text.index("STALE") < text.index("Total")

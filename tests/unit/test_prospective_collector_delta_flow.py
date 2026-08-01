@@ -8,7 +8,7 @@ a _collect_currency wiring test) plus the isolation guarantees
 test_prospective_collector_volatility_reconstruction.py established for a
 similarly-positioned per-currency step.
 """
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import MagicMock
 
 from coding.core.analytics.results.delta_flow_results import FlowBucket
@@ -56,6 +56,12 @@ class TestPersistDeltaFlow:
             assert call.kwargs["snapshot_hour"] == hour
 
     def test_fetches_trades_for_the_exact_hour_window(self):
+        """``hour`` here (2026-07-31) is a fixed, already-elapsed past hour
+        relative to real wall-clock ``now`` at test-run time -- exercises
+        the "explicit past hour, already closed" branch of
+        _resolve_delta_flow_target_hour, so the window equals ``hour``
+        unchanged (see TestJustClosedHourResolution below for the
+        in-progress-hour branch)."""
         collector = _make_collector()
         collector.repo.get_trades_for_delta_flow.return_value = []
         collector._delta_flow_calculator.compute_hourly_buckets.return_value = {}
@@ -128,6 +134,94 @@ class TestPersistDeltaFlow:
         assert result["total_trade_count"] == 7
         assert result["total_skipped_count"] == 1
         assert result["expirations_written"] == 1
+
+
+class TestJustClosedHourResolution:
+    """
+    Review fix, Important #1: the daemon must never aggregate/persist for
+    an hour that has not yet fully elapsed. The original test suite only
+    exercised _persist_delta_flow by replaying an already-PAST hour
+    (test_fetches_trades_for_the_exact_hour_window above) -- that scenario
+    structurally cannot catch this bug, since a past hour is already
+    closed by the time it's queried. These tests specifically call
+    _persist_delta_flow DURING the hour it nominally covers (the exact
+    default `collect_hour` passes every 30-minute daemon cycle), which is
+    the scenario that was broken: minutes 39-59 of every hour were
+    permanently missing because the daemon's last in-hour run persisted an
+    incomplete aggregate via ON CONFLICT DO UPDATE, and no later run ever
+    revisited that hour.
+    """
+
+    def test_current_in_progress_hour_persists_the_just_closed_hour_instead(self):
+        collector = _make_collector()
+        collector.repo.get_trades_for_delta_flow.return_value = []
+        collector._delta_flow_calculator.compute_hourly_buckets.return_value = {}
+
+        # The exact value collect_hour's default computes every daemon cycle.
+        current_hour = datetime.now().replace(minute=0, second=0, microsecond=0)
+        collector._persist_delta_flow("BTC", current_hour)
+
+        expected_target = current_hour - timedelta(hours=1)
+
+        call_args = collector.repo.get_trades_for_delta_flow.call_args
+        _currency, start_ms, end_ms = call_args[0]
+        assert start_ms == int(expected_target.timestamp() * 1000)
+        assert end_ms == int(expected_target.timestamp() * 1000) + 3600 * 1000
+        # Never the in-progress hour itself.
+        assert start_ms != int(current_hour.timestamp() * 1000)
+
+        save_call = collector.repo.save_delta_flow_hourly.call_args
+        assert save_call.kwargs["snapshot_hour"] == expected_target
+
+    def test_hour_strictly_after_current_hour_also_resolves_to_just_closed(self):
+        """Defensive: an hour that is somehow in the future (should never
+        happen in practice) must not be treated as already-closed either --
+        falls back to the just-closed hour, same as the in-progress case."""
+        collector = _make_collector()
+        collector.repo.get_trades_for_delta_flow.return_value = []
+        collector._delta_flow_calculator.compute_hourly_buckets.return_value = {}
+
+        current_hour = datetime.now().replace(minute=0, second=0, microsecond=0)
+        future_hour = current_hour + timedelta(hours=3)
+        collector._persist_delta_flow("BTC", future_hour)
+
+        expected_target = future_hour - timedelta(hours=1)
+        save_call = collector.repo.save_delta_flow_hourly.call_args
+        assert save_call.kwargs["snapshot_hour"] == expected_target
+
+    def test_explicit_past_hour_backfill_persists_that_hour_directly(self):
+        """An hour explicitly passed by a caller (e.g. _backfill_gap's
+        per-hour loop) that already precedes the current hour is already
+        fully elapsed -- persist it as given, not hour-1 (which would
+        create an off-by-one mismatch against the SAME backfill call's
+        hourly_snapshots/onchain_analysis_snapshots rows)."""
+        collector = _make_collector()
+        collector.repo.get_trades_for_delta_flow.return_value = []
+        collector._delta_flow_calculator.compute_hourly_buckets.return_value = {}
+
+        past_hour = (datetime.now() - timedelta(hours=5)).replace(minute=0, second=0, microsecond=0)
+        collector._persist_delta_flow("BTC", past_hour)
+
+        call_args = collector.repo.get_trades_for_delta_flow.call_args
+        _currency, start_ms, _end_ms = call_args[0]
+        assert start_ms == int(past_hour.timestamp() * 1000)
+
+        save_call = collector.repo.save_delta_flow_hourly.call_args
+        assert save_call.kwargs["snapshot_hour"] == past_hour
+
+    def test_resolve_helper_directly_current_hour(self):
+        from coding.service.data_collection.prospective_collector import ProspectiveCollector
+
+        current_hour = datetime.now().replace(minute=0, second=0, microsecond=0)
+        resolved = ProspectiveCollector._resolve_delta_flow_target_hour(current_hour)
+        assert resolved == current_hour - timedelta(hours=1)
+
+    def test_resolve_helper_directly_past_hour(self):
+        from coding.service.data_collection.prospective_collector import ProspectiveCollector
+
+        past_hour = (datetime.now() - timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
+        resolved = ProspectiveCollector._resolve_delta_flow_target_hour(past_hour)
+        assert resolved == past_hour
 
 
 class TestCollectCurrencyWiring:

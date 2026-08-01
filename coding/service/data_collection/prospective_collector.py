@@ -396,9 +396,24 @@ class ProspectiveCollector:
     def _persist_delta_flow(self, currency: str, hour: datetime) -> Dict[str, Any]:
         """
         Compute + persist signed delta-weighted taker flow (institutional_
-        metrics_spec.md section 6 / infra_spec.md section 2 -- task C7) for
-        the given hour: one row per expiration that actually had a trade
-        this hour, plus a currency-level ``"ALL"`` rollup.
+        metrics_spec.md section 6 / infra_spec.md section 2 -- task C7):
+        one row per expiration that actually had a trade in the resolved
+        target hour, plus a currency-level ``"ALL"`` rollup.
+
+        Review fix (Important #1): ``hour`` is resolved to the just-closed
+        hour via ``_resolve_delta_flow_target_hour`` before use -- NEVER
+        used directly as the aggregation window. ``hour`` as received here
+        is the collection cycle's CURRENT hour bucket by convention
+        (``collect_hour``'s default is ``datetime.now().replace(minute=0,
+        second=0, microsecond=0)``), which is correct for every OTHER
+        per-currency step (point-in-time snapshots -- valid mid-hour) but
+        wrong for this one: ``flow_delta_hourly`` is a TRUE aggregate over
+        a complete ``[hour, hour+1)`` window, and the daemon runs every 30
+        minutes (``unified_scheduler.py``), so persisting directly against
+        the in-progress ``hour`` would upsert a still-incomplete aggregate
+        on the last in-hour run before the hour rolls over -- and no later
+        run ever revisits that hour to complete it. See
+        ``_resolve_delta_flow_target_hour``'s docstring for the full fix.
 
         The ``"ALL"`` row is written even when zero trades exist for this
         currency/hour (an all-zero, ``trade_count == 0`` bucket) --
@@ -422,9 +437,9 @@ class ProspectiveCollector:
 
         Args:
             currency: Currency symbol (BTC or ETH).
-            hour: Hour bucket start (matches the ``hour`` value already
-                used for ``hourly_snapshots``/``onchain_analysis_snapshots``
-                elsewhere in this collector).
+            hour: The collection cycle's hour bucket (same value every
+                other per-currency step receives) -- resolved to the
+                just-closed hour internally before use.
 
         Returns:
             Dict with ``expirations_written``, ``total_trade_count``,
@@ -433,7 +448,8 @@ class ProspectiveCollector:
             ``_fetch_dvol``/``_fetch_funding_rate``'s existing "log only"
             convention for this class of per-currency step).
         """
-        hour_start_ms = int(hour.timestamp() * 1000)
+        target_hour = self._resolve_delta_flow_target_hour(hour)
+        hour_start_ms = int(target_hour.timestamp() * 1000)
         hour_end_ms = hour_start_ms + 3600 * 1000
 
         trades = self.repo.get_trades_for_delta_flow(currency, hour_start_ms, hour_end_ms)
@@ -448,7 +464,7 @@ class ProspectiveCollector:
             )
 
         for bucket in buckets.values():
-            self.repo.save_delta_flow_hourly(currency=currency, snapshot_hour=hour, bucket=bucket)
+            self.repo.save_delta_flow_hourly(currency=currency, snapshot_hour=target_hour, bucket=bucket)
 
         all_bucket = buckets["ALL"]
         return {
@@ -456,6 +472,53 @@ class ProspectiveCollector:
             "total_trade_count": all_bucket.trade_count,
             "total_skipped_count": all_bucket.skipped_count,
         }
+
+    @staticmethod
+    def _resolve_delta_flow_target_hour(hour: datetime) -> datetime:
+        """
+        Resolve the collection cycle's ``hour`` to the hour
+        ``flow_delta_hourly`` should actually persist for (review fix,
+        Important #1): a TRUE hourly aggregate must never be computed for
+        an hour that has not yet fully elapsed.
+
+        ``hour`` has a real dual meaning across ``collect_hour`` callers:
+
+        - The default, no-argument call (every 30-minute daemon cycle,
+          ``unified_scheduler.py``/``collection_daemon.py``) passes the
+          CURRENT, in-progress hour (``datetime.now().replace(minute=0,
+          second=0, microsecond=0)``) -- correct for every other
+          per-currency step's point-in-time snapshot, wrong for an hourly
+          SUM. Resolves to ``hour - timedelta(hours=1)``, the just-closed
+          hour, per institutional_metrics_spec.md section 6(c)'s explicit
+          "computing only the just-closed hour."
+        - An explicitly-passed ``hour`` (``_backfill_gap``'s per-hour
+          loop) is always an ALREADY-ELAPSED past hour -- backfill only
+          ever fills gaps that already occurred, so ``hour`` itself is
+          already closed by the time this runs. Resolves to ``hour``
+          unchanged: subtracting another hour would create an off-by-one
+          mismatch against the SAME backfill call's ``hourly_snapshots``/
+          ``onchain_analysis_snapshots`` rows, which use ``hour`` directly.
+
+        Both branches compare against ``datetime.now()`` on the SAME
+        naive-local basis ``hour`` itself is built on everywhere else in
+        this collector -- self-consistent, and distinct from the
+        on_chain_analysis_service.py:842 bug (Important #2): both sides of
+        THIS comparison are naive-local, neither is a UTC-labeled DB
+        column.
+
+        Args:
+            hour: The collection cycle's hour bucket, as received by
+                ``_persist_delta_flow``.
+
+        Returns:
+            The hour to actually query/persist against -- guaranteed to
+            have fully elapsed by wall-clock "now" at the moment this is
+            called.
+        """
+        current_hour = datetime.now().replace(minute=0, second=0, microsecond=0)
+        if hour >= current_hour:
+            return hour - timedelta(hours=1)
+        return hour
 
     def _fetch_trades(
         self,

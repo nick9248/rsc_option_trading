@@ -490,6 +490,8 @@ class OnChainReportFormatter:
         # convention as historical context above.
         delta_flow_text = format_delta_flow_section(
             result.delta_flow_buckets, result.delta_flow_lookback_hours,
+            hours_present=result.delta_flow_hours_present,
+            stale_since=result.delta_flow_stale_since,
         )
         if delta_flow_text:
             blocks.append(delta_flow_text)

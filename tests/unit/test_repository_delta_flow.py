@@ -24,10 +24,11 @@ def _make_repo():
 
 
 class FakeCursor:
-    def __init__(self, fetchall_result=None):
+    def __init__(self, fetchall_result=None, fetchone_result=None):
         self.captured_queries = []
         self.captured_params = []
         self._fetchall_result = fetchall_result if fetchall_result is not None else []
+        self._fetchone_result = fetchone_result
 
     def execute(self, query, params):
         self.captured_queries.append(query)
@@ -35,6 +36,9 @@ class FakeCursor:
 
     def fetchall(self):
         return self._fetchall_result
+
+    def fetchone(self):
+        return self._fetchone_result
 
 
 def _patched_cursor(repo, cursor):
@@ -198,3 +202,43 @@ class TestGetDeltaFlowSummary:
             result = repo.get_delta_flow_summary(currency="BTC", since=since)
 
         assert result == []
+
+
+class TestGetDeltaFlowCoverage:
+    """Review fix, Important #4 -- coverage/recency signal so the report
+    can disclose a stale/lagging daemon instead of a confident-looking
+    total over an incomplete window."""
+
+    def test_query_filters_currency_all_expiration_and_since(self):
+        repo = _make_repo()
+        cursor = FakeCursor(fetchone_result=(0, None))
+        since = datetime(2026, 7, 30, 14, 0, 0)
+
+        with _patched_cursor(repo, cursor):
+            repo.get_delta_flow_coverage(currency="BTC", since=since)
+
+        assert len(cursor.captured_queries) == 1
+        query = cursor.captured_queries[0]
+        assert "expiration = 'ALL'" in query
+        assert cursor.captured_params[0] == ("BTC", since)
+
+    def test_returns_hours_present_and_max_snapshot_hour(self):
+        repo = _make_repo()
+        max_hour = datetime(2026, 7, 31, 10, 0, 0)
+        cursor = FakeCursor(fetchone_result=(24, max_hour))
+        since = datetime(2026, 7, 30, 14, 0, 0)
+
+        with _patched_cursor(repo, cursor):
+            result = repo.get_delta_flow_coverage(currency="BTC", since=since)
+
+        assert result == {"hours_present": 24, "max_snapshot_hour": max_hour}
+
+    def test_no_rows_returns_zero_hours_and_none_max(self):
+        repo = _make_repo()
+        cursor = FakeCursor(fetchone_result=(0, None))
+        since = datetime(2026, 7, 30, 14, 0, 0)
+
+        with _patched_cursor(repo, cursor):
+            result = repo.get_delta_flow_coverage(currency="BTC", since=since)
+
+        assert result == {"hours_present": 0, "max_snapshot_hour": None}

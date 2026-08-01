@@ -304,12 +304,16 @@ class OnChainAnalysisService:
         # recomputed from raw trades here. Additive, same dataclasses.
         # replace pattern as normalized_metrics above.
         progress("Calculating delta-adjusted flow summary...")
-        delta_flow_buckets, delta_flow_lookback_hours = self._build_delta_flow_summary(currency)
+        delta_flow_buckets, delta_flow_lookback_hours, delta_flow_hours_present, delta_flow_stale_since = (
+            self._build_delta_flow_summary(currency)
+        )
         if delta_flow_buckets:
             result = dataclasses.replace(
                 result,
                 delta_flow_buckets=delta_flow_buckets,
                 delta_flow_lookback_hours=delta_flow_lookback_hours,
+                delta_flow_hours_present=delta_flow_hours_present,
+                delta_flow_stale_since=delta_flow_stale_since,
             )
 
         # Generate report (includes GEX/DEX and flow) — rendered directly
@@ -817,7 +821,17 @@ class OnChainAnalysisService:
     # lookback even though they read different tables.
     _DELTA_FLOW_LOOKBACK_HOURS = 24.0
 
-    def _build_delta_flow_summary(self, currency: str) -> Tuple[Tuple[FlowBucket, ...], float]:
+    # Review fix (Important #4): same threshold value as
+    # _STALENESS_THRESHOLD_HOURS (Task C1's historical-context pattern) --
+    # a currency whose most recently persisted flow_delta_hourly row is
+    # more than this many hours behind "now" gets an explicit staleness
+    # note instead of a confident-looking total silently computed over an
+    # incomplete window (e.g. a daemon down for 12h).
+    _DELTA_FLOW_STALENESS_THRESHOLD_HOURS = 3
+
+    def _build_delta_flow_summary(
+        self, currency: str
+    ) -> Tuple[Tuple[FlowBucket, ...], float, int, Optional[datetime]]:
         """
         Sum the persisted ``flow_delta_hourly`` rows over the trailing
         ``_DELTA_FLOW_LOOKBACK_HOURS`` for ``currency`` (institutional_
@@ -826,8 +840,21 @@ class OnChainAnalysisService:
         BS delta from raw trades at report time (the daemon already did
         that once, hourly, per ``ProspectiveCollector._persist_delta_flow``).
 
-        Returns ``((), _DELTA_FLOW_LOOKBACK_HOURS)`` when there is no
-        repository, or when the window has no rows yet (feature just
+        Review fix (Important #4): also returns ``hours_present`` and
+        ``stale_since`` (via ``DatabaseRepository.get_delta_flow_coverage``)
+        so the report can disclose a stale/lagging daemon -- task-C7-
+        brief.md explicitly named this case, and the SUM alone cannot
+        surface it: a daemon down for 12h still produces a confident-
+        looking total over whatever rows DID land, with the header still
+        claiming the full lookback window. Mirrors ``_compute_historical_
+        context_staleness``'s pattern (Task C1): ``stale_since`` is the
+        most recently persisted hour, but ONLY when it is more than
+        ``_DELTA_FLOW_STALENESS_THRESHOLD_HOURS`` behind "now" -- ``None``
+        when fresh (or when there are no rows at all, since the empty-
+        buckets case already suppresses the whole section).
+
+        Returns ``((), _DELTA_FLOW_LOOKBACK_HOURS, 0, None)`` when there is
+        no repository, or when the window has no rows yet (feature just
         shipped, or the daemon hasn't run in this window, or a real DB
         error) -- ``format_delta_flow_section`` renders "" for an empty
         buckets tuple, matching the codebase's "no data -> no section"
@@ -837,17 +864,42 @@ class OnChainAnalysisService:
         come back from ``get_delta_flow_summary`` and IS rendered.
         """
         if self.repository is None:
-            return (), self._DELTA_FLOW_LOOKBACK_HOURS
+            return (), self._DELTA_FLOW_LOOKBACK_HOURS, 0, None
 
-        since = datetime.now() - timedelta(hours=self._DELTA_FLOW_LOOKBACK_HOURS)
+        # Review fix (Important #2): flow_delta_hourly.snapshot_hour is
+        # written by ProspectiveCollector using naive-UTC hour buckets (the
+        # VPS's OS and DB timezone are both confirmed UTC -- see
+        # task-C7-report.md's Important #2 writeup). A naive
+        # datetime.now() here is LOCAL time (this machine is Europe/Berlin,
+        # UTC+1/+2) -- comparing it directly against a UTC-labeled column
+        # silently shrinks the "24h" window to 22-23h, exactly the same bug
+        # class c4bff4e already fixed for the BS-fallback greeks path.
+        # Naive-UTC on both sides, matching that fix's pattern verbatim.
+        now_utc_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        since = now_utc_naive - timedelta(hours=self._DELTA_FLOW_LOOKBACK_HOURS)
+
         try:
             rows = self.repository.get_delta_flow_summary(currency=currency, since=since)
         except Exception as exc:
             logger.warning("Failed to build delta flow summary for %s: %s", currency, exc)
-            return (), self._DELTA_FLOW_LOOKBACK_HOURS
+            return (), self._DELTA_FLOW_LOOKBACK_HOURS, 0, None
 
         buckets = tuple(FlowBucket(**row) for row in rows)
-        return buckets, self._DELTA_FLOW_LOOKBACK_HOURS
+
+        hours_present = 0
+        stale_since: Optional[datetime] = None
+        try:
+            coverage = self.repository.get_delta_flow_coverage(currency=currency, since=since)
+            hours_present = coverage.get("hours_present", 0)
+            max_snapshot_hour = coverage.get("max_snapshot_hour")
+            if max_snapshot_hour is not None:
+                threshold = now_utc_naive - timedelta(hours=self._DELTA_FLOW_STALENESS_THRESHOLD_HOURS)
+                if max_snapshot_hour < threshold:
+                    stale_since = max_snapshot_hour
+        except Exception as exc:
+            logger.warning("Failed to build delta flow coverage for %s: %s", currency, exc)
+
+        return buckets, self._DELTA_FLOW_LOOKBACK_HOURS, hours_present, stale_since
 
     def _build_skew_term_structure(
         self,

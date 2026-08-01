@@ -79,15 +79,36 @@ class DeltaFlowCalculator:
           looking ``hiro_usd`` -- for a trade whose IV is actually missing,
           exactly the "insufficient data reads as a clean number" failure
           task-C7-brief.md warns about.
-        - ``strike`` is ``None``, ``option_type`` not in ``("C", "P")``,
-          ``direction`` not in ``("buy", "sell")``, ``amount``/
-          ``index_price`` is ``None`` or ``<= 0``, ``expiration`` is
-          falsy, ``instrument_name`` is missing, or ``trade_timestamp`` is
-          missing. Defensive: ``historical_trades`` is verified 0-null on
-          all of these over the last 7 days (73,623+ BTC+ETH trades), but
-          this mirrors the ``strike IS NOT NULL AND direction IS NOT NULL``
-          filter already applied at this table by
-          ``get_trades_for_flow_analysis``/``get_signed_taker_flow_by_strike``.
+        - ``strike`` is ``None`` or ``<= 0``, ``option_type`` not in
+          ``("C", "P")``, ``direction`` not in ``("buy", "sell")``,
+          ``amount``/``index_price`` is ``None`` or ``<= 0``,
+          ``expiration`` is falsy, ``instrument_name`` is missing, or
+          ``trade_timestamp`` is missing. Defensive: ``historical_trades``
+          is verified 0-null on all of these over the last 7 days
+          (73,623+ BTC+ETH trades), but this mirrors the ``strike IS NOT
+          NULL AND direction IS NOT NULL`` filter already applied at this
+          table by ``get_trades_for_flow_analysis``/
+          ``get_signed_taker_flow_by_strike``.
+        - Review fix, Important #5: ``strike <= 0`` is gated explicitly
+          rather than relying on ``strike is None`` alone.
+          ``BlackScholesCalculator.calculate_greeks`` has a bare
+          ``except`` that catches internal failures (e.g. ``log(spot /
+          0)`` -> ``ZeroDivisionError``, or ``log`` of a negative ratio)
+          and returns all-zero greeks instead of raising -- the exact same
+          failure class as the ``iv <= 0`` case above (a second silent
+          door into the same room): a zero/negative strike used to
+          produce a plausible-looking ``delta=0.0, hiro_usd=0.0`` instead
+          of a properly-skipped trade. Latent today (0 occurrences across
+          2.35M+ rows) but closed per this campaign's exhaustive-gate
+          standard.
+        - Review fix, Minor #1: ``price is None`` is gated explicitly
+          (skip, do not default to 0.0). A ``None`` price silently coerced
+          to ``0.0`` would understate ``premium_usd`` while leaving
+          ``skipped_count`` unchanged -- violating this module's own
+          stated invariant that ``trade_count``/``skipped_count``
+          unambiguously describes every column in a ``FlowBucket`` row.
+          ``price == 0.0`` itself (a legitimately worthless option) is
+          NOT skipped -- only an actually-missing value is.
         - ``instrument_name`` fails to parse
           (``BlackScholesCalculator.parse_instrument_name`` returns
           ``None``) -- without a parsed ``expiry_time`` there is no tau to
@@ -125,7 +146,7 @@ class DeltaFlowCalculator:
         instrument_name = trade.get("instrument_name")
         trade_timestamp_ms = trade.get("trade_timestamp")
 
-        if strike is None:
+        if strike is None or float(strike) <= 0:
             return None
         if option_type not in ("C", "P"):
             return None
@@ -142,6 +163,10 @@ class DeltaFlowCalculator:
         if trade_timestamp_ms is None:
             return None
 
+        price = trade.get("price")
+        if price is None:
+            return None
+
         parsed = self.black_scholes.parse_instrument_name(instrument_name)
         if parsed is None:
             return None
@@ -150,8 +175,7 @@ class DeltaFlowCalculator:
         amount = float(amount)
         index_price = float(index_price)
         iv_decimal = float(iv) / 100.0
-        price = trade.get("price")
-        price = float(price) if price is not None else 0.0
+        price = float(price)
 
         trade_time_utc = datetime.fromtimestamp(
             float(trade_timestamp_ms) / 1000.0, tz=timezone.utc
