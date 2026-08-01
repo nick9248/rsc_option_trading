@@ -52,6 +52,18 @@ class FixedStrikeVolResult:
     prior_date: Optional[date_type]
     expected_prior_date: date_type  # today_date - 1 day; always computable
     stale_prior: bool  # True when prior_date is None or != expected_prior_date
+    # spot_today/spot_prior: despite the name (inherited from
+    # FixedStrikeVolCalculator's generic "spot" terminology -- this class
+    # is anchor-agnostic pure math), the CALLER must pass the SAME price
+    # anchor on both sides. institutional_metrics_spec.md/bugfix_spec.md
+    # Item 7's settlement-space convention means that anchor is normally
+    # this expiry's FORWARD price, not the spot index -- OnChainAnalysis
+    # Service._calculate_fixed_strike_vol_matrix passes analyzer.
+    # forward_price_by_expiration[expiration] (independent review, Task
+    # C8 fix round, Important #1: mixing spot on one side against forward
+    # on the other prints a spurious "move" on a flat day and can flip
+    # the sticky-strike/sticky-delta/repriced regime label on a skewed
+    # smile).
     spot_today: Optional[float]
     spot_prior: Optional[float]
     spot_move_pct: Optional[float]

@@ -72,6 +72,15 @@ class TestFullTableRender(object):
         text = format_fixed_strike_vol_section(_base_result())
         assert "ATM IV 30.00 -> 33.00 (+3.00)" in text
 
+    def test_price_line_labelled_forward_not_spot(self):
+        """Independent review (Task C8 fix round, Important #1): the
+        anchor is this expiry's FORWARD price, not the spot index --
+        labelling it 'Spot' would relocate the same confusion the anchor
+        fix eliminated into the report text itself."""
+        text = format_fixed_strike_vol_section(_base_result())
+        assert "Fwd " in text
+        assert "Spot " not in text
+
     def test_calls_and_puts_rendered_as_separate_blocks(self):
         text = format_fixed_strike_vol_section(_base_result())
         assert "CALLS" in text

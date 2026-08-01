@@ -9,7 +9,7 @@ actually reliable today) was verified separately via read-only SELECT and is
 recorded in task-C8-report.md, not re-verified here.
 """
 
-from datetime import date
+from datetime import date, timedelta
 from unittest.mock import MagicMock, patch
 
 from coding.core.database.repository import DatabaseRepository
@@ -35,6 +35,13 @@ class FakeCursor:
         self.captured_params.append(params)
 
     def fetchall(self):
+        return self._fetchall_results.pop(0)
+
+    def fetchone(self):
+        """Shares the same queue as fetchall() -- callers that use
+        fetchone() (get_latest_chain_iv_date) must queue a single raw row
+        tuple per execute() call, e.g. ``(date(2026, 7, 20),)``, not a
+        list wrapping it."""
         return self._fetchall_results.pop(0)
 
 
@@ -184,3 +191,112 @@ class TestGetChainIvAtSnapshotsFallback:
         fallback_params = cursor.captured_params[1]
         from datetime import datetime
         assert datetime(2026, 7, 30, 8, 0, 0) in fallback_params
+
+    def test_snapshots_fallback_subquery_filters_mark_iv_and_expiration(self):
+        """Independent review (Task C8 fix round, Minor #1): without these
+        filters on the INNER subquery, a pre-deploy tick near 08:00 with a
+        NULL mark_iv (or one that never wrote this expiration at all) could
+        win the 'nearest' pick and make the whole lookup report 'no data'
+        even though a later same-day tick has real IV for this
+        expiration."""
+        repo = _make_repo()
+        cursor = FakeCursor(fetchall_results=[[], []])
+
+        with _patched_cursor(repo, cursor):
+            repo.get_chain_iv_at(
+                currency="BTC", expiration="31JUL26", snapshot_date=date(2026, 7, 30),
+            )
+
+        query = cursor.captured_queries[1]
+        # The subquery text appears twice in the full query (outer WHERE +
+        # inner subquery) -- both instances must carry the filter.
+        assert query.count("mark_iv IS NOT NULL") == 2
+        assert query.count("expiration = %s") == 2
+
+    def test_snapshots_fallback_bounds_window_to_anchor_tolerance(self):
+        """Independent review (Minor #2): the nearest-tick pick is bounded
+        to +/- the anchor tolerance, not the whole calendar day -- a tick
+        hours away from 08:00 must never be silently accepted as 'the
+        08:00 anchor'."""
+        repo = _make_repo()
+        cursor = FakeCursor(fetchall_results=[[], []])
+
+        with _patched_cursor(repo, cursor):
+            repo.get_chain_iv_at(
+                currency="BTC", expiration="31JUL26", snapshot_date=date(2026, 7, 30),
+            )
+
+        from datetime import datetime
+        anchor = datetime(2026, 7, 30, 8, 0, 0)
+        tolerance = timedelta(hours=DatabaseRepository._FIXED_STRIKE_VOL_ANCHOR_TOLERANCE_HOURS)
+        fallback_params = cursor.captured_params[1]
+        assert (anchor - tolerance) in fallback_params
+        assert (anchor + tolerance) in fallback_params
+        # A tick 12h away from the anchor is well outside a +/-3h
+        # tolerance window -- confirms the window is meaningfully narrower
+        # than a full calendar day (24h span).
+        assert tolerance <= timedelta(hours=3)
+
+
+class TestGetLatestChainIvDate:
+    """Independent review (Task C8 fix round, Important #3): powers the
+    'no comparable prior snapshot (last: <date>)' diagnostic message with
+    the REAL most-recent-available date, rather than leaving that spec
+    7(c) branch unreachable dead code."""
+
+    def test_returns_max_of_both_tables(self):
+        repo = _make_repo()
+        cursor = FakeCursor(fetchall_results=[
+            (date(2026, 7, 20),),  # daily_oi_snapshots MAX row
+            (date(2026, 7, 24),),  # snapshots MAX row
+        ])
+
+        with _patched_cursor(repo, cursor):
+            result = repo.get_latest_chain_iv_date(
+                currency="BTC", expiration="31JUL26", before_date=date(2026, 7, 30),
+            )
+
+        assert result == date(2026, 7, 24)
+
+    def test_returns_none_when_neither_table_has_any_data(self):
+        repo = _make_repo()
+        cursor = FakeCursor(fetchall_results=[(None,), (None,)])
+
+        with _patched_cursor(repo, cursor):
+            result = repo.get_latest_chain_iv_date(
+                currency="BTC", expiration="31JUL26", before_date=date(2026, 7, 30),
+            )
+
+        assert result is None
+
+    def test_uses_only_the_non_null_source_when_one_table_has_nothing(self):
+        repo = _make_repo()
+        cursor = FakeCursor(fetchall_results=[
+            (None,),
+            (date(2026, 7, 24),),
+        ])
+
+        with _patched_cursor(repo, cursor):
+            result = repo.get_latest_chain_iv_date(
+                currency="BTC", expiration="31JUL26", before_date=date(2026, 7, 30),
+            )
+
+        assert result == date(2026, 7, 24)
+
+    def test_query_filters_mark_iv_not_null_and_before_date_inclusive(self):
+        repo = _make_repo()
+        cursor = FakeCursor(fetchall_results=[(None,), (None,)])
+
+        with _patched_cursor(repo, cursor):
+            repo.get_latest_chain_iv_date(
+                currency="ETH", expiration="26MAR27", before_date=date(2026, 7, 24),
+            )
+
+        daily_oi_query = cursor.captured_queries[0]
+        assert "mark_iv IS NOT NULL" in daily_oi_query
+        assert "snapshot_date <= %s" in daily_oi_query
+        assert cursor.captured_params[0] == ("ETH", "26MAR27", date(2026, 7, 24))
+
+        snapshots_query = cursor.captured_queries[1]
+        assert "mark_iv IS NOT NULL" in snapshots_query
+        assert "DATE(captured_at) <= %s" in snapshots_query

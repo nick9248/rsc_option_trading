@@ -1240,8 +1240,20 @@ class DatabaseRepository:
         if not instruments:
             return 0
 
-        from datetime import date as date_type
-        snap_date = snapshot_date or datetime.now().date()
+        # Independent review (Task C8 fix round, Important #2): this
+        # method is called with no explicit snapshot_date from
+        # OnChainAnalysisService._calculate_oi_changes_and_iv_percentile,
+        # in the SAME analysis run that now also calls
+        # _calculate_fixed_strike_vol_matrix -- Task C8's new exact-date
+        # lookup (get_chain_iv_at) depends on this write's date label
+        # being correct. The old `datetime.now().date()` default is this
+        # (non-UTC) machine's LOCAL date -- on this UTC+2 machine, any run
+        # between 00:00-02:00 local time would label a row with the WRONG
+        # calendar day (a ~35-hour-old snapshot could be mislabelled as
+        # "yesterday"), exactly the failure mode spec section 7(c)'s edge
+        # cases forbid. UTC-explicit, matching every other day-boundary
+        # fix in this campaign (Tasks C4/C5/C7/C8).
+        snap_date = snapshot_date or datetime.now(timezone.utc).date()
         if isinstance(snap_date, datetime):
             snap_date = snap_date.date()
 
@@ -1338,6 +1350,14 @@ class DatabaseRepository:
     # docstring).
     _FIXED_STRIKE_VOL_ANCHOR_HOUR_UTC = 8
 
+    # Independent review (Task C8 fix round, Minor #2): the nearest tick
+    # to 08:00 UTC on the requested date must be a genuine local read of
+    # that anchor, not "whatever tick happened to exist that day, however
+    # far away" -- a tick at 23:30 silently used as "the 08:00 anchor"
+    # with no warning would be exactly the kind of misleading-precision
+    # bug this campaign's exhaustive-gate standard exists to catch.
+    _FIXED_STRIKE_VOL_ANCHOR_TOLERANCE_HOURS = 3
+
     def get_chain_iv_at(
         self,
         currency: str,
@@ -1357,7 +1377,7 @@ class DatabaseRepository:
 
         Reads ``daily_oi_snapshots`` first (real per-strike ``mark_iv``
         history, though GUI-triggered and therefore sparse/irregular --
-        [verified 2026-08-01] 92 distinct dates all-time, non-consecutive,
+        [verified 2026-08-01] 90 distinct dates all-time, non-consecutive,
         most recent two entries 7 days apart). Falls back to ``snapshots``
         (the daemon's full ~900-instrument hourly chain, ``mark_iv``
         populated by migration 017 / Decision D11) only when
@@ -1426,13 +1446,31 @@ class DatabaseRepository:
     def _get_hourly_snapshot_chain_iv(
         self, currency: str, expiration: str, snapshot_date,
     ) -> tuple:
-        """Fallback source for ``get_chain_iv_at`` -- see its docstring."""
+        """
+        Fallback source for ``get_chain_iv_at`` -- see its docstring.
+
+        Independent review (Task C8 fix round, Minor #1/#2):
+        - The inner subquery (picking the nearest tick to the 08:00 UTC
+          anchor) now filters ``mark_iv IS NOT NULL`` and matches
+          ``expiration`` -- without these, a pre-deploy tick near 08:00
+          with a NULL ``mark_iv`` (or a tick that never even wrote this
+          expiration) could win the "nearest" pick and make the whole
+          lookup report "no data" even though a later same-day tick has
+          real IV for this expiration.
+        - The window is bounded to +/- ``_FIXED_STRIKE_VOL_ANCHOR_
+          TOLERANCE_HOURS`` around the anchor, not the whole calendar
+          day -- a tick that happens to be the day's ONLY one but sits
+          hours away from 08:00 (e.g. 23:30) is no longer silently
+          accepted as "the 08:00 anchor"; beyond tolerance, this returns
+          empty, same as no data at all.
+        """
         anchor_ts = datetime(
             snapshot_date.year, snapshot_date.month, snapshot_date.day,
             self._FIXED_STRIKE_VOL_ANCHOR_HOUR_UTC, 0, 0,
         )
-        day_start = datetime(snapshot_date.year, snapshot_date.month, snapshot_date.day)
-        day_end = day_start + timedelta(days=1)
+        tolerance = timedelta(hours=self._FIXED_STRIKE_VOL_ANCHOR_TOLERANCE_HOURS)
+        window_start = anchor_ts - tolerance
+        window_end = anchor_ts + tolerance
 
         with self._db_cursor() as cursor:
             cursor.execute("""
@@ -1445,14 +1483,71 @@ class DatabaseRepository:
                       SELECT captured_at
                       FROM snapshots
                       WHERE currency = %s
+                        AND expiration = %s
+                        AND mark_iv IS NOT NULL
                         AND captured_at >= %s
-                        AND captured_at < %s
+                        AND captured_at <= %s
                       ORDER BY ABS(EXTRACT(EPOCH FROM (captured_at - %s)))
                       LIMIT 1
                   )
                 ORDER BY strike, option_type
-            """, (currency, expiration, currency, day_start, day_end, anchor_ts))
+            """, (
+                currency, expiration, currency, expiration,
+                window_start, window_end, anchor_ts,
+            ))
             return self._rows_and_avg_underlying_price(cursor.fetchall())
+
+    def get_latest_chain_iv_date(
+        self, currency: str, expiration: str, before_date,
+    ) -> Optional[Any]:
+        """
+        Find the most recent date <= ``before_date`` that has ANY chain
+        IV data for (currency, expiration), across both
+        ``daily_oi_snapshots`` and ``snapshots`` (independent review, Task
+        C8 fix round, Important #3).
+
+        Diagnostic-only -- used SOLELY to power the "insufficient history"
+        message's actual date (institutional_metrics_spec.md section 7(c):
+        "no comparable prior snapshot (last: 2026-07-20)"). Never used to
+        fetch data to compare against; ``get_chain_iv_at``'s exact-date-
+        only contract (never substitutes a different date) is unaffected
+        and unchanged by this method's existence.
+
+        Args:
+            currency: Currency symbol.
+            expiration: Expiration date string.
+            before_date: Upper bound (inclusive) on the date searched --
+                typically the requested "prior" date that came up empty.
+
+        Returns:
+            The latest matching ``date``, or ``None`` if neither table has
+            ANY row for this (currency, expiration) on or before
+            ``before_date``.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                SELECT MAX(snapshot_date)
+                FROM daily_oi_snapshots
+                WHERE currency = %s
+                  AND expiration = %s
+                  AND snapshot_date <= %s
+                  AND mark_iv IS NOT NULL
+            """, (currency, expiration, before_date))
+            daily_oi_date = cursor.fetchone()[0]
+
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                SELECT MAX(DATE(captured_at))
+                FROM snapshots
+                WHERE currency = %s
+                  AND expiration = %s
+                  AND DATE(captured_at) <= %s
+                  AND mark_iv IS NOT NULL
+            """, (currency, expiration, before_date))
+            snapshots_date = cursor.fetchone()[0]
+
+        candidates = [d for d in (daily_oi_date, snapshots_date) if d is not None]
+        return max(candidates) if candidates else None
 
     @staticmethod
     def _rows_and_avg_underlying_price(fetched_rows) -> tuple:

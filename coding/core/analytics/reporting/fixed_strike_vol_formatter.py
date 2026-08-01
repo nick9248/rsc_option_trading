@@ -58,8 +58,14 @@ def _format_header(result: FixedStrikeVolResult) -> str:
 def _format_summary_line(result: FixedStrikeVolResult) -> str:
     spot_part = ""
     if result.spot_prior is not None and result.spot_today is not None:
+        # Independent review (Task C8 fix round, Important #1): the
+        # anchor the service now passes here is this expiry's FORWARD
+        # price (bugfix_spec.md Item 7's settlement-space convention),
+        # not the spot index -- labelling it "Spot" after fixing the
+        # underlying anchor mismatch would just relocate the same
+        # confusion into the report text.
         move = f"{result.spot_move_pct:+.2f}%" if result.spot_move_pct is not None else "n/a"
-        spot_part = f"Spot {result.spot_prior:,.0f} -> {result.spot_today:,.0f} ({move})     "
+        spot_part = f"Fwd {result.spot_prior:,.0f} -> {result.spot_today:,.0f} ({move})     "
 
     atm_part = f"ATM IV {result.atm_iv_prior:.2f} -> {result.atm_iv_today:.2f} ({result.d_atm:+.2f})"
     return spot_part + atm_part

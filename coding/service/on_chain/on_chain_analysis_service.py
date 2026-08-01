@@ -1054,11 +1054,15 @@ class OnChainAnalysisService:
         gex_dex_typed_by_expiry: Dict[str, Any] = {}
 
         # institutional_metrics_spec.md section 7 / Task C8: resolved ONCE
-        # for the whole per-expiry loop, from a UTC-explicit clock read
-        # (never this local machine's naive datetime.now(), which is not
-        # UTC -- see _calculate_fixed_strike_vol_matrix's docstring and
-        # this campaign's repeated day-boundary lesson).
-        fixed_strike_vol_today_utc = datetime.now(timezone.utc).date()
+        # for the whole per-expiry loop, from a single UTC-explicit clock
+        # read (never this local machine's naive datetime.now(), which is
+        # not UTC -- see _calculate_fixed_strike_vol_matrix's docstring and
+        # this campaign's repeated day-boundary lesson). Kept as a
+        # timezone-aware datetime (not just a date) so
+        # _calculate_fixed_strike_vol_matrix can also use it for the
+        # already-settled-expiry check (spec 7(c): "Expiry gone (settled)
+        # between the two days -> skip the expiry").
+        fixed_strike_vol_now_utc = datetime.now(timezone.utc)
 
         for expiration in analyzer.get_expirations():
             instruments = analyzer.parsed_data.get(expiration, [])
@@ -1168,10 +1172,36 @@ class OnChainAnalysisService:
                 # regime == "INDETERMINATE" (insufficient/stale prior
                 # history) is NOT a failure -- it is still set on the
                 # builder and rendered with an explicit message.
+                #
+                # Independent review (Important #1): the anchor price MUST
+                # be the same TYPE of price on both sides of the day-over-
+                # day comparison. daily_oi_snapshots.underlying_price is
+                # written elsewhere in this service
+                # (_calculate_oi_changes_and_iv_percentile) as this expiry's
+                # FORWARD price, not the spot index -- bugfix_spec.md Item
+                # 7's settlement-space convention. Passing analyzer.
+                # index_price (spot) for "today" against a forward-priced
+                # "prior" would (a) print a spurious spot-move on a flat
+                # day (the forward-spot basis grows with DTE) and (b) let
+                # compute_nearest_strike_atm_iv pick a DIFFERENT nearest
+                # strike on each side on a skewed smile, which can flip the
+                # sticky-strike/sticky-delta/repriced regime label
+                # entirely. Same fallback-to-index-price convention as
+                # _calculate_oi_changes_and_iv_percentile when no forward
+                # price is available for this expiry.
+                fixed_strike_vol_forward_price = analyzer.forward_price_by_expiration.get(expiration)
+                if fixed_strike_vol_forward_price is None:
+                    logger.warning(
+                        f"No forward price for expiration {expiration} -- "
+                        f"falling back to index price for the fixed-strike "
+                        f"vol matrix anchor"
+                    )
+                    fixed_strike_vol_forward_price = analyzer.index_price
+
                 progress_callback(f"Calculating fixed-strike vol change matrix for {expiration}...")
                 fixed_strike_vol_result = self._calculate_fixed_strike_vol_matrix(
                     analyzer.currency, expiration, instruments_with_greeks,
-                    analyzer.index_price, fixed_strike_vol_today_utc,
+                    fixed_strike_vol_forward_price, fixed_strike_vol_now_utc,
                 )
                 if fixed_strike_vol_result is not None and builder is not None:
                     builder.set_fixed_strike_vol(expiration, fixed_strike_vol_result)
@@ -1559,7 +1589,7 @@ class OnChainAnalysisService:
         expiration: str,
         instruments_with_greeks: List[Dict[str, Any]],
         spot_today: float,
-        today_date_utc,
+        now_utc: datetime,
     ) -> Optional[FixedStrikeVolResult]:
         """
         institutional_metrics_spec.md section 7 (Task C8): fixed-strike vol
@@ -1595,21 +1625,57 @@ class OnChainAnalysisService:
             instruments_with_greeks: The SAME enriched-Greeks instrument
                 list already built for GEX/DEX/dealer/exposure-profile
                 above.
-            spot_today: ``analyzer.index_price`` -- same anchor
-                GexDexCalculator uses (bugfix_spec.md Item 7).
-            today_date_utc: UTC calendar ``date`` for "today", resolved
-                once by the caller (``_fetch_greeks_and_store_gex_dex``)
-                from ``datetime.now(timezone.utc)`` -- never derived from
-                this (non-UTC) local machine's naive clock, per this
-                campaign's repeated day-boundary lesson (Tasks C4/C5/C7 fix
-                rounds).
+            spot_today: The SAME price anchor ``spot_prior`` (below) uses.
+                Independent review (Important #1): this must be this
+                expiry's FORWARD price (``analyzer.forward_price_by_
+                expiration[expiration]``, falling back to
+                ``analyzer.index_price`` -- resolved by the caller,
+                ``_fetch_greeks_and_store_gex_dex``), NOT
+                ``analyzer.index_price`` directly. ``daily_oi_snapshots.
+                underlying_price`` (the source of ``spot_prior``) is
+                written elsewhere in this service
+                (``_calculate_oi_changes_and_iv_percentile``) as the
+                per-expiry forward, per bugfix_spec.md Item 7's
+                settlement-space convention -- mixing spot on one side
+                against forward on the other prints a spurious "spot move"
+                on a flat day (the forward-spot basis grows with DTE) and
+                can make ``compute_nearest_strike_atm_iv`` pick a
+                DIFFERENT nearest strike on each side on a skewed smile,
+                which can flip the sticky-strike/sticky-delta/repriced
+                regime label entirely.
+            now_utc: Timezone-aware ``datetime`` for "now", resolved once
+                by the caller from ``datetime.now(timezone.utc)`` -- never
+                derived from this (non-UTC) local machine's naive clock,
+                per this campaign's repeated day-boundary lesson (Tasks
+                C4/C5/C7 fix rounds). ``today_date_utc = now_utc.date()``
+                and the already-settled-expiry check (below) both derive
+                from this single clock read.
 
         Returns:
-            ``FixedStrikeVolResult``, or ``None`` if there is no
-            repository or building the matrix raised unexpectedly.
+            ``FixedStrikeVolResult``, or ``None`` when: there is no
+            repository; ``expiration`` has already reached or passed its
+            own 08:00 UTC settlement as of ``now_utc`` (spec 7(c): "Expiry
+            gone (settled) between the two days -> skip the expiry" --
+            a dead, cash-settled expiry has no IV smile left to compare,
+            so it is skipped entirely rather than rendered as
+            "insufficient history"); or building the matrix raised
+            unexpectedly.
         """
         if self.repository is None:
             return None
+
+        # Independent review (Minor #5 / spec 7(c)): an expiry at or past
+        # its own settlement instant is gone -- skip it entirely, before
+        # any repository call, rather than rendering an "insufficient
+        # history" block for a dead contract. ``dte is None`` (expiration
+        # string failed to parse) is treated the same as "cannot confirm
+        # this expiry is still live" -- skip, don't guess.
+        dte = MarketWideCalculator._calculate_days_to_expiry(expiration, now_utc)
+        if dte is None or dte <= 0:
+            return None
+
+        today_date_utc = now_utc.date()
+
         try:
             today_rows = [
                 {
@@ -1627,6 +1693,34 @@ class OnChainAnalysisService:
             spot_prior = chain_prior["underlying_price"]
             atm_iv_prior = compute_nearest_strike_atm_iv(prior_rows, spot_prior)
 
+            if prior_rows:
+                # Exact match for prior_date -- the real, reachable happy
+                # path. stale_prior will be False.
+                actual_prior_date = prior_date
+            else:
+                # Independent review (Important #3): T7.3's stale-prior
+                # message must show the REAL most-recent-available date
+                # (spec 7(c): "no comparable prior snapshot (last:
+                # 2026-07-20)"), not silently degrade with no date at all
+                # -- prior_date is always exactly yesterday by
+                # construction, so passing it through unconditionally made
+                # this diagnostic branch dead code in production (only
+                # reachable from a synthetic unit test). Looked up here,
+                # isolated in its OWN try/except (review's isolation
+                # constraint) so a failure in this diagnostic-only lookup
+                # degrades to "no date available" rather than suppressing
+                # the main result this method already computed.
+                try:
+                    actual_prior_date = self.repository.get_latest_chain_iv_date(
+                        currency, expiration, prior_date,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to look up latest available chain IV date "
+                        "for %s %s: %s", currency, expiration, exc,
+                    )
+                    actual_prior_date = None
+
             calculator = FixedStrikeVolCalculator(
                 today_rows=today_rows,
                 prior_rows=prior_rows,
@@ -1635,16 +1729,7 @@ class OnChainAnalysisService:
                 atm_iv_today=atm_iv_today,
                 atm_iv_prior=atm_iv_prior,
                 today_date=today_date_utc,
-                # The repository was queried for EXACTLY prior_date -- that
-                # is the date we attempted, whether or not it found any
-                # rows. Passing it through here (rather than None on an
-                # empty prior_rows) is what lets FixedStrikeVolCalculator
-                # distinguish "queried the right date, found nothing"
-                # (stale_prior=False, regime degrades to INDETERMINATE only
-                # because there is nothing to evaluate) from "never had a
-                # prior snapshot at all" (stale_prior=True) -- both render
-                # as insufficient history, but with different messages.
-                prior_date=prior_date,
+                prior_date=actual_prior_date,
                 expiration=expiration,
             )
             return calculator.calculate()
