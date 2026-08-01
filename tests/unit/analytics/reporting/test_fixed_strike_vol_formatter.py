@@ -81,6 +81,19 @@ class TestFullTableRender(object):
         assert "Fwd " in text
         assert "Spot " not in text
 
+    def test_today_label_switches_to_idx_on_fallback(self):
+        """Independent review (Task C8 fix round 2, Low #3): a logged
+        warning alone is invisible to the report reader -- the fallback
+        to the spot index for 'today' must be disclosed in the rendered
+        text itself."""
+        text = format_fixed_strike_vol_section(_base_result(spot_today_is_forward=False))
+        assert "Idx " in text
+
+    def test_today_label_stays_fwd_when_not_fallen_back(self):
+        text = format_fixed_strike_vol_section(_base_result(spot_today_is_forward=True))
+        assert "Idx " not in text
+        assert "Fwd 64,182 -> Fwd 64,182" in text
+
     def test_calls_and_puts_rendered_as_separate_blocks(self):
         text = format_fixed_strike_vol_section(_base_result())
         assert "CALLS" in text

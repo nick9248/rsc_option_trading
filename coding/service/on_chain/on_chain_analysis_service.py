@@ -1189,20 +1189,50 @@ class OnChainAnalysisService:
                 # entirely. Same fallback-to-index-price convention as
                 # _calculate_oi_changes_and_iv_percentile when no forward
                 # price is available for this expiry.
-                fixed_strike_vol_forward_price = analyzer.forward_price_by_expiration.get(expiration)
-                if fixed_strike_vol_forward_price is None:
-                    logger.warning(
-                        f"No forward price for expiration {expiration} -- "
-                        f"falling back to index price for the fixed-strike "
-                        f"vol matrix anchor"
-                    )
-                    fixed_strike_vol_forward_price = analyzer.index_price
+                #
+                # Fix round 2 (Low #1): this resolution -- and the call
+                # into _calculate_fixed_strike_vol_matrix -- is wrapped in
+                # its OWN try/except, isolated from every pre-existing call
+                # in this loop (gex_result, dealer_result, exposure_result
+                # above): without it, an unexpected failure here (e.g. a
+                # malformed analyzer stub) would propagate past this
+                # expiry's remaining processing AND abort every subsequent
+                # expiration in this per-expiry loop -- far wider than the
+                # "additive, GEX/DEX-safe" contract this section's own
+                # docstring/comments already advertise.
+                fixed_strike_vol_result = None
+                try:
+                    fixed_strike_vol_forward_price = analyzer.forward_price_by_expiration.get(expiration)
+                    # Fix round 2 (Low #3): recorded so the report can
+                    # disclose which anchor was ACTUALLY used for "today"
+                    # -- a logged warning alone is invisible to the report
+                    # reader.
+                    fixed_strike_vol_price_is_forward = fixed_strike_vol_forward_price is not None
+                    if fixed_strike_vol_forward_price is None:
+                        logger.warning(
+                            f"No forward price for expiration {expiration} -- "
+                            f"falling back to index price for the fixed-strike "
+                            f"vol matrix anchor"
+                        )
+                        fixed_strike_vol_forward_price = analyzer.index_price
 
-                progress_callback(f"Calculating fixed-strike vol change matrix for {expiration}...")
-                fixed_strike_vol_result = self._calculate_fixed_strike_vol_matrix(
-                    analyzer.currency, expiration, instruments_with_greeks,
-                    fixed_strike_vol_forward_price, fixed_strike_vol_now_utc,
-                )
+                    progress_callback(f"Calculating fixed-strike vol change matrix for {expiration}...")
+                    fixed_strike_vol_result = self._calculate_fixed_strike_vol_matrix(
+                        analyzer.currency, expiration, instruments_with_greeks,
+                        fixed_strike_vol_forward_price, fixed_strike_vol_now_utc,
+                        fixed_strike_vol_price_is_forward,
+                    )
+                except Exception:
+                    logger.error(
+                        f"OnChainAnalysisService: failed to resolve the "
+                        f"fixed-strike vol matrix anchor price for "
+                        f"{analyzer.currency} {expiration} -- degrading to "
+                        "'no fixed-strike-vol section' rather than aborting "
+                        "the remaining per-expiry loop (additive-only, "
+                        "institutional_metrics_spec.md section 7 / task C8)",
+                        exc_info=True,
+                    )
+
                 if fixed_strike_vol_result is not None and builder is not None:
                     builder.set_fixed_strike_vol(expiration, fixed_strike_vol_result)
 
@@ -1590,6 +1620,7 @@ class OnChainAnalysisService:
         instruments_with_greeks: List[Dict[str, Any]],
         spot_today: float,
         now_utc: datetime,
+        spot_today_is_forward: bool = True,
     ) -> Optional[FixedStrikeVolResult]:
         """
         institutional_metrics_spec.md section 7 (Task C8): fixed-strike vol
@@ -1650,6 +1681,17 @@ class OnChainAnalysisService:
                 C4/C5/C7 fix rounds). ``today_date_utc = now_utc.date()``
                 and the already-settled-expiry check (below) both derive
                 from this single clock read.
+            spot_today_is_forward: Fix round 2 (Low #3). Whether
+                ``spot_today`` is the true per-expiry forward price
+                (``True``) or the caller already fell back to the spot
+                index because no forward price was available (``False``).
+                Purely a display flag -- passed straight through to
+                ``FixedStrikeVolResult.spot_today_is_forward`` so the
+                report can disclose the fallback (previously only a
+                logged warning, invisible to the report reader) rather
+                than affecting any calculation here. Defaults to ``True``
+                (the common case) so existing callers/tests that don't
+                pass it keep their prior behavior.
 
         Returns:
             ``FixedStrikeVolResult``, or ``None`` when: there is no
@@ -1664,19 +1706,29 @@ class OnChainAnalysisService:
         if self.repository is None:
             return None
 
-        # Independent review (Minor #5 / spec 7(c)): an expiry at or past
-        # its own settlement instant is gone -- skip it entirely, before
-        # any repository call, rather than rendering an "insufficient
-        # history" block for a dead contract. ``dte is None`` (expiration
-        # string failed to parse) is treated the same as "cannot confirm
-        # this expiry is still live" -- skip, don't guess.
-        dte = MarketWideCalculator._calculate_days_to_expiry(expiration, now_utc)
-        if dte is None or dte <= 0:
-            return None
-
-        today_date_utc = now_utc.date()
-
         try:
+            # Independent review (Minor #5 / spec 7(c)): an expiry at or
+            # past its own settlement instant is gone -- skip it entirely,
+            # before any repository call, rather than rendering an
+            # "insufficient history" block for a dead contract. ``dte is
+            # None`` (expiration string failed to parse) is treated the
+            # same as "cannot confirm this expiry is still live" -- skip,
+            # don't guess.
+            #
+            # Fix round 2 (Low #1): this check -- previously OUTSIDE this
+            # try block -- is now inside it. An early ``return None`` from
+            # within a ``try`` is ordinary control flow (does not trigger
+            # ``except``); moving it in only closes the gap where an
+            # unexpected exception from ``_calculate_days_to_expiry``
+            # (not just its documented ``None`` return) would have
+            # propagated past this method's own "additive, never aborts
+            # GEX/DEX" guarantee.
+            dte = MarketWideCalculator._calculate_days_to_expiry(expiration, now_utc)
+            if dte is None or dte <= 0:
+                return None
+
+            today_date_utc = now_utc.date()
+
             today_rows = [
                 {
                     "strike": inst.get("strike"),
@@ -1731,6 +1783,7 @@ class OnChainAnalysisService:
                 today_date=today_date_utc,
                 prior_date=actual_prior_date,
                 expiration=expiration,
+                spot_today_is_forward=spot_today_is_forward,
             )
             return calculator.calculate()
         except Exception:

@@ -74,3 +74,11 @@ class FixedStrikeVolResult:
     n_strikes_matched: int
     n_strikes_unmatched: int
     regime: str
+    # Fix round 2 (Low #3): whether spot_today is the true per-expiry
+    # forward price (True) or the caller already fell back to the spot
+    # index because no forward price was available (False). Purely a
+    # display flag -- lets the report disclose the fallback, previously
+    # only visible in a logged warning the report reader never sees.
+    # Defaults to True so every pre-existing direct constructor call
+    # (tests) keeps its prior behavior/rendering.
+    spot_today_is_forward: bool = True

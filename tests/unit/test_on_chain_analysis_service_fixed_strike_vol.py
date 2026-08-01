@@ -350,5 +350,113 @@ class TestClockResolutionInCaller:
 
         mock_datetime.now.assert_any_call(timezone.utc)
         assert mock_fsv.called
-        passed_now_utc = mock_fsv.call_args[0][-1]
+        # Positional args: (currency, expiration, instruments_with_greeks,
+        # spot_today, now_utc, spot_today_is_forward) -- now_utc is
+        # second-to-last since fix round 2 added the is-forward flag
+        # after it.
+        passed_now_utc = mock_fsv.call_args[0][-2]
         assert passed_now_utc == fake_utc_now
+
+
+def _make_analyzer(expirations, forward_price_by_expiration):
+    analyzer = MagicMock()
+    analyzer.get_expirations.return_value = expirations
+    analyzer.parsed_data = {
+        exp: [{"instrument_name": f"BTC-{exp}-65000-C"}] for exp in expirations
+    }
+    analyzer.index_price = 65000.0
+    analyzer.forward_price_by_expiration = forward_price_by_expiration
+    analyzer.enriched_instruments = {}
+    analyzer.currency = "BTC"
+    return analyzer
+
+
+def _run_loop_with_mocked_fsv(service, analyzer):
+    """Shared harness: runs _fetch_greeks_and_store_gex_dex with GEX/DEX
+    and the other additive calls stubbed out, capturing every call made
+    to _calculate_fixed_strike_vol_matrix. Returns the mock so callers can
+    inspect .call_args_list."""
+    import coding.service.on_chain.on_chain_analysis_service as svc_module
+
+    service.api.get_ticker.return_value = {
+        "greeks": {"delta": 0.5, "gamma": 0.001, "theta": -10.0, "vega": 20.0},
+        "mark_iv": 60.0, "underlying_price": 65010.0,
+        "best_bid_price": 0.01, "best_ask_price": 0.02,
+    }
+
+    with patch.object(svc_module, "GexDexCalculator") as mock_gex_cls, \
+         patch.object(service, "_calculate_inferred_dealer_positioning", return_value=None), \
+         patch.object(service, "_calculate_exposure_profile", return_value=None), \
+         patch.object(service, "_calculate_fixed_strike_vol_matrix", return_value=None) as mock_fsv, \
+         patch.object(service, "_build_gamma_rolloff", return_value=None):
+        mock_gex_cls.return_value.calculate.return_value = MagicMock()
+        service._fetch_greeks_and_store_gex_dex(analyzer, lambda msg: None, builder=None)
+
+    return mock_fsv
+
+
+class TestCallerForwardPriceIsForwardFlag:
+    """Fix round 2 (Low #3): the caller must compute the disclosure flag
+    BEFORE substituting the index-price fallback, so it accurately
+    reflects what was ACTUALLY used, not just whether a forward price
+    happens to exist somewhere."""
+
+    def test_forward_price_available_passes_true(self):
+        analyzer = _make_analyzer([EXPIRATION], {EXPIRATION: 65010.0})
+        service = _make_service(repository=MagicMock())
+
+        mock_fsv = _run_loop_with_mocked_fsv(service, analyzer)
+
+        assert mock_fsv.called
+        spot_today, is_forward = mock_fsv.call_args[0][-3], mock_fsv.call_args[0][-1]
+        assert spot_today == 65010.0
+        assert is_forward is True
+
+    def test_forward_price_missing_falls_back_and_passes_false(self):
+        analyzer = _make_analyzer([EXPIRATION], {})  # no forward price for this expiration
+        service = _make_service(repository=MagicMock())
+
+        mock_fsv = _run_loop_with_mocked_fsv(service, analyzer)
+
+        assert mock_fsv.called
+        spot_today, is_forward = mock_fsv.call_args[0][-3], mock_fsv.call_args[0][-1]
+        assert spot_today == 65000.0  # analyzer.index_price fallback
+        assert is_forward is False
+
+
+class TestCallerResolutionIsolation:
+    """Fix round 2 (Low #1): the forward-price resolution + the call into
+    _calculate_fixed_strike_vol_matrix now live in their OWN try/except at
+    the call site -- a failure there must degrade to 'no fixed-strike-vol
+    section for THIS expiry', never abort the remaining per-expiry loop
+    (previously an unhandled exception here would have propagated past
+    every subsequent expiration's GEX/DEX/exposure-profile processing
+    too)."""
+
+    def test_exception_resolving_forward_price_does_not_abort_remaining_expirations(self, caplog):
+        expirations = ["01AUG26", "02AUG26"]
+        analyzer = _make_analyzer(expirations, {"01AUG26": 65010.0, "02AUG26": 65020.0})
+
+        # Make the FIRST expiration's forward-price lookup raise --
+        # .get() on a real dict can't raise, so swap in a dict-like stub
+        # that raises only for "01AUG26".
+        class _RaisingForwardPrices(dict):
+            def get(self, key, default=None):
+                if key == "01AUG26":
+                    raise RuntimeError("boom")
+                return super().get(key, default)
+
+        analyzer.forward_price_by_expiration = _RaisingForwardPrices(
+            {"01AUG26": 65010.0, "02AUG26": 65020.0}
+        )
+
+        service = _make_service(repository=MagicMock())
+
+        with caplog.at_level("ERROR"):
+            mock_fsv = _run_loop_with_mocked_fsv(service, analyzer)
+
+        # The second expiration must still have been processed normally --
+        # this is the actual "did it abort the loop" assertion.
+        called_expirations = [call.args[1] for call in mock_fsv.call_args_list]
+        assert called_expirations == ["02AUG26"]
+        assert "failed to resolve the fixed-strike vol matrix anchor price" in caplog.text

@@ -125,6 +125,7 @@ class FixedStrikeVolCalculator:
         today_date: date_type,
         prior_date: Optional[date_type],
         expiration: str = "",
+        spot_today_is_forward: bool = True,
     ):
         """
         Args:
@@ -151,6 +152,16 @@ class FixedStrikeVolCalculator:
                 all (never seen one, or the query found nothing).
             expiration: Expiration label, purely for display/identification
                 on the returned result -- not used in any calculation.
+            spot_today_is_forward: Fix round 2 (Low #3). Purely a display
+                flag, passed straight through to ``FixedStrikeVolResult.
+                spot_today_is_forward`` -- never used in any calculation
+                here (this class is anchor-agnostic; see ``spot_today``
+                above). Lets the report disclose whether the caller's
+                anchor for "today" is the true per-expiry forward price or
+                a fallback to the spot index, instead of that distinction
+                being visible only in a logged warning. Defaults to
+                ``True`` so every pre-existing direct constructor call
+                (tests) keeps its prior behavior.
         """
         self.today_rows = today_rows or []
         self.prior_rows = prior_rows or []
@@ -161,6 +172,7 @@ class FixedStrikeVolCalculator:
         self.today_date = today_date
         self.prior_date = prior_date
         self.expiration = expiration
+        self.spot_today_is_forward = spot_today_is_forward
 
     def calculate(self) -> FixedStrikeVolResult:
         """
@@ -213,6 +225,7 @@ class FixedStrikeVolCalculator:
             expected_prior_date=expected_prior_date,
             stale_prior=stale_prior,
             spot_today=self.spot_today,
+            spot_today_is_forward=self.spot_today_is_forward,
             spot_prior=self.spot_prior,
             spot_move_pct=spot_move_pct,
             atm_iv_today=self.atm_iv_today,

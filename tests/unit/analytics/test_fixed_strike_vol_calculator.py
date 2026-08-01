@@ -55,6 +55,65 @@ class TestArithmetic:
         assert result.stale_prior is False
 
 
+class TestSpotTodayIsForwardPassThrough:
+    """Fix round 2 (Low #3): spot_today_is_forward is purely a display
+    flag -- never affects any calculation, only passed through to the
+    result so the report can disclose whether 'today' actually used the
+    forward price or fell back to the spot index."""
+
+    def test_defaults_to_true_when_not_specified(self):
+        """Every pre-existing direct constructor call (this module's own
+        tests above) omits this argument -- must default to True so their
+        assertions keep describing the same result shape as before."""
+        calc = FixedStrikeVolCalculator(
+            today_rows=[_row(65000, "C", 34.50)],
+            prior_rows=[_row(65000, "C", 32.00)],
+            spot_today=64182.0,
+            spot_prior=64182.0,
+            atm_iv_today=33.00,
+            atm_iv_prior=30.00,
+            today_date=TODAY,
+            prior_date=YESTERDAY,
+        )
+        result = calc.calculate()
+        assert result.spot_today_is_forward is True
+
+    def test_false_is_passed_through_unchanged(self):
+        calc = FixedStrikeVolCalculator(
+            today_rows=[_row(65000, "C", 34.50)],
+            prior_rows=[_row(65000, "C", 32.00)],
+            spot_today=64182.0,
+            spot_prior=64182.0,
+            atm_iv_today=33.00,
+            atm_iv_prior=30.00,
+            today_date=TODAY,
+            prior_date=YESTERDAY,
+            spot_today_is_forward=False,
+        )
+        result = calc.calculate()
+        assert result.spot_today_is_forward is False
+
+    def test_does_not_affect_arithmetic_or_regime(self):
+        """The flag must be purely cosmetic -- identical inputs produce
+        identical d_iv/d_atm/regime regardless of its value."""
+        kwargs = dict(
+            today_rows=[_row(65000, "C", 34.50)],
+            prior_rows=[_row(65000, "C", 32.00)],
+            spot_today=64182.0,
+            spot_prior=64182.0,
+            atm_iv_today=33.00,
+            atm_iv_prior=30.00,
+            today_date=TODAY,
+            prior_date=YESTERDAY,
+        )
+        result_true = FixedStrikeVolCalculator(spot_today_is_forward=True, **kwargs).calculate()
+        result_false = FixedStrikeVolCalculator(spot_today_is_forward=False, **kwargs).calculate()
+
+        assert result_true.rows == result_false.rows
+        assert result_true.d_atm == result_false.d_atm
+        assert result_true.regime == result_false.regime
+
+
 class TestStickyRegimeDetection:
     def test_t7_2_sticky_strike(self):
         """T7.2: 5 ATM-region strikes all with d_iv=0.0, d_atm=+2.0,

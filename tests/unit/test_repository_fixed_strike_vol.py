@@ -300,3 +300,25 @@ class TestGetLatestChainIvDate:
         snapshots_query = cursor.captured_queries[1]
         assert "mark_iv IS NOT NULL" in snapshots_query
         assert "DATE(captured_at) <= %s" in snapshots_query
+
+    def test_snapshots_branch_applies_same_anchor_tolerance_as_get_chain_iv_at(self):
+        """Fix round 2 (Low #2): without this, get_latest_chain_iv_date
+        could report a date as 'having data' (e.g. a 14:00 UTC tick) that
+        get_chain_iv_at's own +/-3h-of-08:00-UTC tolerance would then
+        refuse to use -- the two methods disagreeing about whether a
+        given date has usable data."""
+        repo = _make_repo()
+        cursor = FakeCursor(fetchall_results=[(None,), (None,)])
+
+        with _patched_cursor(repo, cursor):
+            repo.get_latest_chain_iv_date(
+                currency="BTC", expiration="31JUL26", before_date=date(2026, 7, 30),
+            )
+
+        snapshots_query = cursor.captured_queries[1]
+        assert "EXTRACT(HOUR FROM captured_at) BETWEEN %s AND %s" in snapshots_query
+
+        anchor_hour = DatabaseRepository._FIXED_STRIKE_VOL_ANCHOR_HOUR_UTC
+        tolerance = DatabaseRepository._FIXED_STRIKE_VOL_ANCHOR_TOLERANCE_HOURS
+        snapshots_params = cursor.captured_params[1]
+        assert snapshots_params[-2:] == (anchor_hour - tolerance, anchor_hour + tolerance)

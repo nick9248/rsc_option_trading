@@ -64,8 +64,22 @@ def _format_summary_line(result: FixedStrikeVolResult) -> str:
         # not the spot index -- labelling it "Spot" after fixing the
         # underlying anchor mismatch would just relocate the same
         # confusion into the report text.
+        #
+        # Fix round 2 (Low #3): the "today" label is conditional on
+        # ``spot_today_is_forward`` -- when the caller silently fell back
+        # to the spot index (no forward price available for this
+        # expiry), that was previously only a logged warning, invisible
+        # to anyone reading the report. "prior" is always labelled "Fwd"
+        # -- daily_oi_snapshots.underlying_price has no equivalent
+        # fallback-tracking on the read side (a residual, narrower
+        # mismatch scenario logged as a known limitation, not fixed here
+        # per the reviewer's explicit deferral).
         move = f"{result.spot_move_pct:+.2f}%" if result.spot_move_pct is not None else "n/a"
-        spot_part = f"Fwd {result.spot_prior:,.0f} -> {result.spot_today:,.0f} ({move})     "
+        today_label = "Fwd" if result.spot_today_is_forward else "Idx"
+        spot_part = (
+            f"Fwd {result.spot_prior:,.0f} -> {today_label} {result.spot_today:,.0f} "
+            f"({move})     "
+        )
 
     atm_part = f"ATM IV {result.atm_iv_prior:.2f} -> {result.atm_iv_today:.2f} ({result.d_atm:+.2f})"
     return spot_part + atm_part

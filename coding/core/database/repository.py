@@ -1314,8 +1314,21 @@ class DatabaseRepository:
             Dict mapping (strike, option_type) -> open_interest.
         """
         from datetime import date as date_type, timedelta
+        # Fix round 2 (Important, "paired sibling" pattern this campaign
+        # has now hit in Tasks C3/C5/C7/C8): this method is this table's
+        # READER, called ~8 lines away from save_daily_oi_snapshot's
+        # WRITE in the same on_chain_analysis_service.py loop iteration.
+        # save_daily_oi_snapshot's default was fixed to
+        # datetime.now(timezone.utc).date() in the round-1 fix; leaving
+        # THIS default on naive-local datetime.now() desynced the pair --
+        # on this UTC+2 machine, a run during the UTC 22:00-24:00 window
+        # (local 00:00-02:00) would write a row dated "today UTC" via the
+        # sibling's now-correct default, then this method's still-local
+        # "yesterday" would resolve to that SAME UTC date, comparing a
+        # snapshot against itself and reporting ~zero OI change for every
+        # strike. UTC-explicit, matching the sibling.
         if before_date is None:
-            target_date = datetime.now().date() - timedelta(days=1)
+            target_date = datetime.now(timezone.utc).date() - timedelta(days=1)
         elif isinstance(before_date, datetime):
             target_date = before_date.date()
         else:
@@ -1535,6 +1548,23 @@ class DatabaseRepository:
             """, (currency, expiration, before_date))
             daily_oi_date = cursor.fetchone()[0]
 
+        # Fix round 2 (Low #2): apply the SAME +/- anchor tolerance
+        # get_chain_iv_at's snapshots fallback enforces for the actual
+        # comparison -- without it, this diagnostic method could report
+        # a date as "having data" (e.g. a 14:00 UTC tick, hours from the
+        # 08:00 anchor) that get_chain_iv_at would then refuse to use,
+        # letting the two methods disagree about whether a given date
+        # "has data". Hour-of-day filtering is sufficient here (no
+        # per-day timestamp arithmetic needed) since the tolerance window
+        # (05:00-11:00 UTC) never wraps past a calendar-day boundary.
+        anchor_hour_low = (
+            self._FIXED_STRIKE_VOL_ANCHOR_HOUR_UTC
+            - self._FIXED_STRIKE_VOL_ANCHOR_TOLERANCE_HOURS
+        )
+        anchor_hour_high = (
+            self._FIXED_STRIKE_VOL_ANCHOR_HOUR_UTC
+            + self._FIXED_STRIKE_VOL_ANCHOR_TOLERANCE_HOURS
+        )
         with self._db_cursor() as cursor:
             cursor.execute("""
                 SELECT MAX(DATE(captured_at))
@@ -1543,7 +1573,8 @@ class DatabaseRepository:
                   AND expiration = %s
                   AND DATE(captured_at) <= %s
                   AND mark_iv IS NOT NULL
-            """, (currency, expiration, before_date))
+                  AND EXTRACT(HOUR FROM captured_at) BETWEEN %s AND %s
+            """, (currency, expiration, before_date, anchor_hour_low, anchor_hour_high))
             snapshots_date = cursor.fetchone()[0]
 
         candidates = [d for d in (daily_oi_date, snapshots_date) if d is not None]
