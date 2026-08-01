@@ -47,6 +47,7 @@ from coding.core.analytics.reporting.historical_context_formatter import (
 from coding.core.analytics.reporting.market_wide_formatter import (
     format_block_trades_section,
     format_cross_asset_correlation_section,
+    format_forward_vol_section,
     format_futures_basis_section,
     format_perpetual_funding_section,
     format_realized_volatility_section,
@@ -77,11 +78,14 @@ _MARKET_WIDE_SECTION_ORDER = (
     "aggregate_gex_dex",
     # institutional_metrics_spec.md section 9(b)'s new market-wide order:
     # AGGREGATE GEX/DEX -> GAMMA ROLL-OFF (section 5, Task C6) -> SKEW TERM
-    # STRUCTURE (section 3) -> IV TERM STRUCTURE. The remaining reorder
-    # items (FORWARD VOL, block-trade M2 regrouping, etc.) are later tasks.
+    # STRUCTURE (section 3) -> IV TERM STRUCTURE -> FORWARD VOL (section 8,
+    # Task C9 -- "directly after the IV term structure, which it
+    # explains"). The remaining reorder items (block-trade M2 regrouping,
+    # etc.) are later tasks.
     "gamma_rolloff",
     "skew_term_structure",
     "iv_term_structure",
+    "forward_vol",
     "futures_basis",
     "realized_volatility",
     "vrp",
@@ -439,6 +443,8 @@ class OnChainReportFormatter:
             )
         if mw.term_structure is not None:
             sections["iv_term_structure"] = format_term_structure_section(mw.term_structure)
+        if mw.forward_vol is not None:
+            sections["forward_vol"] = format_forward_vol_section(mw.forward_vol)
         if mw.futures_basis is not None:
             sections["futures_basis"] = format_futures_basis_section(mw.futures_basis)
         if mw.realized_volatility is not None:

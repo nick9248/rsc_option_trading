@@ -24,6 +24,7 @@ from coding.core.analytics.market_wide_calculator import FUNDING_PERIODS_PER_YEA
 from coding.core.analytics.results.market_wide_results import (
     BlockTradesResult,
     CrossAssetCorrelationResult,
+    ForwardVolResult,
     FuturesBasisResult,
     PerpetualFundingResult,
     RealizedVolatilityResult,
@@ -145,6 +146,68 @@ def format_term_structure_section(result: Optional[TermStructureResult]) -> str:
         else:
             shape_label = f"FLAT ({diff:+.1f} pts)"
         lines.append(f"  Structure: {shape_label}")
+
+    lines.append("")
+    return "\n".join(lines)
+
+
+_FORWARD_VOL_WINDOW_WIDTH = 22
+_FORWARD_VOL_FWD_WIDTH = 22  # fits "NEG VARIANCE (-0.9600)" (spec 8(c) edge case)
+
+
+def format_forward_vol_section(result: Optional[ForwardVolResult]) -> str:
+    """
+    Render the FORWARD VOL section (institutional_metrics_spec.md
+    section 8, Task C9), directly after IV TERM STRUCTURE in the report
+    (which it explains) -- see ``_MARKET_WIDE_SECTION_ORDER`` in
+    report_formatter.py.
+
+    ASCII-only (no sigma/arrow unicode glyphs): mirrors
+    fixed_strike_vol_formatter.py's explicit convention -- this machine's
+    default console codec is cp1252, which raises ``UnicodeEncodeError``
+    on non-ASCII glyphs.
+
+    Negative-variance row (spec 8(c) edge case): the "Forward sigma"
+    column shows literal text ``NEG VARIANCE (<raw variance>)`` instead of
+    a number -- the raw (negative) variance is the diagnostic value here,
+    not a fabricated square root of a negative number. The section header
+    additionally gains a DATA QUALITY warning line when ANY bucket has
+    negative variance (``result.has_negative_variance``), so a reader
+    scanning only the header still sees the alarm.
+    """
+    lines = ["FORWARD VOL", _SUB_SEPARATOR]
+
+    if result is None or not result.buckets:
+        lines.append("  No forward vol data available")
+        lines.append("")
+        return "\n".join(lines)
+
+    if result.has_negative_variance:
+        lines.append(
+            "  DATA QUALITY WARNING: negative forward variance on at least "
+            "one leg below -- calendar-spread arb / stale ATM IV, not a "
+            "trade signal"
+        )
+
+    lines.append(
+        f"  {'Window':<{_FORWARD_VOL_WINDOW_WIDTH}}  {'T1':>7}  {'T2':>7}  "
+        f"{'sigma1':>7}  {'sigma2':>7}  "
+        f"{'Forward sigma':>{_FORWARD_VOL_FWD_WIDTH}}  {'Flag':<13}"
+    )
+
+    for bucket in result.buckets:
+        window = f"{bucket.from_expiry} -> {bucket.to_expiry}"
+        if bucket.negative_variance:
+            fwd_str = f"NEG VARIANCE ({bucket.fwd_var:.4f})"
+        else:
+            fwd_str = f"{bucket.fwd_vol_pct:.2f}"
+        flag_str = "EVENT PREMIUM" if "EVENT_PREMIUM" in bucket.flags else ""
+
+        lines.append(
+            f"  {window:<{_FORWARD_VOL_WINDOW_WIDTH}}  {bucket.t1_days:>6.1f}d  "
+            f"{bucket.t2_days:>6.1f}d  {bucket.sigma1_pct:>7.2f}  "
+            f"{bucket.sigma2_pct:>7.2f}  {fwd_str:>{_FORWARD_VOL_FWD_WIDTH}}  {flag_str:<13}"
+        )
 
     lines.append("")
     return "\n".join(lines)
