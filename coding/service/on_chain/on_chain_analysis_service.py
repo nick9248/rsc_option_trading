@@ -1052,18 +1052,34 @@ class OnChainAnalysisService:
         ``MarketWideCalculator._calculate_days_to_expiry`` -- the EXACT
         same method (same clock convention, same 08:00 UTC settlement
         anchor) ``_build_skew_term_structure`` already uses for this same
-        ``skew_by_expiry`` data. A shared expiry's DTE can therefore never
-        desync between the SKEW TERM STRUCTURE and FORWARD VOL sections
-        (the paired-method check the brief calls out explicitly).
+        ``skew_by_expiry`` data. A shared expiry's DTE therefore uses the
+        identical formula and settlement anchor in both sections. Note
+        (Task C9 review, Minor #1): this method and
+        ``_build_skew_term_structure`` each resolve their OWN
+        ``datetime.now(timezone.utc)`` independently -- they are not
+        threaded a single shared clock value -- so there is a
+        theoretical sub-millisecond gap between the two reads within one
+        analysis run. Immaterial today (both calls happen back-to-back in
+        the same synchronous request, far below one DTE-day of drift),
+        but "never desync" would overstate the guarantee; if a future
+        caller needs byte-identical DTE across both sections, thread one
+        ``now_utc`` through both builders instead of relying on this.
 
-        Isolation: a parse failure for one expiration's label is caught
-        and that expiration is excluded from candidacy (logged, never
-        raised) -- isolated per-expiry, the same way
-        ``_build_skew_term_structure`` isolates its per-expiry try/except,
-        so one bad label cannot suppress the other expiries' rows. The
-        pure-calculator call itself is wrapped separately so a bug in
-        ``calculate_forward_vol_curve`` cannot be blamed on (or hide
-        behind) a DTE-parsing failure, and vice versa.
+        Isolation: the try/except wraps the ENTIRE per-expiry body (DTE
+        calculation, the None-DTE skip, and the ``skew.get(...)`` reads)
+        in one block -- matching ``_build_skew_term_structure``'s own
+        boundary exactly (Task C9 review, Important: an earlier revision
+        of this method wrapped only the DTE calculation, leaving
+        ``skew.get("atm_iv_interp")`` unguarded; a ``None`` ``skew`` for
+        one expiry raised an uncaught ``AttributeError`` there, which
+        propagated past ``builder.set_market_wide(...)`` and lost every
+        market-wide report section for the run -- reproduced by the
+        reviewer, fixed by widening the boundary). One bad
+        expiration/label/skew-dict can never suppress the other
+        expiries' rows. The pure-calculator call below is wrapped in its
+        OWN separate try, so a bug in ``calculate_forward_vol_curve``
+        cannot be blamed on (or hide behind) a per-expiry build failure,
+        and vice versa.
 
         Returns:
             ``None`` when there is no skew data at all (mirrors
@@ -1087,22 +1103,31 @@ class OnChainAnalysisService:
         now_utc = datetime.now(timezone.utc)
         atm_by_expiry: Dict[str, Tuple[Optional[float], Optional[float]]] = {}
         for expiration, skew in skew_by_expiry.items():
+            # Task C9 review (Important): the try boundary must wrap the
+            # ENTIRE per-expiry body -- not just the DTE calculation --
+            # matching _build_skew_term_structure's boundary exactly.
+            # skew.get("atm_iv_interp") below can raise AttributeError if
+            # `skew` is None for this expiry; that used to sit AFTER the
+            # try/except and was uncaught, propagating past
+            # builder.set_market_wide(...) and losing every market-wide
+            # report section for the whole run -- the reviewer reproduced
+            # this by execution. Fixed by widening the try to match the
+            # sibling's own "wrap the whole per-expiry body" convention.
             try:
                 dte = MarketWideCalculator._calculate_days_to_expiry(expiration, now_utc)
+                if dte is None:
+                    logger.warning(
+                        "Skipping forward vol row for %s %s: expiration string "
+                        "did not parse as a date",
+                        currency, expiration,
+                    )
+                    continue
+                atm_by_expiry[expiration] = (skew.get("atm_iv_interp"), dte)
             except Exception as exc:
                 logger.warning(
-                    "Failed to compute DTE for forward vol row %s %s: %s",
+                    "Failed to build forward vol row for %s %s: %s",
                     currency, expiration, exc,
                 )
-                continue
-            if dte is None:
-                logger.warning(
-                    "Skipping forward vol row for %s %s: expiration string "
-                    "did not parse as a date",
-                    currency, expiration,
-                )
-                continue
-            atm_by_expiry[expiration] = (skew.get("atm_iv_interp"), dte)
 
         if len(atm_by_expiry) < 2:
             return None

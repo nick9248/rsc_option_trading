@@ -110,6 +110,34 @@ class TestBuildForwardVolCurve:
         })
         assert service._build_forward_vol_curve(analyzer, "BTC") is None
 
+    def test_none_skew_value_for_one_expiry_is_skipped_not_raised(self):
+        """Task C9 review (Important): an earlier revision only wrapped
+        the DTE calculation in try/except, leaving the subsequent
+        skew.get("atm_iv_interp") line unguarded. When ``skew`` itself is
+        ``None`` for one expiry (reproduced here), that line raised an
+        uncaught AttributeError which the reviewer confirmed propagates
+        past builder.set_market_wide(...) in production, losing every
+        market-wide report section for the run. The try boundary now
+        wraps the whole per-expiry body (matching
+        _build_skew_term_structure's own boundary) -- the bad expiry is
+        skipped and the other two still produce a bucket."""
+        service = _make_service()
+        good_near = _future_expiration(7)
+        good_far = _future_expiration(30)
+        bad_exp = _future_expiration(15)
+        analyzer = _FakeAnalyzer(skew_by_expiry={
+            good_near: _skew(atm=40.0),
+            bad_exp: None,  # simulates a None skew dict for one expiry
+            good_far: _skew(atm=45.0),
+        })
+
+        result = service._build_forward_vol_curve(analyzer, "BTC")
+
+        assert result is not None
+        assert len(result.buckets) == 1
+        assert result.buckets[0].from_expiry == good_near
+        assert result.buckets[0].to_expiry == good_far
+
     def test_unparseable_expiration_is_skipped_not_raised(self):
         service = _make_service()
         good_near = _future_expiration(7)
