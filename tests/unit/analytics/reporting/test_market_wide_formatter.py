@@ -408,6 +408,28 @@ def test_block_trades_rendered():
         assert instrument not in large_prints_text
 
 
+def test_block_timestamp_rendered_in_utc_not_local():
+    """Independent review round 2 (Important #2): same banned bug class as
+    the calculator's own detect_block_trades -- ts=1785546525278 is
+    01:08:45 UTC; on a UTC+2 dev machine the old naive
+    datetime.fromtimestamp(ts/1000) rendered 03:08:45 instead."""
+    result = BlockTradesResult(
+        trades=(), notional_threshold=100_000.0, total_detected=0,
+        blocks=(
+            Block(
+                block_trade_id="BLOCK-282155", leg_count=1, observed_leg_count=1,
+                combo_id=None, combined_premium_usd=100.0, total_amount=12.5,
+                instruments=("BTC-1AUG26-63000-C",), timestamp=1785546525278,
+            ),
+        ),
+        tracked_since="2026-08-02",
+    )
+    text = format_block_trades_section(result)
+
+    assert "01:08:45" in text
+    assert "03:08:45" not in text
+
+
 # ---------------------------------------------------------------------------
 # Cross-asset correlation
 # ---------------------------------------------------------------------------

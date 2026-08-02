@@ -17,7 +17,7 @@ Every function accepts ``Optional[...]`` and renders the same
 early-return case when the corresponding phase produced no result.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from coding.core.analytics.market_wide_calculator import FUNDING_PERIODS_PER_YEAR
@@ -418,7 +418,12 @@ def format_block_trades_section(result: Optional[BlockTradesResult]) -> str:
         )
         for block in result.blocks:
             if block.timestamp:
-                time_str = datetime.fromtimestamp(block.timestamp / 1000).strftime("%H:%M:%S")
+                # independent review round 2 (Important #2): naive-local
+                # datetime is the exact banned bug class this campaign has
+                # already spent 5 fix rounds on -- explicit UTC always.
+                time_str = datetime.fromtimestamp(
+                    block.timestamp / 1000, tz=timezone.utc
+                ).strftime("%H:%M:%S")
             else:
                 time_str = "N/A"
             structure = block.combo_id or "N/A"

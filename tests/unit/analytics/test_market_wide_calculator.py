@@ -393,6 +393,32 @@ class TestFundingRateExtractionAndTrend:
         assert "BLOCK-281688" in report
         assert "LARGE PRINTS" in report
 
+    def test_block_timestamp_rendered_in_utc_not_local(self, calculator):
+        """Independent review round 2 (Important #2): the exact banned
+        naive-local-datetime bug class (5 fix rounds this campaign).
+        ts=1785546525278 is 01:08:45 UTC; on a UTC+2 dev machine the old
+        naive datetime.fromtimestamp(ts/1000) rendered 03:08:45 instead --
+        a direct in-report inconsistency against every other UTC-labelled
+        section, and machine-timezone-dependent golden master output."""
+        trades = [
+            {
+                "instrument_name": "BTC-1AUG26-63000-C",
+                "amount": 12.5,
+                "price": 0.0008,
+                "index_price": 62892.69,
+                "direction": "buy",
+                "timestamp": 1785546525278,
+                "iv": 13.35,
+                "block_trade_id": "BLOCK-282155",
+                "block_trade_leg_count": 1,
+            },
+        ]
+
+        report, _ = calculator.detect_block_trades(trades, notional_threshold=100_000)
+
+        assert "01:08:45" in report
+        assert "03:08:45" not in report
+
     def test_no_blocks_in_window_states_start_date_not_no_data(self, calculator):
         """Gate exhaustiveness: trades exist but none share a
         block_trade_id -- must render as an empty block section that
@@ -483,6 +509,35 @@ class TestFundingRateExtractionAndTrend:
         assert block["leg_count"] == 2  # falls back to observed count
         assert block["combo_id"] is None
         assert "BLOCK-NOMETA" in report
+
+    def test_block_leg_with_null_index_price_falls_back_to_spot(self, calculator):
+        """Independent review round 2 (M1): `leg.get("index_price",
+        self.spot_price) or 0` only applies the spot_price default when
+        the key is ABSENT -- a leg with the key present but null (a real,
+        if rare, API shape) fell through the `or 0` instead, silently
+        zeroing that leg's contribution to combined_premium_usd. Fixture
+        calculator has spot_price=90000 -- the correct premium uses that,
+        not zero."""
+        trades = [
+            {
+                "instrument_name": "BTC-31JUL26-63000-C",
+                "amount": 10.0,
+                "price": 0.001,
+                "index_price": None,  # key present, value null
+                "direction": "buy",
+                "timestamp": int(time.time() * 1000),
+                "iv": 20.0,
+                "block_trade_id": "BLOCK-NULLIDX",
+                "block_trade_leg_count": 1,
+            },
+        ]
+
+        _, structured = calculator.detect_block_trades(trades, notional_threshold=100_000)
+
+        assert len(structured["blocks"]) == 1
+        block = structured["blocks"][0]
+        expected_premium = 0.001 * 10.0 * 90000  # spot_price fallback, not 0
+        assert block["combined_premium_usd"] == pytest.approx(expected_premium)
 
     def test_cross_asset_correlation(self, calculator):
         own_prices = _make_price_history(35, base_price=90000)

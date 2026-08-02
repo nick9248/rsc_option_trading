@@ -168,8 +168,15 @@ class MarketWideMetrics:
     btc_eth_price_corr: float = 0.0
     btc_eth_dvol_corr: float = 0.0
 
-    # Block trades
-    block_trades: List[dict] = field(default_factory=list)
+    # Block trades (institutional_metrics_spec.md section 9 / Migration M2,
+    # Task D1 review round 2, Important #3): `blocks` is grouped by
+    # block_trade_id (real blocks, one row per block); `large_prints` is
+    # the pre-existing notional-filter list, relabelled here for the same
+    # reason the report was -- a large single-leg screen print is not a
+    # block, and narrating it as one conflates exactly what section 9 was
+    # written to separate.
+    blocks: List[dict] = field(default_factory=list)
+    large_prints: List[dict] = field(default_factory=list)
 
     # Aggregate GEX/DEX across all expirations
     aggregate_total_gex: float = 0.0
@@ -1570,7 +1577,7 @@ class SynthesisEngine:
         )
 
         # Block trade summary
-        block_narrative = self._generate_block_summary(market.block_trades)
+        block_narrative = self._generate_block_summary(market.blocks, market.large_prints)
 
         # =====================================================================
         # STEP 6: Assemble final output
@@ -1710,31 +1717,54 @@ Perp Funding: {market.funding_rate:.4f}%  | 8h: {market.funding_8h:.4f}%
 
         return "unclear — monitor GEX evolution"
 
-    def _generate_block_summary(self, block_trades: List[dict]) -> str:
-        """Summarize block trade activity."""
-        if not block_trades:
-            return "INSTITUTIONAL FLOW: No block trades detected in lookback window."
+    def _generate_block_summary(self, blocks: List[dict], large_prints: List[dict]) -> str:
+        """
+        Summarize institutional block-trade activity.
 
-        buy_blocks = [b for b in block_trades if b.get('direction') == 'buy']
-        sell_blocks = [b for b in block_trades if b.get('direction') == 'sell']
+        institutional_metrics_spec.md section 9 / Migration M2 (Task D1
+        review round 2, Important #3): ``blocks`` (grouped by
+        ``block_trade_id``, real blocks) is the primary narrative --
+        ``large_prints`` (the pre-existing notional-filter list of large
+        single-leg screen prints) is narrated separately, explicitly
+        labelled "Screen Prints", never conflated with real blocks.
+        """
+        if not blocks:
+            lines = ["INSTITUTIONAL FLOW (Block Trades): none detected in lookback window."]
+        else:
+            total_premium = sum(b.get('combined_premium_usd', 0) for b in blocks)
+            lines = [
+                f"INSTITUTIONAL FLOW (Block Trades): {len(blocks)} block(s), "
+                f"combined premium ${total_premium / 1e6:.2f}M"
+            ]
 
-        total_buy_notional = sum(b.get('notional', 0) for b in buy_blocks)
-        total_sell_notional = sum(b.get('notional', 0) for b in sell_blocks)
-
-        lines = [
-            f"INSTITUTIONAL FLOW (Block Trades): "
-            f"{len(buy_blocks)} buys (${total_buy_notional / 1e6:.1f}M) | "
-            f"{len(sell_blocks)} sells (${total_sell_notional / 1e6:.1f}M)"
-        ]
-
-        # Highlight the largest block
-        if block_trades:
-            largest = max(block_trades, key=lambda b: b.get('notional', 0))
+            largest = max(blocks, key=lambda b: b.get('combined_premium_usd', 0))
+            structure = largest.get('combo_id') or "N/A"
             lines.append(
-                f"  Largest: {largest.get('instrument', 'N/A')} "
-                f"{'BUY' if largest.get('direction') == 'buy' else 'SELL'} "
-                f"{largest.get('size', 0)} BTC "
-                f"(${largest.get('notional', 0) / 1e6:.2f}M) at {largest.get('iv', 0):.1f}% IV"
+                f"  Largest: {largest.get('block_trade_id', 'N/A')} "
+                f"({largest.get('leg_count', 0)} legs, structure: {structure}) "
+                f"${largest.get('combined_premium_usd', 0) / 1e6:.2f}M"
+            )
+
+        if large_prints:
+            buy_prints = [t for t in large_prints if t.get('direction') == 'buy']
+            sell_prints = [t for t in large_prints if t.get('direction') == 'sell']
+
+            total_buy_notional = sum(t.get('notional', 0) for t in buy_prints)
+            total_sell_notional = sum(t.get('notional', 0) for t in sell_prints)
+
+            lines.append(
+                f"SCREEN PRINTS (large single-leg trades, not blocks): "
+                f"{len(buy_prints)} buys (${total_buy_notional / 1e6:.1f}M) | "
+                f"{len(sell_prints)} sells (${total_sell_notional / 1e6:.1f}M)"
+            )
+
+            largest_print = max(large_prints, key=lambda t: t.get('notional', 0))
+            lines.append(
+                f"  Largest: {largest_print.get('instrument', 'N/A')} "
+                f"{'BUY' if largest_print.get('direction') == 'buy' else 'SELL'} "
+                f"{largest_print.get('size', 0)} BTC "
+                f"(${largest_print.get('notional', 0) / 1e6:.2f}M) at "
+                f"{largest_print.get('iv', 0):.1f}% IV"
             )
 
         return "\n".join(lines)
@@ -1990,7 +2020,23 @@ class SynthesisMapper:
             aggregate_put_support = None
             aggregate_hvl = None
 
-        block_trades = [
+        # institutional_metrics_spec.md section 9 / Migration M2 (Task D1
+        # review round 2, Important #3): `blocks` (real, block_trade_id-
+        # grouped) and `large_prints` (the pre-existing notional-filter
+        # list) are wired separately -- large_prints already excludes any
+        # trade with a block_trade_id (see MarketWideCalculator.
+        # detect_block_trades), so the two never conflate or double-count.
+        blocks = [
+            {
+                "block_trade_id": b.block_trade_id, "leg_count": b.leg_count,
+                "observed_leg_count": b.observed_leg_count, "combo_id": b.combo_id,
+                "combined_premium_usd": b.combined_premium_usd,
+                "total_amount": b.total_amount, "instruments": b.instruments,
+                "timestamp": b.timestamp,
+            }
+            for b in (mw.block_trades.blocks if mw.block_trades is not None else ())
+        ]
+        large_prints = [
             {
                 "timestamp": t.timestamp, "instrument": t.instrument_name,
                 "size": t.amount, "amount": t.amount, "direction": t.direction,
@@ -2036,7 +2082,8 @@ class SynthesisMapper:
             btc_eth_dvol_corr=(
                 (corr.dvol_correlation or 0.0) if corr is not None else 0.0
             ),
-            block_trades=block_trades,
+            blocks=blocks,
+            large_prints=large_prints,
             aggregate_total_gex=aggregate_total_gex,
             aggregate_total_dex=aggregate_total_dex,
             aggregate_call_resistance=aggregate_call_resistance,
@@ -2096,7 +2143,11 @@ def build_from_current_data():
         perp_funding_trend="Stable",
         btc_eth_price_corr=0.93,
         btc_eth_dvol_corr=0.93,
-        block_trades=[
+        # institutional_metrics_spec.md section 9 / Migration M2 (Task D1
+        # review round 2): this hardcoded example data predates block_trade_id
+        # capture entirely, so these are large single-leg screen prints, not
+        # real blocks -- `blocks` intentionally has no example data here.
+        large_prints=[
             {"instrument": "BTC-6MAR26-50000-P", "size": 30.0, "direction": "sell",
              "notional": 1_968_044, "iv": 101.7},
             {"instrument": "BTC-24APR26-77000-C", "size": 20.0, "direction": "buy",

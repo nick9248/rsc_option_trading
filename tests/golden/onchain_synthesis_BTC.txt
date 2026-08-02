@@ -29,7 +29,9 @@ VOL ASSESSMENT: Volatility is expensive (IV at 20th percentile, VRP +10.4pts). N
 
 RISK FACTORS: No elevated risk factors detected
 
-INSTITUTIONAL FLOW (Block Trades): 4 buys ($7.7M) | 6 sells ($11.5M)
+INSTITUTIONAL FLOW (Block Trades): 3 block(s), combined premium $0.15M
+  Largest: BLOCK-281702 (2 legs, structure: N/A) $0.09M
+SCREEN PRINTS (large single-leg trades, not blocks): 4 buys ($7.7M) | 6 sells ($11.5M)
   Largest: BTC-27JUL26-66000-C BUY 30.0 BTC ($1.93M) at 24.4% IV
 
 TRADE RECOMMENDATIONS:

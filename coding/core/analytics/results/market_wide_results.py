@@ -480,7 +480,18 @@ class MarketWideResult:
 
         bt = self.block_trades
         if bt is not None:
-            flat["block_trades"] = [
+            # institutional_metrics_spec.md section 9 / Migration M2 (Task
+            # D1 review round 2, Important #3): `large_prints` (the
+            # pre-existing notional-filter list of large single-leg screen
+            # prints) and `blocks` (real block_trade_id groups) are
+            # exported under SEPARATE keys -- the old code exported the
+            # large-prints list under the key "block_trades", which
+            # conflated exactly the two things section 9 was written to
+            # separate. Downstream: synthesis.py's SynthesisMapper reads
+            # the typed model directly (not this flat dict), so this key
+            # rename only affects to_flat_dict() consumers (currently the
+            # characterization golden-master JSON snapshot).
+            flat["large_prints"] = [
                 {
                     "timestamp": t.timestamp,
                     "instrument": t.instrument_name,
@@ -491,6 +502,19 @@ class MarketWideResult:
                     "iv": t.implied_volatility,
                 }
                 for t in bt.trades
+            ]
+            flat["blocks"] = [
+                {
+                    "block_trade_id": b.block_trade_id,
+                    "leg_count": b.leg_count,
+                    "observed_leg_count": b.observed_leg_count,
+                    "combo_id": b.combo_id,
+                    "combined_premium_usd": b.combined_premium_usd,
+                    "total_amount": b.total_amount,
+                    "instruments": b.instruments,
+                    "timestamp": b.timestamp,
+                }
+                for b in bt.blocks
             ]
 
         corr = self.cross_asset_correlation

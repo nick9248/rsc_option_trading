@@ -15,6 +15,7 @@ import dataclasses
 import pytest
 
 from coding.core.analytics.results import (
+    Block,
     BlockTrade,
     BlockTradesResult,
     CrossAssetCorrelationResult,
@@ -549,6 +550,12 @@ def _make_market_wide_result(**overrides) -> MarketWideResult:
                 amount=5.0, direction="buy", notional=500_000.0, implied_volatility=70.0,
             ),),
             notional_threshold=100_000.0, total_detected=1,
+            blocks=(Block(
+                block_trade_id="BLOCK-281688", leg_count=3, observed_leg_count=3,
+                combo_id="BTC-STRD-31JUL26-63000", combined_premium_usd=12345.0,
+                total_amount=37.5, instruments=("A", "B", "C"), timestamp=1234567891,
+            ),),
+            tracked_since="2026-08-02",
         ),
         cross_asset_correlation=CrossAssetCorrelationResult(
             other_currency="ETH", price_correlation=0.85, dvol_correlation=0.6, sample_size=30,
@@ -580,10 +587,21 @@ def test_market_wide_result_to_flat_dict_full():
     assert flat["perp_funding_trend"] == "Rising"
     assert flat["funding_rate"] == 0.0001
     assert flat["funding_8h"] == 0.0001
-    assert flat["block_trades"] == [
+    # institutional_metrics_spec.md section 9 / Migration M2 (Task D1
+    # review round 2, Important #3): the large-prints (screen-print) list
+    # and the real block-trade_id groups are exported under separate keys
+    # -- never conflated under one "block_trades" name.
+    assert flat["large_prints"] == [
         {
             "timestamp": 1234567890, "instrument": "BTC-28FEB26-100000-C", "size": 5.0,
             "amount": 5.0, "direction": "buy", "notional": 500_000.0, "iv": 70.0,
+        }
+    ]
+    assert flat["blocks"] == [
+        {
+            "block_trade_id": "BLOCK-281688", "leg_count": 3, "observed_leg_count": 3,
+            "combo_id": "BTC-STRD-31JUL26-63000", "combined_premium_usd": 12345.0,
+            "total_amount": 37.5, "instruments": ("A", "B", "C"), "timestamp": 1234567891,
         }
     ]
     assert flat["btc_eth_price_corr"] == 0.85

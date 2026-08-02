@@ -3584,9 +3584,9 @@ BLOCK TRADES
   Tracked since 2026-08-02 (block_trade_id was not captured before this date; history is not backfillable)
           Block ID  Legs                 Structure     Premium (USD)          Time
           --------  ----                 ---------     -------------          ----
-      BLOCK-281702     2                       N/A  $         90,476      17:24:55
-      BLOCK-281701     3                       N/A  $         34,779      17:11:06
-      BLOCK-281700     2    BTC-STRD-31JUL26-64000  $         28,887      15:49:41
+      BLOCK-281702     2                       N/A  $         90,476      15:24:55
+      BLOCK-281701     3                       N/A  $         34,779      15:11:06
+      BLOCK-281700     2    BTC-STRD-31JUL26-64000  $         28,887      13:49:41
 
 LARGE PRINTS (screen prints, not blocks; >$100,000 notional)
 --------------------------------------------------------------------------------

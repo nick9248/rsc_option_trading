@@ -36,6 +36,8 @@ from coding.core.analytics.results.expiry_results import (
 from coding.core.analytics.results.flow_results import FlowResult, FlowTotals
 from coding.core.analytics.results.gex_dex_results import GexDexKeyLevels, GexDexLevel, GexDexResult
 from coding.core.analytics.results.market_wide_results import (
+    Block,
+    BlockTrade,
     BlockTradesResult,
     CrossAssetCorrelationResult,
     FuturesBasisResult,
@@ -120,7 +122,8 @@ def make_market_wide(**overrides) -> MarketWideMetrics:
         perp_funding_trend="Stable",
         btc_eth_price_corr=0.90,
         btc_eth_dvol_corr=0.85,
-        block_trades=[],
+        large_prints=[],
+        blocks=[],
     )
     defaults.update(overrides)
     return MarketWideMetrics(**defaults)
@@ -865,6 +868,66 @@ class TestBuildMarketWide:
             assert market.term_structure_shape == shape
             assert market.term_structure_spread == 5.0
 
+    def test_blocks_and_large_prints_are_wired_separately(self):
+        """Independent review round 2 (Important #3): real blocks
+        (block_trade_id grouping, institutional_metrics_spec.md section 9)
+        must reach MarketWideMetrics.blocks; the pre-existing notional-
+        filter list must reach large_prints -- NOT the same field, and
+        neither list's content leaks into the other."""
+        mw = MarketWideResult(
+            spot_price=65000.0, currency="BTC", dvol=None, iv_percentile_365d=None,
+            aggregate_gex_dex=None, term_structure=None, futures_basis=None,
+            realized_volatility=None, variance_risk_premium=None, volatility_cone=None,
+            perpetual_funding=None,
+            block_trades=BlockTradesResult(
+                trades=(
+                    BlockTrade(
+                        timestamp=1700000000000, instrument_name="BTC-28FEB26-100000-C",
+                        amount=5.0, direction="buy", notional=500_000.0, implied_volatility=70.0,
+                    ),
+                ),
+                notional_threshold=100_000.0, total_detected=1,
+                blocks=(
+                    Block(
+                        block_trade_id="BLOCK-281688", leg_count=3, observed_leg_count=3,
+                        combo_id="BTC-STRD-31JUL26-63000", combined_premium_usd=12345.0,
+                        total_amount=37.5,
+                        instruments=("A", "B", "C"), timestamp=1700000001000,
+                    ),
+                ),
+                tracked_since="2026-08-02",
+            ),
+            cross_asset_correlation=None, failed_sections=(),
+        )
+        result = make_onchain_result(market_wide=mw)
+        market = SynthesisMapper.build_market_wide(result)
+
+        assert len(market.blocks) == 1
+        assert market.blocks[0]["block_trade_id"] == "BLOCK-281688"
+        assert market.blocks[0]["combined_premium_usd"] == 12345.0
+        assert market.blocks[0]["combo_id"] == "BTC-STRD-31JUL26-63000"
+
+        assert len(market.large_prints) == 1
+        assert market.large_prints[0]["instrument"] == "BTC-28FEB26-100000-C"
+
+        # no conflation: block fields never appear on a large-print entry
+        # and vice versa.
+        assert "block_trade_id" not in market.large_prints[0]
+        assert "instrument" not in market.blocks[0]
+
+    def test_empty_block_trades_result_gives_empty_blocks_and_large_prints(self):
+        empty_mw = MarketWideResult(
+            spot_price=50000.0, currency="BTC", dvol=None, iv_percentile_365d=None,
+            aggregate_gex_dex=None, term_structure=None, futures_basis=None,
+            realized_volatility=None, variance_risk_premium=None, volatility_cone=None,
+            perpetual_funding=None, block_trades=None, cross_asset_correlation=None,
+            failed_sections=(),
+        )
+        result = make_onchain_result(underlying_price=50000.0, market_wide=empty_mw)
+        market = SynthesisMapper.build_market_wide(result)
+        assert market.blocks == []
+        assert market.large_prints == []
+
 
 # =============================================================================
 # TESTS: SynthesisMapper.build_expiry_metrics
@@ -1079,6 +1142,49 @@ class TestSynthesisEngineRun:
         expiry = make_expiry_metrics()
         result = engine.run(market, [expiry])
         assert "ATM IV (front): ~0.0%" in result
+
+    def test_run_narrates_real_blocks_not_large_prints(self):
+        """Independent review round 2 (Important #3): real blocks
+        (block_trade_id grouping) must reach the narrative under
+        "Block Trades"; the notional-filter list, if narrated at all,
+        must be separately labelled as screen prints -- never conflated."""
+        engine = SynthesisEngine()
+        market = make_market_wide(
+            blocks=[
+                {
+                    "block_trade_id": "BLOCK-281688", "leg_count": 3,
+                    "observed_leg_count": 3, "combo_id": "BTC-STRD-31JUL26-63000",
+                    "combined_premium_usd": 2_500_000.0, "total_amount": 37.5,
+                    "instruments": ("A", "B", "C"), "timestamp": 1700000000000,
+                },
+            ],
+            large_prints=[
+                {
+                    "timestamp": 1700000000000, "instrument": "BTC-28FEB26-100000-C",
+                    "size": 5.0, "amount": 5.0, "direction": "buy",
+                    "notional": 500_000.0, "iv": 70.0,
+                },
+            ],
+        )
+        expiry = make_expiry_metrics()
+        result = engine.run(market, [expiry])
+
+        assert "Block Trades" in result
+        assert "BLOCK-281688" in result
+        assert "BTC-STRD-31JUL26-63000" in result
+
+        # if the large-prints list is narrated, it must be separately
+        # labelled as screen prints, not conflated into "Block Trades".
+        if "BTC-28FEB26-100000-C" in result:
+            assert "screen print" in result.lower()
+
+    def test_run_no_blocks_states_none_detected_not_silence(self):
+        engine = SynthesisEngine()
+        market = make_market_wide(blocks=[], large_prints=[])
+        expiry = make_expiry_metrics()
+        result = engine.run(market, [expiry])
+        assert "Block Trades" in result
+        assert "none detected" in result.lower() or "no block" in result.lower()
 
     def test_timeframe_max_pain_distance_uses_own_expiry_price_not_global_spot(self):
         """

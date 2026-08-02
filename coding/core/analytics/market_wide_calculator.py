@@ -774,9 +774,15 @@ class MarketWideCalculator:
 
             combo_id = next((leg.get("combo_id") for leg in legs if leg.get("combo_id")), None)
 
+            # independent review round 2 (M1): leg.get("index_price",
+            # self.spot_price) only applies the spot_price default when the
+            # key is ABSENT -- a leg with the key present but null fell
+            # through to `or 0`, silently zeroing that leg's premium
+            # contribution instead of using spot_price. `.get("index_price")
+            # or self.spot_price` applies the fallback for both cases.
             combined_premium_usd = sum(
                 (leg.get("price") or 0) * (leg.get("amount") or 0)
-                * (leg.get("index_price", self.spot_price) or 0)
+                * (leg.get("index_price") or self.spot_price)
                 for leg in legs
             )
             total_amount = sum(leg.get("amount") or 0 for leg in legs)
@@ -811,7 +817,13 @@ class MarketWideCalculator:
             )
             for b in blocks:
                 ts = b["timestamp"]
-                time_str = datetime.fromtimestamp(ts / 1000).strftime("%H:%M:%S") if ts else "N/A"
+                # independent review round 2 (Important #2): naive-local
+                # datetime is the exact banned bug class this campaign has
+                # already spent 5 fix rounds on -- explicit UTC always.
+                time_str = (
+                    datetime.fromtimestamp(ts / 1000, tz=timezone.utc).strftime("%H:%M:%S")
+                    if ts else "N/A"
+                )
                 structure = b["combo_id"] or "N/A"
                 leg_str = (
                     str(b["leg_count"])

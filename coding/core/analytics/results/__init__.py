@@ -41,6 +41,7 @@ from coding.core.analytics.results.gex_dex_results import (
     GexDexStrikeRow,
 )
 from coding.core.analytics.results.market_wide_results import (
+    Block,
     BlockTrade,
     BlockTradesResult,
     CrossAssetCorrelationResult,
@@ -102,6 +103,7 @@ __all__ = [
     "VolatilityConeResult",
     "VolatilityConeWindowStats",
     "PerpetualFundingResult",
+    "Block",
     "BlockTrade",
     "BlockTradesResult",
     "CrossAssetCorrelationResult",
