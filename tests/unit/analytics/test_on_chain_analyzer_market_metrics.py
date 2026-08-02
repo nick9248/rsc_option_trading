@@ -11,7 +11,6 @@ rewritten against OnChainReportFormatter.render_header(result) directly
 (the section 3 compat table's planned replacement for this file).
 """
 
-import math
 from datetime import datetime
 
 import pytest
@@ -66,53 +65,23 @@ def test_market_metrics_iv_rank_100():
 
 
 # ---------------------------------------------------------------------------
-# Expected movements tests
+# Expected movements: institutional_metrics_spec.md section 9 (Task D2)
+# deletes the header's three-line $+% breakdown -- its one-line integer-
+# dollar replacement (market_wide_formatter.format_expected_move_line)
+# renders in the market-wide CONTEXT block instead, not the header. See
+# tests/unit/analytics/reporting/test_market_wide_formatter.py's
+# test_expected_move_line_* tests for the new one-liner's coverage.
 # ---------------------------------------------------------------------------
 
-def test_market_metrics_expected_movements_rendered():
-    """Expected daily/weekly/monthly moves appear in report when dvol is set."""
-    report = _render_header(dvol=75.95, iv_percentile=92.6)
-    assert "Expected Daily Move:" in report
-    assert "Expected Weekly Move:" in report
-    assert "Expected Monthly Move:" in report
-
-
-def test_market_metrics_expected_movements_values():
-    """Expected move dollar values are mathematically correct."""
-    dvol = 80.0
-    spot = UNDERLYING_PRICE
-    report = _render_header(dvol=dvol, iv_percentile=50.0)
-
-    expected_daily_dollar = dvol / 100 / math.sqrt(365) * spot
-    expected_weekly_dollar = dvol / 100 / math.sqrt(52) * spot
-    expected_monthly_dollar = dvol / 100 / math.sqrt(12) * spot
-
-    # Check that rounded dollar values appear in the report
-    assert f"${expected_daily_dollar:,.2f}" in report
-    assert f"${expected_weekly_dollar:,.2f}" in report
-    assert f"${expected_monthly_dollar:,.2f}" in report
-
-
-def test_market_metrics_expected_movements_percent_values():
-    """Expected move percentage values are mathematically correct."""
-    dvol = 80.0
-    report = _render_header(dvol=dvol, iv_percentile=50.0)
-
-    daily_pct = dvol / 100 / math.sqrt(365) * 100
-    weekly_pct = dvol / 100 / math.sqrt(52) * 100
-    monthly_pct = dvol / 100 / math.sqrt(12) * 100
-
-    assert f"{daily_pct:.1f}%" in report
-    assert f"{weekly_pct:.1f}%" in report
-    assert f"{monthly_pct:.1f}%" in report
-
-
-def test_market_metrics_expected_movements_absent_without_dvol():
-    """Expected move lines do NOT appear when dvol is None."""
-    report = _render_header(dvol=None, iv_percentile=50.0)
-    assert "Expected Daily Move:" not in report
-    assert "Expected Weekly Move:" not in report
-    assert "Expected Monthly Move:" not in report
+def test_market_metrics_expected_movements_never_in_header():
+    """Expected move lines never appear in the header, with or without dvol."""
+    report_with_dvol = _render_header(dvol=75.95, iv_percentile=92.6)
+    report_without_dvol = _render_header(dvol=None, iv_percentile=50.0)
+    for report in (report_with_dvol, report_without_dvol):
+        assert "Expected Daily Move:" not in report
+        assert "Expected Weekly Move:" not in report
+        assert "Expected Monthly Move:" not in report
+        assert "Expected Move:" not in report
 
 
 # ---------------------------------------------------------------------------
@@ -132,12 +101,11 @@ def test_market_metrics_iv_percentile_still_rendered():
 
 
 def test_market_metrics_order_in_report():
-    """IV Rank appears after IV Percentile; Expected moves appear after IV Rank."""
+    """IV Rank appears after IV Percentile."""
     report = _render_header(dvol=75.95, iv_percentile=92.6, iv_rank=78.4)
 
     pos_dvol = report.index("DVOL (Volatility Index)")
     pos_percentile = report.index("IV Percentile (365d)")
     pos_rank = report.index("IV Rank (365d)")
-    pos_daily = report.index("Expected Daily Move:")
 
-    assert pos_dvol < pos_percentile < pos_rank < pos_daily
+    assert pos_dvol < pos_percentile < pos_rank

@@ -92,9 +92,24 @@ def test_render_header_with_market_metrics():
     assert "DVOL (Volatility Index): 75.00" in text
     assert "IV Percentile (365d): 90.0%" in text
     assert "IV Rank (365d): 80.0%" in text
-    assert "Expected Daily Move:" in text
     assert "Current Funding Rate:" in text
     assert "8h Funding Rate:" in text
+
+
+def test_render_header_no_longer_shows_expected_move():
+    """
+    institutional_metrics_spec.md section 9 (Task D2): "Expected daily/
+    weekly/monthly move -> one line, integer dollars" -- the three-line
+    $+% breakdown is deleted from the header; its one-line replacement is
+    in the market-wide CONTEXT block (market_wide_formatter.
+    format_expected_move_line), not the header.
+    """
+    formatter = OnChainReportFormatter()
+    metrics = MarketMetricsResult(dvol=75.0, iv_percentile=90.0, iv_rank=80.0, current_funding=0.0001, funding_8h=0.0001)
+    text = formatter.render_header("BTC", 95000.0, GENERATED_AT, metrics)
+    assert "Expected Daily Move" not in text
+    assert "Expected Weekly Move" not in text
+    assert "Expected Monthly Move" not in text
 
 
 def test_render_header_ends_with_single_trailing_newline_no_metrics():

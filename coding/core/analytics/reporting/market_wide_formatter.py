@@ -17,6 +17,7 @@ Every function accepts ``Optional[...]`` and renders the same
 early-return case when the corresponding phase produced no result.
 """
 
+import math
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -475,40 +476,78 @@ def format_block_trades_section(result: Optional[BlockTradesResult]) -> str:
     return "\n".join(lines)
 
 
-def format_cross_asset_correlation_section(
+def format_cross_asset_correlation_line(
     result: Optional[CrossAssetCorrelationResult],
     currency: str,
 ) -> str:
-    """Render the CROSS-ASSET CORRELATION section."""
+    """
+    One-line BTC/ETH change-correlation fact (institutional_metrics_spec.md
+    section 9: "BTC/ETH correlation -> one line, and on DAILY CHANGES not
+    levels"). Both correlations already ran on daily changes before this
+    task -- price correlation via ``_calculate_return_correlation`` (log
+    returns), DVOL correlation via log CHANGES of the raw DVOL levels
+    (bugfix_spec.md Item 11) -- this function only demotes the report TEXT
+    from a full titled section to one line, part of the market-wide
+    CONTEXT block (``format_market_wide_context_section``).
+    """
     other = result.other_currency if result is not None else ""
-    lines = [f"CROSS-ASSET CORRELATION (30d, {currency}/{other})", _SUB_SEPARATOR]
+    pair = f"{currency}/{other}" if other else currency
 
-    if result is None:
-        lines.append("  Price Correlation: Insufficient data")
-        lines.append("  DVOL Correlation: N/A")
-        lines.append("")
-        return "\n".join(lines)
-
-    if result.price_correlation is not None:
-        lines.append(f"  Price Correlation: {result.price_correlation:.2f}")
+    if result is None or result.price_correlation is None:
+        price_str = "insufficient data"
     else:
-        lines.append("  Price Correlation: Insufficient data")
+        price_str = f"{result.price_correlation:.2f}"
 
-    if result.dvol_correlation is not None:
-        # bugfix_spec.md Item 11: the label must say "log changes" so a
-        # reader comparing against a previously-stored levels-based value
-        # knows why the number changed.
+    if result is not None and result.dvol_correlation is not None:
         if result.dvol_correlation_observations is not None:
-            lines.append(
-                f"  DVOL Correlation (log changes, {result.dvol_correlation_observations}d): "
-                f"{result.dvol_correlation:.2f}"
+            dvol_str = (
+                f"{result.dvol_correlation:.2f} (log changes, "
+                f"{result.dvol_correlation_observations}d)"
             )
         else:
-            lines.append(f"  DVOL Correlation: {result.dvol_correlation:.2f}")
-    elif result.sample_size > 0:
-        lines.append("  DVOL Correlation: Insufficient data")
+            dvol_str = f"{result.dvol_correlation:.2f}"
+    elif result is not None and result.sample_size > 0:
+        dvol_str = "insufficient data"
     else:
-        lines.append("  DVOL Correlation: N/A")
+        dvol_str = "N/A"
 
+    return f"{pair} change-correlation (30d): price {price_str}  |  DVOL {dvol_str}"
+
+
+def format_expected_move_line(dvol: Optional[float], underlying_price: float) -> str:
+    """
+    One-line expected daily/weekly/monthly move, integer dollars
+    (institutional_metrics_spec.md section 9: "Expected daily/weekly/
+    monthly move -> one line, integer dollars"). Replaces the header's old
+    three-line $+% breakdown (report_formatter.OnChainReportFormatter.
+    render_header).
+    """
+    if dvol is None:
+        return "Expected Move: N/A (no DVOL)"
+
+    daily_move = dvol / 100 / math.sqrt(365) * underlying_price
+    weekly_move = dvol / 100 / math.sqrt(52) * underlying_price
+    monthly_move = dvol / 100 / math.sqrt(12) * underlying_price
+    return (
+        f"Expected Move: 1d ${daily_move:,.0f}  |  7d ${weekly_move:,.0f}  |  "
+        f"30d ${monthly_move:,.0f}"
+    )
+
+
+def format_market_wide_context_section(
+    cross_asset: Optional[CrossAssetCorrelationResult],
+    currency: str,
+    dvol: Optional[float],
+    underlying_price: float,
+) -> str:
+    """
+    Render the market-wide CONTEXT section (institutional_metrics_spec.md
+    section 9(b), market-wide order item 10): one line each for BTC/ETH
+    change-correlation and the expected move. Rendered LAST in the
+    market-wide block.
+    """
+    lines = ["CONTEXT", _SUB_SEPARATOR]
+    lines.append(format_cross_asset_correlation_line(cross_asset, currency))
+    lines.append(format_expected_move_line(dvol, underlying_price))
     lines.append("")
     return "\n".join(lines)

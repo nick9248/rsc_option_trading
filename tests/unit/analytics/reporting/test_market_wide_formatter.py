@@ -9,8 +9,10 @@ unavailable/uncalculated phase.
 
 from coding.core.analytics.reporting.market_wide_formatter import (
     format_block_trades_section,
-    format_cross_asset_correlation_section,
+    format_cross_asset_correlation_line,
+    format_expected_move_line,
     format_futures_basis_section,
+    format_market_wide_context_section,
     format_perpetual_funding_section,
     format_realized_volatility_section,
     format_skew_term_structure_section,
@@ -434,18 +436,45 @@ def test_block_timestamp_rendered_in_utc_not_local():
 # Cross-asset correlation
 # ---------------------------------------------------------------------------
 
-def test_cross_asset_correlation_no_data():
-    text = format_cross_asset_correlation_section(None, currency="BTC")
-    assert "CROSS-ASSET CORRELATION (30d, BTC/)" in text
-    assert "Price Correlation: Insufficient data" in text
-    assert "DVOL Correlation: N/A" in text
+def test_cross_asset_correlation_line_no_data():
+    """institutional_metrics_spec.md section 9: one line, no section
+    header -- rendered as part of the market-wide CONTEXT block."""
+    line = format_cross_asset_correlation_line(None, currency="BTC")
+    assert line == "BTC change-correlation (30d): price insufficient data  |  DVOL N/A"
 
 
-def test_cross_asset_correlation_rendered():
+def test_cross_asset_correlation_line_rendered():
     result = CrossAssetCorrelationResult(
         other_currency="ETH", price_correlation=0.85, dvol_correlation=0.6, sample_size=30,
+        dvol_correlation_observations=29,
     )
-    text = format_cross_asset_correlation_section(result, currency="BTC")
-    assert "CROSS-ASSET CORRELATION (30d, BTC/ETH)" in text
-    assert "Price Correlation: 0.85" in text
-    assert "DVOL Correlation: 0.60" in text
+    line = format_cross_asset_correlation_line(result, currency="BTC")
+    assert line == (
+        "BTC/ETH change-correlation (30d): price 0.85  |  "
+        "DVOL 0.60 (log changes, 29d)"
+    )
+
+
+def test_expected_move_line_integer_dollars():
+    """institutional_metrics_spec.md section 9: one line, integer dollars."""
+    line = format_expected_move_line(dvol=75.0, underlying_price=95000.0)
+    assert line.startswith("Expected Move: 1d $")
+    assert "." not in line.split("$")[1].split(" ")[0]  # integer, no decimals
+    assert "7d $" in line and "30d $" in line
+
+
+def test_expected_move_line_na_when_no_dvol():
+    assert format_expected_move_line(dvol=None, underlying_price=95000.0) == (
+        "Expected Move: N/A (no DVOL)"
+    )
+
+
+def test_market_wide_context_section_combines_both_lines():
+    result = CrossAssetCorrelationResult(
+        other_currency="ETH", price_correlation=0.85, dvol_correlation=0.6, sample_size=30,
+        dvol_correlation_observations=29,
+    )
+    text = format_market_wide_context_section(result, "BTC", 75.0, 95000.0)
+    assert text.startswith("CONTEXT\n" + "-" * 80 + "\n")
+    assert "change-correlation" in text
+    assert "Expected Move:" in text

@@ -19,8 +19,10 @@ from coding.core.analytics.reporting.gex_dex_formatter import (
 )
 from coding.core.analytics.reporting.market_wide_formatter import (
     format_block_trades_section,
-    format_cross_asset_correlation_section,
+    format_cross_asset_correlation_line,
+    format_expected_move_line,
     format_futures_basis_section,
+    format_market_wide_context_section,
     format_perpetual_funding_section,
     format_realized_volatility_section,
     format_term_structure_section,
@@ -51,7 +53,9 @@ __all__ = [
     "format_volatility_cone_section",
     "format_perpetual_funding_section",
     "format_block_trades_section",
-    "format_cross_asset_correlation_section",
+    "format_cross_asset_correlation_line",
+    "format_expected_move_line",
+    "format_market_wide_context_section",
     "format_oi_changes_section",
     "format_iv_percentile_section",
     "ExpirationRenderInput",

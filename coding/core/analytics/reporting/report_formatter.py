@@ -18,7 +18,6 @@ still speaks dicts. It is not one of the frozen result models defined in
 refactor_design_spec.md section 2 and does not need to survive past T8.
 """
 
-import math
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, Optional, Tuple
@@ -49,9 +48,9 @@ from coding.core.analytics.reporting.historical_context_formatter import (
 )
 from coding.core.analytics.reporting.market_wide_formatter import (
     format_block_trades_section,
-    format_cross_asset_correlation_section,
     format_forward_vol_section,
     format_futures_basis_section,
+    format_market_wide_context_section,
     format_perpetual_funding_section,
     format_realized_volatility_section,
     format_skew_term_structure_section,
@@ -96,7 +95,10 @@ _MARKET_WIDE_SECTION_ORDER = (
     "volatility_cone",
     "perpetual_funding",
     "block_trades",
-    "cross_asset_correlation",
+    # institutional_metrics_spec.md section 9(b) market-wide order item 10
+    # (CONTEXT): BTC/ETH change-correlation + expected move, one line each.
+    # Always last.
+    "context",
 )
 
 
@@ -185,16 +187,14 @@ class OnChainReportFormatter:
                 lines.append(f"IV Percentile (365d): {iv_percentile:.1f}%")
             if iv_rank is not None:
                 lines.append(f"IV Rank (365d): {iv_rank:.1f}%")
-            if dvol is not None:
-                daily_move = dvol / 100 / math.sqrt(365) * underlying_price
-                weekly_move = dvol / 100 / math.sqrt(52) * underlying_price
-                monthly_move = dvol / 100 / math.sqrt(12) * underlying_price
-                daily_pct = dvol / 100 / math.sqrt(365) * 100
-                weekly_pct = dvol / 100 / math.sqrt(52) * 100
-                monthly_pct = dvol / 100 / math.sqrt(12) * 100
-                lines.append(f"Expected Daily Move:    ${daily_move:,.2f}  ({daily_pct:.1f}%)")
-                lines.append(f"Expected Weekly Move:   ${weekly_move:,.2f}  ({weekly_pct:.1f}%)")
-                lines.append(f"Expected Monthly Move:  ${monthly_move:,.2f}  ({monthly_pct:.1f}%)")
+            # institutional_metrics_spec.md section 9 (Task D2): "Expected
+            # daily/weekly/monthly move -> one line, integer dollars".
+            # The three-line $+% breakdown that used to render here is
+            # deleted -- its one-line replacement
+            # (market_wide_formatter.format_expected_move_line) renders in
+            # the market-wide CONTEXT block instead (spec 9(b) market-wide
+            # order item 10), alongside the BTC/ETH change-correlation
+            # one-liner.
             if current_funding is not None:
                 # CARRIED FINDING #2 (A5 review, task A6 brief): this line
                 # used to compute funding_annualized = current_funding * 3
@@ -478,9 +478,14 @@ class OnChainReportFormatter:
             sections["perpetual_funding"] = format_perpetual_funding_section(mw.perpetual_funding)
         if mw.block_trades is not None:
             sections["block_trades"] = format_block_trades_section(mw.block_trades)
-        if mw.cross_asset_correlation is not None:
-            sections["cross_asset_correlation"] = format_cross_asset_correlation_section(
-                mw.cross_asset_correlation, result.currency,
+        # institutional_metrics_spec.md section 9(b) market-wide order item
+        # 10 (CONTEXT): rendered whenever either constituent fact has data
+        # (matches the legacy "no data -> no section" gate applied to the
+        # block as a whole, not each one-liner separately -- an all-N/A
+        # block would be noise, not information).
+        if mw.cross_asset_correlation is not None or mw.dvol is not None:
+            sections["context"] = format_market_wide_context_section(
+                mw.cross_asset_correlation, result.currency, mw.dvol, result.underlying_price,
             )
 
         return self.render_market_wide(sections)
