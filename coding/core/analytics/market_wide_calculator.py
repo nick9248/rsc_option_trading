@@ -863,7 +863,13 @@ class MarketWideCalculator:
                 # already counted in `blocks` above -- never double-count.
                 continue
 
-            amount = trade.get("amount", 0)
+            # independent review round 4 sweep: aligned with the blocks
+            # path's `leg.get("amount") or 0` a few dozen lines above --
+            # amount is required (non-nullable) per deribit_schemas.py's
+            # trades schema, so this was never exploitable, just an
+            # internal inconsistency between two extractions of the same
+            # field in the same function.
+            amount = trade.get("amount") or 0
             # independent review round 3 (Important #5): same M1 bug class
             # -- `.get("index_price", self.spot_price)` only applies the
             # spot_price default when the key is ABSENT; a trade with the

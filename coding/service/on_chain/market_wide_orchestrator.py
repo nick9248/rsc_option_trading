@@ -223,7 +223,16 @@ class MarketWideOrchestrator:
                     futures_data.append({
                         "instrument_name": name,
                         "mark_price": ticker.get("mark_price", 0),
-                        "index_price": ticker.get("index_price", analyzer.index_price),
+                        # independent review round 4 sweep: index_price is
+                        # nullable per deribit_schemas.py's TICKER schema
+                        # -- .get(key, default) only applies the fallback
+                        # when the key is ABSENT. Currently benign only
+                        # because calculate_futures_basis's own extraction
+                        # (Important #5) already applies `or self.spot_price`
+                        # downstream -- fixed here too for consistency/
+                        # defense-in-depth, not because it's exploitable
+                        # today.
+                        "index_price": ticker.get("index_price") or analyzer.index_price,
                     })
                 except Exception as e:
                     logger.warning(f"Failed to fetch future ticker {name}: {e}")

@@ -1211,7 +1211,18 @@ class OnChainAnalysisService:
             for i, item in enumerate(instruments):
                 try:
                     ticker = self.api.get_ticker(item["instrument_name"])
-                    greeks = ticker.get("greeks", {})
+                    # independent review round 4 sweep: same M1/#5/#6 bug
+                    # class -- a two-arg .get(key, default) only applies
+                    # the default when the key is ABSENT, not when it's
+                    # present-but-null. "greeks" isn't declared in
+                    # deribit_schemas.py's TICKER schema at all (option-
+                    # specific field the schema doesn't model), but a
+                    # present-but-null value here would otherwise crash
+                    # the next line's greeks.get("delta") with
+                    # AttributeError -- silently dropping this instrument
+                    # via the per-instrument except below rather than
+                    # extracting it.
+                    greeks = ticker.get("greeks") or {}
 
                     item_with_greeks = item.copy()
                     item_with_greeks["delta"] = greeks.get("delta")
@@ -1219,7 +1230,12 @@ class OnChainAnalysisService:
                     item_with_greeks["theta"] = greeks.get("theta")
                     item_with_greeks["vega"] = greeks.get("vega")
                     item_with_greeks["mark_iv"] = ticker.get("mark_iv")
-                    item_with_greeks["underlying_price"] = ticker.get("underlying_price", analyzer.index_price)
+                    # underlying_price is nullable in practice (stale/
+                    # illiquid instruments); .get(key) or fallback covers
+                    # both "absent" and "present-but-null" -- currently
+                    # benign only because nothing downstream crashes on a
+                    # None here yet, not because the two-arg form was safe.
+                    item_with_greeks["underlying_price"] = ticker.get("underlying_price") or analyzer.index_price
                     # institutional_metrics_spec.md section 3(b) step 1
                     # (Task C4): RR25/BF25's "quoted" filter needs bid/ask.
                     # Ticker's fields are best_bid_price/best_ask_price

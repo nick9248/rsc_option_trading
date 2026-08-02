@@ -138,6 +138,24 @@ class TestCalculateFuturesBasis:
         )
         assert result is None
 
+    def test_null_ticker_index_price_falls_back_to_analyzer_index_price(self):
+        """Independent review round 4 sweep: index_price is nullable per
+        deribit_schemas.py's TICKER schema. Benign only because
+        calculate_futures_basis's own extraction (Important #5) already
+        absorbs a None -- fixed here too for consistency, verified it
+        still produces the correct fallback end-to-end."""
+        api = MagicMock()
+        api.get_instruments.return_value = [{"instrument_name": "BTC-27MAR26"}]
+        api.get_ticker.return_value = {"mark_price": 91000.0, "index_price": None}
+        orchestrator = MarketWideOrchestrator(api=api)
+
+        result = orchestrator._calculate_futures_basis(
+            "BTC", _FakeAnalyzer(underlying_price=90000.0), _calc(), progress_callback=lambda m: None,
+        )
+        assert result is not None
+        assert len(result.entries) == 1
+        assert result.entries[0].index_price == 90000.0
+
 
 class TestFetchPriceHistory:
     """Shared fetch feeding phases 3/4/5/8."""

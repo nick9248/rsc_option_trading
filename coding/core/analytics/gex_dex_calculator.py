@@ -319,7 +319,14 @@ class GexDexCalculator:
             if strike is None:
                 continue
 
-            option_type = item.get("option_type", "").upper()
+            # independent review round 4 sweep: aligned with
+            # _aggregate_by_moneyness's `(item.get("option_type") or "")`
+            # (same field, a few dozen lines above) -- option_type is
+            # always parsed from the instrument_name string by this
+            # pipeline (never raw-API null in practice), so this was never
+            # exploitable, just an internal inconsistency between two
+            # extractions of the same field in the same file.
+            option_type = (item.get("option_type") or "").upper()
             gamma = item.get("gamma") or 0
             delta = item.get("delta") or 0
             oi = item.get("open_interest") or 0
