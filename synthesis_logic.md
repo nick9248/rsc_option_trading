@@ -98,7 +98,8 @@ OnChainAnalyzer (live run)
 | `perp_funding_trend` | `market_wide_structured["perp_funding_trend"]` | `"Stable"` etc. |
 | `btc_eth_price_corr` | `market_wide_structured["btc_eth_price_corr"]` | -1.0 to +1.0 |
 | `btc_eth_dvol_corr` | `market_wide_structured["btc_eth_dvol_corr"]` | -1.0 to +1.0 |
-| `block_trades` | `market_wide_structured["block_trades"]` | list of dicts |
+| `large_prints` | `market_wide_structured["large_prints"]` | list of dicts (large single-leg screen prints, notional-filter list — NOT real blocks) |
+| `blocks` | `market_wide_structured["blocks"]` | list of dicts (real blocks grouped by `block_trade_id`, institutional_metrics_spec.md section 9 / Migration M2) |
 | `aggregate_total_gex` | `gex_dex_structured["AGGREGATE"]["total_net_gex"]` | raw USD value |
 | `aggregate_total_dex` | `gex_dex_structured["AGGREGATE"]["total_net_dex"]` | raw currency units |
 | `aggregate_call_resistance` | `gex_dex_structured["AGGREGATE"]["key_levels"]["call_resistance"]` | `{strike, net_gex}` dict or None |

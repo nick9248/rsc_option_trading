@@ -632,7 +632,13 @@ def test_market_wide_result_to_flat_dict_omits_keys_for_none_sections():
         "rv_10d", "rv_20d", "rv_30d", "vrp", "signal",
         "cone_10d_pctile", "cone_20d_pctile", "cone_30d_pctile",
         "perp_oi", "perp_funding_trend", "funding_rate", "funding_8h",
-        "block_trades", "btc_eth_price_corr", "btc_eth_dvol_corr",
+        # independent review round 3 (Minor): "block_trades" is a key that
+        # can never exist post-rename (institutional_metrics_spec.md
+        # section 9 / Migration M2, Task D1 review round 2) -- assert its
+        # two replacements are absent instead, so this still provides real
+        # coverage of the None-section-omits-its-keys contract.
+        "large_prints", "blocks",
+        "btc_eth_price_corr", "btc_eth_dvol_corr",
     ):
         assert key not in flat
 
