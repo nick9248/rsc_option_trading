@@ -660,8 +660,15 @@ class MarketWideCalculator:
         lines.append("PERPETUAL FUNDING & OI")
         lines.append(sub_separator)
 
-        # Extract current data from ticker
-        perp_oi = perp_ticker.get("open_interest", 0)
+        # Extract current data from ticker. independent review round 4
+        # (Important #6): same M1/#5 bug class -- `.get("open_interest", 0)`
+        # only applies the 0 default when the key is ABSENT; open_interest
+        # is nullable per deribit_schemas.py's TICKER schema, and a
+        # present-but-null value chained all the way to a TypeError
+        # formatting None with `:,.0f` a few lines below (and, before this
+        # fix, would have aborted the entire report render -- there is no
+        # try/except anywhere in render_market_wide_from_result).
+        perp_oi = perp_ticker.get("open_interest") or 0
         current_funding = perp_ticker.get("current_funding")
         funding_8h = perp_ticker.get("funding_8h")
 

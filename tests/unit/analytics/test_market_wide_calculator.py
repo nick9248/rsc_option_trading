@@ -240,6 +240,28 @@ class TestFundingRateExtractionAndTrend:
         assert "Instantaneous funding: 0.0000%" in report
         assert "Funding (8h): not available" in report
 
+    def test_null_open_interest_falls_back_to_zero_not_none(self, calculator):
+        """Independent review round 4 (Important #6): same M1/#5 bug class
+        -- `perp_ticker.get("open_interest", 0)` only applies the 0 default
+        when the key is ABSENT. `open_interest` is nullable per
+        deribit_schemas.py's TICKER schema (the same ticker perp_ticker
+        comes from); a present-but-null value made structured["perp_oi"]
+        None, which chained through market_wide_orchestrator.py's own
+        `funding_data_struct.get("perp_oi", 0.0)` (same trap, but that one
+        is a no-op fix target -- the key IS present there too, just with a
+        None value it can no longer receive once this fix lands) into
+        PerpetualFundingResult.perp_open_interest, then crashed
+        market_wide_formatter.py's `f"...{result.perp_open_interest:,.0f}"`
+        -- and unlike the block-trades phase (Important #5), there is no
+        try/except anywhere in render_market_wide_from_result, so this
+        would abort the ENTIRE report render, not just one section."""
+        report, structured = calculator.calculate_perpetual_funding_trend(
+            {"data": []},
+            {"open_interest": None, "current_funding": 0.0001, "funding_8h": 0.0001},
+        )
+        assert structured["perp_oi"] == 0
+        assert "Perp OI: 0 USD" in report
+
     def test_large_print_detection_excludes_block_legs(self, calculator):
         """The notional-filter ("large prints") list must not include a
         trade that is part of a block, even if its own notional clears the
