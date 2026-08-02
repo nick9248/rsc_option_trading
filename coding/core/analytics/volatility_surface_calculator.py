@@ -240,9 +240,23 @@ class VolatilitySurfaceCalculator:
             (PRIMARY, market convention), put_over_call_skew_25d (legacy
             sign, explicitly named), and interpretation.
         """
-        # Find instruments closest to ±0.25 delta
-        puts = [i for i in self.instruments if i["option_type"] == "P" and i.get("delta") is not None]
-        calls = [i for i in self.instruments if i["option_type"] == "C" and i.get("delta") is not None]
+        # Find instruments closest to ±0.25 delta. independent review round
+        # 4 (Minor): gate on mark_iv is not None here too (not just delta)
+        # -- _find_closest_delta's own `valid` filter already excludes a
+        # null-mark_iv candidate from being selected (verified: this
+        # method does not currently crash on one), so this is "gate before
+        # compute" applied one layer earlier, matching C3's standard,
+        # rather than a live-bug fix -- purely additive, no behavior
+        # change (the redundant check inside _find_closest_delta stays,
+        # since other callers may pass it unfiltered lists).
+        puts = [
+            i for i in self.instruments
+            if i["option_type"] == "P" and i.get("delta") is not None and i.get("mark_iv") is not None
+        ]
+        calls = [
+            i for i in self.instruments
+            if i["option_type"] == "C" and i.get("delta") is not None and i.get("mark_iv") is not None
+        ]
 
         put_25d = self._find_closest_delta(puts, -0.25)
         call_25d = self._find_closest_delta(calls, 0.25)

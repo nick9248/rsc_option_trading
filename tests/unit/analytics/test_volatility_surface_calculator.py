@@ -372,6 +372,25 @@ class TestRiskReversalSignConvention:
         assert r["risk_reversal_25d"] == pytest.approx(0.0)
         assert r["interpretation"] == "Balanced"
 
+    def test_null_mark_iv_candidate_is_never_selected_even_if_closer_by_delta(self):
+        """Independent review round 4 (Minor): mark_iv is nullable per
+        deribit_schemas.py (on_chain_analysis_service.py:1221 always sets
+        the key, sometimes to None). A null-mark_iv put at exactly -0.25
+        delta (closer than any alternative) must be skipped in favor of a
+        further-but-valid candidate at -0.20 -- never selected, and never
+        reaches `call_iv - put_iv` with a None operand."""
+        instruments = [
+            _make_instrument(62_000, "P", mark_iv=None, delta=-0.25),  # closest, but null IV
+            _make_instrument(60_000, "P", mark_iv=32.0, delta=-0.20),  # further, valid IV
+            _make_instrument(66_000, "C", mark_iv=35.0, delta=0.25),
+        ]
+        calc = VolatilitySurfaceCalculator(instruments, 64_000.0, "31JUL26")
+        r = calc._calculate_25_delta_risk_reversal()
+
+        assert r["put_25d_delta"] == pytest.approx(-0.20)
+        assert r["put_25d_iv"] == pytest.approx(32.0)
+        assert r["risk_reversal_25d"] == pytest.approx(3.0)  # 35.0 - 32.0
+
 
 def _quoted_instrument(strike, option_type, delta, mark_iv, bid_price=1.0, ask_price=1.0):
     """
