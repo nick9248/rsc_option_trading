@@ -352,7 +352,13 @@ class MarketWideCalculator:
         for future in futures_data:
             name = future.get("instrument_name", "")
             price = future.get("mark_price", 0)
-            spot = future.get("index_price", self.spot_price)
+            # independent review round 3 (Important #5): same M1 bug class
+            # -- `.get("index_price", self.spot_price)` only applies the
+            # spot_price default when the key is ABSENT; a future dict with
+            # the key present but null made `spot` None, and `spot <= 0`
+            # below then raised TypeError. `.get("index_price") or
+            # self.spot_price` covers both cases.
+            spot = future.get("index_price") or self.spot_price
 
             if spot <= 0 or price <= 0:
                 continue
@@ -851,7 +857,15 @@ class MarketWideCalculator:
                 continue
 
             amount = trade.get("amount", 0)
-            index_price = trade.get("index_price", self.spot_price)
+            # independent review round 3 (Important #5): same M1 bug class
+            # -- `.get("index_price", self.spot_price)` only applies the
+            # spot_price default when the key is ABSENT; a trade with the
+            # key present but null made `index_price` None, and
+            # `amount * index_price` below then raised TypeError, aborting
+            # the whole large-prints loop (and, absent a guard upstream,
+            # the entire market-wide phase). `.get("index_price") or
+            # self.spot_price` covers both cases.
+            index_price = trade.get("index_price") or self.spot_price
 
             # Notional = amount × underlying price
             notional = amount * index_price

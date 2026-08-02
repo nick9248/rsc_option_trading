@@ -400,52 +400,68 @@ class MarketWideOrchestrator:
     def _calculate_block_trades(
         self, analyzer: OnChainMetricsCalculator, calc: MarketWideCalculator, progress_callback,
     ) -> Optional[BlockTradesResult]:
-        """Reuses trade data already fetched during the VWAP IV phase."""
+        """
+        Reuses trade data already fetched during the VWAP IV phase.
+
+        Independent review round 3 (Important #5): this phase previously
+        had no try/except -- unlike _calculate_perpetual_funding (Phase
+        6), a single malformed trade (e.g. a null index_price, the exact
+        shape Important #5 also fixed in the calculator) could raise and
+        abort the ENTIRE market-wide phase, not just this section. Isolated
+        per bugfix_spec.md/refactor_design_spec.md's per-phase try/except
+        convention (see module docstring) -- this except is scoped to only
+        this phase's own calculator call, never a pre-existing call whose
+        failure it could suppress.
+        """
         recent_trades = analyzer._recent_trades
         if not recent_trades:
             return None
 
-        progress_callback("Detecting block trades...")
-        _, block_data = calc.detect_block_trades(recent_trades)
-        # institutional_metrics_spec.md section 9 / Migration M2 (Task D1):
-        # "large_prints" already excludes any trade with a block_trade_id
-        # (see MarketWideCalculator.detect_block_trades) -- no double
-        # counting between this tuple and `blocks` below.
-        large_prints_tuple = tuple(
-            BlockTrade(
-                timestamp=bt.get("timestamp"),
-                instrument_name=bt.get("instrument", ""),
-                amount=bt.get("amount", 0.0),
-                direction=bt.get("direction", ""),
-                notional=bt.get("notional", 0.0),
-                implied_volatility=bt.get("iv"),
+        try:
+            progress_callback("Detecting block trades...")
+            _, block_data = calc.detect_block_trades(recent_trades)
+            # institutional_metrics_spec.md section 9 / Migration M2 (Task
+            # D1): "large_prints" already excludes any trade with a
+            # block_trade_id (see MarketWideCalculator.detect_block_trades)
+            # -- no double counting between this tuple and `blocks` below.
+            large_prints_tuple = tuple(
+                BlockTrade(
+                    timestamp=bt.get("timestamp"),
+                    instrument_name=bt.get("instrument", ""),
+                    amount=bt.get("amount", 0.0),
+                    direction=bt.get("direction", ""),
+                    notional=bt.get("notional", 0.0),
+                    implied_volatility=bt.get("iv"),
+                )
+                for bt in block_data.get("large_prints", [])
             )
-            for bt in block_data.get("large_prints", [])
-        )
-        blocks_tuple = tuple(
-            Block(
-                block_trade_id=b["block_trade_id"],
-                leg_count=b["leg_count"],
-                observed_leg_count=b["observed_leg_count"],
-                combo_id=b.get("combo_id"),
-                combined_premium_usd=b.get("combined_premium_usd", 0.0),
-                total_amount=b.get("total_amount", 0.0),
-                instruments=b.get("instruments", ()),
-                timestamp=b.get("timestamp"),
+            blocks_tuple = tuple(
+                Block(
+                    block_trade_id=b["block_trade_id"],
+                    leg_count=b["leg_count"],
+                    observed_leg_count=b["observed_leg_count"],
+                    combo_id=b.get("combo_id"),
+                    combined_premium_usd=b.get("combined_premium_usd", 0.0),
+                    total_amount=b.get("total_amount", 0.0),
+                    instruments=b.get("instruments", ()),
+                    timestamp=b.get("timestamp"),
+                )
+                for b in block_data.get("blocks", [])
             )
-            for b in block_data.get("blocks", [])
-        )
-        # notional_threshold matches detect_block_trades' own default;
-        # total_detected approximates the (already top-10-truncated)
-        # displayed count -- the calculator does not expose the
-        # pre-truncation total externally.
-        return BlockTradesResult(
-            trades=large_prints_tuple,
-            notional_threshold=BLOCK_TRADE_NOTIONAL_THRESHOLD_USD,
-            total_detected=len(large_prints_tuple),
-            blocks=blocks_tuple,
-            tracked_since=BLOCK_TRADE_ID_TRACKED_SINCE,
-        )
+            # notional_threshold matches detect_block_trades' own default;
+            # total_detected approximates the (already top-10-truncated)
+            # displayed count -- the calculator does not expose the
+            # pre-truncation total externally.
+            return BlockTradesResult(
+                trades=large_prints_tuple,
+                notional_threshold=BLOCK_TRADE_NOTIONAL_THRESHOLD_USD,
+                total_detected=len(large_prints_tuple),
+                blocks=blocks_tuple,
+                tracked_since=BLOCK_TRADE_ID_TRACKED_SINCE,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to calculate block trades: {e}")
+            return None
 
     # -- Phase 8: cross-asset correlation ------------------------------------
 

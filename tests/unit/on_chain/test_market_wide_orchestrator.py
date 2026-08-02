@@ -304,6 +304,25 @@ class TestCalculateBlockTrades:
         assert result.trades == ()
         assert result.tracked_since != ""
 
+    def test_calculator_exception_is_caught_and_returns_none(self):
+        """Independent review round 3 (Important #5): unlike
+        _calculate_perpetual_funding (Phase 6), this phase had no
+        try/except -- a single bad leg (e.g. the null-index_price shape
+        Important #5 also fixed in the calculator) would previously abort
+        the ENTIRE market-wide phase, not just the block section. A future
+        instance of the same bug class must degrade this phase to None,
+        not propagate."""
+        orchestrator = MarketWideOrchestrator(api=MagicMock())
+        calc = MagicMock()
+        calc.detect_block_trades.side_effect = TypeError(
+            "unsupported operand type(s) for *: 'float' and 'NoneType'"
+        )
+        result = orchestrator._calculate_block_trades(
+            _FakeAnalyzer(recent_trades=[{"amount": 1.0, "index_price": None}]),
+            calc, progress_callback=lambda m: None,
+        )
+        assert result is None
+
 
 class TestCalculateCrossAssetCorrelation:
     """Phase 8."""

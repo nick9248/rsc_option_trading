@@ -539,6 +539,34 @@ class TestFundingRateExtractionAndTrend:
         expected_premium = 0.001 * 10.0 * 90000  # spot_price fallback, not 0
         assert block["combined_premium_usd"] == pytest.approx(expected_premium)
 
+    def test_large_print_leg_with_null_index_price_falls_back_to_spot_not_typeerror(
+        self, calculator
+    ):
+        """Independent review round 3 (Important #5): the M1 bug class
+        survives 60+ lines below the M1 fix, in the large-prints loop --
+        and here it's worse: `amount * index_price` with index_price=None
+        raises TypeError (a hard crash), not a silent wrong value. Same
+        one-arg `.get()` default pattern, same fix."""
+        trades = [
+            {
+                "instrument_name": "BTC-28MAR26-90000-C",
+                "amount": 5.0,
+                "price": 0.05,
+                "index_price": None,  # key present, value null
+                "direction": "buy",
+                "timestamp": int(time.time() * 1000),
+                "iv": 65.0,
+            },
+        ]
+
+        # must not raise TypeError
+        report, structured = calculator.detect_block_trades(trades, notional_threshold=100_000)
+
+        assert len(structured["large_prints"]) == 1
+        # notional falls back to spot_price=90000, not None/crash:
+        # 5.0 * 90000 = 450000
+        assert structured["large_prints"][0]["notional"] == pytest.approx(450_000.0)
+
     def test_cross_asset_correlation(self, calculator):
         own_prices = _make_price_history(35, base_price=90000)
         # ETH prices correlated with BTC
@@ -823,3 +851,25 @@ class TestFuturesBasisAnnualization:
             now_utc=datetime(2026, 7, 25, 8, 0, tzinfo=timezone.utc),
         )
         assert result.entries[0].dte == 2
+
+    def test_null_index_price_falls_back_to_spot_not_typeerror(self, calculator):
+        """Independent review round 3 (Important #5): the same M1 bug
+        class survives here -- `future.get("index_price", self.spot_price)`
+        only applies the spot_price default when the key is ABSENT. A
+        future dict with the key present but null (the real API shape M1's
+        own fix's premise asserts exists) previously made `spot` None,
+        then `if spot <= 0` raised TypeError -- a hard crash, not a silent
+        wrong value. Fixture calculator has spot_price=90000."""
+        result = calculator.calculate_futures_basis(
+            [{"instrument_name": "BTC-27JUL26", "mark_price": 100_200.0, "index_price": None}],
+            now_utc=datetime(2026, 7, 25, 8, 0, tzinfo=timezone.utc),
+        )
+        assert len(result.entries) == 1
+        # spot falls back to self.spot_price=90000, matching the calculator
+        # fixture -- not a crash, and not left as None/0.
+        assert result.entries[0].index_price == 90000
+        basis_pct = ((100_200.0 - 90000) / 90000) * 100.0
+        expected_annualized = basis_pct * (365.0 / 2)
+        assert result.to_dict()["futures_basis"]["27JUL26"] == pytest.approx(
+            expected_annualized, rel=1e-6
+        )
