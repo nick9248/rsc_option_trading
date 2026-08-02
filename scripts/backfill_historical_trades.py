@@ -215,15 +215,39 @@ class HistoricalBackfillService:
                     strike = float(parts[2]) if len(parts) > 2 else None
                     option_type = parts[3] if len(parts) > 3 else None
 
+                    # institutional_metrics_spec.md section 9 / Migration M2
+                    # (Task D1 review round 3, Important #4): this is a
+                    # THIRD writer into historical_trades alongside
+                    # TradeCollector._store_trades and
+                    # ProspectiveCollector._store_trade -- its own
+                    # ON CONFLICT (trade_id) DO NOTHING means whichever
+                    # writer inserts a given trade_id first wins the race
+                    # permanently, so this INSERT must carry the same new
+                    # columns or any trade this script backfills first
+                    # permanently NULLs block_trade_id (unbackfillable by
+                    # construction). Mirrors trade_collector.py's
+                    # extraction exactly, including the block_rfq_id
+                    # int-to-VARCHAR(64) stringification.
+                    block_trade_id = trade.get("block_trade_id")
+                    block_trade_leg_count = trade.get("block_trade_leg_count")
+                    combo_id = trade.get("combo_id")
+                    block_rfq_id = trade.get("block_rfq_id")
+                    block_rfq_id = str(block_rfq_id) if block_rfq_id is not None else None
+                    liquidation = trade.get("liquidation")
+                    contracts = trade.get("contracts")
+
                     # Insert with ON CONFLICT DO NOTHING (deduplication by trade_id)
                     cursor.execute(
                         """
                         INSERT INTO historical_trades (
                             trade_id, trade_seq, trade_timestamp, instrument_name,
                             currency, expiration, strike, option_type,
-                            price, amount, direction, iv, mark_price, index_price
+                            price, amount, direction, iv, mark_price, index_price,
+                            block_trade_id, block_trade_leg_count, combo_id,
+                            block_rfq_id, liquidation, contracts
                         ) VALUES (
-                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                            %s, %s, %s, %s, %s, %s
                         )
                         ON CONFLICT (trade_id) DO NOTHING
                         RETURNING trade_id
@@ -242,7 +266,13 @@ class HistoricalBackfillService:
                             trade.get("direction"),
                             trade.get("iv"),
                             trade.get("mark_price"),
-                            trade.get("index_price")
+                            trade.get("index_price"),
+                            block_trade_id,
+                            block_trade_leg_count,
+                            combo_id,
+                            block_rfq_id,
+                            liquidation,
+                            contracts
                         )
                     )
 
