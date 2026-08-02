@@ -13,10 +13,6 @@ making this formatter a pure consumer.
 """
 
 from coding.core.analytics.results.vol_surface_results import VolSurfaceResult
-from coding.core.analytics.volatility_surface_calculator import (
-    MINIMUM_TRADED_INSTRUMENTS_FOR_AGGRESSION,
-    VWAP_AGGRESSION_THRESHOLD_POINTS,
-)
 
 _SUB_SEPARATOR = "-" * 80
 
@@ -68,33 +64,15 @@ def format_vol_surface_section(result: VolSurfaceResult, expiration: str) -> str
         lines.append(f"ATM IV: {atm_iv:.1f}%")
         lines.append("")
 
-    # VWAP IV vs the matched (volume-weighted, same-instruments) mark IV
-    # baseline (if available) — bugfix_spec.md Item 3. Mirrors
-    # VolatilitySurfaceCalculator.generate_report_section exactly (must stay
-    # in lockstep — see that method's docstring).
-    vwap_iv = result.vwap_iv
-    mark_iv_baseline = result.mark_iv_average
-    if vwap_iv is not None and mark_iv_baseline is not None:
-        if result.traded_instrument_count < MINIMUM_TRADED_INSTRUMENTS_FOR_AGGRESSION:
-            lines.append(
-                f"VWAP IV: {vwap_iv:.1f}%  |  Matched Mark IV: {mark_iv_baseline:.1f}%  "
-                f"(only {result.traded_instrument_count} instrument(s) traded - "
-                f"aggression signal suppressed)"
-            )
-        else:
-            diff = vwap_iv - mark_iv_baseline
-            if diff > VWAP_AGGRESSION_THRESHOLD_POINTS:
-                aggression = "Buyers aggressive (VWAP > Mark)"
-            elif diff < -VWAP_AGGRESSION_THRESHOLD_POINTS:
-                aggression = "Sellers aggressive (VWAP < Mark)"
-            else:
-                aggression = "Balanced"
-            lines.append(
-                f"VWAP IV: {vwap_iv:.1f}%  |  Matched Mark IV: {mark_iv_baseline:.1f}%  "
-                f"|  Diff: {diff:+.1f}%  ({result.traded_instrument_count} instruments)"
-            )
-            lines.append(f"  {aggression}")
-        lines.append("")
+    # institutional_metrics_spec.md section 9 (Task D2): "VWAP IV vs mark
+    # IV -> one line, matched-baseline only". The two-line VWAP/Matched-
+    # Mark/Diff + aggression-label block that used to render here is
+    # deleted -- its one-line replacement is expiry_formatter.py's
+    # format_context_section (CONTEXT section, rendered last in this
+    # expiration's block). bugfix_spec.md Item 3's matched-baseline fix
+    # (mark_iv_average is the volume-weighted, same-instruments baseline,
+    # never a chain-wide average) is unchanged -- this is a text-rendering
+    # removal only, not a data-model or calculation change.
 
     # IV by Strike (show most relevant strikes around spot). The per-strike
     # {call_iv, put_iv} merge lives on the model (carried finding) —

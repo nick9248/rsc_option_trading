@@ -1,22 +1,24 @@
 """
 Unit tests for coding.core.analytics.reporting.expiry_formatter
-(refactor_design_spec.md section T3).
+(refactor_design_spec.md section T3; institutional_metrics_spec.md section 9
+/ Task D2 report restructure).
 
-format_expiration_section/format_trend_delta are extracted verbatim from
-OnChainAnalyzer.generate_report()/_format_trend — the golden-master
-characterization suite (tests/characterization/test_onchain_golden_master.py)
-is the byte-identical proof for the full integration path. These tests give
-fast, isolated coverage of each branch (N/A ratios, empty support/resistance,
-trend arrows, strike-table annotations) using hand-built result models.
+format_expiration_section now renders only the instrument-count summary and
+the raw OI/volume-by-strike table. MAX PAIN, PUT/CALL RATIO, VOLUME
+STATISTICS, MONEYNESS ANALYSIS and SUPPORT/RESISTANCE LEVELS (all full
+multi-line blocks, several carrying trend arrows against a single prior
+snapshot) are removed -- their one-line replacements live in
+format_context_section, rendered by report_formatter.py as the LAST section
+in each expiration's block (spec 9(b) per-expiry order item 8). Trend arrows
+against a single prior DB snapshot (format_trend_delta) are deleted
+everywhere in this module (spec 9's removals table, row "Trend arrows vs 1
+prior snapshot -> delete everywhere").
 """
 
-import pytest
-
 from coding.core.analytics.reporting.expiry_formatter import (
+    format_context_section,
     format_expiration_section,
-    format_trend_delta,
 )
-from coding.core.analytics.results.analysis_result import TrendSnapshot
 from coding.core.analytics.results.expiry_results import (
     ExpirationAnalysisResult,
     LevelRef,
@@ -27,6 +29,13 @@ from coding.core.analytics.results.expiry_results import (
     StrikeOiRow,
     SupportResistanceResult,
     VolumeStatsResult,
+)
+from coding.core.analytics.results.vol_surface_results import (
+    MoneynessBucket,
+    PutCallByMoneyness,
+    SecondOrderGreeks,
+    SkewResult,
+    VolSurfaceResult,
 )
 
 SPOT_PRICE = 64405.02
@@ -77,218 +86,175 @@ def _make_analysis(**overrides) -> ExpirationAnalysisResult:
     return ExpirationAnalysisResult(**defaults)
 
 
+def _make_vol_surface(**overrides) -> VolSurfaceResult:
+    defaults = dict(
+        expiration="14AUG26",
+        spot_price=SPOT_PRICE,
+        atm_iv=60.0,
+        skew_25d=SkewResult(
+            put_25d_iv=None, call_25d_iv=None, put_25d_strike=None,
+            call_25d_strike=None, interpretation="insufficient chain",
+        ),
+        iv_by_strike=(),
+        pc_by_moneyness=PutCallByMoneyness(
+            atm=MoneynessBucket(range_label="+/-5%", call_oi=0, put_oi=0, ratio=0.0, bias="N/A"),
+            near_otm=MoneynessBucket(range_label="5-15%", call_oi=0, put_oi=0, ratio=0.0, bias="N/A"),
+            far_otm=MoneynessBucket(range_label="15%+", call_oi=0, put_oi=0, ratio=0.0, bias="N/A"),
+        ),
+        second_order_greeks=SecondOrderGreeks(
+            vanna_exposure_holder=0.0, charm_exposure_holder=0.0,
+            vanna_signal="N/A", charm_signal="N/A", skipped_instruments=0,
+            dealer_vanna_exposure=0.0, dealer_charm_exposure=0.0,
+        ),
+        vwap_iv=82.0,
+        mark_iv_average=80.0,
+        traded_instrument_count=10,
+    )
+    defaults.update(overrides)
+    return VolSurfaceResult(**defaults)
+
+
 # ---------------------------------------------------------------------------
-# format_trend_delta
-# ---------------------------------------------------------------------------
-
-def test_format_trend_delta_empty_when_previous_none():
-    assert format_trend_delta(2000.0, None) == ""
-
-
-def test_format_trend_delta_unchanged():
-    assert "unchanged" in format_trend_delta(2000.0, 2000.0)
-
-
-def test_format_trend_delta_up_integer_mode():
-    result = format_trend_delta(2100.0, 1900.0)
-    assert "↑" in result and "1,900" in result and "+200" in result
-
-
-def test_format_trend_delta_down_integer_mode():
-    result = format_trend_delta(1800.0, 2000.0)
-    assert "↓" in result and "2,000" in result and "-200" in result
-
-
-def test_format_trend_delta_ratio_mode():
-    result = format_trend_delta(1.59, 1.42, is_ratio=True)
-    assert "↑" in result and "1.42" in result and "+0.17" in result
-
-
-# ---------------------------------------------------------------------------
-# format_expiration_section — summary / max pain / P-C / volume
+# format_expiration_section — summary + strike table only
 # ---------------------------------------------------------------------------
 
 def test_summary_line():
-    text = format_expiration_section(_make_analysis(), SPOT_PRICE, None)
+    text = format_expiration_section(_make_analysis())
     assert "Total Instruments: 3 (1 Calls, 2 Puts)" in text
 
 
-def test_max_pain_rendered_with_distance():
-    text = format_expiration_section(_make_analysis(), SPOT_PRICE, None)
-    assert "Max Pain Strike: $65,000" in text
-    assert "Distance from Current: $-594.98 (-0.92%)" in text
+def test_no_max_pain_pcr_volume_moneyness_or_support_resistance_blocks():
+    """institutional_metrics_spec.md section 9: these full blocks are gone
+    from format_expiration_section -- their one-liners live in
+    format_context_section instead."""
+    text = format_expiration_section(_make_analysis())
+    assert "MAX PAIN ANALYSIS" not in text
+    assert "PUT/CALL RATIO" not in text
+    assert "VOLUME STATISTICS" not in text
+    assert "MONEYNESS ANALYSIS" not in text
+    assert "SUPPORT/RESISTANCE LEVELS" not in text
+    assert "RESISTANCE (Top 3" not in text
+    assert "SUPPORT (Top 3" not in text
+    assert "Heavy OTM" not in text
+    assert "Speculative" not in text
 
 
-def test_max_pain_na_when_no_strike():
+def test_strike_table_lists_strikes_ascending_with_max_pain_note_only():
+    text = format_expiration_section(_make_analysis())
+    idx_60k = text.index("60,000")
+    idx_65k = text.index("65,000", idx_60k)
+    assert idx_60k < idx_65k  # ascending order
+
+    lines = text.splitlines()
+    line_60k = next(l for l in lines if l.strip().startswith("60,000"))
+    line_65k = next(l for l in lines if l.strip().startswith("65,000"))
+    # institutional_metrics_spec.md section 9: raw-OI top-3 support/
+    # resistance annotations are deleted from the strike table -- merged
+    # into the existing (GEX-based) key levels shown elsewhere.
+    assert "Support" not in line_60k
+    assert "Resistance" not in line_65k
+    assert "<< MAX PAIN" in line_65k
+
+
+def test_strike_table_no_notes_when_not_max_pain():
+    analysis = _make_analysis(
+        strike_rows=(StrikeOiRow(strike=61000.0, call_oi=1.0, put_oi=1.0, call_volume=0.1, put_volume=0.1),),
+        max_pain=MaxPainResult(max_pain_strike=65000.0, pain_by_strike={}, min_pain_value=0.0),
+    )
+    text = format_expiration_section(analysis)
+    line = next(l for l in text.splitlines() if l.strip().startswith("61,000"))
+    assert line.rstrip().endswith("0.10")  # no trailing notes text after put volume column
+
+
+# ---------------------------------------------------------------------------
+# format_context_section
+# ---------------------------------------------------------------------------
+
+def test_context_header_present():
+    text = format_context_section(_make_analysis(), SPOT_PRICE, _make_vol_surface())
+    assert text.startswith("CONTEXT\n" + "-" * 80 + "\n")
+
+
+def test_context_max_pain_one_line_no_trend():
+    text = format_context_section(_make_analysis(), SPOT_PRICE, _make_vol_surface())
+    assert "Max Pain: $65,000" in text
+    assert "Trend (Max Pain)" not in text
+    assert "↑" not in text
+    assert "↓" not in text
+
+
+def test_context_max_pain_na_when_no_strike():
     analysis = _make_analysis(
         max_pain=MaxPainResult(max_pain_strike=None, pain_by_strike={}, min_pain_value=0.0)
     )
-    text = format_expiration_section(analysis, SPOT_PRICE, None)
-    assert "Max Pain Strike: N/A" in text
+    text = format_context_section(analysis, SPOT_PRICE, _make_vol_surface())
+    assert "Max Pain: N/A" in text
 
 
-def test_max_pain_trend_shown_when_previous_present():
-    trend = TrendSnapshot(
-        max_pain_strike=64000.0, call_oi=None, put_oi=None, pc_ratio=None,
-        total_volume=None, volume_ratio=None,
-    )
-    text = format_expiration_section(_make_analysis(), SPOT_PRICE, trend)
-    assert "Trend (Max Pain):" in text
-    assert "↑" in text
-
-
-def test_max_pain_trend_absent_without_previous():
-    text = format_expiration_section(_make_analysis(), SPOT_PRICE, None)
-    assert "Trend (Max Pain):" not in text
-
-
-def test_put_call_ratio_rendered_insufficient_history_by_default():
-    """
-    _make_analysis()'s default PutCallRatioResult fixture (used across most
-    of this file's tests) never sets percentile_90d, matching the field's
-    default -- bugfix_spec.md Item 10's "insufficient history" branch, not
-    the old hard-coded-threshold label.
-    """
-    text = format_expiration_section(_make_analysis(), SPOT_PRICE, None)
-    assert "Total Call OI: 50" in text
-    assert "Total Put OI: 120" in text
-    assert "P/C Ratio: 2.40 (n=0 - insufficient history for a percentile; absolute reading only)" in text
-
-
-def test_put_call_ratio_percentile_classification_rendered():
-    """bugfix_spec.md F10.3.3 report format, sufficient-history branch."""
+def test_context_pcr_percentile_no_bias_word():
+    """institutional_metrics_spec.md section 9: PCR hard-coded/percentile-
+    derived bias word labels ("Strong Bullish" etc) are deleted -- only the
+    raw value + percentile print, "p"+digits convention (T9.2 acceptance:
+    must not contain "Strong Bullish", must contain a "p"+digits marker on
+    the PCR line)."""
     analysis = _make_analysis(
         put_call_ratio=PutCallRatioResult(
             total_call_oi=50.0, total_put_oi=120.0, ratio=2.4, bias="Strong Bearish",
             percentile_90d=98.3, history_n_90d=705,
         )
     )
-    text = format_expiration_section(analysis, SPOT_PRICE, None)
-    assert "P/C Ratio: 2.40 (98th pctile of its own 90d history, n=705) -> Strong Bearish" in text
+    text = format_context_section(analysis, SPOT_PRICE, _make_vol_surface())
+    assert "P/C Ratio: 2.40  p98 (90d history, n=705)" in text
+    assert "Strong Bearish" not in text
+    assert "->" not in text.split("P/C Ratio")[1].splitlines()[0]
 
 
-def test_put_call_ratio_na_when_infinite():
+def test_context_pcr_insufficient_history():
+    text = format_context_section(_make_analysis(), SPOT_PRICE, _make_vol_surface())
+    assert "P/C Ratio: 2.40  (n=0 - insufficient history for a percentile)" in text
+
+
+def test_context_pcr_na_when_infinite():
     analysis = _make_analysis(
         put_call_ratio=PutCallRatioResult(
             total_call_oi=0.0, total_put_oi=50.0, ratio=float("inf"), bias="Strong Bearish"
         )
     )
-    text = format_expiration_section(analysis, SPOT_PRICE, None)
+    text = format_context_section(analysis, SPOT_PRICE, _make_vol_surface())
     assert "P/C Ratio: N/A (No Call OI)" in text
 
 
-def test_put_call_ratio_trends_shown():
-    trend = TrendSnapshot(
-        max_pain_strike=None, call_oi=40.0, put_oi=100.0, pc_ratio=2.0,
-        total_volume=None, volume_ratio=None,
-    )
-    text = format_expiration_section(_make_analysis(), SPOT_PRICE, trend)
-    assert "Trend (Call OI):" in text
-    assert "Trend (Put OI):" in text
-    assert "Trend (P/C):" in text
+def test_context_moneyness_one_line_itm_pct():
+    text = format_context_section(_make_analysis(), SPOT_PRICE, _make_vol_surface())
+    assert "Moneyness: ITM calls 0.0%  |  ITM puts 16.7%" in text
 
 
-def test_put_call_ratio_trend_skipped_when_ratio_infinite():
-    """Trend (P/C) is suppressed when the current ratio is inf, even with a previous pc_ratio."""
-    analysis = _make_analysis(
-        put_call_ratio=PutCallRatioResult(
-            total_call_oi=0.0, total_put_oi=50.0, ratio=float("inf"), bias="Strong Bearish"
-        )
-    )
-    trend = TrendSnapshot(
-        max_pain_strike=None, call_oi=10.0, put_oi=40.0, pc_ratio=1.5,
-        total_volume=None, volume_ratio=None,
-    )
-    text = format_expiration_section(analysis, SPOT_PRICE, trend)
-    assert "Trend (Call OI):" in text  # call/put OI trend independent of ratio
-    assert "Trend (P/C):" not in text
+def test_context_volume_pc_one_line():
+    text = format_context_section(_make_analysis(), SPOT_PRICE, _make_vol_surface())
+    assert "Volume P/C: 2.40" in text
 
 
-def test_volume_stats_rendered():
-    text = format_expiration_section(_make_analysis(), SPOT_PRICE, None)
-    assert "Total Call Volume: 5.00" in text
-    assert "Total Put Volume: 12.00" in text
-    assert "Total Volume: 17.00" in text
-    assert "Volume P/C Ratio: 2.40" in text
-
-
-def test_volume_ratio_na_when_infinite():
+def test_context_volume_pc_na_when_infinite():
     analysis = _make_analysis(
         volume_stats=VolumeStatsResult(
             total_call_volume=0.0, total_put_volume=5.0, total_volume=5.0, volume_ratio=float("inf")
         )
     )
-    text = format_expiration_section(analysis, SPOT_PRICE, None)
-    assert "Volume P/C Ratio: N/A (No Call Volume)" in text
+    text = format_context_section(analysis, SPOT_PRICE, _make_vol_surface())
+    assert "Volume P/C: N/A (No Call Volume)" in text
 
 
-# ---------------------------------------------------------------------------
-# Moneyness
-# ---------------------------------------------------------------------------
-
-def test_moneyness_skew_and_breakdown_rendered():
-    text = format_expiration_section(_make_analysis(), SPOT_PRICE, None)
-    assert "OI Skew: Heavy OTM (Speculative)" in text
-    assert "CALLS:" in text
-    assert "PUTS:" in text
-    assert "COMBINED TOTALS:" in text
-    assert "16.67%" in text  # puts ITM pct
+def test_context_vwap_iv_gap_one_line():
+    text = format_context_section(_make_analysis(), SPOT_PRICE, _make_vol_surface())
+    assert "VWAP-IV gap: +2.0%  (VWAP 82.0% vs Matched Mark 80.0%, 10 instr)" in text
 
 
-# ---------------------------------------------------------------------------
-# Strike table + notes
-# ---------------------------------------------------------------------------
-
-def test_strike_table_lists_strikes_ascending_with_notes():
-    text = format_expiration_section(_make_analysis(), SPOT_PRICE, None)
-    idx_60k = text.index("60,000")
-    idx_65k = text.index("65,000", idx_60k)
-    assert idx_60k < idx_65k  # ascending order
-    # 60,000 is a support level (put OI top) -> "Support" note
-    line_60k = text.splitlines()[[i for i, l in enumerate(text.splitlines()) if l.strip().startswith("60,000")][0]]
-    assert "Support" in line_60k
-    # 65,000 is both max pain and a resistance level
-    line_65k = text.splitlines()[[i for i, l in enumerate(text.splitlines()) if l.strip().startswith("65,000")][0]]
-    assert "<< MAX PAIN" in line_65k
-    assert "Resistance" in line_65k
+def test_context_vwap_iv_gap_none_when_vol_surface_missing():
+    text = format_context_section(_make_analysis(), SPOT_PRICE, None)
+    assert "VWAP-IV gap: N/A (no vol surface data)" in text
 
 
-def test_strike_table_no_notes_when_not_special():
-    analysis = _make_analysis(
-        strike_rows=(StrikeOiRow(strike=61000.0, call_oi=1.0, put_oi=1.0, call_volume=0.1, put_volume=0.1),),
-        max_pain=MaxPainResult(max_pain_strike=65000.0, pain_by_strike={}, min_pain_value=0.0),
-    )
-    text = format_expiration_section(analysis, SPOT_PRICE, None)
-    line = next(l for l in text.splitlines() if l.strip().startswith("61,000"))
-    assert line.rstrip().endswith("0.10")  # no trailing notes text after put volume column
-
-
-# ---------------------------------------------------------------------------
-# Support/Resistance + short-term levels
-# ---------------------------------------------------------------------------
-
-def test_support_resistance_levels_rendered():
-    text = format_expiration_section(_make_analysis(), SPOT_PRICE, None)
-    assert "RESISTANCE (Top 3 Call OI):" in text
-    assert "1. $65,000 - Call OI: 50" in text
-    assert "SUPPORT (Top 3 Put OI):" in text
-    assert "1. $60,000 - Put OI: 100" in text
-
-
-def test_support_resistance_none_found_when_empty():
-    analysis = _make_analysis(
-        support_resistance=SupportResistanceResult(
-            resistance_levels=(), support_levels=(), short_term_resistance=None, short_term_support=None,
-        )
-    )
-    text = format_expiration_section(analysis, SPOT_PRICE, None)
-    assert text.count("  None found") == 2
-    assert "Nearest Resistance: None found above current price" in text
-    assert "Nearest Support: None found below current price" in text
-
-
-def test_short_term_levels_rendered_with_price():
-    text = format_expiration_section(_make_analysis(), SPOT_PRICE, None)
-    assert f"SHORT-TERM LEVELS (nearest to current price ${SPOT_PRICE:,.2f}):" in text
-    assert "Nearest Resistance: $65,000 (Call OI: 50)" in text
-    assert "Nearest Support: $60,000 (Put OI: 100)" in text
+def test_context_vwap_iv_gap_suppressed_low_instrument_count():
+    vs = _make_vol_surface(traded_instrument_count=1)
+    text = format_context_section(_make_analysis(), SPOT_PRICE, vs)
+    assert "VWAP-IV gap: n/a (only 1 instrument(s) traded)" in text

@@ -24,56 +24,13 @@ EVIDENCE: OI/GEX from full book | Flow: INSUFFICIENT (0 trades in 24h)
 
 Total Instruments: 28 (14 Calls, 14 Puts)
 
-MAX PAIN ANALYSIS
---------------------------------------------------------------------------------
-Max Pain Strike: $65,000
-Distance from Current: $-490.66 (-0.75%)
-Trend (Max Pain): [→ unchanged]
-
-PUT/CALL RATIO (Open Interest)
---------------------------------------------------------------------------------
-Total Call OI: 1,597
-Total Put OI: 475
-P/C Ratio: 0.30 (n=0 - insufficient history for a percentile; absolute reading only)
-Trend (Call OI):  [↑ from 1,464, +133]
-Trend (Put OI):   [↑ from 302, +173]
-Trend (P/C):      [↑ from 0.21, +0.09]
-
-VOLUME STATISTICS
---------------------------------------------------------------------------------
-Total Call Volume: 173.80
-Total Put Volume: 70.60
-Total Volume: 244.40
-Volume P/C Ratio: 0.41
-Trend (Volume):   [↓ from 1,106, -862]
-Trend (Vol P/C):  [↑ from 0.15, +0.26]
-
-MONEYNESS ANALYSIS (ITM/OTM)
---------------------------------------------------------------------------------
-OI Skew: Heavy OTM (Speculative)
-
-CALLS:
-  ITM:        6 OI    Notional: $    412,859.78    ( 0.40%)
-  OTM:    1,590 OI    Notional: $102,602,105.27    (99.60%)
-  Total:  1,597 OI    Notional: $103,014,965.05
-
-PUTS:
-  ITM:       22 OI    Notional: $  1,399,852.68    ( 4.56%)
-  OTM:      454 OI    Notional: $ 29,267,887.56    (95.44%)
-  Total:    475 OI    Notional: $ 30,667,740.24
-
-COMBINED TOTALS:
-  ITM:       28 OI    Notional: $  1,812,712.45    ( 1.36%)
-  OTM:    2,044 OI    Notional: $131,869,992.83    (98.64%)
-  Total:  2,072 OI    Notional: $133,682,705.28
-
 OPEN INTEREST & VOLUME BY STRIKE
 --------------------------------------------------------------------------------
     Strike     Call OI      Put OI    Call Vol     Put Vol  Notes
     ------    --------     -------    --------     -------  -----
-    55,000           0          58        0.00        2.20  Support
-    58,000           0          64        0.00        0.00  Support
-    60,000           0         243        0.00       51.70  Support
+    55,000           0          58        0.00        2.20  
+    58,000           0          64        0.00        0.00  
+    60,000           0         243        0.00       51.70  
     61,000           0          11        0.00       11.00  
     62,000           1          29        0.00        0.00  
     63,000           2          26        0.10        0.40  
@@ -81,26 +38,10 @@ OPEN INTEREST & VOLUME BY STRIKE
     65,000           1          19        0.50        3.80  << MAX PAIN
     66,000          34           3        1.00        0.80  
     67,000          74           0        0.40        0.00  
-    68,000         278           0      109.20        0.00  Resistance
-    70,000         568           0       59.80        0.00  Resistance
-    72,000         426           0        0.60        0.00  Resistance
+    68,000         278           0      109.20        0.00  
+    70,000         568           0       59.80        0.00  
+    72,000         426           0        0.60        0.00  
     75,000         209           0        2.00        0.00  
-
-SUPPORT/RESISTANCE LEVELS
---------------------------------------------------------------------------------
-RESISTANCE (Top 3 Call OI):
-  1. $70,000 - Call OI: 568
-  2. $72,000 - Call OI: 426
-  3. $68,000 - Call OI: 278
-
-SUPPORT (Top 3 Put OI):
-  1. $60,000 - Put OI: 243
-  2. $58,000 - Put OI: 64
-  3. $55,000 - Put OI: 58
-
-SHORT-TERM LEVELS (nearest to current price $64,509.34):
-  Nearest Resistance: $65,000 (Call OI: 1)
-  Nearest Support: $64,000 (Put OI: 24)
 
 GEX/DEX ANALYSIS (Gamma & Delta Exposure)
 --------------------------------------------------------------------------------
@@ -193,9 +134,6 @@ VOLATILITY SURFACE ANALYSIS
 
 ATM IV: 35.1%
 
-VWAP IV: 39.2%  |  Matched Mark IV: 39.2%  |  Diff: -0.1%  (11 instruments)
-  Balanced
-
 IV BY STRIKE:
       Strike     Call IV      Put IV
       ------     -------      ------
@@ -225,6 +163,14 @@ LARGE OI CHANGES (Day-over-Day)
       ------  ----     -------     -------      ------   -------
       68,000  Call         207         278         +72    +34.7%
 
+CONTEXT
+--------------------------------------------------------------------------------
+Max Pain: $65,000  (-0.75% from spot)
+P/C Ratio: 0.30  (n=0 - insufficient history for a percentile)
+Moneyness: ITM calls 0.4%  |  ITM puts 4.6%
+Volume P/C: 0.41
+VWAP-IV gap: -0.1%  (VWAP 39.2% vs Matched Mark 39.2%, 11 instr)
+
 ================================================================================
 
 EXPIRATION: 25DEC26
@@ -233,64 +179,21 @@ EVIDENCE: OI/GEX from full book | Flow: INSUFFICIENT (0 trades in 24h)
 
 Total Instruments: 116 (58 Calls, 58 Puts)
 
-MAX PAIN ANALYSIS
---------------------------------------------------------------------------------
-Max Pain Strike: $70,000
-Distance from Current: $-4,518.20 (-6.45%)
-Trend (Max Pain): [→ unchanged]
-
-PUT/CALL RATIO (Open Interest)
---------------------------------------------------------------------------------
-Total Call OI: 58,816
-Total Put OI: 32,936
-P/C Ratio: 0.56 (n=0 - insufficient history for a percentile; absolute reading only)
-Trend (Call OI):  [↑ from 58,804, +12]
-Trend (Put OI):   [↑ from 32,935, +1]
-Trend (P/C):      [↓ from 0.56, -0.00]
-
-VOLUME STATISTICS
---------------------------------------------------------------------------------
-Total Call Volume: 27.40
-Total Put Volume: 16.50
-Total Volume: 43.90
-Volume P/C Ratio: 0.60
-Trend (Volume):   [↓ from 2,800, -2,756]
-Trend (Vol P/C):  [↓ from 0.90, -0.30]
-
-MONEYNESS ANALYSIS (ITM/OTM)
---------------------------------------------------------------------------------
-OI Skew: Heavy OTM (Speculative)
-
-CALLS:
-  ITM:    3,156 OI    Notional: $206,686,753.52    ( 5.37%)
-  OTM:   55,659 OI    Notional: $3,644,658,054.38    (94.63%)
-  Total: 58,816 OI    Notional: $3,851,344,807.90
-
-PUTS:
-  ITM:    6,408 OI    Notional: $419,640,115.30    (19.46%)
-  OTM:   26,528 OI    Notional: $1,737,074,997.68    (80.54%)
-  Total: 32,936 OI    Notional: $2,156,715,112.98
-
-COMBINED TOTALS:
-  ITM:    9,565 OI    Notional: $626,326,868.82    (10.42%)
-  OTM:   82,187 OI    Notional: $5,381,733,052.06    (89.58%)
-  Total: 91,752 OI    Notional: $6,008,059,920.88
-
 OPEN INTEREST & VOLUME BY STRIKE
 --------------------------------------------------------------------------------
     Strike     Call OI      Put OI    Call Vol     Put Vol  Notes
     ------    --------     -------    --------     -------  -----
     30,000         289       2,149        0.00        0.10  
     35,000          78       2,312        0.00        3.10  
-    40,000         251       4,056        0.00        3.10  Support
-    45,000          54       2,783        0.00        4.30  Support
+    40,000         251       4,056        0.00        3.10  
+    45,000          54       2,783        0.00        4.30  
     50,000         261       1,748        0.00        0.00  
     52,000           0         148        0.00        0.00  
     54,000          33       1,821        0.00        0.00  
     55,000          43       1,037        0.00        0.00  
     56,000          41         342        0.00        0.00  
     58,000          42       2,055        0.00        0.00  
-    60,000         785       6,449        0.00        1.00  Support
+    60,000         785       6,449        0.00        1.00  
     62,000         241         703        0.20        0.20  
     64,000         392         247        0.20        0.20  
     65,000         646         677        0.00        0.00  
@@ -302,7 +205,7 @@ OPEN INTEREST & VOLUME BY STRIKE
     75,000       1,326         892        0.00        0.00  
     76,000         339         142        0.10        0.00  
     78,000         400         235        0.40        0.00  
-    80,000       7,690         952        3.50        0.00  Resistance
+    80,000       7,690         952        3.50        0.00  
     82,000         472         159        0.10        0.00  
     84,000         706          47        0.00        0.00  
     85,000       2,094         548        0.30        0.00  
@@ -314,7 +217,7 @@ OPEN INTEREST & VOLUME BY STRIKE
     95,000       1,298          86        0.00        0.00  
     96,000         310          11        0.00        0.00  
     98,000         207           1        0.00        0.00  
-   100,000       3,566         303        3.00        0.00  Resistance
+   100,000       3,566         303        3.00        0.00  
    102,000         169           8        0.00        0.00  
    104,000          84           0        0.00        0.00  
    105,000         834         109        0.00        0.00  
@@ -322,7 +225,7 @@ OPEN INTEREST & VOLUME BY STRIKE
    108,000         122           0        0.00        0.00  
    110,000       2,641          54        0.00        0.00  
    115,000       2,340           1        0.00        0.00  
-   120,000       6,031          36        0.00        0.00  Resistance
+   120,000       6,031          36        0.00        0.00  
    125,000         596           8        0.20        0.00  
    130,000       1,568          52        2.10        0.00  
    135,000       1,077           1        3.00        0.00  
@@ -338,22 +241,6 @@ OPEN INTEREST & VOLUME BY STRIKE
    230,000         196           0        6.00        0.00  
    240,000         874           0        0.00        0.00  
    250,000       1,256          10        0.00        0.00  
-
-SUPPORT/RESISTANCE LEVELS
---------------------------------------------------------------------------------
-RESISTANCE (Top 3 Call OI):
-  1. $80,000 - Call OI: 7,690
-  2. $120,000 - Call OI: 6,031
-  3. $100,000 - Call OI: 3,566
-
-SUPPORT (Top 3 Put OI):
-  1. $60,000 - Put OI: 6,449
-  2. $40,000 - Put OI: 4,056
-  3. $45,000 - Put OI: 2,783
-
-SHORT-TERM LEVELS (nearest to current price $65,481.80):
-  Nearest Resistance: $66,000 (Call OI: 255)
-  Nearest Support: $65,000 (Put OI: 677)
 
 GEX/DEX ANALYSIS (Gamma & Delta Exposure)
 --------------------------------------------------------------------------------
@@ -534,9 +421,6 @@ VOLATILITY SURFACE ANALYSIS
 
 ATM IV: 40.8%
 
-VWAP IV: 40.4%  |  Matched Mark IV: 40.3%  |  Diff: +0.1%  (7 instruments)
-  Balanced
-
 IV BY STRIKE:
       Strike     Call IV      Put IV
       ------     -------      ------
@@ -572,6 +456,14 @@ LARGE OI CHANGES (Day-over-Day)
 --------------------------------------------------------------------------------
   No significant OI changes (>20%) detected
 
+CONTEXT
+--------------------------------------------------------------------------------
+Max Pain: $70,000  (-6.45% from spot)
+P/C Ratio: 0.56  (n=0 - insufficient history for a percentile)
+Moneyness: ITM calls 5.4%  |  ITM puts 19.5%
+Volume P/C: 0.60
+VWAP-IV gap: +0.1%  (VWAP 40.4% vs Matched Mark 40.3%, 7 instr)
+
 ================================================================================
 
 EXPIRATION: 25JUN27
@@ -580,55 +472,12 @@ EVIDENCE: OI/GEX from full book | Flow: INSUFFICIENT (0 trades in 24h)
 
 Total Instruments: 74 (37 Calls, 37 Puts)
 
-MAX PAIN ANALYSIS
---------------------------------------------------------------------------------
-Max Pain Strike: $60,000
-Distance from Current: $+6,880.71 (+11.47%)
-Trend (Max Pain): [→ unchanged]
-
-PUT/CALL RATIO (Open Interest)
---------------------------------------------------------------------------------
-Total Call OI: 2,520
-Total Put OI: 1,521
-P/C Ratio: 0.60 (n=0 - insufficient history for a percentile; absolute reading only)
-Trend (Call OI):  [↑ from 2,517, +3]
-Trend (Put OI):   [↑ from 1,509, +12]
-Trend (P/C):      [↑ from 0.60, +0.00]
-
-VOLUME STATISTICS
---------------------------------------------------------------------------------
-Total Call Volume: 7.40
-Total Put Volume: 14.10
-Total Volume: 21.50
-Volume P/C Ratio: 1.91
-Trend (Volume):   [↓ from 80, -58]
-Trend (Vol P/C):  [↑ from 0.37, +1.54]
-
-MONEYNESS ANALYSIS (ITM/OTM)
---------------------------------------------------------------------------------
-OI Skew: Heavy OTM (Speculative)
-
-CALLS:
-  ITM:    1,116 OI    Notional: $ 74,605,432.01    (44.27%)
-  OTM:    1,404 OI    Notional: $ 93,933,957.20    (55.73%)
-  Total:  2,520 OI    Notional: $168,539,389.20
-
-PUTS:
-  ITM:       44 OI    Notional: $  2,949,439.31    ( 2.90%)
-  OTM:    1,477 OI    Notional: $ 98,802,872.88    (97.10%)
-  Total:  1,521 OI    Notional: $101,752,312.19
-
-COMBINED TOTALS:
-  ITM:    1,160 OI    Notional: $ 77,554,871.32    (28.69%)
-  OTM:    2,882 OI    Notional: $192,736,830.08    (71.31%)
-  Total:  4,041 OI    Notional: $270,291,701.39
-
 OPEN INTEREST & VOLUME BY STRIKE
 --------------------------------------------------------------------------------
     Strike     Call OI      Put OI    Call Vol     Put Vol  Notes
     ------    --------     -------    --------     -------  -----
-    30,000          13         262        0.00       10.00  Support
-    40,000           0         476        0.00        0.00  Support
+    30,000          13         262        0.00       10.00  
+    40,000           0         476        0.00        0.00  
     45,000           0         228        0.00        0.00  
     50,000          17          33        0.00        0.10  
     52,000           1          18        0.00        0.00  
@@ -636,12 +485,12 @@ OPEN INTEREST & VOLUME BY STRIKE
     55,000           0           6        0.00        0.00  
     56,000           3          41        0.00        0.00  
     58,000           5          15        0.00        2.00  
-    60,000         943         321        0.00        2.00  << MAX PAIN | Resistance | Support
+    60,000         943         321        0.00        2.00  << MAX PAIN
     62,000          94          15        0.10        0.00  
     64,000          16          14        0.10        0.00  
     66,000          23          32        0.00        0.00  
     68,000           8           8        0.20        0.00  
-    70,000         185           9        0.00        0.00  Resistance
+    70,000         185           9        0.00        0.00  
     72,000          14           1        0.00        0.00  
     74,000          13           0        0.00        0.00  
     76,000          14           0        0.00        0.00  
@@ -662,24 +511,8 @@ OPEN INTEREST & VOLUME BY STRIKE
    130,000          67           0        0.10        0.00  
    140,000         107           0        0.40        0.00  
    150,000          86           0        0.40        0.00  
-   160,000         493           0        0.30        0.00  Resistance
+   160,000         493           0        0.30        0.00  
    170,000           8           0        0.60        0.00  
-
-SUPPORT/RESISTANCE LEVELS
---------------------------------------------------------------------------------
-RESISTANCE (Top 3 Call OI):
-  1. $60,000 - Call OI: 943
-  2. $160,000 - Call OI: 493
-  3. $70,000 - Call OI: 185
-
-SUPPORT (Top 3 Put OI):
-  1. $40,000 - Put OI: 476
-  2. $60,000 - Put OI: 321
-  3. $30,000 - Put OI: 262
-
-SHORT-TERM LEVELS (nearest to current price $66,880.71):
-  Nearest Resistance: $68,000 (Call OI: 8)
-  Nearest Support: $66,000 (Put OI: 32)
 
 GEX/DEX ANALYSIS (Gamma & Delta Exposure)
 --------------------------------------------------------------------------------
@@ -818,9 +651,6 @@ VOLATILITY SURFACE ANALYSIS
 
 ATM IV: 43.1%
 
-VWAP IV: 43.4%  |  Matched Mark IV: 44.0%  |  Diff: -0.6%  (7 instruments)
-  Balanced
-
 IV BY STRIKE:
       Strike     Call IV      Put IV
       ------     -------      ------
@@ -855,6 +685,14 @@ LARGE OI CHANGES (Day-over-Day)
 --------------------------------------------------------------------------------
   No significant OI changes (>20%) detected
 
+CONTEXT
+--------------------------------------------------------------------------------
+Max Pain: $60,000  (+11.47% from spot)
+P/C Ratio: 0.60  (n=0 - insufficient history for a percentile)
+Moneyness: ITM calls 44.3%  |  ITM puts 2.9%
+Volume P/C: 1.91
+VWAP-IV gap: -0.6%  (VWAP 43.4% vs Matched Mark 44.0%, 7 instr)
+
 ================================================================================
 
 EXPIRATION: 25SEP26
@@ -862,49 +700,6 @@ EXPIRATION: 25SEP26
 EVIDENCE: OI/GEX from full book | Flow: INSUFFICIENT (0 trades in 24h)
 
 Total Instruments: 120 (60 Calls, 60 Puts)
-
-MAX PAIN ANALYSIS
---------------------------------------------------------------------------------
-Max Pain Strike: $70,000
-Distance from Current: $-5,190.99 (-7.42%)
-Trend (Max Pain): [→ unchanged]
-
-PUT/CALL RATIO (Open Interest)
---------------------------------------------------------------------------------
-Total Call OI: 59,768
-Total Put OI: 34,440
-P/C Ratio: 0.58 (n=0 - insufficient history for a percentile; absolute reading only)
-Trend (Call OI):  [↑ from 59,456, +313]
-Trend (Put OI):   [↑ from 34,421, +19]
-Trend (P/C):      [↓ from 0.58, -0.00]
-
-VOLUME STATISTICS
---------------------------------------------------------------------------------
-Total Call Volume: 385.50
-Total Put Volume: 180.20
-Total Volume: 565.70
-Volume P/C Ratio: 0.47
-Trend (Volume):   [↓ from 2,621, -2,055]
-Trend (Vol P/C):  [↓ from 0.70, -0.23]
-
-MONEYNESS ANALYSIS (ITM/OTM)
---------------------------------------------------------------------------------
-OI Skew: Heavy OTM (Speculative)
-
-CALLS:
-  ITM:    2,953 OI    Notional: $191,348,602.03    ( 4.94%)
-  OTM:   56,816 OI    Notional: $3,682,175,750.36    (95.06%)
-  Total: 59,768 OI    Notional: $3,873,524,352.38
-
-PUTS:
-  ITM:   11,131 OI    Notional: $721,402,052.11    (32.32%)
-  OTM:   23,308 OI    Notional: $1,510,600,809.59    (67.68%)
-  Total: 34,440 OI    Notional: $2,232,002,861.70
-
-COMBINED TOTALS:
-  ITM:   14,084 OI    Notional: $912,750,654.14    (14.95%)
-  OTM:   80,124 OI    Notional: $5,192,776,559.94    (85.05%)
-  Total: 94,208 OI    Notional: $6,105,527,214.08
 
 OPEN INTEREST & VOLUME BY STRIKE
 --------------------------------------------------------------------------------
@@ -914,13 +709,13 @@ OPEN INTEREST & VOLUME BY STRIKE
     35,000          29         889        0.00        0.80  
     40,000          34       2,293        0.00        0.70  
     45,000         153       1,953        0.00        0.20  
-    50,000          30       3,571        0.00        0.10  Support
+    50,000          30       3,571        0.00        0.10  
     52,000          75       1,077        0.00        0.00  
     54,000           7         372        0.00        5.00  
-    55,000          84       3,217        0.00        0.30  Support
+    55,000          84       3,217        0.00        0.30  
     56,000          12       1,030        0.00      100.00  
     58,000         486         718        0.00       34.20  
-    60,000         933       4,352        0.40       30.60  Support
+    60,000         933       4,352        0.40       30.60  
     62,000         682         975        0.50        1.20  
     64,000         294         525        0.70        0.00  
     65,000         760         648        2.00        0.00  
@@ -931,8 +726,8 @@ OPEN INTEREST & VOLUME BY STRIKE
     74,000         722         111      100.70        0.00  
     75,000       2,997       2,967        1.70        0.00  
     76,000       2,257         600       14.10        0.00  
-    78,000       4,219         629       16.20        0.10  Resistance
-    80,000       3,545         613        3.10        0.00  Resistance
+    78,000       4,219         629       16.20        0.10  
+    80,000       3,545         613        3.10        0.00  
     82,000       2,487         194        2.00        0.00  
     84,000       1,457          35      216.70        0.00  
     85,000       1,225         454        1.20        0.00  
@@ -944,7 +739,7 @@ OPEN INTEREST & VOLUME BY STRIKE
     95,000       1,866         148        0.00        0.00  
     96,000         306           1        0.00        0.00  
     98,000         304           0        0.00        0.00  
-   100,000       3,606         272        0.00        0.00  Resistance
+   100,000       3,606         272        0.00        0.00  
    102,000          92           0        0.00        0.00  
    105,000       1,208         105        0.00        0.00  
    110,000       1,313         116        1.00        0.00  
@@ -970,22 +765,6 @@ OPEN INTEREST & VOLUME BY STRIKE
    280,000          94           0        0.00        0.00  
    300,000         192           0        0.00        0.00  
    320,000         277          25        0.00        0.00  
-
-SUPPORT/RESISTANCE LEVELS
---------------------------------------------------------------------------------
-RESISTANCE (Top 3 Call OI):
-  1. $78,000 - Call OI: 4,219
-  2. $100,000 - Call OI: 3,606
-  3. $80,000 - Call OI: 3,545
-
-SUPPORT (Top 3 Put OI):
-  1. $60,000 - Put OI: 4,352
-  2. $50,000 - Put OI: 3,571
-  3. $55,000 - Put OI: 3,217
-
-SHORT-TERM LEVELS (nearest to current price $64,809.01):
-  Nearest Resistance: $65,000 (Call OI: 760)
-  Nearest Support: $64,000 (Put OI: 525)
 
 GEX/DEX ANALYSIS (Gamma & Delta Exposure)
 --------------------------------------------------------------------------------
@@ -1170,9 +949,6 @@ VOLATILITY SURFACE ANALYSIS
 
 ATM IV: 36.7%
 
-VWAP IV: 38.6%  |  Matched Mark IV: 38.7%  |  Diff: -0.0%  (13 instruments)
-  Balanced
-
 IV BY STRIKE:
       Strike     Call IV      Put IV
       ------     -------      ------
@@ -1207,6 +983,14 @@ LARGE OI CHANGES (Day-over-Day)
 --------------------------------------------------------------------------------
   No significant OI changes (>20%) detected
 
+CONTEXT
+--------------------------------------------------------------------------------
+Max Pain: $70,000  (-7.42% from spot)
+P/C Ratio: 0.58  (n=0 - insufficient history for a percentile)
+Moneyness: ITM calls 4.9%  |  ITM puts 32.3%
+Volume P/C: 0.47
+VWAP-IV gap: -0.0%  (VWAP 38.6% vs Matched Mark 38.7%, 13 instr)
+
 ================================================================================
 
 EXPIRATION: 26JUL26
@@ -1214,49 +998,6 @@ EXPIRATION: 26JUL26
 EVIDENCE: OI/GEX from full book | Flow: INSUFFICIENT (0 trades in 24h)
 
 Total Instruments: 46 (23 Calls, 23 Puts)
-
-MAX PAIN ANALYSIS
---------------------------------------------------------------------------------
-Max Pain Strike: $64,000
-Distance from Current: $+372.48 (+0.58%)
-Trend (Max Pain): [↓ from 64,500, -500]
-
-PUT/CALL RATIO (Open Interest)
---------------------------------------------------------------------------------
-Total Call OI: 1,432
-Total Put OI: 1,028
-P/C Ratio: 0.72 (n=0 - insufficient history for a percentile; absolute reading only)
-Trend (Call OI):  [↑ from 1,038, +394]
-Trend (Put OI):   [↑ from 639, +390]
-Trend (P/C):      [↑ from 0.62, +0.10]
-
-VOLUME STATISTICS
---------------------------------------------------------------------------------
-Total Call Volume: 564.10
-Total Put Volume: 502.90
-Total Volume: 1,067.00
-Volume P/C Ratio: 0.89
-Trend (Volume):   [↑ from 924, +143]
-Trend (Vol P/C):  [↑ from 0.47, +0.42]
-
-MONEYNESS ANALYSIS (ITM/OTM)
---------------------------------------------------------------------------------
-OI Skew: Heavy OTM (Speculative)
-
-CALLS:
-  ITM:       64 OI    Notional: $  4,119,838.72    ( 4.47%)
-  OTM:    1,368 OI    Notional: $ 88,067,989.89    (95.53%)
-  Total:  1,432 OI    Notional: $ 92,187,828.61
-
-PUTS:
-  ITM:       59 OI    Notional: $  3,804,413.57    ( 5.75%)
-  OTM:      969 OI    Notional: $ 62,402,682.11    (94.25%)
-  Total:  1,028 OI    Notional: $ 66,207,095.68
-
-COMBINED TOTALS:
-  ITM:      123 OI    Notional: $  7,924,252.29    ( 5.00%)
-  OTM:    2,338 OI    Notional: $150,470,672.00    (95.00%)
-  Total:  2,461 OI    Notional: $158,394,924.29
 
 OPEN INTEREST & VOLUME BY STRIKE
 --------------------------------------------------------------------------------
@@ -1268,16 +1009,16 @@ OPEN INTEREST & VOLUME BY STRIKE
     61,000           0          58        0.00       47.80  
     62,000           0         112        0.00       38.20  
     62,500           0          61        0.00       61.60  
-    63,000           0         210        0.00      128.90  Support
-    63,500           0         209        0.10      117.60  Support
-    64,000          64         171       50.90      107.20  << MAX PAIN | Support
-    64,500         268          10      222.40        1.40  Resistance
+    63,000           0         210        0.00      128.90  
+    63,500           0         209        0.10      117.60  
+    64,000          64         171       50.90      107.20  << MAX PAIN
+    64,500         268          10      222.40        1.40  
     65,000         199          13      150.40        0.00  
     65,500          82          22       84.00        0.20  
     66,000          72          14       32.20        0.00  
     66,500         119           0       11.60        0.00  
-    67,000         243           0       12.00        0.00  Resistance
-    67,500         206           0        0.00        0.00  Resistance
+    67,000         243           0       12.00        0.00  
+    67,500         206           0        0.00        0.00  
     68,000          83           0        0.40        0.00  
     68,500          10           0        0.00        0.00  
     69,000          30           0        0.00        0.00  
@@ -1285,22 +1026,6 @@ OPEN INTEREST & VOLUME BY STRIKE
     71,000           4           0        0.00        0.00  
     72,000           4           0        0.00        0.00  
     73,000          30           0        0.00        0.00  
-
-SUPPORT/RESISTANCE LEVELS
---------------------------------------------------------------------------------
-RESISTANCE (Top 3 Call OI):
-  1. $64,500 - Call OI: 268
-  2. $67,000 - Call OI: 243
-  3. $67,500 - Call OI: 206
-
-SUPPORT (Top 3 Put OI):
-  1. $63,000 - Put OI: 210
-  2. $63,500 - Put OI: 209
-  3. $64,000 - Put OI: 171
-
-SHORT-TERM LEVELS (nearest to current price $64,372.48):
-  Nearest Resistance: $64,500 (Call OI: 268)
-  Nearest Support: $64,000 (Put OI: 171)
 
 GEX/DEX ANALYSIS (Gamma & Delta Exposure)
 --------------------------------------------------------------------------------
@@ -1411,9 +1136,6 @@ VOLATILITY SURFACE ANALYSIS
 
 ATM IV: 14.8%
 
-VWAP IV: 24.4%  |  Matched Mark IV: 23.0%  |  Diff: +1.5%  (13 instruments)
-  Buyers aggressive (VWAP > Mark)
-
 IV BY STRIKE:
       Strike     Call IV      Put IV
       ------     -------      ------
@@ -1460,6 +1182,14 @@ LARGE OI CHANGES (Day-over-Day)
       65,500  Call          59          82         +23    +38.4%
       61,000   Put          43          58         +15    +34.5%
 
+CONTEXT
+--------------------------------------------------------------------------------
+Max Pain: $64,000  (+0.58% from spot)
+P/C Ratio: 0.72  (n=0 - insufficient history for a percentile)
+Moneyness: ITM calls 4.5%  |  ITM puts 5.7%
+Volume P/C: 0.89
+VWAP-IV gap: +1.5%  (VWAP 24.4% vs Matched Mark 23.0%, 13 instr)
+
 ================================================================================
 
 EXPIRATION: 26MAR27
@@ -1468,60 +1198,17 @@ EVIDENCE: OI/GEX from full book | Flow: INSUFFICIENT (0 trades in 24h)
 
 Total Instruments: 102 (51 Calls, 51 Puts)
 
-MAX PAIN ANALYSIS
---------------------------------------------------------------------------------
-Max Pain Strike: $65,000
-Distance from Current: $+1,131.80 (+1.74%)
-Trend (Max Pain): [→ unchanged]
-
-PUT/CALL RATIO (Open Interest)
---------------------------------------------------------------------------------
-Total Call OI: 15,659
-Total Put OI: 8,308
-P/C Ratio: 0.53 (n=0 - insufficient history for a percentile; absolute reading only)
-Trend (Call OI):  [↑ from 15,640, +19]
-Trend (Put OI):   [↑ from 8,305, +3]
-Trend (P/C):      [↓ from 0.53, -0.00]
-
-VOLUME STATISTICS
---------------------------------------------------------------------------------
-Total Call Volume: 13.50
-Total Put Volume: 2.10
-Total Volume: 15.60
-Volume P/C Ratio: 0.16
-Trend (Volume):   [↓ from 214, -199]
-Trend (Vol P/C):  [↑ from 0.13, +0.02]
-
-MONEYNESS ANALYSIS (ITM/OTM)
---------------------------------------------------------------------------------
-OI Skew: Heavy OTM (Speculative)
-
-CALLS:
-  ITM:    1,240 OI    Notional: $ 82,029,884.72    ( 7.92%)
-  OTM:   14,419 OI    Notional: $953,547,811.02    (92.08%)
-  Total: 15,659 OI    Notional: $1,035,577,695.74
-
-PUTS:
-  ITM:      927 OI    Notional: $ 61,324,018.14    (11.16%)
-  OTM:    7,381 OI    Notional: $488,118,815.80    (88.84%)
-  Total:  8,308 OI    Notional: $549,442,833.94
-
-COMBINED TOTALS:
-  ITM:    2,168 OI    Notional: $143,353,902.86    ( 9.04%)
-  OTM:   21,800 OI    Notional: $1,441,666,626.82    (90.96%)
-  Total: 23,968 OI    Notional: $1,585,020,529.68
-
 OPEN INTEREST & VOLUME BY STRIKE
 --------------------------------------------------------------------------------
     Strike     Call OI      Put OI    Call Vol     Put Vol  Notes
     ------    --------     -------    --------     -------  -----
     35,000           4         547        0.00        1.80  
-    40,000          80       1,148        0.00        0.30  Support
+    40,000          80       1,148        0.00        0.30  
     45,000           3         151        0.00        0.00  
-    50,000          20       2,023        0.00        0.00  Support
+    50,000          20       2,023        0.00        0.00  
     52,000           5         112        0.00        0.00  
     54,000           0          53        0.00        0.00  
-    55,000          29       1,354        0.00        0.00  Support
+    55,000          29       1,354        0.00        0.00  
     56,000          17          80        0.00        0.00  
     58,000           5         108        0.00        0.00  
     60,000         719         614        0.00        0.00  
@@ -1535,7 +1222,7 @@ OPEN INTEREST & VOLUME BY STRIKE
     74,000          50          55        0.00        0.00  
     76,000         278          19        1.00        0.00  
     78,000         374         183        0.00        0.00  
-    80,000         913         140        0.00        0.00  Resistance
+    80,000         913         140        0.00        0.00  
     82,000         659           4        0.00        0.00  
     84,000         238          55        0.00        0.00  
     85,000          55           1        6.50        0.00  
@@ -1558,30 +1245,14 @@ OPEN INTEREST & VOLUME BY STRIKE
    115,000         764           1        0.00        0.00  
    120,000         327           1        0.00        0.00  
    125,000         121           0        0.00        0.00  
-   130,000       1,057           0        0.20        0.00  Resistance
+   130,000       1,057           0        0.20        0.00  
    140,000         756           0        0.00        0.00  
-   150,000       1,898           0        0.10        0.00  Resistance
+   150,000       1,898           0        0.10        0.00  
    160,000         855           0        0.00        0.00  
    170,000         248           0        0.00        0.00  
    180,000         644           0        0.00        0.00  
    190,000         881           1        1.60        0.00  
    200,000         500           1        3.80        0.00  
-
-SUPPORT/RESISTANCE LEVELS
---------------------------------------------------------------------------------
-RESISTANCE (Top 3 Call OI):
-  1. $150,000 - Call OI: 1,898
-  2. $130,000 - Call OI: 1,057
-  3. $80,000 - Call OI: 913
-
-SUPPORT (Top 3 Put OI):
-  1. $50,000 - Put OI: 2,023
-  2. $55,000 - Put OI: 1,354
-  3. $40,000 - Put OI: 1,148
-
-SHORT-TERM LEVELS (nearest to current price $66,131.80):
-  Nearest Resistance: $68,000 (Call OI: 40)
-  Nearest Support: $66,000 (Put OI: 129)
 
 GEX/DEX ANALYSIS (Gamma & Delta Exposure)
 --------------------------------------------------------------------------------
@@ -1748,9 +1419,6 @@ VOLATILITY SURFACE ANALYSIS
 
 ATM IV: 42.1%
 
-VWAP IV: 42.3%  |  Matched Mark IV: 42.7%  |  Diff: -0.4%  (2 instruments)
-  Balanced
-
 IV BY STRIKE:
       Strike     Call IV      Put IV
       ------     -------      ------
@@ -1785,6 +1453,14 @@ LARGE OI CHANGES (Day-over-Day)
 --------------------------------------------------------------------------------
   No significant OI changes (>20%) detected
 
+CONTEXT
+--------------------------------------------------------------------------------
+Max Pain: $65,000  (+1.74% from spot)
+P/C Ratio: 0.53  (n=0 - insufficient history for a percentile)
+Moneyness: ITM calls 7.9%  |  ITM puts 11.2%
+Volume P/C: 0.16
+VWAP-IV gap: -0.4%  (VWAP 42.3% vs Matched Mark 42.7%, 2 instr)
+
 ================================================================================
 
 EXPIRATION: 27JUL26
@@ -1792,49 +1468,6 @@ EXPIRATION: 27JUL26
 EVIDENCE: OI/GEX from full book | Flow: INSUFFICIENT (0 trades in 24h)
 
 Total Instruments: 44 (22 Calls, 22 Puts)
-
-MAX PAIN ANALYSIS
---------------------------------------------------------------------------------
-Max Pain Strike: $65,000
-Distance from Current: $-627.52 (-0.97%)
-Trend (Max Pain): [→ unchanged]
-
-PUT/CALL RATIO (Open Interest)
---------------------------------------------------------------------------------
-Total Call OI: 1,145
-Total Put OI: 1,201
-P/C Ratio: 1.05 (n=0 - insufficient history for a percentile; absolute reading only)
-Trend (Call OI):  [↑ from 891, +254]
-Trend (Put OI):   [↑ from 1,101, +100]
-Trend (P/C):      [↓ from 1.24, -0.19]
-
-VOLUME STATISTICS
---------------------------------------------------------------------------------
-Total Call Volume: 342.80
-Total Put Volume: 128.90
-Total Volume: 471.70
-Volume P/C Ratio: 0.38
-Trend (Volume):   [↓ from 1,561, -1,089]
-Trend (Vol P/C):  [↓ from 1.04, -0.66]
-
-MONEYNESS ANALYSIS (ITM/OTM)
---------------------------------------------------------------------------------
-OI Skew: Heavy OTM (Speculative)
-
-CALLS:
-  ITM:       18 OI    Notional: $  1,171,579.14    ( 1.59%)
-  OTM:    1,127 OI    Notional: $ 72,547,784.96    (98.41%)
-  Total:  1,145 OI    Notional: $ 73,719,364.10
-
-PUTS:
-  ITM:      261 OI    Notional: $ 16,788,342.78    (21.72%)
-  OTM:      940 OI    Notional: $ 60,510,131.20    (78.28%)
-  Total:  1,201 OI    Notional: $ 77,298,473.98
-
-COMBINED TOTALS:
-  ITM:      279 OI    Notional: $ 17,959,921.92    (11.89%)
-  OTM:    2,067 OI    Notional: $133,057,916.16    (88.11%)
-  Total:  2,346 OI    Notional: $151,017,838.08
 
 OPEN INTEREST & VOLUME BY STRIKE
 --------------------------------------------------------------------------------
@@ -1844,40 +1477,24 @@ OPEN INTEREST & VOLUME BY STRIKE
     59,000           0           8        0.00        5.40  
     60,000           0           9        0.00        0.00  
     61,000           0          52        0.00        1.70  
-    62,000           0         337        0.00       13.60  Support
+    62,000           0         337        0.00       13.60  
     62,500           0         122        0.00       67.80  
-    63,000           0         301        0.00       25.70  Support
+    63,000           0         301        0.00       25.70  
     63,500           0          13        0.00        6.60  
     64,000          18          64       15.60        6.50  
     64,500          47          42       30.30        0.00  
-    65,000          25         216       14.30        0.10  << MAX PAIN | Support
-    65,500         144           1      175.50        0.00  Resistance
-    66,000         259           1       86.30        0.50  Resistance
+    65,000          25         216       14.30        0.10  << MAX PAIN
+    65,500         144           1      175.50        0.00  
+    66,000         259           1       86.30        0.50  
     66,500          61           0        6.60        0.00  
     67,000          89           0       12.20        0.00  
     67,500          60           0        1.00        0.00  
     68,000         134           0        0.60        0.00  
-    69,000         216           0        0.00        0.00  Resistance
+    69,000         216           0        0.00        0.00  
     70,000          57           0        0.00        0.00  
     71,000           2           0        0.40        0.00  
     72,000           1           0        0.00        0.00  
     73,000          31           0        0.00        0.00  
-
-SUPPORT/RESISTANCE LEVELS
---------------------------------------------------------------------------------
-RESISTANCE (Top 3 Call OI):
-  1. $66,000 - Call OI: 259
-  2. $69,000 - Call OI: 216
-  3. $65,500 - Call OI: 144
-
-SUPPORT (Top 3 Put OI):
-  1. $62,000 - Put OI: 337
-  2. $63,000 - Put OI: 301
-  3. $65,000 - Put OI: 216
-
-SHORT-TERM LEVELS (nearest to current price $64,372.48):
-  Nearest Resistance: $64,500 (Call OI: 47)
-  Nearest Support: $64,000 (Put OI: 64)
 
 GEX/DEX ANALYSIS (Gamma & Delta Exposure)
 --------------------------------------------------------------------------------
@@ -1986,9 +1603,6 @@ VOLATILITY SURFACE ANALYSIS
 
 ATM IV: 24.5%
 
-VWAP IV: 24.5%  |  Matched Mark IV: 25.5%  |  Diff: -1.1%  (14 instruments)
-  Sellers aggressive (VWAP < Mark)
-
 IV BY STRIKE:
       Strike     Call IV      Put IV
       ------     -------      ------
@@ -2030,6 +1644,14 @@ LARGE OI CHANGES (Day-over-Day)
       64,500  Call          25          47         +22    +89.6%
       66,000  Call         177         259         +82    +46.1%
 
+CONTEXT
+--------------------------------------------------------------------------------
+Max Pain: $65,000  (-0.97% from spot)
+P/C Ratio: 1.05  (n=0 - insufficient history for a percentile)
+Moneyness: ITM calls 1.6%  |  ITM puts 21.7%
+Volume P/C: 0.38
+VWAP-IV gap: -1.1%  (VWAP 24.5% vs Matched Mark 25.5%, 14 instr)
+
 ================================================================================
 
 EXPIRATION: 28AUG26
@@ -2038,49 +1660,6 @@ EVIDENCE: OI/GEX from full book | Flow: INSUFFICIENT (0 trades in 24h)
 
 Total Instruments: 98 (49 Calls, 49 Puts)
 
-MAX PAIN ANALYSIS
---------------------------------------------------------------------------------
-Max Pain Strike: $62,000
-Distance from Current: $+2,599.84 (+4.19%)
-Trend (Max Pain): [→ unchanged]
-
-PUT/CALL RATIO (Open Interest)
---------------------------------------------------------------------------------
-Total Call OI: 28,486
-Total Put OI: 14,938
-P/C Ratio: 0.52 (n=0 - insufficient history for a percentile; absolute reading only)
-Trend (Call OI):  [↑ from 28,432, +54]
-Trend (Put OI):   [↑ from 14,836, +102]
-Trend (P/C):      [↑ from 0.52, +0.00]
-
-VOLUME STATISTICS
---------------------------------------------------------------------------------
-Total Call Volume: 127.10
-Total Put Volume: 186.00
-Total Volume: 313.10
-Volume P/C Ratio: 1.46
-Trend (Volume):   [↓ from 2,172, -1,858]
-Trend (Vol P/C):  [↑ from 0.53, +0.93]
-
-MONEYNESS ANALYSIS (ITM/OTM)
---------------------------------------------------------------------------------
-OI Skew: Heavy OTM (Speculative)
-
-CALLS:
-  ITM:    3,952 OI    Notional: $255,285,647.71    (13.87%)
-  OTM:   24,534 OI    Notional: $1,584,898,934.54    (86.13%)
-  Total: 28,486 OI    Notional: $1,840,184,582.26
-
-PUTS:
-  ITM:    1,411 OI    Notional: $ 91,124,534.30    ( 9.44%)
-  OTM:   13,528 OI    Notional: $873,880,795.58    (90.56%)
-  Total: 14,938 OI    Notional: $965,005,329.89
-
-COMBINED TOTALS:
-  ITM:    5,362 OI    Notional: $346,410,182.02    (12.35%)
-  OTM:   38,062 OI    Notional: $2,458,779,730.13    (87.65%)
-  Total: 43,424 OI    Notional: $2,805,189,912.14
-
 OPEN INTEREST & VOLUME BY STRIKE
 --------------------------------------------------------------------------------
     Strike     Call OI      Put OI    Call Vol     Put Vol  Notes
@@ -2088,8 +1667,8 @@ OPEN INTEREST & VOLUME BY STRIKE
     40,000          24         443       12.20        0.10  
     46,000           1         666        0.00       50.60  
     48,000          38         840        0.00        1.60  
-    50,000          51       1,318        0.00       11.10  Support
-    52,000          51       1,098        0.00       48.60  Support
+    50,000          51       1,318        0.00       11.10  
+    52,000          51       1,098        0.00       48.60  
     53,000           6         208        0.00       45.20  
     54,000           8       1,059        0.00       12.90  
     55,000           6         699        0.00        0.30  
@@ -2097,7 +1676,7 @@ OPEN INTEREST & VOLUME BY STRIKE
     57,000          26         639        0.00        2.50  
     58,000         164         803        0.00        0.80  
     59,000         414         827        0.00        0.60  
-    60,000         369       1,665        0.00        3.10  Support
+    60,000         369       1,665        0.00        3.10  
     61,000         588         572        2.00        0.30  
     62,000         896         777        0.00        0.50  << MAX PAIN
     63,000         839         652        0.00        2.10  
@@ -2109,15 +1688,15 @@ OPEN INTEREST & VOLUME BY STRIKE
     69,000         616          50        2.20        0.00  
     70,000       1,106         106        5.90        0.00  
     71,000       1,118           8        0.50        0.00  
-    72,000       2,707          86        1.50        0.00  Resistance
+    72,000       2,707          86        1.50        0.00  
     73,000       1,365           5        5.30        0.00  
     74,000       1,884           3        0.70        0.00  
-    75,000       2,677          34       10.60        0.00  Resistance
+    75,000       2,677          34       10.60        0.00  
     76,000         968           5        3.00        0.00  
     77,000         226           3        2.10        0.00  
     78,000       1,095           4        0.40        0.00  
     79,000         353           0        0.00        0.00  
-    80,000       1,889          13        0.00        0.00  Resistance
+    80,000       1,889          13        0.00        0.00  
     81,000       1,056           0        0.00        0.00  
     82,000       1,499           1       12.20        0.80  
     83,000         250           0        0.00        0.00  
@@ -2134,22 +1713,6 @@ OPEN INTEREST & VOLUME BY STRIKE
    100,000         154           0        0.00        0.00  
    105,000         168           1        0.00        0.60  
    110,000         104           0        0.00        0.00  
-
-SUPPORT/RESISTANCE LEVELS
---------------------------------------------------------------------------------
-RESISTANCE (Top 3 Call OI):
-  1. $72,000 - Call OI: 2,707
-  2. $75,000 - Call OI: 2,677
-  3. $80,000 - Call OI: 1,889
-
-SUPPORT (Top 3 Put OI):
-  1. $60,000 - Put OI: 1,665
-  2. $50,000 - Put OI: 1,318
-  3. $52,000 - Put OI: 1,098
-
-SHORT-TERM LEVELS (nearest to current price $64,599.84):
-  Nearest Resistance: $65,000 (Call OI: 1,114)
-  Nearest Support: $64,000 (Put OI: 460)
 
 GEX/DEX ANALYSIS (Gamma & Delta Exposure)
 --------------------------------------------------------------------------------
@@ -2312,9 +1875,6 @@ VOLATILITY SURFACE ANALYSIS
 
 ATM IV: 35.4%
 
-VWAP IV: 39.6%  |  Matched Mark IV: 39.7%  |  Diff: -0.1%  (19 instruments)
-  Balanced
-
 IV BY STRIKE:
       Strike     Call IV      Put IV
       ------     -------      ------
@@ -2365,6 +1925,14 @@ LARGE OI CHANGES (Day-over-Day)
       ------  ----     -------     -------      ------   -------
       40,000  Call          12          24         +12   +102.6%
 
+CONTEXT
+--------------------------------------------------------------------------------
+Max Pain: $62,000  (+4.19% from spot)
+P/C Ratio: 0.52  (n=0 - insufficient history for a percentile)
+Moneyness: ITM calls 13.9%  |  ITM puts 9.4%
+Volume P/C: 1.46
+VWAP-IV gap: -0.1%  (VWAP 39.6% vs Matched Mark 39.7%, 19 instr)
+
 ================================================================================
 
 EXPIRATION: 28JUL26
@@ -2372,49 +1940,6 @@ EXPIRATION: 28JUL26
 EVIDENCE: OI/GEX from full book | Flow: INSUFFICIENT (0 trades in 24h)
 
 Total Instruments: 46 (23 Calls, 23 Puts)
-
-MAX PAIN ANALYSIS
---------------------------------------------------------------------------------
-Max Pain Strike: $65,000
-Distance from Current: $-627.52 (-0.97%)
-Trend (Max Pain): [→ unchanged]
-
-PUT/CALL RATIO (Open Interest)
---------------------------------------------------------------------------------
-Total Call OI: 412
-Total Put OI: 424
-P/C Ratio: 1.03 (n=0 - insufficient history for a percentile; absolute reading only)
-Trend (Call OI):  [↑ from 331, +81]
-Trend (Put OI):   [↑ from 227, +197]
-Trend (P/C):      [↑ from 0.68, +0.34]
-
-VOLUME STATISTICS
---------------------------------------------------------------------------------
-Total Call Volume: 114.60
-Total Put Volume: 211.00
-Total Volume: 325.60
-Volume P/C Ratio: 1.84
-Trend (Volume):   [↓ from 628, -302]
-Trend (Vol P/C):  [↑ from 0.57, +1.27]
-
-MONEYNESS ANALYSIS (ITM/OTM)
---------------------------------------------------------------------------------
-OI Skew: Heavy OTM (Speculative)
-
-CALLS:
-  ITM:        3 OI    Notional: $    218,866.43    ( 0.82%)
-  OTM:      409 OI    Notional: $ 26,328,344.32    (99.18%)
-  Total:    412 OI    Notional: $ 26,547,210.75
-
-PUTS:
-  ITM:      164 OI    Notional: $ 10,550,649.47    (38.68%)
-  OTM:      260 OI    Notional: $ 16,723,970.30    (61.32%)
-  Total:    424 OI    Notional: $ 27,274,619.78
-
-COMBINED TOTALS:
-  ITM:      167 OI    Notional: $ 10,769,515.90    (20.01%)
-  OTM:      669 OI    Notional: $ 43,052,314.62    (79.99%)
-  Total:    836 OI    Notional: $ 53,821,830.53
 
 OPEN INTEREST & VOLUME BY STRIKE
 --------------------------------------------------------------------------------
@@ -2424,41 +1949,25 @@ OPEN INTEREST & VOLUME BY STRIKE
     58,000           0          14        0.00       13.60  
     59,000           0           2        0.00        0.50  
     60,000           0          12        0.00        5.30  
-    61,000           0         136        0.00      135.70  Support
-    62,000           0          62        0.00       34.60  Support
+    61,000           0         136        0.00      135.70  
+    62,000           0          62        0.00       34.60  
     62,500           0          12        0.00       10.90  
     63,000           0          10        0.00        5.70  
     63,500           0           1        0.20        0.10  
     64,000           3           6        2.90        0.90  
     64,500          28           1        2.10        0.40  
-    65,000         177         163        1.60        0.10  << MAX PAIN | Resistance | Support
+    65,000         177         163        1.60        0.10  << MAX PAIN
     65,500          11           0       12.80        0.00  
     66,000           9           0        7.50        0.00  
     66,500          41           0       32.30        0.00  
     67,000          19           0        9.90        0.00  
-    67,500          42           0       41.40        0.00  Resistance
-    68,000          54           0        1.10        0.00  Resistance
+    67,500          42           0       41.40        0.00  
+    68,000          54           0        1.10        0.00  
     69,000          18           0        1.40        0.00  
     70,000          10           0        1.30        0.00  
     71,000           0           0        0.10        0.00  
     72,000           0           0        0.00        0.00  
     73,000           0           0        0.00        0.00  
-
-SUPPORT/RESISTANCE LEVELS
---------------------------------------------------------------------------------
-RESISTANCE (Top 3 Call OI):
-  1. $65,000 - Call OI: 177
-  2. $68,000 - Call OI: 54
-  3. $67,500 - Call OI: 42
-
-SUPPORT (Top 3 Put OI):
-  1. $65,000 - Put OI: 163
-  2. $61,000 - Put OI: 136
-  3. $62,000 - Put OI: 62
-
-SHORT-TERM LEVELS (nearest to current price $64,372.48):
-  Nearest Resistance: $64,500 (Call OI: 28)
-  Nearest Support: $64,000 (Put OI: 6)
 
 GEX/DEX ANALYSIS (Gamma & Delta Exposure)
 --------------------------------------------------------------------------------
@@ -2567,9 +2076,6 @@ VOLATILITY SURFACE ANALYSIS
 
 ATM IV: 29.2%
 
-VWAP IV: 32.9%  |  Matched Mark IV: 33.8%  |  Diff: -0.9%  (19 instruments)
-  Balanced
-
 IV BY STRIKE:
       Strike     Call IV      Put IV
       ------     -------      ------
@@ -2613,6 +2119,14 @@ LARGE OI CHANGES (Day-over-Day)
       66,500  Call          15          41         +26   +176.0%
       62,000   Put          28          62         +34   +123.1%
 
+CONTEXT
+--------------------------------------------------------------------------------
+Max Pain: $65,000  (-0.97% from spot)
+P/C Ratio: 1.03  (n=0 - insufficient history for a percentile)
+Moneyness: ITM calls 0.8%  |  ITM puts 38.7%
+Volume P/C: 1.84
+VWAP-IV gap: -0.9%  (VWAP 32.9% vs Matched Mark 33.8%, 19 instr)
+
 ================================================================================
 
 EXPIRATION: 29JUL26
@@ -2621,52 +2135,15 @@ EVIDENCE: OI/GEX from full book | Flow: INSUFFICIENT (0 trades in 24h)
 
 Total Instruments: 42 (21 Calls, 21 Puts)
 
-MAX PAIN ANALYSIS
---------------------------------------------------------------------------------
-Max Pain Strike: $63,500
-Distance from Current: $+872.48 (+1.37%)
-
-PUT/CALL RATIO (Open Interest)
---------------------------------------------------------------------------------
-Total Call OI: 109
-Total Put OI: 108
-P/C Ratio: 0.99 (n=0 - insufficient history for a percentile; absolute reading only)
-
-VOLUME STATISTICS
---------------------------------------------------------------------------------
-Total Call Volume: 109.70
-Total Put Volume: 140.80
-Total Volume: 250.50
-Volume P/C Ratio: 1.28
-
-MONEYNESS ANALYSIS (ITM/OTM)
---------------------------------------------------------------------------------
-OI Skew: Heavy OTM (Speculative)
-
-CALLS:
-  ITM:        0 OI    Notional: $          0.00    ( 0.00%)
-  OTM:      109 OI    Notional: $  7,042,349.31    (100.00%)
-  Total:    109 OI    Notional: $  7,042,349.31
-
-PUTS:
-  ITM:        0 OI    Notional: $          0.00    ( 0.00%)
-  OTM:      108 OI    Notional: $  6,939,353.34    (100.00%)
-  Total:    108 OI    Notional: $  6,939,353.34
-
-COMBINED TOTALS:
-  ITM:        0 OI    Notional: $          0.00    ( 0.00%)
-  OTM:      217 OI    Notional: $ 13,981,702.66    (100.00%)
-  Total:    217 OI    Notional: $ 13,981,702.66
-
 OPEN INTEREST & VOLUME BY STRIKE
 --------------------------------------------------------------------------------
     Strike     Call OI      Put OI    Call Vol     Put Vol  Notes
     ------    --------     -------    --------     -------  -----
     57,000           0           8        0.00        8.90  
     58,000           0           0        0.00        0.00  
-    59,000           0          16        0.00       18.60  Support
-    60,000           0          39        0.00       69.00  Support
-    61,000           0          34        0.00       33.90  Support
+    59,000           0          16        0.00       18.60  
+    60,000           0          39        0.00       69.00  
+    61,000           0          34        0.00       33.90  
     61,500           0           8        0.00        8.30  
     62,000           0           2        0.00        1.80  
     62,500           0           0        0.00        0.10  
@@ -2676,29 +2153,13 @@ OPEN INTEREST & VOLUME BY STRIKE
     64,500           0           0        0.00        0.00  
     65,000           0           0        0.00        0.00  
     65,500           0           0        0.60        0.00  
-    66,000           1           0        1.30        0.00  Resistance
+    66,000           1           0        1.30        0.00  
     66,500           0           0        0.30        0.00  
-    67,000          14           0       13.90        0.00  Resistance
+    67,000          14           0       13.90        0.00  
     68,000           0           0        0.50        0.00  
-    69,000          92           0       92.10        0.00  Resistance
+    69,000          92           0       92.10        0.00  
     70,000           1           0        1.00        0.00  
     71,000           0           0        0.00        0.00  
-
-SUPPORT/RESISTANCE LEVELS
---------------------------------------------------------------------------------
-RESISTANCE (Top 3 Call OI):
-  1. $69,000 - Call OI: 92
-  2. $67,000 - Call OI: 14
-  3. $66,000 - Call OI: 1
-
-SUPPORT (Top 3 Put OI):
-  1. $60,000 - Put OI: 39
-  2. $61,000 - Put OI: 34
-  3. $59,000 - Put OI: 16
-
-SHORT-TERM LEVELS (nearest to current price $64,372.48):
-  Nearest Resistance: $65,500 (Call OI: 0)
-  Nearest Support: $63,500 (Put OI: 0)
 
 GEX/DEX ANALYSIS (Gamma & Delta Exposure)
 --------------------------------------------------------------------------------
@@ -2800,9 +2261,6 @@ VOLATILITY SURFACE ANALYSIS
 
 ATM IV: 32.2%
 
-VWAP IV: 35.6%  |  Matched Mark IV: 34.7%  |  Diff: +1.0%  (16 instruments)
-  Balanced
-
 IV BY STRIKE:
       Strike     Call IV      Put IV
       ------     -------      ------
@@ -2833,6 +2291,14 @@ P/C RATIO BY MONEYNESS:
   Near-OTM (5-15%):     P/C = 1.04
   Far-OTM (15%+):     P/C = 0.00
 
+CONTEXT
+--------------------------------------------------------------------------------
+Max Pain: $63,500  (+1.37% from spot)
+P/C Ratio: 0.99  (n=0 - insufficient history for a percentile)
+Moneyness: ITM calls 0.0%  |  ITM puts 0.0%
+Volume P/C: 1.28
+VWAP-IV gap: +1.0%  (VWAP 35.6% vs Matched Mark 34.7%, 16 instr)
+
 ================================================================================
 
 EXPIRATION: 31JUL26
@@ -2841,49 +2307,6 @@ EVIDENCE: OI/GEX from full book | Flow: INSUFFICIENT (0 trades in 24h)
 
 Total Instruments: 116 (58 Calls, 58 Puts)
 
-MAX PAIN ANALYSIS
---------------------------------------------------------------------------------
-Max Pain Strike: $64,000
-Distance from Current: $+405.02 (+0.63%)
-Trend (Max Pain): [→ unchanged]
-
-PUT/CALL RATIO (Open Interest)
---------------------------------------------------------------------------------
-Total Call OI: 115,926
-Total Put OI: 33,081
-P/C Ratio: 0.29 (n=0 - insufficient history for a percentile; absolute reading only)
-Trend (Call OI):  [↑ from 115,784, +142]
-Trend (Put OI):   [↑ from 32,993, +88]
-Trend (P/C):      [↑ from 0.28, +0.00]
-
-VOLUME STATISTICS
---------------------------------------------------------------------------------
-Total Call Volume: 1,131.40
-Total Put Volume: 597.20
-Total Volume: 1,728.60
-Volume P/C Ratio: 0.53
-Trend (Volume):   [↓ from 7,531, -5,803]
-Trend (Vol P/C):  [↓ from 0.75, -0.23]
-
-MONEYNESS ANALYSIS (ITM/OTM)
---------------------------------------------------------------------------------
-OI Skew: Heavy OTM (Speculative)
-
-CALLS:
-  ITM:    6,201 OI    Notional: $399,375,529.02    ( 5.35%)
-  OTM:  109,725 OI    Notional: $7,066,821,497.99    (94.65%)
-  Total: 115,926 OI    Notional: $7,466,197,027.01
-
-PUTS:
-  ITM:    6,063 OI    Notional: $390,481,195.76    (18.33%)
-  OTM:   27,018 OI    Notional: $1,740,101,270.86    (81.67%)
-  Total: 33,081 OI    Notional: $2,130,582,466.62
-
-COMBINED TOTALS:
-  ITM:   12,264 OI    Notional: $789,856,724.78    ( 8.23%)
-  OTM:  136,743 OI    Notional: $8,806,922,768.86    (91.77%)
-  Total: 149,007 OI    Notional: $9,596,779,493.63
-
 OPEN INTEREST & VOLUME BY STRIKE
 --------------------------------------------------------------------------------
     Strike     Call OI      Put OI    Call Vol     Put Vol  Notes
@@ -2891,15 +2314,15 @@ OPEN INTEREST & VOLUME BY STRIKE
     45,000           0       1,064        0.00        0.00  
     46,000           0       1,659        0.00        0.00  
     48,000           2       1,141        0.00        4.00  
-    50,000           3       3,524        0.00       30.30  Support
+    50,000           3       3,524        0.00       30.30  
     52,000           0       1,927        0.00        0.00  
     54,000           2       2,116        0.00        0.00  
     55,000          12       1,224        0.00       11.00  
-    56,000          41       2,489        0.00        0.00  Support
+    56,000          41       2,489        0.00        0.00  
     57,000           4         439        0.00        3.50  
     58,000         258       1,925        0.00      222.30  
     59,000         197       1,688        0.00        7.20  
-    60,000       1,110       2,736        0.00       32.90  Support
+    60,000       1,110       2,736        0.00       32.90  
     61,000         938       1,475        1.60       38.20  
     62,000       1,450       1,845        0.00       47.90  
     63,000       1,200         918       51.20      104.80  
@@ -2909,9 +2332,9 @@ OPEN INTEREST & VOLUME BY STRIKE
     67,000       2,162         243       72.40        0.00  
     68,000       4,724         426      274.60        0.40  
     69,000       2,861         210       21.40        0.00  
-    70,000      25,416         885       19.00        0.00  Resistance
+    70,000      25,416         885       19.00        0.00  
     71,000       2,678         111        7.50        0.00  
-    72,000      26,217         364       57.80        0.20  Resistance
+    72,000      26,217         364       57.80        0.20  
     73,000       2,055          98       14.20        0.00  
     74,000         709         130       35.40        0.00  
     75,000       4,306         225        1.10        0.00  
@@ -2919,7 +2342,7 @@ OPEN INTEREST & VOLUME BY STRIKE
     77,000       2,576         245      166.00        0.00  
     78,000       1,170         444        0.00        0.10  
     79,000       1,606         144        0.00        0.00  
-    80,000       7,014         385        0.00        0.00  Resistance
+    80,000       7,014         385        0.00        0.00  
     81,000       1,463         114        0.00        0.00  
     82,000       3,188          92        0.50        0.80  
     83,000       1,200          30        0.00        0.00  
@@ -2946,22 +2369,6 @@ OPEN INTEREST & VOLUME BY STRIKE
    110,000         194          46        0.00        0.00  
    115,000         182           3        0.00        0.00  
    120,000       1,059           4        0.00        0.00  
-
-SUPPORT/RESISTANCE LEVELS
---------------------------------------------------------------------------------
-RESISTANCE (Top 3 Call OI):
-  1. $72,000 - Call OI: 26,217
-  2. $70,000 - Call OI: 25,416
-  3. $80,000 - Call OI: 7,014
-
-SUPPORT (Top 3 Put OI):
-  1. $50,000 - Put OI: 3,524
-  2. $60,000 - Put OI: 2,736
-  3. $56,000 - Put OI: 2,489
-
-SHORT-TERM LEVELS (nearest to current price $64,405.02):
-  Nearest Resistance: $65,000 (Call OI: 2,118)
-  Nearest Support: $64,000 (Put OI: 850)
 
 GEX/DEX ANALYSIS (Gamma & Delta Exposure)
 --------------------------------------------------------------------------------
@@ -3142,9 +2549,6 @@ VOLATILITY SURFACE ANALYSIS
 
 ATM IV: 36.2%
 
-VWAP IV: 47.2%  |  Matched Mark IV: 48.4%  |  Diff: -1.3%  (26 instruments)
-  Sellers aggressive (VWAP < Mark)
-
 IV BY STRIKE:
       Strike     Call IV      Put IV
       ------     -------      ------
@@ -3197,6 +2601,14 @@ ATM Strike: $64,000  |  Current IV: 36.2%  |  Percentile: 15.2%
   IV is very low relative to history - favor buying vol
 
 
+CONTEXT
+--------------------------------------------------------------------------------
+Max Pain: $64,000  (+0.63% from spot)
+P/C Ratio: 0.29  (n=0 - insufficient history for a percentile)
+Moneyness: ITM calls 5.3%  |  ITM puts 18.3%
+Volume P/C: 0.53
+VWAP-IV gap: -1.3%  (VWAP 47.2% vs Matched Mark 48.4%, 26 instr)
+
 ================================================================================
 
 EXPIRATION: 7AUG26
@@ -3205,49 +2617,6 @@ EVIDENCE: OI/GEX from full book | Flow: INSUFFICIENT (0 trades in 24h)
 
 Total Instruments: 38 (19 Calls, 19 Puts)
 
-MAX PAIN ANALYSIS
---------------------------------------------------------------------------------
-Max Pain Strike: $64,000
-Distance from Current: $+453.65 (+0.71%)
-Trend (Max Pain): [→ unchanged]
-
-PUT/CALL RATIO (Open Interest)
---------------------------------------------------------------------------------
-Total Call OI: 19,488
-Total Put OI: 2,625
-P/C Ratio: 0.13 (n=0 - insufficient history for a percentile; absolute reading only)
-Trend (Call OI):  [↑ from 19,377, +111]
-Trend (Put OI):   [↑ from 2,476, +149]
-Trend (P/C):      [↑ from 0.13, +0.01]
-
-VOLUME STATISTICS
---------------------------------------------------------------------------------
-Total Call Volume: 180.80
-Total Put Volume: 185.30
-Total Volume: 366.10
-Volume P/C Ratio: 1.02
-Trend (Volume):   [↓ from 4,308, -3,942]
-Trend (Vol P/C):  [↑ from 0.21, +0.81]
-
-MONEYNESS ANALYSIS (ITM/OTM)
---------------------------------------------------------------------------------
-OI Skew: Heavy OTM (Speculative)
-
-CALLS:
-  ITM:      242 OI    Notional: $ 15,565,556.48    ( 1.24%)
-  OTM:   19,247 OI    Notional: $1,240,520,065.45    (98.76%)
-  Total: 19,488 OI    Notional: $1,256,085,621.93
-
-PUTS:
-  ITM:      170 OI    Notional: $ 10,963,565.87    ( 6.48%)
-  OTM:    2,455 OI    Notional: $158,233,710.75    (93.52%)
-  Total:  2,625 OI    Notional: $169,197,276.62
-
-COMBINED TOTALS:
-  ITM:      412 OI    Notional: $ 26,529,122.34    ( 1.86%)
-  OTM:   21,702 OI    Notional: $1,398,753,776.20    (98.14%)
-  Total: 22,113 OI    Notional: $1,425,282,898.54
-
 OPEN INTEREST & VOLUME BY STRIKE
 --------------------------------------------------------------------------------
     Strike     Call OI      Put OI    Call Vol     Put Vol  Notes
@@ -3255,9 +2624,9 @@ OPEN INTEREST & VOLUME BY STRIKE
     53,000           0          82        0.00       35.50  
     55,000           0         129        0.00       35.10  
     58,000           0         263        0.00       25.60  
-    60,000           0       1,179        0.00       15.40  Support
-    61,000          33         278        2.00       12.10  Support
-    62,000         100         392        0.00       41.10  Support
+    60,000           0       1,179        0.00       15.40  
+    61,000          33         278        2.00       12.10  
+    62,000         100         392        0.00       41.10  
     63,000          24          52        0.00        0.10  
     64,000          84          80       14.10       19.80  << MAX PAIN
     65,000         130          72        0.60        0.60  
@@ -3265,28 +2634,12 @@ OPEN INTEREST & VOLUME BY STRIKE
     67,000         486          40       58.70        0.00  
     68,000       1,152           0       23.20        0.00  
     69,000         695           0        1.60        0.00  
-    70,000       6,633           0        9.30        0.00  Resistance
+    70,000       6,633           0        9.30        0.00  
     71,000         849           0       20.10        0.00  
-    72,000       5,590           0        0.40        0.00  Resistance
-    75,000       2,468           0        8.80        0.00  Resistance
+    72,000       5,590           0        0.40        0.00  
+    75,000       2,468           0        8.80        0.00  
     77,000       1,005           0        0.00        0.00  
     80,000          39           0        1.60        0.00  
-
-SUPPORT/RESISTANCE LEVELS
---------------------------------------------------------------------------------
-RESISTANCE (Top 3 Call OI):
-  1. $70,000 - Call OI: 6,633
-  2. $72,000 - Call OI: 5,590
-  3. $75,000 - Call OI: 2,468
-
-SUPPORT (Top 3 Put OI):
-  1. $60,000 - Put OI: 1,179
-  2. $62,000 - Put OI: 392
-  3. $61,000 - Put OI: 278
-
-SHORT-TERM LEVELS (nearest to current price $64,453.65):
-  Nearest Resistance: $65,000 (Call OI: 130)
-  Nearest Support: $64,000 (Put OI: 80)
 
 GEX/DEX ANALYSIS (Gamma & Delta Exposure)
 --------------------------------------------------------------------------------
@@ -3389,9 +2742,6 @@ VOLATILITY SURFACE ANALYSIS
 
 ATM IV: 35.8%
 
-VWAP IV: 40.2%  |  Matched Mark IV: 40.8%  |  Diff: -0.6%  (17 instruments)
-  Balanced
-
 IV BY STRIKE:
       Strike     Call IV      Put IV
       ------     -------      ------
@@ -3427,6 +2777,14 @@ LARGE OI CHANGES (Day-over-Day)
       53,000   Put          46          82         +36    +76.3%
       55,000   Put          94         129         +35    +37.3%
       66,000  Call         163         200         +37    +22.7%
+
+CONTEXT
+--------------------------------------------------------------------------------
+Max Pain: $64,000  (+0.71% from spot)
+P/C Ratio: 0.13  (n=0 - insufficient history for a percentile)
+Moneyness: ITM calls 1.2%  |  ITM puts 6.5%
+Volume P/C: 1.02
+VWAP-IV gap: -0.6%  (VWAP 40.2% vs Matched Mark 40.8%, 17 instr)
 
 ================================================================================
 

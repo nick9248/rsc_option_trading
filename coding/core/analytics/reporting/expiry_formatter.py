@@ -1,240 +1,77 @@
 """
 Text formatting for the per-expiration section of the on-chain analysis report.
 
-Extracted verbatim (behavior-preserving) from
+Originally extracted verbatim (behavior-preserving) from
 ``OnChainAnalyzer.generate_report()`` / ``OnChainAnalyzer._format_trend()``
-per refactor_design_spec.md section T3. Every line this module produces was
-previously produced inline inside ``generate_report()`` — the golden-master
-characterization test (tests/characterization/test_onchain_golden_master.py)
-is the proof this extraction did not change a single byte of output.
+per refactor_design_spec.md section T3.
+
+institutional_metrics_spec.md section 9 (Task D2 — report restructure):
+``format_expiration_section`` now renders ONLY the instrument-count summary
+and the raw OI/volume-by-strike table. The following full multi-line blocks
+(several carrying trend arrows against a single prior DB snapshot) are
+DELETED from this function per the removals table:
+
+- MAX PAIN ANALYSIS (strike, distance-from-current, trend)
+- PUT/CALL RATIO (Open Interest) (value, percentile/bias label, trend)
+- VOLUME STATISTICS (call/put/total volume, ratio, trend)
+- MONEYNESS ANALYSIS (ITM/OTM) (the hard-coded "OI Skew: Heavy OTM
+  (Speculative)"/"Heavy ITM (Hedging)"/"Balanced" label, plus the full
+  CALLS/PUTS/COMBINED TOTALS notional breakdown)
+- SUPPORT/RESISTANCE LEVELS (raw-OI top-3 call/put strikes + short-term
+  nearest levels) — deleted outright, not replaced by a one-liner: the
+  reader relies on the already-existing GEX-based Call Resistance/Put
+  Support levels in gex_dex_formatter.format_gex_dex_section's KEY LEVELS
+  block instead ("merge into existing GEX key levels"). The strike table's
+  own "Resistance"/"Support" per-row annotations (sourced from the same
+  raw-OI top-3 sets) are removed for the same reason; the "<< MAX PAIN"
+  annotation is kept — it is a compact strike marker, not the deleted
+  multi-line block.
+
+Their one-line replacements (Max Pain, P/C ratio, Moneyness ITM%, Volume
+P/C, VWAP-IV gap) live in ``format_context_section`` below, rendered by
+``report_formatter.py`` as the LAST section in each expiration's block
+(spec 9(b) per-expiry order item 8, "CONTEXT"). Trend arrows against a
+single prior snapshot (the old ``format_trend_delta`` helper) are deleted
+everywhere in this module — spec 9's removals table: "Trend arrows vs 1
+prior snapshot -> delete everywhere"; superseded by the percentile-based
+context task C1's HistoricalNormalizer already provides elsewhere in the
+report (PCR percentile here, IV/skew percentiles in other sections).
 """
 
 from typing import Optional
 
-from coding.core.analytics.results.analysis_result import TrendSnapshot
 from coding.core.analytics.results.expiry_results import ExpirationAnalysisResult
+from coding.core.analytics.results.vol_surface_results import VolSurfaceResult
+from coding.core.analytics.volatility_surface_calculator import (
+    MINIMUM_TRADED_INSTRUMENTS_FOR_AGGRESSION,
+)
 
 _SUB_SEPARATOR = "-" * 80
 
 
-def _ordinal(value: float) -> str:
-    """Format a percentile as an ordinal string ("98th", "61st", "22nd", "3rd")."""
-    n = round(value)
-    if 10 <= (n % 100) <= 20:
-        suffix = "th"
-    else:
-        suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
-    return f"{n}{suffix}"
-
-
-def format_trend_delta(current: float, previous: Optional[float], is_ratio: bool = False) -> str:
+def format_expiration_section(analysis: ExpirationAnalysisResult) -> str:
     """
-    Format a trend arrow + delta against a previous value.
-
-    Args:
-        current: Current value.
-        previous: Previous value, or None if unavailable.
-        is_ratio: If True, format as ratio (2 decimal places); otherwise as integer.
-
-    Returns:
-        Formatted trend string, or empty string if no previous value.
-    """
-    if previous is None:
-        return ""
-    delta = current - previous
-    if delta == 0:
-        return "  [→ unchanged]"
-    arrow = "↑" if delta > 0 else "↓"
-    if is_ratio:
-        return f"  [{arrow} from {previous:.2f}, {delta:+.2f}]"
-    return f"  [{arrow} from {previous:,.0f}, {delta:+,.0f}]"
-
-
-def format_expiration_section(
-    analysis: ExpirationAnalysisResult,
-    spot_price: float,
-    trend: Optional[TrendSnapshot],
-) -> str:
-    """
-    Render the summary / max-pain / put-call-ratio / volume / moneyness /
-    strike-table / support-resistance blocks for one expiration.
+    Render the summary + open-interest/volume-by-strike table for one
+    expiration.
 
     Args:
         analysis: The expiration's computed analysis result.
-        spot_price: Underlying price anchoring this section's
-            settlement-space distances (max-pain distance, the
-            support/resistance "current price" label). bugfix_spec.md
-            Item 7: pass THIS expiration's own forward price (e.g.
-            ``analysis.underlying_price``), not a global index shared
-            across every expiration.
-        trend: Previous DB snapshot for this expiration, or None if there is
-            no prior record (or trend data was never set).
 
     Returns:
-        Formatted multi-line string (no leading/trailing separators —
-        the caller is responsible for the "EXPIRATION: ..." header line
-        and the surrounding section separators).
+        Formatted multi-line string (no leading/trailing separators — the
+        caller is responsible for the "EXPIRATION: ..." header line and the
+        surrounding section separators).
     """
     lines = []
 
-    # Summary
     lines.append(
         f"Total Instruments: {analysis.total_instruments} "
         f"({analysis.call_count} Calls, {analysis.put_count} Puts)"
     )
     lines.append("")
 
-    # Max Pain
     max_pain_strike = analysis.max_pain.max_pain_strike
-    lines.append("MAX PAIN ANALYSIS")
-    lines.append(_SUB_SEPARATOR)
-    if max_pain_strike is not None:
-        lines.append(f"Max Pain Strike: ${max_pain_strike:,.0f}")
-        diff = spot_price - max_pain_strike
-        diff_pct = (diff / max_pain_strike * 100) if max_pain_strike else 0
-        lines.append(f"Distance from Current: ${diff:+,.2f} ({diff_pct:+.2f}%)")
-    else:
-        lines.append("Max Pain Strike: N/A")
 
-    if trend is not None:
-        prev_mp = trend.max_pain_strike
-        if prev_mp is not None and max_pain_strike is not None:
-            trend_str = format_trend_delta(max_pain_strike, prev_mp)
-            lines.append(f"Trend (Max Pain): {trend_str.strip()}")
-
-    lines.append("")
-
-    # Put/Call Ratio
-    pcr = analysis.put_call_ratio
-    lines.append("PUT/CALL RATIO (Open Interest)")
-    lines.append(_SUB_SEPARATOR)
-    lines.append(f"Total Call OI: {pcr.total_call_oi:,.0f}")
-    lines.append(f"Total Put OI: {pcr.total_put_oi:,.0f}")
-    if pcr.ratio != float("inf"):
-        # bugfix_spec.md Item 10: percentile-vs-own-90d-history
-        # classification replaces the hard-coded 0.7/1.0/1.3-threshold
-        # label. When history is too short (< HistoricalNormalizer.
-        # MIN_OBS), no directional label is printed -- the absolute
-        # reading alone, per F10.3.3's edge case.
-        if pcr.percentile_90d is not None:
-            lines.append(
-                f"P/C Ratio: {pcr.ratio:.2f} "
-                f"({_ordinal(pcr.percentile_90d)} pctile of its own 90d history, "
-                f"n={pcr.history_n_90d}) -> {pcr.bias}"
-            )
-        else:
-            lines.append(
-                f"P/C Ratio: {pcr.ratio:.2f} "
-                f"(n={pcr.history_n_90d} - insufficient history for a percentile; "
-                f"absolute reading only)"
-            )
-    else:
-        lines.append(f"P/C Ratio: N/A (No Call OI)")
-
-    if trend is not None:
-        prev_call_oi = trend.call_oi
-        prev_put_oi = trend.put_oi
-        prev_pc = trend.pc_ratio
-        if prev_call_oi is not None:
-            lines.append(
-                f"Trend (Call OI):  {format_trend_delta(pcr.total_call_oi, prev_call_oi).strip()}"
-            )
-            lines.append(
-                f"Trend (Put OI):   {format_trend_delta(pcr.total_put_oi, prev_put_oi).strip()}"
-            )
-        if prev_pc is not None and pcr.ratio != float("inf"):
-            lines.append(
-                f"Trend (P/C):      {format_trend_delta(pcr.ratio, prev_pc, is_ratio=True).strip()}"
-            )
-
-    lines.append("")
-
-    # Volume Stats
-    vol = analysis.volume_stats
-    lines.append("VOLUME STATISTICS")
-    lines.append(_SUB_SEPARATOR)
-    lines.append(f"Total Call Volume: {vol.total_call_volume:,.2f}")
-    lines.append(f"Total Put Volume: {vol.total_put_volume:,.2f}")
-    lines.append(f"Total Volume: {vol.total_volume:,.2f}")
-    if vol.volume_ratio != float("inf"):
-        lines.append(f"Volume P/C Ratio: {vol.volume_ratio:.2f}")
-    else:
-        lines.append("Volume P/C Ratio: N/A (No Call Volume)")
-
-    if trend is not None:
-        prev_vol = trend.total_volume
-        prev_vr = trend.volume_ratio
-        if prev_vol is not None:
-            lines.append(
-                f"Trend (Volume):   {format_trend_delta(vol.total_volume, prev_vol).strip()}"
-            )
-        if prev_vr is not None and vol.volume_ratio != float("inf"):
-            lines.append(
-                f"Trend (Vol P/C):  {format_trend_delta(vol.volume_ratio, prev_vr, is_ratio=True).strip()}"
-            )
-
-    lines.append("")
-
-    # ITM/OTM Analysis (Deribit-style, no ATM)
-    money = analysis.moneyness
-    totals = money.totals
-    calls = money.calls
-    puts = money.puts
-
-    lines.append("MONEYNESS ANALYSIS (ITM/OTM)")
-    lines.append(_SUB_SEPARATOR)
-    lines.append(f"OI Skew: {money.oi_skew}")
-    lines.append("")
-
-    # Calls breakdown
-    lines.append("CALLS:")
-    lines.append(
-        f"  ITM: {calls.itm_oi:>8,.0f} OI    "
-        f"Notional: ${calls.itm_notional:>14,.2f}    ({calls.itm_pct:>5.2f}%)"
-    )
-    lines.append(
-        f"  OTM: {calls.otm_oi:>8,.0f} OI    "
-        f"Notional: ${calls.otm_notional:>14,.2f}    ({calls.otm_pct:>5.2f}%)"
-    )
-    lines.append(
-        f"  Total: {calls.total_oi:>6,.0f} OI    "
-        f"Notional: ${calls.total_notional:>14,.2f}"
-    )
-    lines.append("")
-
-    # Puts breakdown
-    lines.append("PUTS:")
-    lines.append(
-        f"  ITM: {puts.itm_oi:>8,.0f} OI    "
-        f"Notional: ${puts.itm_notional:>14,.2f}    ({puts.itm_pct:>5.2f}%)"
-    )
-    lines.append(
-        f"  OTM: {puts.otm_oi:>8,.0f} OI    "
-        f"Notional: ${puts.otm_notional:>14,.2f}    ({puts.otm_pct:>5.2f}%)"
-    )
-    lines.append(
-        f"  Total: {puts.total_oi:>6,.0f} OI    "
-        f"Notional: ${puts.total_notional:>14,.2f}"
-    )
-    lines.append("")
-
-    # Combined totals
-    lines.append("COMBINED TOTALS:")
-    lines.append(
-        f"  ITM: {totals.itm_oi:>8,.0f} OI    "
-        f"Notional: ${totals.itm_notional:>14,.2f}    ({totals.itm_pct:>5.2f}%)"
-    )
-    lines.append(
-        f"  OTM: {totals.otm_oi:>8,.0f} OI    "
-        f"Notional: ${totals.otm_notional:>14,.2f}    ({totals.otm_pct:>5.2f}%)"
-    )
-    lines.append(
-        f"  Total: {totals.total_oi:>6,.0f} OI    "
-        f"Notional: ${totals.total_notional:>14,.2f}"
-    )
-    lines.append("")
-
-    # Open Interest and Volume by Strike
     lines.append("OPEN INTEREST & VOLUME BY STRIKE")
     lines.append(_SUB_SEPARATOR)
     lines.append(
@@ -246,24 +83,9 @@ def format_expiration_section(
         f"{'--------':>10}  {'-------':>10}  -----"
     )
 
-    sr = analysis.support_resistance
-
-    # Get top OI strikes for annotations
-    top_call_strikes = set(level.strike for level in sr.resistance_levels)
-    top_put_strikes = set(level.strike for level in sr.support_levels)
-
     for row in analysis.strike_rows:
         strike = row.strike
-
-        notes = []
-        if strike == max_pain_strike:
-            notes.append("<< MAX PAIN")
-        if strike in top_call_strikes:
-            notes.append("Resistance")
-        if strike in top_put_strikes:
-            notes.append("Support")
-
-        notes_str = " | ".join(notes) if notes else ""
+        notes_str = "<< MAX PAIN" if strike == max_pain_strike else ""
 
         lines.append(
             f"{strike:>10,.0f}  {row.call_oi:>10,.0f}  "
@@ -272,41 +94,113 @@ def format_expiration_section(
         )
     lines.append("")
 
-    # Support/Resistance Levels
-    lines.append("SUPPORT/RESISTANCE LEVELS")
-    lines.append(_SUB_SEPARATOR)
+    return "\n".join(lines)
 
-    lines.append("RESISTANCE (Top 3 Call OI):")
-    for i, level in enumerate(sr.resistance_levels, 1):
-        lines.append(f"  {i}. ${level.strike:,.0f} - Call OI: {level.open_interest:,.0f}")
-    if not sr.resistance_levels:
-        lines.append("  None found")
-    lines.append("")
 
-    lines.append("SUPPORT (Top 3 Put OI):")
-    for i, level in enumerate(sr.support_levels, 1):
-        lines.append(f"  {i}. ${level.strike:,.0f} - Put OI: {level.open_interest:,.0f}")
-    if not sr.support_levels:
-        lines.append("  None found")
-    lines.append("")
+def _format_vwap_iv_gap_line(vol_surface: Optional[VolSurfaceResult]) -> str:
+    """
+    One-line VWAP-IV-vs-matched-mark-IV gap (institutional_metrics_spec.md
+    section 9: "VWAP IV vs mark IV -> one line, matched-baseline only").
 
-    lines.append(f"SHORT-TERM LEVELS (nearest to current price ${spot_price:,.2f}):")
-    if sr.short_term_resistance:
+    ``mark_iv_average`` is the volume-weighted, same-instruments MATCHED
+    baseline (bugfix_spec.md Item 3) — never the chain-wide average. That
+    fix already landed in ``VolatilitySurfaceCalculator``/
+    ``VolSurfaceResult``; this function only demotes the report TEXT to one
+    line, it does not change which baseline is used.
+    """
+    if vol_surface is None:
+        return "VWAP-IV gap: N/A (no vol surface data)"
+
+    vwap_iv = vol_surface.vwap_iv
+    mark_iv_baseline = vol_surface.mark_iv_average
+    if vwap_iv is None or mark_iv_baseline is None:
+        return "VWAP-IV gap: N/A (no VWAP data)"
+
+    if vol_surface.traded_instrument_count < MINIMUM_TRADED_INSTRUMENTS_FOR_AGGRESSION:
+        return (
+            f"VWAP-IV gap: n/a (only {vol_surface.traded_instrument_count} "
+            "instrument(s) traded)"
+        )
+
+    diff = vwap_iv - mark_iv_baseline
+    return (
+        f"VWAP-IV gap: {diff:+.1f}%  (VWAP {vwap_iv:.1f}% vs Matched Mark "
+        f"{mark_iv_baseline:.1f}%, {vol_surface.traded_instrument_count} instr)"
+    )
+
+
+def format_context_section(
+    analysis: ExpirationAnalysisResult,
+    spot_price: float,
+    vol_surface: Optional[VolSurfaceResult],
+) -> str:
+    """
+    Render the per-expiry CONTEXT section (institutional_metrics_spec.md
+    section 9(b), per-expiry order item 8): one line each for Max Pain,
+    P/C ratio, Moneyness ITM%, Volume P/C, and the VWAP-IV gap. Rendered
+    LAST in each expiration's block, after every other section.
+
+    Args:
+        analysis: The expiration's computed analysis result.
+        spot_price: This expiration's own forward price (bugfix_spec.md
+            Item 7 anchor — NOT a global index shared across expirations),
+            used only for the Max Pain distance-from-spot percentage.
+        vol_surface: This expiration's volatility surface result, or None
+            when unavailable (matches the "no data -> N/A line" convention
+            — CONTEXT always prints exactly one line per fact, never omits
+            a line the way other sections omit themselves entirely).
+
+    Returns:
+        Formatted multi-line string.
+    """
+    lines = ["CONTEXT", _SUB_SEPARATOR]
+
+    # Max Pain -- one line, no trend, no separate "Distance from Current"
+    # line (institutional_metrics_spec.md section 9).
+    max_pain_strike = analysis.max_pain.max_pain_strike
+    if max_pain_strike is not None:
+        diff_pct = (spot_price - max_pain_strike) / max_pain_strike * 100 if max_pain_strike else 0.0
+        lines.append(f"Max Pain: ${max_pain_strike:,.0f}  ({diff_pct:+.2f}% from spot)")
+    else:
+        lines.append("Max Pain: N/A")
+
+    # P/C Ratio -- value + percentile only, no word bias label (T9.2
+    # acceptance: report must not contain "Strong Bullish"/"Strong
+    # Bearish" etc, and must show a "p"+digits marker on this line,
+    # matching the RR25/BF25 percentile-cell convention already shipped in
+    # market_wide_formatter.py).
+    pcr = analysis.put_call_ratio
+    if pcr.ratio == float("inf"):
+        lines.append("P/C Ratio: N/A (No Call OI)")
+    elif pcr.percentile_90d is not None:
         lines.append(
-            f"  Nearest Resistance: ${sr.short_term_resistance.strike:,.0f} "
-            f"(Call OI: {sr.short_term_resistance.open_interest:,.0f})"
+            f"P/C Ratio: {pcr.ratio:.2f}  p{pcr.percentile_90d:.0f} "
+            f"(90d history, n={pcr.history_n_90d})"
         )
     else:
-        lines.append("  Nearest Resistance: None found above current price")
-
-    if sr.short_term_support:
         lines.append(
-            f"  Nearest Support: ${sr.short_term_support.strike:,.0f} "
-            f"(Put OI: {sr.short_term_support.open_interest:,.0f})"
+            f"P/C Ratio: {pcr.ratio:.2f}  "
+            f"(n={pcr.history_n_90d} - insufficient history for a percentile)"
         )
+
+    # Moneyness -- one line, ITM% calls / ITM% puts (institutional_metrics_
+    # spec.md section 9: replaces the full CALLS/PUTS/COMBINED TOTALS block
+    # and the hard-coded oi_skew label).
+    money = analysis.moneyness
+    lines.append(
+        f"Moneyness: ITM calls {money.calls.itm_pct:.1f}%  |  "
+        f"ITM puts {money.puts.itm_pct:.1f}%"
+    )
+
+    # Volume P/C -- one line.
+    vol = analysis.volume_stats
+    if vol.volume_ratio == float("inf"):
+        lines.append("Volume P/C: N/A (No Call Volume)")
     else:
-        lines.append("  Nearest Support: None found below current price")
+        lines.append(f"Volume P/C: {vol.volume_ratio:.2f}")
+
+    # VWAP-IV gap -- one line, matched-baseline only.
+    lines.append(_format_vwap_iv_gap_line(vol_surface))
 
     lines.append("")
-
     return "\n".join(lines)

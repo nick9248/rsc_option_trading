@@ -28,7 +28,10 @@ from coding.core.analytics.reporting.dealer_inventory_formatter import (
     format_dealer_inventory_section,
 )
 from coding.core.analytics.reporting.delta_flow_formatter import format_delta_flow_section
-from coding.core.analytics.reporting.expiry_formatter import format_expiration_section
+from coding.core.analytics.reporting.expiry_formatter import (
+    format_context_section,
+    format_expiration_section,
+)
 from coding.core.analytics.reporting.exposure_profile_formatter import (
     format_exposure_profile_section,
 )
@@ -68,6 +71,7 @@ from coding.core.analytics.results.analysis_result import (
 )
 from coding.core.analytics.results.expiry_results import ExpirationAnalysisResult
 from coding.core.analytics.results.flow_results import FlowResult
+from coding.core.analytics.results.vol_surface_results import VolSurfaceResult
 
 _SEPARATOR = "=" * 80
 _SUB_SEPARATOR = "-" * 80
@@ -107,6 +111,13 @@ class ExpirationRenderInput:
 
     expiration: str
     analysis: ExpirationAnalysisResult
+    # institutional_metrics_spec.md section 9 (Task D2): trend arrows
+    # against a single prior snapshot are deleted everywhere in the
+    # rendered report -- render_expiration no longer forwards this field
+    # into any formatter. Retained on the dataclass (still populated from
+    # bundle.trend by render_expiration_from_result) so this out-of-scope
+    # plumbing (repository fetch, OnChainAnalysisBuilder.set_trend) does
+    # not need to change for a report-text-only task.
     trend: Optional[TrendSnapshot] = None
     extra_sections: Tuple[str, ...] = field(default_factory=tuple)
     # bugfix_spec.md Item 6 / F6.3.4 (carried from A4 review): a one-line
@@ -115,6 +126,11 @@ class ExpirationRenderInput:
     # printed alongside an empty/insufficient flow section carry an
     # explicit caveat. None when the analyzer has no flow bookkeeping yet.
     evidence_line: Optional[str] = None
+    # institutional_metrics_spec.md section 9(b) per-expiry order item 8
+    # (CONTEXT): the VWAP-IV-gap one-liner needs this expiration's own
+    # VolSurfaceResult. None when unavailable (matches every other
+    # extra_sections entry's "no bundle sub-result -> no data" gate).
+    vol_surface: Optional[VolSurfaceResult] = None
 
 
 class OnChainReportFormatter:
@@ -232,16 +248,17 @@ class OnChainReportFormatter:
     def render_expiration(self, render_input: ExpirationRenderInput, spot_price: float) -> str:
         """
         Render one expiration's full section: header line, the analysis
-        block, and any extra pre-rendered sections (GEX/DEX, flow, vol
-        surface, OI changes), followed by the closing separator.
+        block, any extra pre-rendered sections (GEX/DEX, flow, vol surface,
+        OI changes), and the CONTEXT one-liners, followed by the closing
+        separator.
 
         Args:
-            render_input: The expiration's typed analysis + trend + extras.
+            render_input: The expiration's typed analysis + extras.
             spot_price: Underlying price to anchor this section's
-                settlement-space distances (max-pain distance, "current
-                price" label on support/resistance) against. bugfix_spec.md
-                Item 7: this is THIS expiration's own forward price, not a
-                single value shared across every expiration.
+                settlement-space distances (Max Pain's "% from spot" one-
+                liner) against. bugfix_spec.md Item 7: this is THIS
+                expiration's own forward price, not a single value shared
+                across every expiration.
 
         Returns:
             Formatted multi-line string.
@@ -250,11 +267,14 @@ class OnChainReportFormatter:
         if render_input.evidence_line is not None:
             lines.append(render_input.evidence_line)
             lines.append("")
-        lines.append(
-            format_expiration_section(render_input.analysis, spot_price, render_input.trend)
-        )
+        lines.append(format_expiration_section(render_input.analysis))
         for extra in render_input.extra_sections:
             lines.append(extra)
+        # institutional_metrics_spec.md section 9(b) per-expiry order item
+        # 8: CONTEXT is always rendered LAST in the expiration's block.
+        lines.append(
+            format_context_section(render_input.analysis, spot_price, render_input.vol_surface)
+        )
         lines.append(_SEPARATOR)
         lines.append("")
         return "\n".join(lines)
@@ -346,14 +366,15 @@ class OnChainReportFormatter:
             trend=bundle.trend,
             extra_sections=tuple(extra_sections),
             evidence_line=self._evidence_line_from_flow(bundle.flow),
+            vol_surface=bundle.vol_surface,
         )
-        # bugfix_spec.md Item 7 anchor table: format_expiration_section's
-        # spot_price feeds max-pain distance and the "current price" label
-        # on support/resistance levels -- both settlement-space (strike vs.
-        # where THIS expiry's contract settles), so this expiry's own
-        # forward (bundle.analysis.underlying_price, already anchored there
-        # by analyze_expiration) is correct here, not the aggregate
-        # result.underlying_price (the index, same for every expiration).
+        # bugfix_spec.md Item 7 anchor table: format_context_section's
+        # spot_price feeds the Max Pain "% from spot" one-liner -- this is
+        # settlement-space (strike vs. where THIS expiry's contract
+        # settles), so this expiry's own forward (bundle.analysis.
+        # underlying_price, already anchored there by analyze_expiration)
+        # is correct here, not the aggregate result.underlying_price (the
+        # index, same for every expiration).
         return self.render_expiration(render_input, bundle.analysis.underlying_price)
 
     @staticmethod

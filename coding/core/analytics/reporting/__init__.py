@@ -9,8 +9,8 @@ from ``OnChainAnalyzer.generate_report()`` and the various calculators'
 """
 
 from coding.core.analytics.reporting.expiry_formatter import (
+    format_context_section,
     format_expiration_section,
-    format_trend_delta,
 )
 from coding.core.analytics.reporting.flow_formatter import format_flow_section
 from coding.core.analytics.reporting.gex_dex_formatter import (
@@ -39,7 +39,7 @@ from coding.core.analytics.reporting.vol_surface_formatter import format_vol_sur
 
 __all__ = [
     "format_expiration_section",
-    "format_trend_delta",
+    "format_context_section",
     "format_gex_dex_section",
     "format_aggregate_gex_dex_section",
     "format_flow_section",
