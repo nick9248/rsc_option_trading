@@ -6,8 +6,12 @@ Decision D8).
 
 from datetime import datetime
 
-from coding.core.analytics.reporting.delta_flow_formatter import format_delta_flow_section
+from coding.core.analytics.reporting.delta_flow_formatter import (
+    format_delta_adjusted_flow_section,
+    format_delta_flow_section,
+)
 from coding.core.analytics.results.delta_flow_results import FlowBucket
+from coding.core.analytics.results.flow_results import FlowResult, FlowTotals, TopStrikeEntry
 
 
 def _bucket(expiration, hiro=100.0, premium=10.0, gross=200.0, trade_count=5,
@@ -17,6 +21,97 @@ def _bucket(expiration, hiro=100.0, premium=10.0, gross=200.0, trade_count=5,
         net_contracts=1.0, gross_contracts=2.0, trade_count=trade_count,
         buy_count=buy_count, sell_count=sell_count, skipped_count=skipped_count,
     )
+
+
+def _flow_result(**overrides) -> FlowResult:
+    defaults = dict(
+        flow_data={},
+        expiration_totals=FlowTotals(
+            call_buy_volume=10.0, call_sell_volume=2.0, put_buy_volume=1.0, put_sell_volume=5.0
+        ),
+        bias_interpretation="Heavy Buying",
+        flow_trend="Steady Buy Pressure",
+        top_buy_strikes=(
+            TopStrikeEntry(strike=95000.0, option_type="C", net_flow=8.0, volume=10.0, notional=950_000.0),
+        ),
+        top_sell_strikes=(
+            TopStrikeEntry(strike=90000.0, option_type="P", net_flow=-4.0, volume=5.0, notional=450_000.0),
+        ),
+        trade_count=6,
+        spot_price=95000.0,
+        window_start_ms=1_000,
+        window_end_ms=1_000_000,
+        lookback_hours=24.0,
+        sufficient_data=True,
+        low_confidence=False,
+    )
+    defaults.update(overrides)
+    return FlowResult(**defaults)
+
+
+# ---------------------------------------------------------------------------
+# format_delta_adjusted_flow_section (institutional_metrics_spec.md section
+# 6(c) / section 9(b) per-expiry order item 5, Task D2 independent review
+# Important #1)
+# ---------------------------------------------------------------------------
+
+class TestFormatDeltaAdjustedFlowSection:
+    def test_both_none_returns_empty_string(self):
+        assert format_delta_adjusted_flow_section(None, None) == ""
+
+    def test_headline_from_bucket_replaces_contract_count_claim(self):
+        """spec 6(c): 'replaces the contract-count net flow headline' --
+        the old EXPIRATION-LEVEL FLOW bias/trend claim must not appear."""
+        bucket = _bucket("25JUL26", hiro=-2_110_400.0, premium=-188_020.0, gross=11_004_220.0)
+        text = format_delta_adjusted_flow_section(bucket, _flow_result())
+        assert "DELTA-ADJUSTED FLOW" in text
+        assert "-2,110,400" in text
+        assert "-188,020" in text
+        assert "+11,004,220" in text
+        assert "EXPIRATION-LEVEL FLOW" not in text
+        assert "Bias:" not in text
+        assert "Heavy Buying" not in text
+
+    def test_per_strike_tables_kept(self):
+        """spec 6(c): 'keep the per-strike table'."""
+        bucket = _bucket("25JUL26")
+        text = format_delta_adjusted_flow_section(bucket, _flow_result())
+        assert "TOP 5 STRIKES BY BUYING PRESSURE:" in text
+        assert "TOP 5 STRIKES BY SELLING PRESSURE:" in text
+        assert "95,000" in text
+        assert "90,000" in text
+
+    def test_bucket_none_flow_present_shows_no_hiro_data_line(self):
+        text = format_delta_adjusted_flow_section(None, _flow_result())
+        assert "DELTA-ADJUSTED FLOW" in text
+        assert "no data for this expiry" in text
+        assert "TOP 5 STRIKES BY BUYING PRESSURE:" in text
+
+    def test_flow_none_bucket_present_shows_headline_only(self):
+        bucket = _bucket("25JUL26")
+        text = format_delta_adjusted_flow_section(bucket, None)
+        assert "DELTA-ADJUSTED FLOW" in text
+        assert "TOP 5 STRIKES BY BUYING PRESSURE:" not in text
+
+    def test_insufficient_flow_data_suppresses_tables_not_headline(self):
+        bucket = _bucket("25JUL26", hiro=500.0, premium=50.0, gross=1000.0)
+        flow = _flow_result(trade_count=3, sufficient_data=False)
+        text = format_delta_adjusted_flow_section(bucket, flow)
+        assert "+500" in text  # headline still renders
+        assert "** INSUFFICIENT FLOW DATA **" in text
+        assert "TOP 5 STRIKES BY BUYING PRESSURE:" not in text
+
+    def test_zero_trades_shows_no_activity_line(self):
+        bucket = _bucket("25JUL26", trade_count=0, skipped_count=0)
+        text = format_delta_adjusted_flow_section(bucket, None)
+        assert "no trade activity in window" in text.lower()
+
+    def test_skip_rate_line_present(self):
+        # skip_rate = skipped_count / (trade_count + skipped_count) = 2/102
+        bucket = _bucket("25JUL26", trade_count=100, skipped_count=2)
+        text = format_delta_adjusted_flow_section(bucket, None)
+        assert "skipped 2" in text
+        assert "1.96%" in text
 
 
 class TestFormatDeltaFlowSection:

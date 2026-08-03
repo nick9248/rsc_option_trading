@@ -44,7 +44,6 @@ from coding.core.analytics.historical_normalizer import (
 from coding.core.analytics.on_chain_analyzer import (
     OnChainMetricsCalculator,
     _to_market_metrics,
-    _to_trend_snapshot,
 )
 from coding.core.analytics.put_call_ratio_interpreter import (
     interpret_put_call_ratio_percentile,
@@ -2816,57 +2815,38 @@ class OnChainAnalysisService:
         builder: Optional[OnChainAnalysisBuilder] = None,
     ) -> None:
         """
-        Fetch previous DB snapshots per expiration for trend comparison.
+        institutional_metrics_spec.md section 9 (Task D2 independent review,
+        Minor): trend arrows against a single prior snapshot were deleted
+        from the report everywhere (removals table: "Trend arrows vs 1
+        prior snapshot -> delete everywhere") -- nothing renders
+        ``TrendSnapshot`` data anymore, so the per-expiration
+        ``get_onchain_snapshot_history`` query this method used to run (one
+        DB round trip per expiration -- 12 for a full BTC report) fetched
+        data with no consumer. The query is removed; ``builder.set_trend``
+        is still called (with ``None``) so the ``TrendSnapshot`` plumbing
+        itself -- the dataclass, the builder method,
+        ``ExpirationRenderInput.trend`` -- stays intact for a future
+        consumer, exactly as before, just never populated from the DB.
 
-        Requires repository. Silently skipped when repository is None.
-        Each expiration gets the oldest of the 2 most-recent hourly
-        onchain_analysis_snapshots as its "previous" value to compare
-        against live API data.
+        Requires repository (unchanged gate, kept for parity with the
+        method's prior signature even though the body no longer queries
+        it). Silently skipped when repository is None.
 
         Args:
             analyzer: OnChainMetricsCalculator with parsed data.
-            progress_callback: Callback for progress updates.
+            progress_callback: Unused -- kept for signature parity with the
+                caller; the misleading "Fetching trend data..." message
+                this used to emit is deleted along with the query it
+                described.
             builder: T6 dual-write target (typed aggregate result).
         """
+        del progress_callback  # not used -- see docstring
         if self.repository is None:
             return
 
-        progress_callback("Fetching trend data for report comparison...")
-
         for expiration in analyzer.get_expirations():
-            try:
-                history = self.repository.get_onchain_snapshot_history(
-                    analyzer.currency, expiration, limit=2
-                )
-                prev = history[0] if history else None
-
-                if prev is None:
-                    if builder is not None:
-                        builder.set_trend(expiration, None)
-                    continue
-
-                trend: Dict[str, Any] = {}
-                if prev["max_pain_strike"] is not None:
-                    trend["max_pain_strike"] = float(prev["max_pain_strike"])
-                if prev["total_call_oi"] is not None:
-                    trend["call_oi"] = float(prev["total_call_oi"])
-                if prev["total_put_oi"] is not None:
-                    trend["put_oi"] = float(prev["total_put_oi"])
-                pc = prev["put_call_ratio_oi"]
-                trend["pc_ratio"] = float(pc) if pc is not None else None
-                if prev["total_volume"] is not None:
-                    trend["total_volume"] = float(prev["total_volume"])
-                vr = prev["put_call_ratio_volume"]
-                trend["volume_ratio"] = float(vr) if vr is not None else None
-
-                trend_or_none = trend if trend else None
-                if builder is not None:
-                    builder.set_trend(expiration, _to_trend_snapshot(trend_or_none))
-
-            except Exception as e:
-                logger.warning(f"Failed to fetch trend data for {expiration}: {e}")
-                if builder is not None:
-                    builder.set_trend(expiration, None)
+            if builder is not None:
+                builder.set_trend(expiration, None)
 
     def _save_reports_per_expiration(
         self,

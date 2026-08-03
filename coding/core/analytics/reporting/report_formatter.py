@@ -26,7 +26,9 @@ from coding.core.analytics.market_wide_calculator import FUNDING_PERIODS_PER_YEA
 from coding.core.analytics.reporting.dealer_inventory_formatter import (
     format_dealer_inventory_section,
 )
-from coding.core.analytics.reporting.delta_flow_formatter import format_delta_flow_section
+from coding.core.analytics.reporting.delta_flow_formatter import (
+    format_delta_adjusted_flow_section,
+)
 from coding.core.analytics.reporting.expiry_formatter import (
     format_context_section,
     format_expiration_section,
@@ -37,7 +39,6 @@ from coding.core.analytics.reporting.exposure_profile_formatter import (
 from coding.core.analytics.reporting.fixed_strike_vol_formatter import (
     format_fixed_strike_vol_section,
 )
-from coding.core.analytics.reporting.flow_formatter import format_flow_section
 from coding.core.analytics.reporting.gex_dex_formatter import (
     format_aggregate_gex_dex_section,
     format_gamma_rolloff_section,
@@ -289,7 +290,7 @@ class OnChainReportFormatter:
         Builds an ``ExpirationRenderInput`` from the expiration's
         ``ExpirationBundle`` — extra sections come from the reporting
         package's own formatters (``format_gex_dex_section``,
-        ``format_flow_section``, ``format_vol_surface_section``,
+        ``format_delta_adjusted_flow_section``, ``format_vol_surface_section``,
         ``format_oi_changes_section``/``format_iv_percentile_section``)
         operating on the bundle's typed sub-results, in the same fixed
         order the legacy pre-rendered-text adapter used (GEX/DEX, flow,
@@ -310,13 +311,17 @@ class OnChainReportFormatter:
         #   2. GEX/DEX PROFILE BY STRIKE (gex_dex)
         #   3. VANNA/CHARM PROFILE (exposure_profile)
         #   4. SKEW (vol_surface)
-        #   5. DELTA-ADJUSTED FLOW (flow -- BUY/SELL FLOW ANALYSIS is the
-        #      only per-expiry directional-flow-plus-per-strike-table
-        #      section that exists; the true HIRO/premium/gross
-        #      delta_flow_buckets series stays in its existing
-        #      currency-wide position, appended once after the whole
-        #      report per render_full_from_result, since the spec's
-        #      market-wide order does not list it there either)
+        #   5. DELTA-ADJUSTED FLOW (independent review, Important #1: spec
+        #      6(c) "replaces the contract-count 'net flow' headline; keep
+        #      the per-strike table" is a MERGE instruction, not a choice
+        #      between the old BUY/SELL FLOW ANALYSIS section and the new
+        #      HIRO/premium/gross series -- format_delta_adjusted_flow_
+        #      section implements the merge: this expiry's own bucket from
+        #      delta_flow_buckets supplies the new headline, bundle.flow
+        #      supplies the kept per-strike tables. The old currency-wide
+        #      "Total" delta-flow table (format_delta_flow_section) is no
+        #      longer rendered anywhere -- see render_full_from_result's
+        #      comment for why it was dropped rather than kept.)
         #   6. FIXED-STRIKE VOL CHANGE (fixed_strike_vol)
         #   7. OI CHANGES (oi_changes + iv_percentile)
         #   8. CONTEXT -- rendered separately, always last (render_expiration)
@@ -349,8 +354,13 @@ class OnChainReportFormatter:
             )
         if bundle.vol_surface is not None:
             extra_sections.append(format_vol_surface_section(bundle.vol_surface, expiration))
-        if bundle.flow is not None:
-            extra_sections.append(format_flow_section(bundle.flow, bundle.flow.lookback_hours))
+        own_delta_flow_bucket = next(
+            (b for b in result.delta_flow_buckets if b.expiration == expiration), None
+        )
+        if own_delta_flow_bucket is not None or bundle.flow is not None:
+            extra_sections.append(
+                format_delta_adjusted_flow_section(own_delta_flow_bucket, bundle.flow)
+            )
 
         # institutional_metrics_spec.md section 7 / task C8: fixed-strike
         # vol change matrix. format_fixed_strike_vol_section renders even
@@ -555,19 +565,21 @@ class OnChainReportFormatter:
         # separate block -- see that method's own comment for the gating
         # rationale.
 
-        # institutional_metrics_spec.md section 6 / task C7: signed delta-
-        # weighted taker flow (HIRO analog), summed from the daemon-
-        # persisted flow_delta_hourly table. Appended LAST -- absent
-        # entirely (format_delta_flow_section returns "") when
-        # result.delta_flow_buckets is empty (no repository, or the window
-        # has no persisted rows yet), same "no data -> no section"
-        # convention as historical context above.
-        delta_flow_text = format_delta_flow_section(
-            result.delta_flow_buckets, result.delta_flow_lookback_hours,
-            hours_present=result.delta_flow_hours_present,
-            stale_since=result.delta_flow_stale_since,
-        )
-        if delta_flow_text:
-            blocks.append(delta_flow_text)
+        # institutional_metrics_spec.md section 6 / task C7 (Task D2
+        # independent review, Important #1): the currency-wide "Total"
+        # delta-flow table (format_delta_flow_section) used to render here,
+        # standalone, after the whole report -- a position neither the
+        # per-expiry nor the market-wide order sanctions. It is dropped
+        # (not rendered) rather than kept: each expiration's own HIRO/
+        # premium/gross line now renders in that expiration's own DELTA-
+        # ADJUSTED FLOW section (section 9(b) per-expiry order item 5, via
+        # format_delta_adjusted_flow_section), so the underlying data is
+        # still surfaced, per-expiry, in a slot the spec DOES sanction --
+        # no spec text supports folding the aggregate "Total" row into
+        # market-wide CONTEXT instead (CONTEXT's own list is exhaustive:
+        # BTC/ETH change-correlation + expected move only). The formatter
+        # function and its own tests are left in place (unused in
+        # production, same treatment as flow_formatter.format_flow_section
+        # after this same review round).
 
         return "\n".join(blocks)

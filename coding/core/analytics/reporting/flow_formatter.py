@@ -24,6 +24,71 @@ from coding.core.analytics.results.flow_results import FlowResult
 _SEPARATOR = "-" * 80
 
 
+def format_flow_strike_tables(result: FlowResult) -> str:
+    """
+    Render just the TOP 5 STRIKES BY BUYING/SELLING PRESSURE tables --
+    no header, no "EXPIRATION-LEVEL FLOW" bias/trend headline.
+
+    institutional_metrics_spec.md section 6(c) (Task D2 independent review,
+    Important #1): "Report (replaces the contract-count 'net flow'
+    headline; keep the per-strike table)" -- this function IS "the
+    per-strike table" half of that instruction. Shared by
+    ``format_flow_section`` (the full legacy section, still directly
+    tested but no longer wired into the live report) and
+    ``delta_flow_formatter.format_delta_adjusted_flow_section`` (the live
+    per-expiry DELTA-ADJUSTED FLOW slot, section 9(b) per-expiry order
+    item 5), which replaces the "EXPIRATION-LEVEL FLOW" bias/trend
+    headline this function omits with this expiry's own signed
+    HIRO/premium/gross line instead.
+
+    Callers are responsible for their own "insufficient data" gating and
+    message wording -- this function assumes ``result.sufficient_data`` is
+    True (matching every existing call site's own gate) and always renders
+    both tables.
+    """
+    lines = []
+
+    lines.append("TOP 5 STRIKES BY BUYING PRESSURE:")
+    lines.append(_SEPARATOR)
+    if result.top_buy_strikes:
+        lines.append(
+            f"{'Strike':>10}  {'Type':>6}  {'Net Flow':>12}  {'Buy Vol':>12}  {'Buy Notional':>15}"
+        )
+        lines.append(
+            f"{'------':>10}  {'----':>6}  {'---------':>12}  {'--------':>12}  {'-------------':>15}"
+        )
+        for item in result.top_buy_strikes:
+            lines.append(
+                f"{item.strike:>10,.0f}  {item.option_type:>6}  "
+                f"{item.net_flow:>+12,.1f}  {item.volume:>12,.1f}  "
+                f"${item.notional:>14,.2f}"
+            )
+    else:
+        lines.append("  No net buying detected")
+    lines.append("")
+
+    lines.append("TOP 5 STRIKES BY SELLING PRESSURE:")
+    lines.append(_SEPARATOR)
+    if result.top_sell_strikes:
+        lines.append(
+            f"{'Strike':>10}  {'Type':>6}  {'Net Flow':>12}  {'Sell Vol':>12}  {'Sell Notional':>15}"
+        )
+        lines.append(
+            f"{'------':>10}  {'----':>6}  {'---------':>12}  {'---------':>12}  {'--------------':>15}"
+        )
+        for item in result.top_sell_strikes:
+            lines.append(
+                f"{item.strike:>10,.0f}  {item.option_type:>6}  "
+                f"{item.net_flow:>+12,.1f}  {item.volume:>12,.1f}  "
+                f"${item.notional:>14,.2f}"
+            )
+    else:
+        lines.append("  No net selling detected")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
 def format_flow_section(result: FlowResult, lookback_hours: float) -> str:
     """
     Render the buy/sell flow analysis section.
@@ -73,42 +138,6 @@ def format_flow_section(result: FlowResult, lookback_hours: float) -> str:
     lines.append(f"  Trend: {result.flow_trend}{trend_tag}")
     lines.append("")
 
-    lines.append("TOP 5 STRIKES BY BUYING PRESSURE:")
-    lines.append(_SEPARATOR)
-    if result.top_buy_strikes:
-        lines.append(
-            f"{'Strike':>10}  {'Type':>6}  {'Net Flow':>12}  {'Buy Vol':>12}  {'Buy Notional':>15}"
-        )
-        lines.append(
-            f"{'------':>10}  {'----':>6}  {'---------':>12}  {'--------':>12}  {'-------------':>15}"
-        )
-        for item in result.top_buy_strikes:
-            lines.append(
-                f"{item.strike:>10,.0f}  {item.option_type:>6}  "
-                f"{item.net_flow:>+12,.1f}  {item.volume:>12,.1f}  "
-                f"${item.notional:>14,.2f}"
-            )
-    else:
-        lines.append("  No net buying detected")
-    lines.append("")
-
-    lines.append("TOP 5 STRIKES BY SELLING PRESSURE:")
-    lines.append(_SEPARATOR)
-    if result.top_sell_strikes:
-        lines.append(
-            f"{'Strike':>10}  {'Type':>6}  {'Net Flow':>12}  {'Sell Vol':>12}  {'Sell Notional':>15}"
-        )
-        lines.append(
-            f"{'------':>10}  {'----':>6}  {'---------':>12}  {'---------':>12}  {'--------------':>15}"
-        )
-        for item in result.top_sell_strikes:
-            lines.append(
-                f"{item.strike:>10,.0f}  {item.option_type:>6}  "
-                f"{item.net_flow:>+12,.1f}  {item.volume:>12,.1f}  "
-                f"${item.notional:>14,.2f}"
-            )
-    else:
-        lines.append("  No net selling detected")
-    lines.append("")
+    lines.append(format_flow_strike_tables(result))
 
     return "\n".join(lines)

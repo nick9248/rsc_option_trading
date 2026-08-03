@@ -21,7 +21,9 @@ information.
 from datetime import datetime
 from typing import Optional, Sequence
 
+from coding.core.analytics.reporting.flow_formatter import format_flow_strike_tables
 from coding.core.analytics.results.delta_flow_results import FlowBucket
+from coding.core.analytics.results.flow_results import FlowResult
 
 _SEPARATOR = "-" * 80
 _ALL_KEY = "ALL"
@@ -42,6 +44,78 @@ def _format_row(label: str, bucket: FlowBucket) -> str:
 
 def _find_total(buckets: Sequence[FlowBucket]) -> Optional[FlowBucket]:
     return next((b for b in buckets if b.expiration == _ALL_KEY), None)
+
+
+def format_delta_adjusted_flow_section(
+    bucket: Optional[FlowBucket],
+    flow_result: Optional[FlowResult],
+) -> str:
+    """
+    Render the per-expiry DELTA-ADJUSTED FLOW section
+    (institutional_metrics_spec.md section 6(c) / section 9(b) per-expiry
+    order item 5, Task D2 independent-review fix, Important #1).
+
+    Spec 6(c): "Report (replaces the contract-count 'net flow' headline;
+    keep the per-strike table)" -- this is a MERGE instruction, not a
+    choice between the old buy/sell-flow-analyzer section and the new
+    HIRO/premium/gross series. This function implements the merge: this
+    expiration's own signed HIRO/premium/gross line (from ``bucket``, the
+    per-expiry entry in ``OnChainAnalysisResult.delta_flow_buckets``)
+    REPLACES the old "EXPIRATION-LEVEL FLOW" bias/trend headline
+    (``format_flow_section``'s contract-count claim), while the existing
+    TOP 5 STRIKES BY BUYING/SELLING PRESSURE tables (from ``flow_result``,
+    the buy/sell-flow analyzer -- ``flow_formatter.format_flow_strike_
+    tables``) are KEPT, unchanged.
+
+    ``bucket`` and ``flow_result`` come from two independent data sources
+    (the persisted ``flow_delta_hourly`` table vs. the buy/sell-flow
+    analyzer's own ad hoc trade fetch) with independent availability --
+    each is rendered whenever it is present, regardless of the other's
+    state. Returns "" only when BOTH are None (matches the codebase's
+    "no data -> no section" convention).
+
+    Args:
+        bucket: This expiration's own FlowBucket (``expiration`` field
+            matching, not ``"ALL"``), or None when ``delta_flow_buckets``
+            has no persisted row for this expiration in the window.
+        flow_result: This expiration's buy/sell-flow result, or None.
+
+    Returns:
+        Formatted multi-line string, or "" when both inputs are None.
+    """
+    if bucket is None and flow_result is None:
+        return ""
+
+    lines = ["DELTA-ADJUSTED FLOW", _SEPARATOR]
+
+    if bucket is not None:
+        lines.append(
+            f"{'':<16}{'Directional (HIRO)':>20}{'Premium':>16}{'Gross |Delta| notional':>24}"
+        )
+        lines.append(_format_row("This expiry", bucket))
+        skip_rate = bucket.skip_rate
+        if skip_rate is None:
+            lines.append(f"Trades: {bucket.trade_count} (no trade activity in window)")
+        else:
+            lines.append(
+                f"Trades: {bucket.trade_count:,}  (skipped {bucket.skipped_count}, "
+                f"{skip_rate * 100:.2f}%)"
+            )
+    else:
+        lines.append("HIRO/premium/gross: no data for this expiry")
+    lines.append("")
+
+    if flow_result is not None:
+        if not flow_result.sufficient_data:
+            lines.append(
+                f"  ** INSUFFICIENT FLOW DATA ** - {flow_result.trade_count} trade(s) in "
+                "window. Per-strike flow tables suppressed."
+            )
+            lines.append("")
+        else:
+            lines.append(format_flow_strike_tables(flow_result))
+
+    return "\n".join(lines)
 
 
 def format_delta_flow_section(

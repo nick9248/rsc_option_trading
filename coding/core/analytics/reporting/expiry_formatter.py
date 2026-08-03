@@ -38,15 +38,49 @@ context task C1's HistoricalNormalizer already provides elsewhere in the
 report (PCR percentile here, IV/skew percentiles in other sections).
 """
 
+from datetime import datetime, timezone
 from typing import Optional
 
+from coding.core.analytics.gex_dex_calculator import GexDexCalculator
 from coding.core.analytics.results.expiry_results import ExpirationAnalysisResult
 from coding.core.analytics.results.vol_surface_results import VolSurfaceResult
+from coding.core.analytics.thresholds import MAX_PAIN_EXPIRY_WEEK_THRESHOLD_DAYS
 from coding.core.analytics.volatility_surface_calculator import (
     MINIMUM_TRADED_INSTRUMENTS_FOR_AGGRESSION,
 )
 
 _SUB_SEPARATOR = "-" * 80
+
+
+def _is_expiry_week(expiration: str) -> bool:
+    """
+    True when ``expiration`` (Deribit "DDMONYY" convention) settles within
+    ``MAX_PAIN_EXPIRY_WEEK_THRESHOLD_DAYS`` of right now.
+
+    institutional_metrics_spec.md section 9 (Task D2 independent review
+    ruling): "Max Pain -> one line, expiry-week only" is a TIME-WINDOW gate
+    -- max pain is a pinning phenomenon that isn't institutionally
+    meaningful hundreds of DTE out. Reuses ``GexDexCalculator.
+    _parse_expiry_dte_days`` (the exact same "DDMONYY + 08:00 UTC
+    settlement" parsing convention already established there and in
+    ``MarketWideCalculator._calculate_days_to_expiry``) rather than
+    re-implementing expiry-string parsing a third time in the reporting
+    layer -- see that method's own docstring for the convention. ``now``
+    is computed fresh at render time (explicit ``timezone.utc``, never
+    naive-local -- this exact bug class has cost 5+ fix rounds in this
+    campaign) rather than reusing ``OnChainAnalysisResult.generated_at``,
+    which is naive-local (``analysis_builder.py``'s ``datetime.now()``,
+    a separate pre-existing issue out of scope for this fix).
+
+    Returns False (suppress the line) when the expiration string does not
+    parse -- same "can't compute -> don't show" caution as every other
+    None-guarded fact in this section. Also False for an already-settled
+    expiration (negative DTE) -- "expiry-week" means the week BEFORE
+    settlement; a pinning thesis for a contract that has already settled
+    is not "near expiry", it's stale.
+    """
+    dte_days = GexDexCalculator._parse_expiry_dte_days(expiration, datetime.now(timezone.utc))
+    return dte_days is not None and 0.0 <= dte_days <= MAX_PAIN_EXPIRY_WEEK_THRESHOLD_DAYS
 
 
 def format_expiration_section(analysis: ExpirationAnalysisResult) -> str:
@@ -156,13 +190,19 @@ def format_context_section(
     lines = ["CONTEXT", _SUB_SEPARATOR]
 
     # Max Pain -- one line, no trend, no separate "Distance from Current"
-    # line (institutional_metrics_spec.md section 9).
-    max_pain_strike = analysis.max_pain.max_pain_strike
-    if max_pain_strike is not None:
-        diff_pct = (spot_price - max_pain_strike) / max_pain_strike * 100 if max_pain_strike else 0.0
-        lines.append(f"Max Pain: ${max_pain_strike:,.0f}  ({diff_pct:+.2f}% from spot)")
-    else:
-        lines.append("Max Pain: N/A")
+    # line (institutional_metrics_spec.md section 9). Independent review
+    # ruling: "expiry-week only" is a time-window gate -- the line is
+    # omitted entirely (not shown as N/A) for expirations more than
+    # MAX_PAIN_EXPIRY_WEEK_THRESHOLD_DAYS out, since max pain's pinning
+    # thesis isn't meaningful that far from expiry. See _is_expiry_week's
+    # docstring.
+    if _is_expiry_week(analysis.expiration):
+        max_pain_strike = analysis.max_pain.max_pain_strike
+        if max_pain_strike is not None:
+            diff_pct = (spot_price - max_pain_strike) / max_pain_strike * 100 if max_pain_strike else 0.0
+            lines.append(f"Max Pain: ${max_pain_strike:,.0f}  ({diff_pct:+.2f}% from spot)")
+        else:
+            lines.append("Max Pain: N/A")
 
     # P/C Ratio -- value + percentile only, no word bias label (T9.2
     # acceptance: report must not contain "Strong Bullish"/"Strong

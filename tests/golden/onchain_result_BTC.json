@@ -2432,14 +2432,7 @@
         ]
       },
       "total_instruments": 28,
-      "trend_data": {
-        "call_oi": 1463.8,
-        "max_pain_strike": 65000.0,
-        "pc_ratio": 0.2065,
-        "put_oi": 302.3,
-        "total_volume": 1106.0,
-        "volume_ratio": 0.1465
-      },
+      "trend_data": null,
       "underlying_price": 64509.34,
       "volatility_surface": {
         "atm_iv": 35.14,
@@ -3863,14 +3856,7 @@
         ]
       },
       "total_instruments": 116,
-      "trend_data": {
-        "call_oi": 58803.8,
-        "max_pain_strike": 70000.0,
-        "pc_ratio": 0.5601,
-        "put_oi": 32935.1,
-        "total_volume": 2800.4,
-        "volume_ratio": 0.9034
-      },
+      "trend_data": null,
       "underlying_price": 65481.8,
       "volatility_surface": {
         "atm_iv": 40.82,
@@ -5094,14 +5080,7 @@
         ]
       },
       "total_instruments": 74,
-      "trend_data": {
-        "call_oi": 2517.4,
-        "max_pain_strike": 60000.0,
-        "pc_ratio": 0.5995,
-        "put_oi": 1509.2,
-        "total_volume": 80.0,
-        "volume_ratio": 0.3652
-      },
+      "trend_data": null,
       "underlying_price": 66880.71,
       "volatility_surface": {
         "atm_iv": 43.1,
@@ -6680,14 +6659,7 @@
         ]
       },
       "total_instruments": 120,
-      "trend_data": {
-        "call_oi": 59455.5,
-        "max_pain_strike": 70000.0,
-        "pc_ratio": 0.5789,
-        "put_oi": 34421.1,
-        "total_volume": 2621.0,
-        "volume_ratio": 0.6994
-      },
+      "trend_data": null,
       "underlying_price": 64809.01,
       "volatility_surface": {
         "atm_iv": 36.66,
@@ -7641,14 +7613,7 @@
         ]
       },
       "total_instruments": 46,
-      "trend_data": {
-        "call_oi": 1037.8,
-        "max_pain_strike": 64500.0,
-        "pc_ratio": 0.6155,
-        "put_oi": 638.8,
-        "total_volume": 924.3,
-        "volume_ratio": 0.4685
-      },
+      "trend_data": null,
       "underlying_price": 64372.48,
       "volatility_surface": {
         "atm_iv": 14.84,
@@ -8977,14 +8942,7 @@
         ]
       },
       "total_instruments": 102,
-      "trend_data": {
-        "call_oi": 15640.4,
-        "max_pain_strike": 65000.0,
-        "pc_ratio": 0.531,
-        "put_oi": 8305.3,
-        "total_volume": 214.3,
-        "volume_ratio": 0.1315
-      },
+      "trend_data": null,
       "underlying_price": 66131.8,
       "volatility_surface": {
         "atm_iv": 42.07,
@@ -9873,14 +9831,7 @@
         ]
       },
       "total_instruments": 44,
-      "trend_data": {
-        "call_oi": 890.8,
-        "max_pain_strike": 65000.0,
-        "pc_ratio": 1.2363,
-        "put_oi": 1101.3,
-        "total_volume": 1561.0,
-        "volume_ratio": 1.036
-      },
+      "trend_data": null,
       "underlying_price": 64372.48,
       "volatility_surface": {
         "atm_iv": 24.47,
@@ -11164,14 +11115,7 @@
         ]
       },
       "total_instruments": 98,
-      "trend_data": {
-        "call_oi": 28431.9,
-        "max_pain_strike": 62000.0,
-        "pc_ratio": 0.5218,
-        "put_oi": 14836.0,
-        "total_volume": 2171.5,
-        "volume_ratio": 0.534
-      },
+      "trend_data": null,
       "underlying_price": 64599.84,
       "volatility_surface": {
         "atm_iv": 35.37,
@@ -12070,14 +12014,7 @@
         ]
       },
       "total_instruments": 46,
-      "trend_data": {
-        "call_oi": 331.4,
-        "max_pain_strike": 65000.0,
-        "pc_ratio": 0.6841,
-        "put_oi": 226.7,
-        "total_volume": 627.8,
-        "volume_ratio": 0.5671
-      },
+      "trend_data": null,
       "underlying_price": 64372.48,
       "volatility_surface": {
         "atm_iv": 29.17,
@@ -14265,14 +14202,7 @@
         ]
       },
       "total_instruments": 116,
-      "trend_data": {
-        "call_oi": 115783.8,
-        "max_pain_strike": 64000.0,
-        "pc_ratio": 0.285,
-        "put_oi": 32993.2,
-        "total_volume": 7531.2,
-        "volume_ratio": 0.7537
-      },
+      "trend_data": null,
       "underlying_price": 64405.02,
       "volatility_surface": {
         "atm_iv": 36.25,
@@ -15136,14 +15066,7 @@
         ]
       },
       "total_instruments": 38,
-      "trend_data": {
-        "call_oi": 19377.3,
-        "max_pain_strike": 64000.0,
-        "pc_ratio": 0.1278,
-        "put_oi": 2475.9,
-        "total_volume": 4308.0,
-        "volume_ratio": 0.2146
-      },
+      "trend_data": null,
       "underlying_price": 64453.65,
       "volatility_surface": {
         "atm_iv": 35.76,

@@ -3,7 +3,10 @@ Unit tests for coding.core.analytics.reporting.flow_formatter
 (refactor_design_spec.md section T3).
 """
 
-from coding.core.analytics.reporting.flow_formatter import format_flow_section
+from coding.core.analytics.reporting.flow_formatter import (
+    format_flow_section,
+    format_flow_strike_tables,
+)
 from coding.core.analytics.results.flow_results import FlowResult, FlowTotals, TopStrikeEntry
 
 
@@ -79,3 +82,30 @@ def test_flow_section_no_buying_or_selling_detected():
     text = format_flow_section(result, lookback_hours=24)
     assert "  No net buying detected" in text
     assert "  No net selling detected" in text
+
+
+# ---------------------------------------------------------------------------
+# format_flow_strike_tables (institutional_metrics_spec.md section 6(c),
+# Task D2 independent review Important #1: the shared "keep the per-strike
+# table" half, reused by delta_flow_formatter.format_delta_adjusted_flow_
+# section)
+# ---------------------------------------------------------------------------
+
+def test_flow_strike_tables_no_header_or_headline():
+    """Just the two tables -- no 'BUY/SELL FLOW ANALYSIS' header, no
+    'EXPIRATION-LEVEL FLOW' bias/trend headline."""
+    text = format_flow_strike_tables(_make_result())
+    assert "BUY/SELL FLOW ANALYSIS" not in text
+    assert "EXPIRATION-LEVEL FLOW" not in text
+    assert "Heavy Buying" not in text
+    assert "TOP 5 STRIKES BY BUYING PRESSURE:" in text
+    assert "TOP 5 STRIKES BY SELLING PRESSURE:" in text
+
+
+def test_flow_strike_tables_matches_format_flow_section_tables_byte_for_byte():
+    """The refactor that extracted this function must not change
+    format_flow_section's own rendered table bytes."""
+    result = _make_result()
+    full_text = format_flow_section(result, lookback_hours=24)
+    tables_text = format_flow_strike_tables(result)
+    assert tables_text in full_text

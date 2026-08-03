@@ -8,11 +8,17 @@ from ``OnChainAnalyzer.generate_report()`` and the various calculators'
 ``generate_report_section()`` methods.
 """
 
+from coding.core.analytics.reporting.delta_flow_formatter import (
+    format_delta_adjusted_flow_section,
+)
 from coding.core.analytics.reporting.expiry_formatter import (
     format_context_section,
     format_expiration_section,
 )
-from coding.core.analytics.reporting.flow_formatter import format_flow_section
+from coding.core.analytics.reporting.flow_formatter import (
+    format_flow_section,
+    format_flow_strike_tables,
+)
 from coding.core.analytics.reporting.gex_dex_formatter import (
     format_aggregate_gex_dex_section,
     format_gex_dex_section,
@@ -45,6 +51,8 @@ __all__ = [
     "format_gex_dex_section",
     "format_aggregate_gex_dex_section",
     "format_flow_section",
+    "format_flow_strike_tables",
+    "format_delta_adjusted_flow_section",
     "format_vol_surface_section",
     "format_term_structure_section",
     "format_futures_basis_section",

@@ -283,10 +283,13 @@ class TestCalculateBuySellFlowSingleFetch:
 
         assert mock_repo.get_trades_for_flow_analysis.call_count == 1
         # T10 (refactor_design_spec.md): generate_report_section() is no
-        # longer called at all -- rendering is format_flow_section's job
-        # now, operating on the typed result the builder receives. The
-        # "one fetch, one calculate" invariant this test exists to pin is
-        # still exactly what's asserted here.
+        # longer called at all -- rendering operates on the typed result
+        # the builder receives (as of institutional_metrics_spec.md
+        # section 9(b) Task D2 review, via delta_flow_formatter.
+        # format_delta_adjusted_flow_section, not format_flow_section --
+        # see that module's docstring). The "one fetch, one calculate"
+        # invariant this test exists to pin is still exactly what's
+        # asserted here.
         assert instance.calculate.call_count == 1
 
 

@@ -15,6 +15,8 @@ everywhere in this module (spec 9's removals table, row "Trend arrows vs 1
 prior snapshot -> delete everywhere").
 """
 
+from datetime import datetime, timedelta, timezone
+
 from coding.core.analytics.reporting.expiry_formatter import (
     format_context_section,
     format_expiration_section,
@@ -41,6 +43,18 @@ from coding.core.analytics.results.vol_surface_results import (
 SPOT_PRICE = 64405.02
 
 
+def _expiry_string(days_ahead: float) -> str:
+    """
+    Deribit "DDMONYY" expiration string ``days_ahead`` days from right now
+    (UTC) -- used so tests exercising the Max Pain CONTEXT line's
+    expiry-week gate (institutional_metrics_spec.md section 9 independent
+    review ruling; see expiry_formatter._is_expiry_week) don't depend on
+    today's wall-clock date relative to some fixed calendar string.
+    """
+    dt = datetime.now(timezone.utc) + timedelta(days=days_ahead)
+    return dt.strftime("%d%b%y").upper()
+
+
 def _leg(itm_oi, otm_oi, itm_notional, otm_notional, itm_pct, otm_pct):
     return MoneynessLeg(
         itm_oi=itm_oi, otm_oi=otm_oi, total_oi=itm_oi + otm_oi,
@@ -51,7 +65,10 @@ def _leg(itm_oi, otm_oi, itm_notional, otm_notional, itm_pct, otm_pct):
 
 def _make_analysis(**overrides) -> ExpirationAnalysisResult:
     defaults = dict(
-        expiration="14AUG26",
+        # Within the expiry-week gate by default (2 days out) so every
+        # existing test asserting the Max Pain CONTEXT line renders keeps
+        # working regardless of today's date -- see _expiry_string.
+        expiration=_expiry_string(2),
         underlying_price=SPOT_PRICE,
         total_instruments=3,
         call_count=1,
@@ -189,6 +206,40 @@ def test_context_max_pain_na_when_no_strike():
     )
     text = format_context_section(analysis, SPOT_PRICE, _make_vol_surface())
     assert "Max Pain: N/A" in text
+
+
+def test_context_max_pain_suppressed_outside_expiry_week():
+    """
+    institutional_metrics_spec.md section 9 independent review ruling:
+    Max Pain -> one line, expiry-week only, is a TIME-WINDOW gate. An
+    expiration 60 days out must not print a Max Pain line at all (not
+    even N/A) -- max pain's pinning thesis isn't meaningful that far out.
+    """
+    analysis = _make_analysis(expiration=_expiry_string(60))
+    text = format_context_section(analysis, SPOT_PRICE, _make_vol_surface())
+    assert "Max Pain:" not in text
+
+
+def test_context_max_pain_rendered_well_within_the_threshold():
+    # Deliberately not testing the exact 7-day boundary here: the
+    # expiration string truncates to a calendar date (re-parsed at 08:00
+    # UTC settlement), so the exact fractional DTE from "right now" to
+    # that boundary depends on what time of day the test happens to run
+    # -- a boundary test would be flaky. 5 days out is unambiguously
+    # inside the window regardless of time-of-day.
+    analysis = _make_analysis(expiration=_expiry_string(5))
+    text = format_context_section(analysis, SPOT_PRICE, _make_vol_surface())
+    assert "Max Pain: $65,000" in text
+
+
+def test_context_other_lines_still_render_when_max_pain_suppressed():
+    """Suppressing Max Pain must not suppress the rest of CONTEXT."""
+    analysis = _make_analysis(expiration=_expiry_string(60))
+    text = format_context_section(analysis, SPOT_PRICE, _make_vol_surface())
+    assert "P/C Ratio:" in text
+    assert "Moneyness:" in text
+    assert "Volume P/C:" in text
+    assert "VWAP-IV gap:" in text
 
 
 def test_context_pcr_percentile_no_bias_word():

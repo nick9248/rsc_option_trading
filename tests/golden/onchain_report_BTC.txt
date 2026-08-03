@@ -146,13 +146,11 @@ P/C RATIO BY MONEYNESS:
   Near-OTM (5-15%):     P/C = 0.30
   Far-OTM (15%+):     P/C = 0.00
 
-BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
+DELTA-ADJUSTED FLOW
 --------------------------------------------------------------------------------
-Spot Price: $64,371.10
-Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
-Trades Analyzed: 0
+HIRO/premium/gross: no data for this expiry
 
-  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
+  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window. Per-strike flow tables suppressed.
 
 LARGE OI CHANGES (Day-over-Day)
 --------------------------------------------------------------------------------
@@ -162,7 +160,6 @@ LARGE OI CHANGES (Day-over-Day)
 
 CONTEXT
 --------------------------------------------------------------------------------
-Max Pain: $65,000  (-0.75% from spot)
 P/C Ratio: 0.30  (n=0 - insufficient history for a percentile)
 Moneyness: ITM calls 0.4%  |  ITM puts 4.6%
 Volume P/C: 0.41
@@ -441,13 +438,11 @@ P/C RATIO BY MONEYNESS:
   Near-OTM (5-15%):     P/C = 2.56
   Far-OTM (15%+):     P/C = 0.37
 
-BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
+DELTA-ADJUSTED FLOW
 --------------------------------------------------------------------------------
-Spot Price: $64,371.10
-Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
-Trades Analyzed: 0
+HIRO/premium/gross: no data for this expiry
 
-  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
+  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window. Per-strike flow tables suppressed.
 
 LARGE OI CHANGES (Day-over-Day)
 --------------------------------------------------------------------------------
@@ -455,7 +450,6 @@ LARGE OI CHANGES (Day-over-Day)
 
 CONTEXT
 --------------------------------------------------------------------------------
-Max Pain: $70,000  (-6.45% from spot)
 P/C Ratio: 0.56  (n=0 - insufficient history for a percentile)
 Moneyness: ITM calls 5.4%  |  ITM puts 19.5%
 Volume P/C: 0.60
@@ -670,13 +664,11 @@ P/C RATIO BY MONEYNESS:
   Near-OTM (5-15%):     P/C = 0.33
   Far-OTM (15%+):     P/C = 0.92
 
-BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
+DELTA-ADJUSTED FLOW
 --------------------------------------------------------------------------------
-Spot Price: $64,371.10
-Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
-Trades Analyzed: 0
+HIRO/premium/gross: no data for this expiry
 
-  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
+  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window. Per-strike flow tables suppressed.
 
 LARGE OI CHANGES (Day-over-Day)
 --------------------------------------------------------------------------------
@@ -684,7 +676,6 @@ LARGE OI CHANGES (Day-over-Day)
 
 CONTEXT
 --------------------------------------------------------------------------------
-Max Pain: $60,000  (+11.47% from spot)
 P/C Ratio: 0.60  (n=0 - insufficient history for a percentile)
 Moneyness: ITM calls 44.3%  |  ITM puts 2.9%
 Volume P/C: 1.91
@@ -968,13 +959,11 @@ P/C RATIO BY MONEYNESS:
   Near-OTM (5-15%):     P/C = 1.24
   Far-OTM (15%+):     P/C = 0.46
 
-BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
+DELTA-ADJUSTED FLOW
 --------------------------------------------------------------------------------
-Spot Price: $64,371.10
-Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
-Trades Analyzed: 0
+HIRO/premium/gross: no data for this expiry
 
-  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
+  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window. Per-strike flow tables suppressed.
 
 LARGE OI CHANGES (Day-over-Day)
 --------------------------------------------------------------------------------
@@ -982,7 +971,6 @@ LARGE OI CHANGES (Day-over-Day)
 
 CONTEXT
 --------------------------------------------------------------------------------
-Max Pain: $70,000  (-7.42% from spot)
 P/C Ratio: 0.58  (n=0 - insufficient history for a percentile)
 Moneyness: ITM calls 4.9%  |  ITM puts 32.3%
 Volume P/C: 0.47
@@ -1157,13 +1145,11 @@ P/C RATIO BY MONEYNESS:
   Near-OTM (5-15%):     P/C = 1.14
   Far-OTM (15%+):     P/C = 0.00
 
-BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
+DELTA-ADJUSTED FLOW
 --------------------------------------------------------------------------------
-Spot Price: $64,371.10
-Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
-Trades Analyzed: 0
+HIRO/premium/gross: no data for this expiry
 
-  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
+  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window. Per-strike flow tables suppressed.
 
 LARGE OI CHANGES (Day-over-Day)
 --------------------------------------------------------------------------------
@@ -1181,7 +1167,6 @@ LARGE OI CHANGES (Day-over-Day)
 
 CONTEXT
 --------------------------------------------------------------------------------
-Max Pain: $64,000  (+0.58% from spot)
 P/C Ratio: 0.72  (n=0 - insufficient history for a percentile)
 Moneyness: ITM calls 4.5%  |  ITM puts 5.7%
 Volume P/C: 0.89
@@ -1438,13 +1423,11 @@ P/C RATIO BY MONEYNESS:
   Near-OTM (5-15%):     P/C = 0.74
   Far-OTM (15%+):     P/C = 0.44
 
-BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
+DELTA-ADJUSTED FLOW
 --------------------------------------------------------------------------------
-Spot Price: $64,371.10
-Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
-Trades Analyzed: 0
+HIRO/premium/gross: no data for this expiry
 
-  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
+  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window. Per-strike flow tables suppressed.
 
 LARGE OI CHANGES (Day-over-Day)
 --------------------------------------------------------------------------------
@@ -1452,7 +1435,6 @@ LARGE OI CHANGES (Day-over-Day)
 
 CONTEXT
 --------------------------------------------------------------------------------
-Max Pain: $65,000  (+1.74% from spot)
 P/C Ratio: 0.53  (n=0 - insufficient history for a percentile)
 Moneyness: ITM calls 7.9%  |  ITM puts 11.2%
 Volume P/C: 0.16
@@ -1623,13 +1605,11 @@ P/C RATIO BY MONEYNESS:
   Near-OTM (5-15%):     P/C = 0.23
   Far-OTM (15%+):     P/C = 0.00
 
-BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
+DELTA-ADJUSTED FLOW
 --------------------------------------------------------------------------------
-Spot Price: $64,371.10
-Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
-Trades Analyzed: 0
+HIRO/premium/gross: no data for this expiry
 
-  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
+  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window. Per-strike flow tables suppressed.
 
 LARGE OI CHANGES (Day-over-Day)
 --------------------------------------------------------------------------------
@@ -1643,7 +1623,6 @@ LARGE OI CHANGES (Day-over-Day)
 
 CONTEXT
 --------------------------------------------------------------------------------
-Max Pain: $65,000  (-0.97% from spot)
 P/C Ratio: 1.05  (n=0 - insufficient history for a percentile)
 Moneyness: ITM calls 1.6%  |  ITM puts 21.7%
 Volume P/C: 0.38
@@ -1908,13 +1887,11 @@ P/C RATIO BY MONEYNESS:
   Near-OTM (5-15%):     P/C = 0.57
   Far-OTM (15%+):     P/C = 0.47
 
-BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
+DELTA-ADJUSTED FLOW
 --------------------------------------------------------------------------------
-Spot Price: $64,371.10
-Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
-Trades Analyzed: 0
+HIRO/premium/gross: no data for this expiry
 
-  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
+  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window. Per-strike flow tables suppressed.
 
 LARGE OI CHANGES (Day-over-Day)
 --------------------------------------------------------------------------------
@@ -1924,7 +1901,6 @@ LARGE OI CHANGES (Day-over-Day)
 
 CONTEXT
 --------------------------------------------------------------------------------
-Max Pain: $62,000  (+4.19% from spot)
 P/C Ratio: 0.52  (n=0 - insufficient history for a percentile)
 Moneyness: ITM calls 13.9%  |  ITM puts 9.4%
 Volume P/C: 1.46
@@ -2097,13 +2073,11 @@ P/C RATIO BY MONEYNESS:
   Near-OTM (5-15%):     P/C = 2.02
   Far-OTM (15%+):     P/C = 0.00
 
-BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
+DELTA-ADJUSTED FLOW
 --------------------------------------------------------------------------------
-Spot Price: $64,371.10
-Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
-Trades Analyzed: 0
+HIRO/premium/gross: no data for this expiry
 
-  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
+  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window. Per-strike flow tables suppressed.
 
 LARGE OI CHANGES (Day-over-Day)
 --------------------------------------------------------------------------------
@@ -2118,7 +2092,6 @@ LARGE OI CHANGES (Day-over-Day)
 
 CONTEXT
 --------------------------------------------------------------------------------
-Max Pain: $65,000  (-0.97% from spot)
 P/C Ratio: 1.03  (n=0 - insufficient history for a percentile)
 Moneyness: ITM calls 0.8%  |  ITM puts 38.7%
 Volume P/C: 1.84
@@ -2280,17 +2253,14 @@ P/C RATIO BY MONEYNESS:
   Near-OTM (5-15%):     P/C = 1.04
   Far-OTM (15%+):     P/C = 0.00
 
-BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
+DELTA-ADJUSTED FLOW
 --------------------------------------------------------------------------------
-Spot Price: $64,371.10
-Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
-Trades Analyzed: 0
+HIRO/premium/gross: no data for this expiry
 
-  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
+  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window. Per-strike flow tables suppressed.
 
 CONTEXT
 --------------------------------------------------------------------------------
-Max Pain: $63,500  (+1.37% from spot)
 P/C Ratio: 0.99  (n=0 - insufficient history for a percentile)
 Moneyness: ITM calls 0.0%  |  ITM puts 0.0%
 Volume P/C: 1.28
@@ -2581,13 +2551,11 @@ P/C RATIO BY MONEYNESS:
   Near-OTM (5-15%):     P/C = 0.21
   Far-OTM (15%+):     P/C = 0.35
 
-BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
+DELTA-ADJUSTED FLOW
 --------------------------------------------------------------------------------
-Spot Price: $64,371.10
-Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
-Trades Analyzed: 0
+HIRO/premium/gross: no data for this expiry
 
-  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
+  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window. Per-strike flow tables suppressed.
 
 LARGE OI CHANGES (Day-over-Day)
 --------------------------------------------------------------------------------
@@ -2600,7 +2568,6 @@ ATM Strike: $64,000  |  Current IV: 36.2%  |  Percentile: 15.2%
 
 CONTEXT
 --------------------------------------------------------------------------------
-Max Pain: $64,000  (+0.63% from spot)
 P/C Ratio: 0.29  (n=0 - insufficient history for a percentile)
 Moneyness: ITM calls 5.3%  |  ITM puts 18.3%
 Volume P/C: 0.53
@@ -2759,13 +2726,11 @@ P/C RATIO BY MONEYNESS:
   Near-OTM (5-15%):     P/C = 0.12
   Far-OTM (15%+):     P/C = 0.02
 
-BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
+DELTA-ADJUSTED FLOW
 --------------------------------------------------------------------------------
-Spot Price: $64,371.10
-Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
-Trades Analyzed: 0
+HIRO/premium/gross: no data for this expiry
 
-  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
+  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window. Per-strike flow tables suppressed.
 
 LARGE OI CHANGES (Day-over-Day)
 --------------------------------------------------------------------------------

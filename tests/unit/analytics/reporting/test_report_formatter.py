@@ -431,7 +431,7 @@ def test_render_expiration_from_result_section_order_matches_spec():
     idx_gex_dex = text.index("GEX/DEX ANALYSIS")
     idx_vanna_charm = text.index("VANNA / CHARM PROFILE")
     idx_skew = text.index("VOLATILITY SURFACE ANALYSIS")
-    idx_flow = text.index("BUY/SELL FLOW ANALYSIS")
+    idx_flow = text.index("DELTA-ADJUSTED FLOW")
     idx_fixed_strike_vol = text.index("FIXED-STRIKE VOL CHANGE")
     idx_oi_changes = text.index("LARGE OI CHANGES")
     idx_context = text.index("CONTEXT")

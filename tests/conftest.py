@@ -55,11 +55,13 @@ _FROZEN_CLOCK_MODULES = (
     # analyzer's own entry is removed here for the same reason --
     # generate_report_section() (its last datetime.fromtimestamp() call
     # site, formatting the window start/end for display) was deleted as
-    # dead code (zero production callers; format_flow_section is the sole
-    # live render path and takes pre-formatted ms timestamps, no datetime
-    # import). The module has carried no time.time() call since T5 (the
-    # window is injected by the caller). Not a coverage gap: nothing left
-    # in this module reads "now".
+    # dead code (zero production callers; format_flow_section -- and, as
+    # of institutional_metrics_spec.md section 9(b) Task D2 review, its
+    # successor delta_flow_formatter.format_delta_adjusted_flow_section --
+    # take pre-formatted ms timestamps, no datetime import). The module
+    # has carried no time.time() call since T5 (the window is injected by
+    # the caller). Not a coverage gap: nothing left in this module reads
+    # "now".
     "coding.core.analytics.market_wide_calculator",
     "coding.service.on_chain.on_chain_analysis_service",
     # T11 (refactor_design_spec.md): the term-structure DTE calc's

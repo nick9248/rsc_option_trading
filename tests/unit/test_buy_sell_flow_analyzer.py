@@ -94,8 +94,12 @@ class TestNoDatabaseImportInCore:
 # NOTE (task A7, carried finding #1): TestSingleFetchInProductionSequence
 # (T6.1, "one computation, single truth") used to live here, calling the
 # now-deleted BuySellFlowAnalyzer.generate_report_section() (zero production
-# callers -- the live render path, format_flow_section, is a pure function
-# over an already-typed FlowResult and structurally cannot recompute).
+# callers -- the render path is a pure function over an already-typed
+# FlowResult and structurally cannot recompute; institutional_metrics_
+# spec.md section 9(b) Task D2 review moved that live render path from
+# format_flow_section to delta_flow_formatter.format_delta_adjusted_flow_
+# section, which still consumes the same typed FlowResult, so the
+# "cannot recompute" guarantee this note describes is unaffected).
 # That regression class is now impossible by construction, not just tested.
 
 
@@ -285,8 +289,13 @@ class TestBiasInterpretation:
 # used to live here, covering BuySellFlowAnalyzer.generate_report_section()
 # (deleted -- zero production callers). Equivalent (better) coverage now
 # lives in tests/unit/analytics/reporting/test_flow_formatter.py::
-# test_flow_section_header_and_totals, exercising the actual live render
-# path (format_flow_section) against a typed FlowResult.
+# test_flow_section_header_and_totals, exercising format_flow_section
+# against a typed FlowResult. institutional_metrics_spec.md section 9(b)
+# Task D2 review moved the actual live render path to delta_flow_
+# formatter.format_delta_adjusted_flow_section (which reuses this same
+# module's format_flow_strike_tables for its per-strike tables) --
+# format_flow_section is no longer called in production but remains
+# directly tested as the reference implementation.
 
 
 class TestDataSufficiencyGate:
@@ -360,7 +369,10 @@ class TestDataSufficiencyGate:
     # test_flow_section_suppressed_below_sufficiency_floor,
     # test_flow_section_low_confidence_tag_rendered, and
     # test_flow_section_header_and_totals (asserts "LOW CONFIDENCE" absent),
-    # exercising the actual live render path (format_flow_section).
+    # exercising format_flow_section against a typed FlowResult --
+    # format_flow_section is no longer the live render path as of
+    # institutional_metrics_spec.md section 9(b) Task D2 review (see the
+    # module-level NOTE above), but remains directly tested.
 
     def test_all_trades_on_one_strike_still_labeled(self):
         """Count is the gate, not diversity — 20 trades on a single strike

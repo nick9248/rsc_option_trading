@@ -190,3 +190,22 @@ BLOCK_TRADE_ID_TRACKED_SINCE = "2026-08-02"
 Printed verbatim in the block-trade report section per the spec's
 "state its start date" requirement -- not derived from any row's
 timestamp, since no row before this date has the field."""
+
+
+# --- Max Pain "expiry-week only" gate (institutional_metrics_spec.md
+# section 9, Task D2 independent review ruling) -----------------------------
+#
+# Max pain is a pinning phenomenon that isn't institutionally meaningful
+# hundreds of DTE out -- the removals table's "one line, expiry-week only"
+# instruction is a TIME-WINDOW gate (only render for near-expiry
+# expirations), not a comparison-scope instruction. No existing named
+# constant for "near expiry" was found elsewhere in the campaign at review
+# time -- GammaRolloffCalculator/GexDexCalculator's own 7-day gamma-cliff
+# boundary (gex_dex_calculator.py's calculate_rolloff_profile) uses a raw
+# 7.0 literal, not a named constant -- so this defaults to the same 7 days
+# or a documented, independent choice.
+MAX_PAIN_EXPIRY_WEEK_THRESHOLD_DAYS = 7.0
+"""Per-expiry CONTEXT's Max Pain line renders only when this expiration's
+DTE (to its own 08:00 UTC settlement) is <= this many days -- matches the
+existing (unnamed) 7-day gamma-cliff boundary used elsewhere for the same
+"near expiry" concept, for consistency."""
