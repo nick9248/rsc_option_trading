@@ -146,7 +146,7 @@ P/C RATIO BY MONEYNESS:
   Near-OTM (5-15%):     P/C = 0.30
   Far-OTM (15%+):     P/C = 0.00
 
-DELTA-ADJUSTED FLOW
+DELTA-ADJUSTED FLOW (24h, taker-signed, USD notional)
 --------------------------------------------------------------------------------
 HIRO/premium/gross: no data for this expiry
 
@@ -438,7 +438,7 @@ P/C RATIO BY MONEYNESS:
   Near-OTM (5-15%):     P/C = 2.56
   Far-OTM (15%+):     P/C = 0.37
 
-DELTA-ADJUSTED FLOW
+DELTA-ADJUSTED FLOW (24h, taker-signed, USD notional)
 --------------------------------------------------------------------------------
 HIRO/premium/gross: no data for this expiry
 
@@ -664,7 +664,7 @@ P/C RATIO BY MONEYNESS:
   Near-OTM (5-15%):     P/C = 0.33
   Far-OTM (15%+):     P/C = 0.92
 
-DELTA-ADJUSTED FLOW
+DELTA-ADJUSTED FLOW (24h, taker-signed, USD notional)
 --------------------------------------------------------------------------------
 HIRO/premium/gross: no data for this expiry
 
@@ -959,7 +959,7 @@ P/C RATIO BY MONEYNESS:
   Near-OTM (5-15%):     P/C = 1.24
   Far-OTM (15%+):     P/C = 0.46
 
-DELTA-ADJUSTED FLOW
+DELTA-ADJUSTED FLOW (24h, taker-signed, USD notional)
 --------------------------------------------------------------------------------
 HIRO/premium/gross: no data for this expiry
 
@@ -1145,7 +1145,7 @@ P/C RATIO BY MONEYNESS:
   Near-OTM (5-15%):     P/C = 1.14
   Far-OTM (15%+):     P/C = 0.00
 
-DELTA-ADJUSTED FLOW
+DELTA-ADJUSTED FLOW (24h, taker-signed, USD notional)
 --------------------------------------------------------------------------------
 HIRO/premium/gross: no data for this expiry
 
@@ -1167,6 +1167,7 @@ LARGE OI CHANGES (Day-over-Day)
 
 CONTEXT
 --------------------------------------------------------------------------------
+Max Pain: $64,000  (+0.58% from spot)
 P/C Ratio: 0.72  (n=0 - insufficient history for a percentile)
 Moneyness: ITM calls 4.5%  |  ITM puts 5.7%
 Volume P/C: 0.89
@@ -1423,7 +1424,7 @@ P/C RATIO BY MONEYNESS:
   Near-OTM (5-15%):     P/C = 0.74
   Far-OTM (15%+):     P/C = 0.44
 
-DELTA-ADJUSTED FLOW
+DELTA-ADJUSTED FLOW (24h, taker-signed, USD notional)
 --------------------------------------------------------------------------------
 HIRO/premium/gross: no data for this expiry
 
@@ -1605,7 +1606,7 @@ P/C RATIO BY MONEYNESS:
   Near-OTM (5-15%):     P/C = 0.23
   Far-OTM (15%+):     P/C = 0.00
 
-DELTA-ADJUSTED FLOW
+DELTA-ADJUSTED FLOW (24h, taker-signed, USD notional)
 --------------------------------------------------------------------------------
 HIRO/premium/gross: no data for this expiry
 
@@ -1623,6 +1624,7 @@ LARGE OI CHANGES (Day-over-Day)
 
 CONTEXT
 --------------------------------------------------------------------------------
+Max Pain: $65,000  (-0.97% from spot)
 P/C Ratio: 1.05  (n=0 - insufficient history for a percentile)
 Moneyness: ITM calls 1.6%  |  ITM puts 21.7%
 Volume P/C: 0.38
@@ -1887,7 +1889,7 @@ P/C RATIO BY MONEYNESS:
   Near-OTM (5-15%):     P/C = 0.57
   Far-OTM (15%+):     P/C = 0.47
 
-DELTA-ADJUSTED FLOW
+DELTA-ADJUSTED FLOW (24h, taker-signed, USD notional)
 --------------------------------------------------------------------------------
 HIRO/premium/gross: no data for this expiry
 
@@ -2073,7 +2075,7 @@ P/C RATIO BY MONEYNESS:
   Near-OTM (5-15%):     P/C = 2.02
   Far-OTM (15%+):     P/C = 0.00
 
-DELTA-ADJUSTED FLOW
+DELTA-ADJUSTED FLOW (24h, taker-signed, USD notional)
 --------------------------------------------------------------------------------
 HIRO/premium/gross: no data for this expiry
 
@@ -2092,6 +2094,7 @@ LARGE OI CHANGES (Day-over-Day)
 
 CONTEXT
 --------------------------------------------------------------------------------
+Max Pain: $65,000  (-0.97% from spot)
 P/C Ratio: 1.03  (n=0 - insufficient history for a percentile)
 Moneyness: ITM calls 0.8%  |  ITM puts 38.7%
 Volume P/C: 1.84
@@ -2253,7 +2256,7 @@ P/C RATIO BY MONEYNESS:
   Near-OTM (5-15%):     P/C = 1.04
   Far-OTM (15%+):     P/C = 0.00
 
-DELTA-ADJUSTED FLOW
+DELTA-ADJUSTED FLOW (24h, taker-signed, USD notional)
 --------------------------------------------------------------------------------
 HIRO/premium/gross: no data for this expiry
 
@@ -2261,6 +2264,7 @@ HIRO/premium/gross: no data for this expiry
 
 CONTEXT
 --------------------------------------------------------------------------------
+Max Pain: $63,500  (+1.37% from spot)
 P/C Ratio: 0.99  (n=0 - insufficient history for a percentile)
 Moneyness: ITM calls 0.0%  |  ITM puts 0.0%
 Volume P/C: 1.28
@@ -2551,7 +2555,7 @@ P/C RATIO BY MONEYNESS:
   Near-OTM (5-15%):     P/C = 0.21
   Far-OTM (15%+):     P/C = 0.35
 
-DELTA-ADJUSTED FLOW
+DELTA-ADJUSTED FLOW (24h, taker-signed, USD notional)
 --------------------------------------------------------------------------------
 HIRO/premium/gross: no data for this expiry
 
@@ -2568,6 +2572,7 @@ ATM Strike: $64,000  |  Current IV: 36.2%  |  Percentile: 15.2%
 
 CONTEXT
 --------------------------------------------------------------------------------
+Max Pain: $64,000  (+0.63% from spot)
 P/C Ratio: 0.29  (n=0 - insufficient history for a percentile)
 Moneyness: ITM calls 5.3%  |  ITM puts 18.3%
 Volume P/C: 0.53
@@ -2726,7 +2731,7 @@ P/C RATIO BY MONEYNESS:
   Near-OTM (5-15%):     P/C = 0.12
   Far-OTM (15%+):     P/C = 0.02
 
-DELTA-ADJUSTED FLOW
+DELTA-ADJUSTED FLOW (24h, taker-signed, USD notional)
 --------------------------------------------------------------------------------
 HIRO/premium/gross: no data for this expiry
 
@@ -2742,7 +2747,6 @@ LARGE OI CHANGES (Day-over-Day)
 
 CONTEXT
 --------------------------------------------------------------------------------
-Max Pain: $64,000  (+0.71% from spot)
 P/C Ratio: 0.13  (n=0 - insufficient history for a percentile)
 Moneyness: ITM calls 1.2%  |  ITM puts 6.5%
 Volume P/C: 1.02

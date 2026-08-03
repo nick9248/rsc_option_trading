@@ -284,6 +284,17 @@ def test_full_report_never_contains_banned_labels(pipeline_result):
         "↑",  # "↑" trend arrow
         "↓",  # "↓" trend arrow
         "→ unchanged",  # "→ unchanged" trend arrow
+        # independent review round 2 (Minor): the single largest D2
+        # removal -- the raw-OI top-3 SUPPORT/RESISTANCE LEVELS block and
+        # its "Distance from Current"/"OI Skew" siblings -- was not
+        # actually banned here, so a regression that reintroduced the
+        # whole section plus a golden regen would have sailed through both
+        # this test and test_full_report_matches_golden with no failure.
+        "SUPPORT/RESISTANCE LEVELS",
+        "RESISTANCE (Top 3",
+        "SUPPORT (Top 3",
+        "Distance from Current",
+        "OI Skew",
     )
     for banned in banned_substrings:
         assert banned not in report, f"Banned label/arrow {banned!r} found in the full report"
@@ -298,10 +309,24 @@ def test_full_report_never_contains_banned_labels(pipeline_result):
     assert "Bullish" not in report
     assert "Bearish" not in report
 
-    # Positive assertion: the PCR line does carry a "p"+digits percentile
-    # marker somewhere (not banned -- required), so this test also proves
-    # the replacement, not just the absence of the old labels.
+    # Positive assertion: the PCR line is still present, in the NEW format
+    # (value + either a real percentile or the insufficient-history
+    # fallback -- never the deleted bias-label format).
+    #
+    # independent review round 2 (Minor): T9.2 literally asks to "assert
+    # it does contain 'p'+digits regime markers on the PCR line" -- this
+    # fixture's own recorded onchain_snapshot_history is too short for
+    # HistoricalNormalizer's percentile threshold, so every PCR line in
+    # THIS particular fixture prints the "insufficient history" fallback,
+    # not a real "p"+digits marker; the assertion below only proves the
+    # line still exists in one of the two valid new-format shapes, not
+    # that the percentile marker itself renders correctly. That exact
+    # "p"+digits format IS exercised at the unit level, with a fixture
+    # built to have a real percentile: see test_expiry_formatter.py's
+    # test_context_pcr_percentile_no_bias_word ("P/C Ratio: 2.40  p98
+    # (90d history, n=705)").
     assert "P/C Ratio:" in report
+    assert "insufficient history for a percentile" in report or "  p" in report
 
 
 def test_synthesis_matches_golden(pipeline_result, update_golden):

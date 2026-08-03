@@ -38,7 +38,7 @@ context task C1's HistoricalNormalizer already provides elsewhere in the
 report (PCR percentile here, IV/skew percentiles in other sections).
 """
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional
 
 from coding.core.analytics.gex_dex_calculator import GexDexCalculator
@@ -52,10 +52,10 @@ from coding.core.analytics.volatility_surface_calculator import (
 _SUB_SEPARATOR = "-" * 80
 
 
-def _is_expiry_week(expiration: str) -> bool:
+def _is_expiry_week(expiration: str, now_utc: datetime) -> bool:
     """
     True when ``expiration`` (Deribit "DDMONYY" convention) settles within
-    ``MAX_PAIN_EXPIRY_WEEK_THRESHOLD_DAYS`` of right now.
+    ``MAX_PAIN_EXPIRY_WEEK_THRESHOLD_DAYS`` of ``now_utc``.
 
     institutional_metrics_spec.md section 9 (Task D2 independent review
     ruling): "Max Pain -> one line, expiry-week only" is a TIME-WINDOW gate
@@ -65,12 +65,25 @@ def _is_expiry_week(expiration: str) -> bool:
     settlement" parsing convention already established there and in
     ``MarketWideCalculator._calculate_days_to_expiry``) rather than
     re-implementing expiry-string parsing a third time in the reporting
-    layer -- see that method's own docstring for the convention. ``now``
-    is computed fresh at render time (explicit ``timezone.utc``, never
-    naive-local -- this exact bug class has cost 5+ fix rounds in this
-    campaign) rather than reusing ``OnChainAnalysisResult.generated_at``,
-    which is naive-local (``analysis_builder.py``'s ``datetime.now()``,
-    a separate pre-existing issue out of scope for this fix).
+    layer -- see that method's own docstring for the convention.
+
+    Independent review round 2 (Important #1): ``now_utc`` is an explicit,
+    caller-supplied parameter -- NOT a fresh ``datetime.now(timezone.utc)``
+    read inside this function. A prior version of this fix read the clock
+    here directly; since ``coding.core.analytics.reporting.expiry_
+    formatter`` is not (and should not be) in ``tests/conftest.py``'s
+    ``_FROZEN_CLOCK_MODULES`` freeze list, that clock read was never frozen
+    by the characterization suite's ``frozen_clock`` fixture, so the golden
+    master silently depended on which real day the suite happened to
+    execute -- the exact failure mode that freeze list exists to prevent
+    (see ``GexDexCalculator``'s own entry there, added for the identical
+    reason). Threading ``now_utc`` as a parameter (matching
+    ``_parse_expiry_dte_days``'s own signature) keeps the reporting layer
+    pure and doesn't depend on every future time-touching formatter
+    remembering to be added to that list. The caller chain
+    (``format_context_section`` -> ``report_formatter``'s render methods)
+    ultimately gets ``now_utc`` from ``OnChainAnalysisService.
+    fetch_and_analyze``, a module that IS in the freeze list.
 
     Returns False (suppress the line) when the expiration string does not
     parse -- same "can't compute -> don't show" caution as every other
@@ -79,7 +92,7 @@ def _is_expiry_week(expiration: str) -> bool:
     settlement; a pinning thesis for a contract that has already settled
     is not "near expiry", it's stale.
     """
-    dte_days = GexDexCalculator._parse_expiry_dte_days(expiration, datetime.now(timezone.utc))
+    dte_days = GexDexCalculator._parse_expiry_dte_days(expiration, now_utc)
     return dte_days is not None and 0.0 <= dte_days <= MAX_PAIN_EXPIRY_WEEK_THRESHOLD_DAYS
 
 
@@ -167,6 +180,7 @@ def format_context_section(
     analysis: ExpirationAnalysisResult,
     spot_price: float,
     vol_surface: Optional[VolSurfaceResult],
+    now_utc: datetime,
 ) -> str:
     """
     Render the per-expiry CONTEXT section (institutional_metrics_spec.md
@@ -183,6 +197,13 @@ def format_context_section(
             when unavailable (matches the "no data -> N/A line" convention
             — CONTEXT always prints exactly one line per fact, never omits
             a line the way other sections omit themselves entirely).
+        now_utc: The report's own "now" reference (independent review
+            round 2, Important #1) -- explicit, UTC-aware, and supplied by
+            the caller, never read fresh inside this function. See
+            ``_is_expiry_week``'s docstring for why: this module is not in
+            ``tests/conftest.py``'s clock-freeze list, so a clock read here
+            would make the golden master depend on which day the suite
+            executes.
 
     Returns:
         Formatted multi-line string.
@@ -196,7 +217,7 @@ def format_context_section(
     # MAX_PAIN_EXPIRY_WEEK_THRESHOLD_DAYS out, since max pain's pinning
     # thesis isn't meaningful that far from expiry. See _is_expiry_week's
     # docstring.
-    if _is_expiry_week(analysis.expiration):
+    if _is_expiry_week(analysis.expiration, now_utc):
         max_pain_strike = analysis.max_pain.max_pain_strike
         if max_pain_strike is not None:
             diff_pct = (spot_price - max_pain_strike) / max_pain_strike * 100 if max_pain_strike else 0.0

@@ -8,6 +8,7 @@ from datetime import datetime
 
 from coding.core.analytics.reporting.delta_flow_formatter import (
     format_delta_adjusted_flow_section,
+    format_delta_flow_coverage_line,
     format_delta_flow_section,
 )
 from coding.core.analytics.results.delta_flow_results import FlowBucket
@@ -57,13 +58,13 @@ def _flow_result(**overrides) -> FlowResult:
 
 class TestFormatDeltaAdjustedFlowSection:
     def test_both_none_returns_empty_string(self):
-        assert format_delta_adjusted_flow_section(None, None) == ""
+        assert format_delta_adjusted_flow_section(None, None, lookback_hours=24.0) == ""
 
     def test_headline_from_bucket_replaces_contract_count_claim(self):
         """spec 6(c): 'replaces the contract-count net flow headline' --
         the old EXPIRATION-LEVEL FLOW bias/trend claim must not appear."""
         bucket = _bucket("25JUL26", hiro=-2_110_400.0, premium=-188_020.0, gross=11_004_220.0)
-        text = format_delta_adjusted_flow_section(bucket, _flow_result())
+        text = format_delta_adjusted_flow_section(bucket, _flow_result(), lookback_hours=24.0)
         assert "DELTA-ADJUSTED FLOW" in text
         assert "-2,110,400" in text
         assert "-188,020" in text
@@ -75,43 +76,91 @@ class TestFormatDeltaAdjustedFlowSection:
     def test_per_strike_tables_kept(self):
         """spec 6(c): 'keep the per-strike table'."""
         bucket = _bucket("25JUL26")
-        text = format_delta_adjusted_flow_section(bucket, _flow_result())
+        text = format_delta_adjusted_flow_section(bucket, _flow_result(), lookback_hours=24.0)
         assert "TOP 5 STRIKES BY BUYING PRESSURE:" in text
         assert "TOP 5 STRIKES BY SELLING PRESSURE:" in text
         assert "95,000" in text
         assert "90,000" in text
 
     def test_bucket_none_flow_present_shows_no_hiro_data_line(self):
-        text = format_delta_adjusted_flow_section(None, _flow_result())
+        text = format_delta_adjusted_flow_section(None, _flow_result(), lookback_hours=24.0)
         assert "DELTA-ADJUSTED FLOW" in text
         assert "no data for this expiry" in text
         assert "TOP 5 STRIKES BY BUYING PRESSURE:" in text
 
     def test_flow_none_bucket_present_shows_headline_only(self):
         bucket = _bucket("25JUL26")
-        text = format_delta_adjusted_flow_section(bucket, None)
+        text = format_delta_adjusted_flow_section(bucket, None, lookback_hours=24.0)
         assert "DELTA-ADJUSTED FLOW" in text
         assert "TOP 5 STRIKES BY BUYING PRESSURE:" not in text
 
     def test_insufficient_flow_data_suppresses_tables_not_headline(self):
         bucket = _bucket("25JUL26", hiro=500.0, premium=50.0, gross=1000.0)
         flow = _flow_result(trade_count=3, sufficient_data=False)
-        text = format_delta_adjusted_flow_section(bucket, flow)
+        text = format_delta_adjusted_flow_section(bucket, flow, lookback_hours=24.0)
         assert "+500" in text  # headline still renders
         assert "** INSUFFICIENT FLOW DATA **" in text
         assert "TOP 5 STRIKES BY BUYING PRESSURE:" not in text
 
     def test_zero_trades_shows_no_activity_line(self):
         bucket = _bucket("25JUL26", trade_count=0, skipped_count=0)
-        text = format_delta_adjusted_flow_section(bucket, None)
+        text = format_delta_adjusted_flow_section(bucket, None, lookback_hours=24.0)
         assert "no trade activity in window" in text.lower()
 
     def test_skip_rate_line_present(self):
         # skip_rate = skipped_count / (trade_count + skipped_count) = 2/102
         bucket = _bucket("25JUL26", trade_count=100, skipped_count=2)
-        text = format_delta_adjusted_flow_section(bucket, None)
+        text = format_delta_adjusted_flow_section(bucket, None, lookback_hours=24.0)
         assert "skipped 2" in text
         assert "1.96%" in text
+
+    def test_header_carries_window_and_units_label(self):
+        """
+        Independent review round 2 (Important #2): the merged per-expiry
+        header must carry the same window/units disclosure the old
+        currency-wide header had -- silently dropping it (bare
+        "DELTA-ADJUSTED FLOW" with no window/units anywhere) was the
+        defect this test guards against.
+        """
+        bucket = _bucket("25JUL26")
+        text = format_delta_adjusted_flow_section(bucket, None, lookback_hours=24.0)
+        assert "DELTA-ADJUSTED FLOW (24h, taker-signed, USD notional)" in text
+
+    def test_header_window_label_reflects_non_integer_lookback(self):
+        bucket = _bucket("25JUL26")
+        text = format_delta_adjusted_flow_section(bucket, None, lookback_hours=1.5)
+        assert "DELTA-ADJUSTED FLOW (1.5h, taker-signed, USD notional)" in text
+
+
+class TestFormatDeltaFlowCoverageLine:
+    """
+    Independent review round 2 (Important #2): the STALE/Coverage
+    disclosure format_delta_flow_section used to render was silently
+    dropped when Important #1's fix retired that currency-wide section --
+    format_delta_flow_coverage_line restores it as a single market-wide
+    line (see format_market_wide_context_section).
+    """
+
+    def test_coverage_line_no_staleness(self):
+        line = format_delta_flow_coverage_line(24, 24.0, None)
+        assert line == "Delta-flow coverage: 24/24h hourly rows persisted"
+        assert "STALE" not in line
+
+    def test_coverage_line_thin_history_not_stale(self):
+        line = format_delta_flow_coverage_line(3, 24.0, None)
+        assert line == "Delta-flow coverage: 3/24h hourly rows persisted"
+        assert "STALE" not in line
+
+    def test_coverage_line_staleness_rendered(self):
+        stale_ts = datetime(2026, 7, 31, 2, 0, 0)
+        line = format_delta_flow_coverage_line(12, 24.0, stale_ts)
+        assert "STALE" in line
+        assert "2026-07-31 02:00" in line
+        assert "12/24h hourly rows persisted" in line
+
+    def test_coverage_line_non_integer_lookback(self):
+        line = format_delta_flow_coverage_line(1, 1.5, None)
+        assert "1/1.5h hourly rows persisted" in line
 
 
 class TestFormatDeltaFlowSection:

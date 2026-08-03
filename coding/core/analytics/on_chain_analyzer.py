@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from coding.core.analytics.forward_price_utils import select_forward_price
-from coding.core.analytics.results.analysis_result import MarketMetricsResult, TrendSnapshot
+from coding.core.analytics.results.analysis_result import MarketMetricsResult
 from coding.core.analytics.thresholds import (
     OI_SKEW_ITM_HEAVY_THRESHOLD_PCT,
     OI_SKEW_OTM_HEAVY_THRESHOLD_PCT,
@@ -61,25 +61,6 @@ def _to_market_metrics(market_metrics: Dict[str, Any]) -> Optional[MarketMetrics
     if not market_metrics:
         return None
     return MarketMetricsResult(**market_metrics)
-
-
-def _to_trend_snapshot(prev: Optional[Dict[str, Any]]) -> Optional[TrendSnapshot]:
-    """Adapt a legacy trend_data dict entry into a TrendSnapshot.
-
-    Returns None when there is no prior record (None or empty dict) —
-    matches the legacy ``if prev:`` truthiness gate. Missing keys map to
-    None fields, identical to the legacy dict's ``.get(key)`` behavior.
-    """
-    if not prev:
-        return None
-    return TrendSnapshot(
-        max_pain_strike=prev.get("max_pain_strike"),
-        call_oi=prev.get("call_oi"),
-        put_oi=prev.get("put_oi"),
-        pc_ratio=prev.get("pc_ratio"),
-        total_volume=prev.get("total_volume"),
-        volume_ratio=prev.get("volume_ratio"),
-    )
 
 
 def _level_ref(level: Optional[Dict[str, Any]], oi_key: str) -> Optional[LevelRef]:

@@ -49,6 +49,7 @@ def _find_total(buckets: Sequence[FlowBucket]) -> Optional[FlowBucket]:
 def format_delta_adjusted_flow_section(
     bucket: Optional[FlowBucket],
     flow_result: Optional[FlowResult],
+    lookback_hours: float,
 ) -> str:
     """
     Render the per-expiry DELTA-ADJUSTED FLOW section
@@ -74,11 +75,26 @@ def format_delta_adjusted_flow_section(
     state. Returns "" only when BOTH are None (matches the codebase's
     "no data -> no section" convention).
 
+    Independent review round 2 (Important #2): the header carries the
+    same "(Nh, taker-signed, USD notional)" window/units label
+    ``format_delta_flow_section``'s header always had -- the first
+    Important #1 fix merged the two sections but left the merged header
+    bare ("DELTA-ADJUSTED FLOW" with no window or units disclosed
+    anywhere), silently dropping that disclosure. The data-quality STALE/
+    Coverage disclosure that same prior fix also dropped is NOT restored
+    here -- it describes the whole ``flow_delta_hourly`` table's coverage
+    for the report's window, the same value for every expiration, not a
+    per-expiry fact -- see ``format_delta_flow_coverage_line`` (rendered
+    once, in the market-wide CONTEXT section, not repeated per expiry).
+
     Args:
         bucket: This expiration's own FlowBucket (``expiration`` field
             matching, not ``"ALL"``), or None when ``delta_flow_buckets``
             has no persisted row for this expiration in the window.
         flow_result: This expiration's buy/sell-flow result, or None.
+        lookback_hours: Window length in hours (the report's SUM window
+            over ``flow_delta_hourly``, typically 24) -- rendered in the
+            header exactly as ``format_delta_flow_section``'s header did.
 
     Returns:
         Formatted multi-line string, or "" when both inputs are None.
@@ -86,7 +102,10 @@ def format_delta_adjusted_flow_section(
     if bucket is None and flow_result is None:
         return ""
 
-    lines = ["DELTA-ADJUSTED FLOW", _SEPARATOR]
+    lines = [
+        f"DELTA-ADJUSTED FLOW ({_format_lookback_label(lookback_hours)}, taker-signed, USD notional)",
+        _SEPARATOR,
+    ]
 
     if bucket is not None:
         lines.append(
@@ -116,6 +135,48 @@ def format_delta_adjusted_flow_section(
             lines.append(format_flow_strike_tables(flow_result))
 
     return "\n".join(lines)
+
+
+def format_delta_flow_coverage_line(
+    hours_present: int, lookback_hours: float, stale_since: Optional[datetime],
+) -> str:
+    """
+    One-line data-quality disclosure for the ``flow_delta_hourly`` table's
+    coverage over the report's window (institutional_metrics_spec.md
+    section 6 / task C7's Important #4 review fix, restored in the market-
+    wide CONTEXT section by Task D2 independent review round 2, Important
+    #2, after the first Important #1 fix merged DELTA-ADJUSTED FLOW into a
+    per-expiry section and silently dropped this disclosure along with the
+    orphaned currency-wide "Total" table it replaced).
+
+    Rendered ONCE, market-wide -- ``hours_present``/``stale_since`` are
+    table-wide facts (the same value for every expiration in the report),
+    not a per-expiry fact, so this does not belong inside
+    ``format_delta_adjusted_flow_section`` (which would repeat an
+    identical line once per expiration -- noise, not information).
+
+    Args:
+        hours_present: How many hourly "ALL" rows actually exist in the
+            window (``DatabaseRepository.get_delta_flow_coverage``).
+        lookback_hours: Window length in hours (typically 24).
+        stale_since: The most recently persisted hour, set ONLY when it is
+            more than ``OnChainAnalysisService.
+            _DELTA_FLOW_STALENESS_THRESHOLD_HOURS`` behind "now"
+            (mirrors ``format_historical_context_section``'s "STALE:
+            history ends {ts}" convention). ``None`` means fresh.
+
+    Returns:
+        One line, always -- never "" (callers gate on whether to include
+        it at all; see ``format_market_wide_context_section``).
+    """
+    lookback_label = _format_lookback_label(lookback_hours)
+    if stale_since is not None:
+        return (
+            f"Delta-flow coverage: STALE (most recent persisted hour "
+            f"{stale_since.strftime('%Y-%m-%d %H:%M')})  --  "
+            f"{hours_present}/{lookback_label} hourly rows persisted"
+        )
+    return f"Delta-flow coverage: {hours_present}/{lookback_label} hourly rows persisted"
 
 
 def format_delta_flow_section(

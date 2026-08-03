@@ -8,7 +8,7 @@ OnChainAnalyzer.generate_report()'s single flat "\n".join(lines) output byte
 for byte (proven end-to-end by the golden-master characterization suite).
 """
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 from coding.core.analytics.reporting.report_formatter import (
     ExpirationRenderInput,
@@ -65,6 +65,13 @@ from coding.core.analytics.results.vol_surface_results import (
 )
 
 GENERATED_AT = datetime(2026, 7, 25, 12, 0, 0)
+
+# institutional_metrics_spec.md section 9 independent review round 2,
+# Important #1: render_expiration/render_expiration_from_result/
+# render_full_from_result take now_utc as an explicit parameter (never
+# read the clock themselves) -- a fixed reference instant, not
+# datetime.now(timezone.utc), so these tests are deterministic.
+NOW_UTC = datetime(2026, 7, 25, 12, 0, 0, tzinfo=timezone.utc)
 
 
 def _leg():
@@ -189,7 +196,7 @@ def test_render_header_current_funding_without_funding_8h_omits_annualized():
 def test_render_expiration_includes_header_and_analysis_and_closing_separator():
     formatter = OnChainReportFormatter()
     render_input = ExpirationRenderInput(expiration="10MAR26", analysis=_make_analysis("10MAR26"))
-    text = formatter.render_expiration(render_input, spot_price=95000.0)
+    text = formatter.render_expiration(render_input, spot_price=95000.0, now_utc=NOW_UTC)
     assert text.startswith("EXPIRATION: 10MAR26\n" + "-" * 80 + "\n")
     assert "Total Instruments: 0 (0 Calls, 0 Puts)" in text
     assert text.rstrip("\n").endswith("=" * 80)
@@ -202,7 +209,7 @@ def test_render_expiration_appends_extra_sections_in_order():
         analysis=_make_analysis("10MAR26"),
         extra_sections=("GEX/DEX TEXT", "FLOW TEXT"),
     )
-    text = formatter.render_expiration(render_input, spot_price=95000.0)
+    text = formatter.render_expiration(render_input, spot_price=95000.0, now_utc=NOW_UTC)
     assert text.index("GEX/DEX TEXT") < text.index("FLOW TEXT")
 
 
@@ -290,7 +297,7 @@ def test_render_header_from_result_matches_render_header():
 def test_render_expiration_from_result_unknown_expiration_returns_empty():
     formatter = OnChainReportFormatter()
     result = _make_result("10MAR26")
-    assert formatter.render_expiration_from_result(result, "NOTFOUND") == ""
+    assert formatter.render_expiration_from_result(result, "NOTFOUND", NOW_UTC) == ""
 
 
 def test_render_expiration_from_result_includes_evidence_line_when_flow_present():
@@ -308,7 +315,7 @@ def test_render_expiration_from_result_includes_evidence_line_when_flow_present(
         flow_chart_paths={}, enriched_instruments=(),
     )
     result = _make_result(expirations=(bundle,))
-    text = formatter.render_expiration_from_result(result, "10MAR26")
+    text = formatter.render_expiration_from_result(result, "10MAR26", NOW_UTC)
     assert "EVIDENCE: OI/GEX from full book | Flow: INSUFFICIENT (3 trades in 24h)" in text
 
 
@@ -325,7 +332,7 @@ def test_render_expiration_from_result_includes_gex_dex_section_when_present():
         flow_chart_paths={}, enriched_instruments=(),
     )
     result = _make_result(expirations=(bundle,))
-    text = formatter.render_expiration_from_result(result, "10MAR26")
+    text = formatter.render_expiration_from_result(result, "10MAR26", NOW_UTC)
     assert "GEX/DEX ANALYSIS" in text
     assert "+1,234.50" in text
 
@@ -350,7 +357,7 @@ def test_render_expiration_from_result_includes_fixed_strike_vol_section_when_pr
         flow_chart_paths={}, enriched_instruments=(), fixed_strike_vol=fixed_strike_vol,
     )
     result = _make_result(expirations=(bundle,))
-    text = formatter.render_expiration_from_result(result, "10MAR26")
+    text = formatter.render_expiration_from_result(result, "10MAR26", NOW_UTC)
     assert "FIXED-STRIKE VOL CHANGE" in text
     assert "no comparable prior snapshot" in text
 
@@ -425,7 +432,7 @@ def test_render_expiration_from_result_section_order_matches_spec():
         fixed_strike_vol=fixed_strike_vol,
     )
     result = _make_result(expirations=(bundle,))
-    text = formatter.render_expiration_from_result(result, "10MAR26")
+    text = formatter.render_expiration_from_result(result, "10MAR26", NOW_UTC)
 
     idx_positioning = text.index("DEALER POSITIONING")
     idx_gex_dex = text.index("GEX/DEX ANALYSIS")
@@ -692,11 +699,11 @@ def test_render_full_from_result_matches_manual_composition():
     metrics = MarketMetricsResult(dvol=75.0, iv_percentile=90.0, iv_rank=80.0, current_funding=0.0001, funding_8h=0.0001)
     result = _make_result(market_metrics=metrics, market_wide=mw)
 
-    full_text = formatter.render_full_from_result(result)
+    full_text = formatter.render_full_from_result(result, NOW_UTC)
 
     expected_blocks = [formatter.render_header_from_result(result)]
     for expiration in result.expiration_names():
-        expected_blocks.append(formatter.render_expiration_from_result(result, expiration))
+        expected_blocks.append(formatter.render_expiration_from_result(result, expiration, NOW_UTC))
     expected_blocks.append(formatter.render_market_wide_from_result(result))
     expected = "\n".join(expected_blocks)
 
@@ -711,7 +718,7 @@ def test_render_full_from_result_omits_market_wide_block_when_empty():
     formatter = OnChainReportFormatter()
     result = _make_result()  # _make_empty_market_wide() -> every sub-result None
 
-    text = formatter.render_full_from_result(result)
+    text = formatter.render_full_from_result(result, NOW_UTC)
 
     assert "MARKET-WIDE METRICS" not in text
     assert text.endswith("=" * 80 + "\n")
@@ -732,7 +739,7 @@ def test_render_full_from_result_renders_multiple_expirations_in_order():
     )
     result = _make_result(expirations=(bundle_a, bundle_b))
 
-    text = formatter.render_full_from_result(result)
+    text = formatter.render_full_from_result(result, NOW_UTC)
 
     idx_a = text.index("EXPIRATION: 10MAR26")
     idx_b = text.index("EXPIRATION: 27JUN26")

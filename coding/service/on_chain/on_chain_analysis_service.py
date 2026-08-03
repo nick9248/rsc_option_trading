@@ -328,12 +328,28 @@ class OnChainAnalysisService:
         # deleted; render_full_from_result is the sole full-report render
         # path now, and the first live call site for
         # render_market_wide_from_result (dead code before this task).
+        #
+        # institutional_metrics_spec.md section 9 (Task D2 independent
+        # review round 2, Important #1): report_formatter's per-expiry
+        # CONTEXT rendering needs a "now" reference for its Max Pain
+        # expiry-week gate. Computed HERE (this module IS in
+        # tests/conftest.py's _FROZEN_CLOCK_MODULES freeze list) and
+        # threaded explicitly through render_full_from_result ->
+        # render_expiration_from_result -> render_expiration ->
+        # format_context_section, rather than any of those read the clock
+        # themselves -- a formatter-layer clock read would not be frozen
+        # by the characterization suite (that module list is the only
+        # place the freeze applies), silently making the golden master
+        # depend on which real day the suite executes.
         progress("Generating analysis report...")
-        report = OnChainReportFormatter().render_full_from_result(result)
+        report_now_utc = datetime.now(timezone.utc)
+        report = OnChainReportFormatter().render_full_from_result(result, report_now_utc)
 
         # Save reports per expiration — rendered from the typed result (T8),
-        # not the report text (no string scanning).
-        self._save_reports_per_expiration(result, currency)
+        # not the report text (no string scanning). Same now_utc reused
+        # (not a second, independently-computed "now") so both renders of
+        # the same report describe the identical instant.
+        self._save_reports_per_expiration(result, currency, report_now_utc)
 
         progress("Analysis complete")
         if return_analyzer and return_result:
@@ -2852,6 +2868,7 @@ class OnChainAnalysisService:
         self,
         result: OnChainAnalysisResult,
         currency: str,
+        now_utc: datetime,
     ) -> None:
         """
         Render and save one report file per expiration, directly from the
@@ -2869,6 +2886,11 @@ class OnChainAnalysisService:
         Args:
             result: The typed aggregate from ``OnChainAnalysisBuilder.build()``.
             currency: Currency symbol (BTC, ETH).
+            now_utc: The report's own "now" reference (independent review
+                round 2, Important #1), the SAME instant used for the main
+                report render (``fetch_and_analyze`` computes this once and
+                passes it to both call sites) -- threaded to
+                ``render_expiration_from_result``'s CONTEXT rendering.
         """
         try:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -2881,7 +2903,7 @@ class OnChainAnalysisService:
 
             saved = 0
             for expiration in result.expiration_names():
-                section_content = formatter.render_expiration_from_result(result, expiration)
+                section_content = formatter.render_expiration_from_result(result, expiration, now_utc)
                 if not section_content:
                     continue
 

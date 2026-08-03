@@ -42,16 +42,26 @@ from coding.core.analytics.results.vol_surface_results import (
 
 SPOT_PRICE = 64405.02
 
+# institutional_metrics_spec.md section 9 independent review round 2,
+# Important #1: format_context_section takes now_utc as an explicit
+# parameter (never reads the clock itself) -- these tests use a FIXED
+# reference instant, not datetime.now(timezone.utc), so they are fully
+# deterministic and independent of wall-clock time (matching how
+# production supplies now_utc from OnChainAnalysisService.fetch_and_
+# analyze's own frozen-in-tests clock read, never from this module).
+NOW_UTC = datetime(2026, 8, 3, 12, 0, 0, tzinfo=timezone.utc)
+
 
 def _expiry_string(days_ahead: float) -> str:
     """
-    Deribit "DDMONYY" expiration string ``days_ahead`` days from right now
-    (UTC) -- used so tests exercising the Max Pain CONTEXT line's
-    expiry-week gate (institutional_metrics_spec.md section 9 independent
-    review ruling; see expiry_formatter._is_expiry_week) don't depend on
-    today's wall-clock date relative to some fixed calendar string.
+    Deribit "DDMONYY" expiration string ``days_ahead`` days from ``NOW_UTC``
+    -- used so tests exercising the Max Pain CONTEXT line's expiry-week
+    gate (institutional_metrics_spec.md section 9 independent review
+    ruling; see expiry_formatter._is_expiry_week) can construct expirations
+    at a known distance from the fixed reference instant these tests pass
+    as ``now_utc``.
     """
-    dt = datetime.now(timezone.utc) + timedelta(days=days_ahead)
+    dt = NOW_UTC + timedelta(days=days_ahead)
     return dt.strftime("%d%b%y").upper()
 
 
@@ -188,12 +198,12 @@ def test_strike_table_no_notes_when_not_max_pain():
 # ---------------------------------------------------------------------------
 
 def test_context_header_present():
-    text = format_context_section(_make_analysis(), SPOT_PRICE, _make_vol_surface())
+    text = format_context_section(_make_analysis(), SPOT_PRICE, _make_vol_surface(), NOW_UTC)
     assert text.startswith("CONTEXT\n" + "-" * 80 + "\n")
 
 
 def test_context_max_pain_one_line_no_trend():
-    text = format_context_section(_make_analysis(), SPOT_PRICE, _make_vol_surface())
+    text = format_context_section(_make_analysis(), SPOT_PRICE, _make_vol_surface(), NOW_UTC)
     assert "Max Pain: $65,000" in text
     assert "Trend (Max Pain)" not in text
     assert "↑" not in text
@@ -204,7 +214,7 @@ def test_context_max_pain_na_when_no_strike():
     analysis = _make_analysis(
         max_pain=MaxPainResult(max_pain_strike=None, pain_by_strike={}, min_pain_value=0.0)
     )
-    text = format_context_section(analysis, SPOT_PRICE, _make_vol_surface())
+    text = format_context_section(analysis, SPOT_PRICE, _make_vol_surface(), NOW_UTC)
     assert "Max Pain: N/A" in text
 
 
@@ -216,7 +226,7 @@ def test_context_max_pain_suppressed_outside_expiry_week():
     even N/A) -- max pain's pinning thesis isn't meaningful that far out.
     """
     analysis = _make_analysis(expiration=_expiry_string(60))
-    text = format_context_section(analysis, SPOT_PRICE, _make_vol_surface())
+    text = format_context_section(analysis, SPOT_PRICE, _make_vol_surface(), NOW_UTC)
     assert "Max Pain:" not in text
 
 
@@ -228,14 +238,14 @@ def test_context_max_pain_rendered_well_within_the_threshold():
     # -- a boundary test would be flaky. 5 days out is unambiguously
     # inside the window regardless of time-of-day.
     analysis = _make_analysis(expiration=_expiry_string(5))
-    text = format_context_section(analysis, SPOT_PRICE, _make_vol_surface())
+    text = format_context_section(analysis, SPOT_PRICE, _make_vol_surface(), NOW_UTC)
     assert "Max Pain: $65,000" in text
 
 
 def test_context_other_lines_still_render_when_max_pain_suppressed():
     """Suppressing Max Pain must not suppress the rest of CONTEXT."""
     analysis = _make_analysis(expiration=_expiry_string(60))
-    text = format_context_section(analysis, SPOT_PRICE, _make_vol_surface())
+    text = format_context_section(analysis, SPOT_PRICE, _make_vol_surface(), NOW_UTC)
     assert "P/C Ratio:" in text
     assert "Moneyness:" in text
     assert "Volume P/C:" in text
@@ -254,14 +264,14 @@ def test_context_pcr_percentile_no_bias_word():
             percentile_90d=98.3, history_n_90d=705,
         )
     )
-    text = format_context_section(analysis, SPOT_PRICE, _make_vol_surface())
+    text = format_context_section(analysis, SPOT_PRICE, _make_vol_surface(), NOW_UTC)
     assert "P/C Ratio: 2.40  p98 (90d history, n=705)" in text
     assert "Strong Bearish" not in text
     assert "->" not in text.split("P/C Ratio")[1].splitlines()[0]
 
 
 def test_context_pcr_insufficient_history():
-    text = format_context_section(_make_analysis(), SPOT_PRICE, _make_vol_surface())
+    text = format_context_section(_make_analysis(), SPOT_PRICE, _make_vol_surface(), NOW_UTC)
     assert "P/C Ratio: 2.40  (n=0 - insufficient history for a percentile)" in text
 
 
@@ -271,17 +281,17 @@ def test_context_pcr_na_when_infinite():
             total_call_oi=0.0, total_put_oi=50.0, ratio=float("inf"), bias="Strong Bearish"
         )
     )
-    text = format_context_section(analysis, SPOT_PRICE, _make_vol_surface())
+    text = format_context_section(analysis, SPOT_PRICE, _make_vol_surface(), NOW_UTC)
     assert "P/C Ratio: N/A (No Call OI)" in text
 
 
 def test_context_moneyness_one_line_itm_pct():
-    text = format_context_section(_make_analysis(), SPOT_PRICE, _make_vol_surface())
+    text = format_context_section(_make_analysis(), SPOT_PRICE, _make_vol_surface(), NOW_UTC)
     assert "Moneyness: ITM calls 0.0%  |  ITM puts 16.7%" in text
 
 
 def test_context_volume_pc_one_line():
-    text = format_context_section(_make_analysis(), SPOT_PRICE, _make_vol_surface())
+    text = format_context_section(_make_analysis(), SPOT_PRICE, _make_vol_surface(), NOW_UTC)
     assert "Volume P/C: 2.40" in text
 
 
@@ -291,21 +301,21 @@ def test_context_volume_pc_na_when_infinite():
             total_call_volume=0.0, total_put_volume=5.0, total_volume=5.0, volume_ratio=float("inf")
         )
     )
-    text = format_context_section(analysis, SPOT_PRICE, _make_vol_surface())
+    text = format_context_section(analysis, SPOT_PRICE, _make_vol_surface(), NOW_UTC)
     assert "Volume P/C: N/A (No Call Volume)" in text
 
 
 def test_context_vwap_iv_gap_one_line():
-    text = format_context_section(_make_analysis(), SPOT_PRICE, _make_vol_surface())
+    text = format_context_section(_make_analysis(), SPOT_PRICE, _make_vol_surface(), NOW_UTC)
     assert "VWAP-IV gap: +2.0%  (VWAP 82.0% vs Matched Mark 80.0%, 10 instr)" in text
 
 
 def test_context_vwap_iv_gap_none_when_vol_surface_missing():
-    text = format_context_section(_make_analysis(), SPOT_PRICE, None)
+    text = format_context_section(_make_analysis(), SPOT_PRICE, None, NOW_UTC)
     assert "VWAP-IV gap: N/A (no vol surface data)" in text
 
 
 def test_context_vwap_iv_gap_suppressed_low_instrument_count():
     vs = _make_vol_surface(traded_instrument_count=1)
-    text = format_context_section(_make_analysis(), SPOT_PRICE, vs)
+    text = format_context_section(_make_analysis(), SPOT_PRICE, vs, NOW_UTC)
     assert "VWAP-IV gap: n/a (only 1 instrument(s) traded)" in text

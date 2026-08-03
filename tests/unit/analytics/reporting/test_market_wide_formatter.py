@@ -7,6 +7,8 @@ legacy MarketWideCalculator methods' early-return message for an
 unavailable/uncalculated phase.
 """
 
+from datetime import datetime
+
 from coding.core.analytics.reporting.market_wide_formatter import (
     format_block_trades_section,
     format_cross_asset_correlation_line,
@@ -478,3 +480,33 @@ def test_market_wide_context_section_combines_both_lines():
     assert text.startswith("CONTEXT\n" + "-" * 80 + "\n")
     assert "change-correlation" in text
     assert "Expected Move:" in text
+
+
+def test_market_wide_context_section_omits_delta_flow_coverage_by_default():
+    text = format_market_wide_context_section(None, "BTC", None, 95000.0)
+    assert "Delta-flow coverage" not in text
+
+
+def test_market_wide_context_section_includes_delta_flow_coverage_when_present():
+    """
+    Independent review round 2 (Important #2): the delta-flow coverage/
+    staleness disclosure format_delta_flow_section used to own is restored
+    here, once, market-wide (not repeated per expiry -- see
+    delta_flow_formatter.format_delta_flow_coverage_line's docstring).
+    """
+    text = format_market_wide_context_section(
+        None, "BTC", None, 95000.0,
+        delta_flow_has_total=True, delta_flow_hours_present=24, delta_flow_lookback_hours=24.0,
+    )
+    assert "Delta-flow coverage: 24/24h hourly rows persisted" in text
+
+
+def test_market_wide_context_section_includes_delta_flow_staleness_when_stale():
+    stale_ts = datetime(2026, 7, 31, 2, 0, 0)
+    text = format_market_wide_context_section(
+        None, "BTC", None, 95000.0,
+        delta_flow_has_total=True, delta_flow_hours_present=12, delta_flow_lookback_hours=24.0,
+        delta_flow_stale_since=stale_ts,
+    )
+    assert "STALE" in text
+    assert "2026-07-31 02:00" in text

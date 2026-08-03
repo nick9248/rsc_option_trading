@@ -247,7 +247,9 @@ class OnChainReportFormatter:
             market_metrics=result.market_metrics,
         )
 
-    def render_expiration(self, render_input: ExpirationRenderInput, spot_price: float) -> str:
+    def render_expiration(
+        self, render_input: ExpirationRenderInput, spot_price: float, now_utc: datetime,
+    ) -> str:
         """
         Render one expiration's full section: header line, the analysis
         block, any extra pre-rendered sections (GEX/DEX, flow, vol surface,
@@ -261,6 +263,11 @@ class OnChainReportFormatter:
                 liner) against. bugfix_spec.md Item 7: this is THIS
                 expiration's own forward price, not a single value shared
                 across every expiration.
+            now_utc: The report's own "now" reference, threaded down into
+                ``format_context_section``'s expiry-week gate (independent
+                review round 2, Important #1 -- see that function's
+                docstring). Explicit, UTC-aware, caller-supplied -- never
+                read fresh here or downstream.
 
         Returns:
             Formatted multi-line string.
@@ -275,13 +282,17 @@ class OnChainReportFormatter:
         # institutional_metrics_spec.md section 9(b) per-expiry order item
         # 8: CONTEXT is always rendered LAST in the expiration's block.
         lines.append(
-            format_context_section(render_input.analysis, spot_price, render_input.vol_surface)
+            format_context_section(
+                render_input.analysis, spot_price, render_input.vol_surface, now_utc,
+            )
         )
         lines.append(_SEPARATOR)
         lines.append("")
         return "\n".join(lines)
 
-    def render_expiration_from_result(self, result: OnChainAnalysisResult, expiration: str) -> str:
+    def render_expiration_from_result(
+        self, result: OnChainAnalysisResult, expiration: str, now_utc: datetime,
+    ) -> str:
         """
         Render one expiration's full section directly from the typed
         ``OnChainAnalysisResult`` (refactor_design_spec.md section T8 —
@@ -297,6 +308,13 @@ class OnChainReportFormatter:
         vol surface, OI-changes+IV-percentile) — so this renders the exact
         same text ``render_expiration`` would for an
         ``ExpirationRenderInput`` built by ``OnChainAnalyzer.generate_report()``.
+
+        Args:
+            result: The typed aggregate.
+            expiration: Which expiration to render.
+            now_utc: The report's own "now" reference (independent review
+                round 2, Important #1), threaded to ``render_expiration``'s
+                CONTEXT rendering. Explicit, UTC-aware, caller-supplied.
 
         Returns "" if the expiration is not in the result (matches the
         legacy behavior of skipping an expiration with no analysis).
@@ -359,7 +377,9 @@ class OnChainReportFormatter:
         )
         if own_delta_flow_bucket is not None or bundle.flow is not None:
             extra_sections.append(
-                format_delta_adjusted_flow_section(own_delta_flow_bucket, bundle.flow)
+                format_delta_adjusted_flow_section(
+                    own_delta_flow_bucket, bundle.flow, result.delta_flow_lookback_hours,
+                )
             )
 
         # institutional_metrics_spec.md section 7 / task C8: fixed-strike
@@ -400,7 +420,7 @@ class OnChainReportFormatter:
         # underlying_price, already anchored there by analyze_expiration)
         # is correct here, not the aggregate result.underlying_price (the
         # index, same for every expiration).
-        return self.render_expiration(render_input, bundle.analysis.underlying_price)
+        return self.render_expiration(render_input, bundle.analysis.underlying_price, now_utc)
 
     @staticmethod
     def _evidence_line_from_flow(flow: Optional[FlowResult]) -> Optional[str]:
@@ -523,18 +543,28 @@ class OnChainReportFormatter:
         if mw.block_trades is not None:
             sections["block_trades"] = format_block_trades_section(mw.block_trades)
         # institutional_metrics_spec.md section 9(b) market-wide order item
-        # 10 (CONTEXT): rendered whenever either constituent fact has data
+        # 10 (CONTEXT): rendered whenever any constituent fact has data
         # (matches the legacy "no data -> no section" gate applied to the
         # block as a whole, not each one-liner separately -- an all-N/A
-        # block would be noise, not information).
-        if mw.cross_asset_correlation is not None or mw.dvol is not None:
+        # block would be noise, not information). Independent review round
+        # 2 (Important #2): delta-flow coverage/staleness disclosure counts
+        # as a constituent fact too, gated on whether delta_flow_buckets
+        # has an "ALL" (currency-level total) entry -- the same "no data ->
+        # no section" gate the prior (now unused) format_delta_flow_section
+        # applied to the whole section it used to own.
+        delta_flow_has_total = any(b.expiration == "ALL" for b in result.delta_flow_buckets)
+        if mw.cross_asset_correlation is not None or mw.dvol is not None or delta_flow_has_total:
             sections["context"] = format_market_wide_context_section(
                 mw.cross_asset_correlation, result.currency, mw.dvol, result.underlying_price,
+                delta_flow_has_total=delta_flow_has_total,
+                delta_flow_hours_present=result.delta_flow_hours_present,
+                delta_flow_lookback_hours=result.delta_flow_lookback_hours,
+                delta_flow_stale_since=result.delta_flow_stale_since,
             )
 
         return self.render_market_wide(sections)
 
-    def render_full_from_result(self, result: OnChainAnalysisResult) -> str:
+    def render_full_from_result(self, result: OnChainAnalysisResult, now_utc: datetime) -> str:
         """
         Render the complete report directly from the typed
         ``OnChainAnalysisResult`` (refactor_design_spec.md section T10).
@@ -549,10 +579,22 @@ class OnChainReportFormatter:
         test) + ``render_market_wide_from_result`` (dead code before this
         task -- going live here for the first time), joined exactly as
         ``render_full`` joins its pieces.
+
+        Args:
+            result: The typed aggregate.
+            now_utc: The report's own "now" reference (independent review
+                round 2, Important #1), threaded to every expiration's
+                CONTEXT rendering. Explicit, UTC-aware -- the caller
+                (``OnChainAnalysisService.fetch_and_analyze``, a module in
+                ``tests/conftest.py``'s clock-freeze list) must compute
+                this via ``datetime.now(timezone.utc)`` itself so the
+                characterization suite's frozen clock actually applies;
+                this method and everything it calls never read the clock
+                themselves.
         """
         blocks = [self.render_header_from_result(result)]
         for expiration in result.expiration_names():
-            blocks.append(self.render_expiration_from_result(result, expiration))
+            blocks.append(self.render_expiration_from_result(result, expiration, now_utc))
 
         market_wide_text = self.render_market_wide_from_result(result)
         if market_wide_text:

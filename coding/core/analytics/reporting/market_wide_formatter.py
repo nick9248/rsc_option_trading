@@ -22,6 +22,9 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from coding.core.analytics.market_wide_calculator import FUNDING_PERIODS_PER_YEAR
+from coding.core.analytics.reporting.delta_flow_formatter import (
+    format_delta_flow_coverage_line,
+)
 from coding.core.analytics.results.market_wide_results import (
     BlockTradesResult,
     CrossAssetCorrelationResult,
@@ -539,15 +542,46 @@ def format_market_wide_context_section(
     currency: str,
     dvol: Optional[float],
     underlying_price: float,
+    delta_flow_has_total: bool = False,
+    delta_flow_hours_present: int = 0,
+    delta_flow_lookback_hours: float = 24.0,
+    delta_flow_stale_since: Optional[datetime] = None,
 ) -> str:
     """
     Render the market-wide CONTEXT section (institutional_metrics_spec.md
     section 9(b), market-wide order item 10): one line each for BTC/ETH
-    change-correlation and the expected move. Rendered LAST in the
-    market-wide block.
+    change-correlation and the expected move, plus (independent review
+    round 2, Important #2) the delta-flow coverage/staleness disclosure.
+    Rendered LAST in the market-wide block.
+
+    The delta-flow coverage line is a table-wide fact (``flow_delta_
+    hourly``'s coverage over the whole report window, the same value for
+    every expiration) -- it is rendered here, once, rather than repeated
+    in every expiration's per-expiry DELTA-ADJUSTED FLOW section (see
+    ``delta_flow_formatter.format_delta_flow_coverage_line``'s docstring).
+    Only rendered when ``delta_flow_has_total`` is True -- mirrors the
+    prior (now-dropped) ``format_delta_flow_section``'s own gate ("no
+    data -> no section": only render when there is an "ALL" bucket in
+    ``OnChainAnalysisResult.delta_flow_buckets``), so an offline/no-
+    repository run doesn't print a misleading "0/24h" line.
+
+    Args:
+        delta_flow_has_total: Whether ``OnChainAnalysisResult.
+            delta_flow_buckets`` has an ``"ALL"`` entry -- the same
+            "no data -> no section" gate as the (unused-in-production)
+            ``format_delta_flow_section``.
+        delta_flow_hours_present: See ``format_delta_flow_coverage_line``.
+        delta_flow_lookback_hours: See ``format_delta_flow_coverage_line``.
+        delta_flow_stale_since: See ``format_delta_flow_coverage_line``.
     """
     lines = ["CONTEXT", _SUB_SEPARATOR]
     lines.append(format_cross_asset_correlation_line(cross_asset, currency))
     lines.append(format_expected_move_line(dvol, underlying_price))
+    if delta_flow_has_total:
+        lines.append(
+            format_delta_flow_coverage_line(
+                delta_flow_hours_present, delta_flow_lookback_hours, delta_flow_stale_since,
+            )
+        )
     lines.append("")
     return "\n".join(lines)
