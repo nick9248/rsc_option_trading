@@ -38,15 +38,23 @@ from coding.core.analytics.results.expiry_results import (
 from coding.core.analytics.results.fixed_strike_vol_results import FixedStrikeVolResult
 from coding.core.analytics.results.flow_results import FlowResult, FlowTotals
 from coding.core.analytics.results.gex_dex_results import GexDexKeyLevels, GexDexResult
+from coding.core.analytics.historical_normalizer import NormalizedMetric
 from coding.core.analytics.results.market_wide_results import (
+    BlockTradesResult,
+    CrossAssetCorrelationResult,
+    ForwardVolResult,
+    FuturesBasisResult,
     GammaRolloffResult,
     GammaRolloffRow,
     MarketWideResult,
     PerpetualFundingResult,
+    RealizedVolatilityResult,
     SkewTermStructureEntry,
     SkewTermStructureResult,
     TermStructureEntry,
     TermStructureResult,
+    VarianceRiskPremiumResult,
+    VolatilityConeResult,
 )
 from coding.core.analytics.results.vol_surface_results import (
     MoneynessBucket,
@@ -553,6 +561,114 @@ def test_render_market_wide_from_result_omits_gamma_rolloff_when_none():
     result = _make_result()  # _make_empty_market_wide() -> gamma_rolloff defaults to None
     text = formatter.render_market_wide_from_result(result)
     assert "GAMMA ROLL-OFF" not in text
+
+
+def test_render_market_wide_from_result_section_order_matches_spec():
+    """
+    institutional_metrics_spec.md section 9(b) market-wide order (Task D2
+    final reorder commit): NORMALIZED DASHBOARD -> AGGREGATE GEX/DEX ->
+    GAMMA ROLL-OFF -> SKEW TERM STRUCTURE -> IV TERM STRUCTURE -> FORWARD
+    VOL -> VRP + VOL CONE + REALIZED VOL -> FUNDING + BASIS -> BLOCK
+    TRADES -> CONTEXT. Every section populated at once so the index-
+    ordering assertion exercises the full sequence, not just a subset.
+    """
+    formatter = OnChainReportFormatter()
+
+    aggregate_gex_dex = GexDexResult(
+        strike_rows=(), cumulative_gex={}, cumulative_dex={},
+        key_levels=GexDexKeyLevels(call_resistance=None, put_support=None, hvl=None, gamma_flip=None),
+        spot_price=95000.0, total_net_gex=100_000_000.0, total_net_dex=0.0, currency="BTC",
+        expiration_count=1,
+    )
+    gamma_rolloff = GammaRolloffResult(
+        rows=(
+            GammaRolloffRow(
+                expiration="25JUL26", dte_days=0.6, net_gex=100_000_000.0,
+                share_pct=100.0, cum_share_pct=100.0, cum_net_gex=100_000_000.0,
+            ),
+        ),
+        gamma_cliff_7d=True, cum_share_7d=100.0, cum_share_30d=100.0,
+        gross_total=100_000_000.0,
+    )
+    skew_entry = SkewTermStructureEntry(
+        expiration="25JUL26", dte=0.6, atm_iv_interp=18.51, n_quotes_used=14,
+        rr_25d=-3.80, rr_percentile_30d=None, rr_regime_30d=None, rr_n_30d=0,
+        bf_25d=0.90, bf_percentile_30d=None, bf_n_30d=0,
+    )
+    skew_term_structure = SkewTermStructureResult(entries=(skew_entry,), rr_slope=None)
+    term_structure = TermStructureResult(
+        entries=(TermStructureEntry(expiration="25JUL26", dte=0, atm_iv=18.51),),
+        shape="FLAT", spread=0.0, spread_signed=0.0, iv_by_dte={"25JUL26": 18.51},
+    )
+    forward_vol = ForwardVolResult(buckets=())
+    variance_risk_premium = VarianceRiskPremiumResult(vrp=0.0, signal="FAIR", dvol=None, rv_30d=0.0)
+    volatility_cone = VolatilityConeResult(percentile_by_window={})
+    realized_volatility = RealizedVolatilityResult(rv_by_window={})
+    perpetual_funding = PerpetualFundingResult(
+        perp_open_interest=0.0, funding_rate=None, funding_8h=None,
+        funding_trend="Stable", history_points=0,
+    )
+    futures_basis = FuturesBasisResult(entries=(), futures_basis={})
+    block_trades = BlockTradesResult(trades=(), notional_threshold=100_000.0, total_detected=0)
+    cross_asset_correlation = CrossAssetCorrelationResult(
+        other_currency="ETH", price_correlation=None, dvol_correlation=None, sample_size=0,
+    )
+
+    mw = MarketWideResult(
+        spot_price=95000.0, currency="BTC", dvol=75.0, iv_percentile_365d=None,
+        aggregate_gex_dex=aggregate_gex_dex, term_structure=term_structure,
+        futures_basis=futures_basis, realized_volatility=realized_volatility,
+        variance_risk_premium=variance_risk_premium, volatility_cone=volatility_cone,
+        perpetual_funding=perpetual_funding, block_trades=block_trades,
+        cross_asset_correlation=cross_asset_correlation, failed_sections=(),
+        skew_term_structure=skew_term_structure, gamma_rolloff=gamma_rolloff,
+        forward_vol=forward_vol,
+    )
+    normalized_metrics = {
+        "net_gex": NormalizedMetric(
+            name="net_gex", value=1_000_000.0, percentile_30d=50.0, z_30d=0.0,
+            percentile_90d=50.0, z_90d=0.0, regime_30d="NORMAL", n_30d=30, n_90d=90,
+            sufficient=True, unit="USD",
+        ),
+    }
+    result = _make_result(
+        market_wide=mw, normalized_metrics=normalized_metrics,
+        normalized_metrics_front_month="25JUL26",
+    )
+    text = formatter.render_market_wide_from_result(result)
+
+    idx_dashboard = text.index("HISTORICAL CONTEXT")
+    idx_aggregate_gex_dex = text.index("MARKET-WIDE GEX/DEX LEVELS")
+    idx_gamma_rolloff = text.index("GAMMA ROLL-OFF")
+    idx_skew_term_structure = text.index("SKEW TERM STRUCTURE")
+    idx_iv_term_structure = text.index("IV TERM STRUCTURE")
+    idx_forward_vol = text.index("FORWARD VOL")
+    idx_vrp = text.index("VOLATILITY RISK PREMIUM")
+    idx_volatility_cone = text.index("VOLATILITY CONE")
+    idx_realized_volatility = text.index("REALIZED VOLATILITY")
+    idx_perpetual_funding = text.index("PERPETUAL FUNDING")
+    idx_futures_basis = text.index("FUTURES BASIS")
+    idx_block_trades = text.index("BLOCK TRADES")
+    # rindex, not index: "CONTEXT" is also a substring of the dashboard's
+    # own "HISTORICAL CONTEXT" header -- the market-wide CONTEXT block is
+    # the LAST section, so its header is the LAST "CONTEXT" occurrence.
+    idx_context = text.rindex("CONTEXT")
+
+    assert (
+        idx_dashboard
+        < idx_aggregate_gex_dex
+        < idx_gamma_rolloff
+        < idx_skew_term_structure
+        < idx_iv_term_structure
+        < idx_forward_vol
+        < idx_vrp
+        < idx_volatility_cone
+        < idx_realized_volatility
+        < idx_perpetual_funding
+        < idx_futures_basis
+        < idx_block_trades
+        < idx_context
+    )
 
 
 # ---------------------------------------------------------------------------

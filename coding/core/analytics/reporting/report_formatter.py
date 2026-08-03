@@ -75,25 +75,26 @@ from coding.core.analytics.results.vol_surface_results import VolSurfaceResult
 _SEPARATOR = "=" * 80
 _SUB_SEPARATOR = "-" * 80
 
-# Fixed order market-wide sections are rendered in — matches
-# OnChainAnalyzer.generate_report()'s legacy section_name loop verbatim.
+# Fixed order market-wide sections are rendered in -- institutional_
+# metrics_spec.md section 9(b)'s market-wide order (Task D2 final reorder
+# commit): NORMALIZED DASHBOARD -> AGGREGATE GEX/DEX -> GAMMA ROLL-OFF
+# (section 5, Task C6) -> SKEW TERM STRUCTURE (section 3) -> IV TERM
+# STRUCTURE -> FORWARD VOL (section 8, Task C9 -- "directly after the IV
+# term structure, which it explains") -> VRP + VOL CONE + REALIZED VOL
+# (spec's own word order) -> FUNDING + BASIS (spec's own word order) ->
+# BLOCK TRADES (Task D1) -> CONTEXT.
 _MARKET_WIDE_SECTION_ORDER = (
+    "normalized_dashboard",
     "aggregate_gex_dex",
-    # institutional_metrics_spec.md section 9(b)'s new market-wide order:
-    # AGGREGATE GEX/DEX -> GAMMA ROLL-OFF (section 5, Task C6) -> SKEW TERM
-    # STRUCTURE (section 3) -> IV TERM STRUCTURE -> FORWARD VOL (section 8,
-    # Task C9 -- "directly after the IV term structure, which it
-    # explains"). The remaining reorder items (block-trade M2 regrouping,
-    # etc.) are later tasks.
     "gamma_rolloff",
     "skew_term_structure",
     "iv_term_structure",
     "forward_vol",
-    "futures_basis",
-    "realized_volatility",
     "vrp",
     "volatility_cone",
+    "realized_volatility",
     "perpetual_funding",
+    "futures_basis",
     "block_trades",
     # institutional_metrics_spec.md section 9(b) market-wide order item 10
     # (CONTEXT): BTC/ETH change-correlation + expected move, one line each.
@@ -466,6 +467,25 @@ class OnChainReportFormatter:
         mw = result.market_wide
         sections: Dict[str, str] = {}
 
+        # institutional_metrics_spec.md section 9(b) market-wide order item
+        # 1 (NORMALIZED DASHBOARD): §1's front-month percentile/z-score
+        # context, moved here (Task D2 reorder) from its previous position
+        # appended after the whole market-wide block in
+        # render_full_from_result. Same "no data -> no section" gate
+        # format_historical_context_section already applies (returns ""
+        # when result.normalized_metrics is empty) -- this is a position
+        # change only, not a content or gating change. The rendered header
+        # is still "HISTORICAL CONTEXT" (unchanged text) -- the spec's
+        # "NORMALIZED DASHBOARD" is this section's descriptive name in the
+        # order table, not a rename instruction.
+        historical_context_text = format_historical_context_section(
+            result.normalized_metrics,
+            front_month_expiration=result.normalized_metrics_front_month,
+            stale_since=result.normalized_metrics_stale_since,
+        )
+        if historical_context_text:
+            sections["normalized_dashboard"] = historical_context_text
+
         if mw.aggregate_gex_dex is not None:
             sections["aggregate_gex_dex"] = format_aggregate_gex_dex_section(
                 mw.aggregate_gex_dex, result.underlying_price, result.currency,
@@ -480,16 +500,16 @@ class OnChainReportFormatter:
             sections["iv_term_structure"] = format_term_structure_section(mw.term_structure)
         if mw.forward_vol is not None:
             sections["forward_vol"] = format_forward_vol_section(mw.forward_vol)
-        if mw.futures_basis is not None:
-            sections["futures_basis"] = format_futures_basis_section(mw.futures_basis)
-        if mw.realized_volatility is not None:
-            sections["realized_volatility"] = format_realized_volatility_section(mw.realized_volatility)
         if mw.variance_risk_premium is not None:
             sections["vrp"] = format_vrp_section(mw.variance_risk_premium)
         if mw.volatility_cone is not None:
             sections["volatility_cone"] = format_volatility_cone_section(mw.volatility_cone)
+        if mw.realized_volatility is not None:
+            sections["realized_volatility"] = format_realized_volatility_section(mw.realized_volatility)
         if mw.perpetual_funding is not None:
             sections["perpetual_funding"] = format_perpetual_funding_section(mw.perpetual_funding)
+        if mw.futures_basis is not None:
+            sections["futures_basis"] = format_futures_basis_section(mw.futures_basis)
         if mw.block_trades is not None:
             sections["block_trades"] = format_block_trades_section(mw.block_trades)
         # institutional_metrics_spec.md section 9(b) market-wide order item
@@ -528,18 +548,12 @@ class OnChainReportFormatter:
         if market_wide_text:
             blocks.append(market_wide_text)
 
-        # institutional_metrics_spec.md section 1: front-month percentile/
-        # z-score context. Appended after market-wide -- absent entirely
-        # (format_historical_context_section returns "") when
-        # result.normalized_metrics is empty (e.g. no repository, or an
-        # offline fixture with no recorded trailing history).
-        historical_context_text = format_historical_context_section(
-            result.normalized_metrics,
-            front_month_expiration=result.normalized_metrics_front_month,
-            stale_since=result.normalized_metrics_stale_since,
-        )
-        if historical_context_text:
-            blocks.append(historical_context_text)
+        # institutional_metrics_spec.md section 9(b) market-wide order item
+        # 1 (NORMALIZED DASHBOARD): §1's front-month percentile/z-score
+        # context now renders INSIDE render_market_wide_from_result (first
+        # section, Task D2 reorder) rather than being appended here as a
+        # separate block -- see that method's own comment for the gating
+        # rationale.
 
         # institutional_metrics_spec.md section 6 / task C7: signed delta-
         # weighted taker flow (HIRO analog), summed from the daemon-

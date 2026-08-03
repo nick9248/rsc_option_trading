@@ -2789,6 +2789,14 @@ VWAP-IV gap: -0.6%  (VWAP 40.2% vs Matched Mark 40.8%, 17 instr)
                               MARKET-WIDE METRICS                               
 ================================================================================
 
+HISTORICAL CONTEXT (front-month: 26JUL26)
+--------------------------------------------------------------------------------
+Net GEX          +8.00M USD     30d: n/a (0 obs)  |  90d: n/a (0 obs)
+PCR (OI)         0.718          30d: n/a (0 obs)  |  90d: n/a (0 obs)
+Total OI         2,461 coins    30d: n/a (0 obs)  |  90d: n/a (0 obs)
+DVOL             37.53          30d: n/a (0 obs)  |  90d: n/a (0 obs)
+Funding (8h)     +0.0003%       30d: n/a (0 obs)  |  90d: n/a (0 obs)
+
 MARKET-WIDE GEX/DEX LEVELS (All 12 Expirations Aggregated)
 --------------------------------------------------------------------------------
 Spot Price: $64,371.10
@@ -2890,6 +2898,32 @@ FORWARD VOL
   26MAR27 -> 25JUN27       243.6d   334.6d    41.44    42.16                   44.05               
 
 
+VOLATILITY RISK PREMIUM (VRP)
+--------------------------------------------------------------------------------
+  DVOL: 37.5%  |  30d RV: 27.1%  |  VRP: +10.4 pts (EXPENSIVE - Sell vol)
+
+
+VOLATILITY CONE
+--------------------------------------------------------------------------------
+    Window   Current      25th    Median      75th    Pctile
+    ------   -------      ----    ------      ----    ------
+      10d     30.8%     26.4%     35.3%     44.7%      40th
+      20d     27.7%     27.7%     38.4%     44.2%      25th
+      30d     26.7%     28.7%     37.7%     43.3%      11th
+
+
+REALIZED VOLATILITY
+--------------------------------------------------------------------------------
+  10d: 28.6% | 20d: 28.4% | 30d: 27.1%
+
+
+PERPETUAL FUNDING & OI
+--------------------------------------------------------------------------------
+  Perp OI: 736,492,670 USD
+  Funding (8h): 0.0003%  |  Annualized: 0.28%  |  Trend: Falling
+  Instantaneous funding: 0.0000%
+
+
 FUTURES BASIS (annualized simple, ACT/365, to 08:00 UTC settlement)
 --------------------------------------------------------------------------------
                 Future         Price          Spot  Ann. Premium
@@ -2906,32 +2940,6 @@ FUTURES BASIS (annualized simple, ACT/365, to 08:00 UTC settlement)
            BTC-25DEC26  $     65,482  $     64,372          4.1%
            BTC-26MAR27  $     66,131  $     64,372          4.1%
            BTC-25JUN27  $     66,876  $     64,372          4.2%
-
-
-REALIZED VOLATILITY
---------------------------------------------------------------------------------
-  10d: 28.6% | 20d: 28.4% | 30d: 27.1%
-
-
-VOLATILITY RISK PREMIUM (VRP)
---------------------------------------------------------------------------------
-  DVOL: 37.5%  |  30d RV: 27.1%  |  VRP: +10.4 pts (EXPENSIVE - Sell vol)
-
-
-VOLATILITY CONE
---------------------------------------------------------------------------------
-    Window   Current      25th    Median      75th    Pctile
-    ------   -------      ----    ------      ----    ------
-      10d     30.8%     26.4%     35.3%     44.7%      40th
-      20d     27.7%     27.7%     38.4%     44.2%      25th
-      30d     26.7%     28.7%     37.7%     43.3%      11th
-
-
-PERPETUAL FUNDING & OI
---------------------------------------------------------------------------------
-  Perp OI: 736,492,670 USD
-  Funding (8h): 0.0003%  |  Annualized: 0.28%  |  Trend: Falling
-  Instantaneous funding: 0.0000%
 
 
 BLOCK TRADES
@@ -2966,10 +2974,3 @@ Expected Move: 1d $1,265  |  7d $3,350  |  30d $6,974
 
 
 ================================================================================
-HISTORICAL CONTEXT (front-month: 26JUL26)
---------------------------------------------------------------------------------
-Net GEX          +8.00M USD     30d: n/a (0 obs)  |  90d: n/a (0 obs)
-PCR (OI)         0.718          30d: n/a (0 obs)  |  90d: n/a (0 obs)
-Total OI         2,461 coins    30d: n/a (0 obs)  |  90d: n/a (0 obs)
-DVOL             37.53          30d: n/a (0 obs)  |  90d: n/a (0 obs)
-Funding (8h)     +0.0003%       30d: n/a (0 obs)  |  90d: n/a (0 obs)
