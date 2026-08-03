@@ -66,6 +66,33 @@ def _format_window(percentile, z, regime, n: int, sufficient: bool) -> str:
     return f"p{percentile:.0f}  {z_str}  {regime_str}"
 
 
+def format_metric_value(value: float, unit: str) -> str:
+    """
+    Public wrapper of ``_format_value`` (institutional_metrics_spec.md
+    section 9(c), Task D3): the GUI's normalized-metric strip needs the
+    exact same value-by-unit formatting the text report already uses, so
+    it reuses this function rather than duplicating the unit-formatting
+    rules in ``on_chain_analysis_tab.py`` (CLAUDE.md Code Quality Checklist
+    section 3 -- no business logic in the GUI layer).
+    """
+    return _format_value(value, unit)
+
+
+def format_window_summary(
+    percentile: Optional[float],
+    z: Optional[float],
+    regime: Optional[str],
+    n: int,
+    sufficient: bool,
+) -> str:
+    """
+    Public wrapper of ``_format_window`` (institutional_metrics_spec.md
+    section 9(c), Task D3) -- see ``format_metric_value``'s docstring for
+    why the GUI reuses this instead of re-deriving it.
+    """
+    return _format_window(percentile, z, regime, n, sufficient)
+
+
 def _format_metric_line(metric: NormalizedMetric) -> str:
     label = _METRIC_LABELS.get(metric.name, metric.name)
     value_str = _format_value(metric.value, metric.unit)
