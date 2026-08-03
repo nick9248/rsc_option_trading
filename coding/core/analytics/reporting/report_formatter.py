@@ -303,19 +303,35 @@ class OnChainReportFormatter:
         if bundle is None:
             return ""
 
+        # institutional_metrics_spec.md section 9(b)'s per-expiry order
+        # (Task D2 reorder commit):
+        #   1. POSITIONING -- TWO VIEWS (dealer_inventory)
+        #   2. GEX/DEX PROFILE BY STRIKE (gex_dex)
+        #   3. VANNA/CHARM PROFILE (exposure_profile)
+        #   4. SKEW (vol_surface)
+        #   5. DELTA-ADJUSTED FLOW (flow -- BUY/SELL FLOW ANALYSIS is the
+        #      only per-expiry directional-flow-plus-per-strike-table
+        #      section that exists; the true HIRO/premium/gross
+        #      delta_flow_buckets series stays in its existing
+        #      currency-wide position, appended once after the whole
+        #      report per render_full_from_result, since the spec's
+        #      market-wide order does not list it there either)
+        #   6. FIXED-STRIKE VOL CHANGE (fixed_strike_vol)
+        #   7. OI CHANGES (oi_changes + iv_percentile)
+        #   8. CONTEXT -- rendered separately, always last (render_expiration)
         extra_sections = []
-        if bundle.gex_dex is not None:
-            extra_sections.append(format_gex_dex_section(bundle.gex_dex, result.currency))
-        # institutional_metrics_spec.md section 2 / task C3: additive new
-        # section, placed immediately after GEX/DEX so the two "ASSUMED
-        # DEALER VIEW" labels (gex_dex_formatter's and this one's) read as
-        # the same convention (D7). Never rendered without a dealer_
-        # inventory result -- unlike gex_dex, there is no legacy fallback
-        # path for this section.
+        # institutional_metrics_spec.md section 2 / task C3: dealer
+        # positioning renders FIRST (before GEX/DEX PROFILE BY STRIKE) per
+        # the spec's per-expiry order -- both still use the same "ASSUMED
+        # DEALER VIEW" label (D7), regardless of which renders first. Never
+        # rendered without a dealer_inventory result -- unlike gex_dex,
+        # there is no legacy fallback path for this section.
         if bundle.dealer_inventory is not None:
             extra_sections.append(
                 format_dealer_inventory_section(bundle.dealer_inventory, bundle.gex_dex, result.currency)
             )
+        if bundle.gex_dex is not None:
+            extra_sections.append(format_gex_dex_section(bundle.gex_dex, result.currency))
         # institutional_metrics_spec.md section 4 / task C5: per-strike
         # vanna/charm exposure profile, placed alongside the other
         # exposure-family sections (GEX/DEX, dealer inventory) so the
@@ -330,15 +346,13 @@ class OnChainReportFormatter:
             extra_sections.append(
                 format_exposure_profile_section(bundle.exposure_profile, result.currency)
             )
-        if bundle.flow is not None:
-            extra_sections.append(format_flow_section(bundle.flow, bundle.flow.lookback_hours))
         if bundle.vol_surface is not None:
             extra_sections.append(format_vol_surface_section(bundle.vol_surface, expiration))
+        if bundle.flow is not None:
+            extra_sections.append(format_flow_section(bundle.flow, bundle.flow.lookback_hours))
 
         # institutional_metrics_spec.md section 7 / task C8: fixed-strike
-        # vol change matrix, placed right after vol surface -- both
-        # describe this expiry's IV smile, so the two read as one
-        # continuous block. format_fixed_strike_vol_section renders even
+        # vol change matrix. format_fixed_strike_vol_section renders even
         # an INDETERMINATE (insufficient/stale history) result with an
         # explicit message rather than "" -- unlike the "no data -> no
         # section" convention every other extra_sections entry here uses,

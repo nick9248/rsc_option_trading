@@ -50,9 +50,11 @@ def format_dealer_inventory_section(
 
     Additive to the existing GEX/DEX ANALYSIS section (spec §2(c)): never
     modifies ``format_gex_dex_section``'s own text, sits in its own new
-    block. Placed immediately after GEX/DEX in ``report_formatter.py`` so
-    the two "ASSUMED DEALER VIEW" labels (this section's and gex_dex_
-    formatter's) read as the same convention, not two different ones.
+    block. institutional_metrics_spec.md section 9(b)'s per-expiry order
+    (Task D2) places this section FIRST, immediately BEFORE GEX/DEX in
+    ``report_formatter.py`` -- the two "ASSUMED DEALER VIEW" labels (this
+    section's and gex_dex_formatter's) still read as the same convention
+    regardless of which renders first.
 
     Args:
         dealer_result: The typed inferred-positioning result for this

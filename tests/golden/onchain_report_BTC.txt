@@ -40,6 +40,11 @@ OPEN INTEREST & VOLUME BY STRIKE
     72,000         426           0        0.60        0.00  
     75,000         209           0        2.00        0.00  
 
+DEALER POSITIONING -- TWO VIEWS
+--------------------------------------------------------------------------------
+INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
+  -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
+
 GEX/DEX ANALYSIS (Gamma & Delta Exposure)
 --------------------------------------------------------------------------------
 Spot Price: $64,371.10
@@ -88,11 +93,6 @@ Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
     72,000   +529,308.38      +41.5325  +1,790,922.00     +146.0405  
     75,000   +173,038.34      +10.1352  +1,963,960.35     +156.1756  
 
-DEALER POSITIONING -- TWO VIEWS
---------------------------------------------------------------------------------
-INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
-  -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
-
 VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets --
                        assumption: dealers long calls / short puts)
 --------------------------------------------------------------------------------
@@ -115,14 +115,6 @@ VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets --
 --------------------------------------------------------------------------------
 Peak vanna strike: $70,000    Peak charm strike: $70,000
 Total VEX: +0.55M USD/vol pt   Total CEX: -0.47M USD/day
-
-BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
---------------------------------------------------------------------------------
-Spot Price: $64,371.10
-Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
-Trades Analyzed: 0
-
-  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
 
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
@@ -153,6 +145,14 @@ P/C RATIO BY MONEYNESS:
   ATM (±5%):     P/C = 0.86
   Near-OTM (5-15%):     P/C = 0.30
   Far-OTM (15%+):     P/C = 0.00
+
+BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
+--------------------------------------------------------------------------------
+Spot Price: $64,371.10
+Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
+Trades Analyzed: 0
+
+  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
 
 LARGE OI CHANGES (Day-over-Day)
 --------------------------------------------------------------------------------
@@ -238,6 +238,11 @@ OPEN INTEREST & VOLUME BY STRIKE
    230,000         196           0        6.00        0.00  
    240,000         874           0        0.00        0.00  
    250,000       1,256          10        0.00        0.00  
+
+DEALER POSITIONING -- TWO VIEWS
+--------------------------------------------------------------------------------
+INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
+  -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
 
 GEX/DEX ANALYSIS (Gamma & Delta Exposure)
 --------------------------------------------------------------------------------
@@ -331,11 +336,6 @@ Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
    240,000         +0.00       +1.0930  +1,502,359.02     -864.7770  
    250,000         +0.00       -8.7720  +1,502,359.02     -873.5490  
 
-DEALER POSITIONING -- TWO VIEWS
---------------------------------------------------------------------------------
-INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
-  -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
-
 VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets --
                        assumption: dealers long calls / short puts)
 --------------------------------------------------------------------------------
@@ -403,14 +403,6 @@ VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets --
 Peak vanna strike: $80,000    Peak charm strike: $80,000
 Total VEX: +14.57M USD/vol pt   Total CEX: -1.81M USD/day
 
-BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
---------------------------------------------------------------------------------
-Spot Price: $64,371.10
-Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
-Trades Analyzed: 0
-
-  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
-
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
 25Δ Risk Reversal (call − put): -4.7% (Puts Richer - Downside Hedging Demand)
@@ -448,6 +440,14 @@ P/C RATIO BY MONEYNESS:
   ATM (±5%):     P/C = 0.87
   Near-OTM (5-15%):     P/C = 2.56
   Far-OTM (15%+):     P/C = 0.37
+
+BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
+--------------------------------------------------------------------------------
+Spot Price: $64,371.10
+Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
+Trades Analyzed: 0
+
+  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
 
 LARGE OI CHANGES (Day-over-Day)
 --------------------------------------------------------------------------------
@@ -510,6 +510,11 @@ OPEN INTEREST & VOLUME BY STRIKE
    150,000          86           0        0.40        0.00  
    160,000         493           0        0.30        0.00  
    170,000           8           0        0.60        0.00  
+
+DEALER POSITIONING -- TWO VIEWS
+--------------------------------------------------------------------------------
+INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
+  -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
 
 GEX/DEX ANALYSIS (Gamma & Delta Exposure)
 --------------------------------------------------------------------------------
@@ -582,11 +587,6 @@ Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
    160,000         +0.00      +15.2189   +229,226.08     +733.2061  
    170,000         +0.00       +0.2056   +229,226.08     +733.4117  
 
-DEALER POSITIONING -- TWO VIEWS
---------------------------------------------------------------------------------
-INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
-  -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
-
 VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets --
                        assumption: dealers long calls / short puts)
 --------------------------------------------------------------------------------
@@ -633,14 +633,6 @@ VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets --
 Peak vanna strike: $160,000    Peak charm strike: $160,000
 Total VEX: +0.35M USD/vol pt   Total CEX: -0.02M USD/day
 
-BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
---------------------------------------------------------------------------------
-Spot Price: $64,371.10
-Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
-Trades Analyzed: 0
-
-  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
-
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
 25Δ Risk Reversal (call − put): -4.6% (Puts Richer - Downside Hedging Demand)
@@ -677,6 +669,14 @@ P/C RATIO BY MONEYNESS:
   ATM (±5%):     P/C = 0.27
   Near-OTM (5-15%):     P/C = 0.33
   Far-OTM (15%+):     P/C = 0.92
+
+BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
+--------------------------------------------------------------------------------
+Spot Price: $64,371.10
+Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
+Trades Analyzed: 0
+
+  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
 
 LARGE OI CHANGES (Day-over-Day)
 --------------------------------------------------------------------------------
@@ -762,6 +762,11 @@ OPEN INTEREST & VOLUME BY STRIKE
    280,000          94           0        0.00        0.00  
    300,000         192           0        0.00        0.00  
    320,000         277          25        0.00        0.00  
+
+DEALER POSITIONING -- TWO VIEWS
+--------------------------------------------------------------------------------
+INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
+  -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
 
 GEX/DEX ANALYSIS (Gamma & Delta Exposure)
 --------------------------------------------------------------------------------
@@ -857,11 +862,6 @@ Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
    300,000         +0.00       +0.0019  +4,171,732.38   -4,929.4197  
    320,000         +0.00      -25.0970  +4,171,732.38   -4,954.5167  
 
-DEALER POSITIONING -- TWO VIEWS
---------------------------------------------------------------------------------
-INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
-  -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
-
 VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets --
                        assumption: dealers long calls / short puts)
 --------------------------------------------------------------------------------
@@ -931,14 +931,6 @@ VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets --
 Peak vanna strike: $75,000    Peak charm strike: $75,000
 Total VEX: +12.22M USD/vol pt   Total CEX: -3.36M USD/day
 
-BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
---------------------------------------------------------------------------------
-Spot Price: $64,371.10
-Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
-Trades Analyzed: 0
-
-  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
-
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
 25Δ Risk Reversal (call − put): -5.0% (Puts Much Richer - Strong Downside Hedging Demand)
@@ -975,6 +967,14 @@ P/C RATIO BY MONEYNESS:
   ATM (±5%):     P/C = 1.02
   Near-OTM (5-15%):     P/C = 1.24
   Far-OTM (15%+):     P/C = 0.46
+
+BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
+--------------------------------------------------------------------------------
+Spot Price: $64,371.10
+Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
+Trades Analyzed: 0
+
+  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
 
 LARGE OI CHANGES (Day-over-Day)
 --------------------------------------------------------------------------------
@@ -1023,6 +1023,11 @@ OPEN INTEREST & VOLUME BY STRIKE
     71,000           4           0        0.00        0.00  
     72,000           4           0        0.00        0.00  
     73,000          30           0        0.00        0.00  
+
+DEALER POSITIONING -- TWO VIEWS
+--------------------------------------------------------------------------------
+INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
+  -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
 
 GEX/DEX ANALYSIS (Gamma & Delta Exposure)
 --------------------------------------------------------------------------------
@@ -1081,11 +1086,6 @@ Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
     72,000         +0.00       +0.0000  +7,999,957.14      +63.4573  
     73,000         +0.00       +0.0000  +7,999,957.14      +63.4573  
 
-DEALER POSITIONING -- TWO VIEWS
---------------------------------------------------------------------------------
-INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
-  -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
-
 VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets --
                        assumption: dealers long calls / short puts)
 --------------------------------------------------------------------------------
@@ -1117,14 +1117,6 @@ VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets --
 --------------------------------------------------------------------------------
 Peak vanna strike: $64,000    Peak charm strike: $64,000
 Total VEX: -0.03M USD/vol pt   Total CEX: +1.72M USD/day
-
-BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
---------------------------------------------------------------------------------
-Spot Price: $64,371.10
-Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
-Trades Analyzed: 0
-
-  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
 
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
@@ -1164,6 +1156,14 @@ P/C RATIO BY MONEYNESS:
   ATM (±5%):     P/C = 0.66
   Near-OTM (5-15%):     P/C = 1.14
   Far-OTM (15%+):     P/C = 0.00
+
+BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
+--------------------------------------------------------------------------------
+Spot Price: $64,371.10
+Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
+Trades Analyzed: 0
+
+  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
 
 LARGE OI CHANGES (Day-over-Day)
 --------------------------------------------------------------------------------
@@ -1251,6 +1251,11 @@ OPEN INTEREST & VOLUME BY STRIKE
    190,000         881           1        1.60        0.00  
    200,000         500           1        3.80        0.00  
 
+DEALER POSITIONING -- TWO VIEWS
+--------------------------------------------------------------------------------
+INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
+  -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
+
 GEX/DEX ANALYSIS (Gamma & Delta Exposure)
 --------------------------------------------------------------------------------
 Spot Price: $64,371.10
@@ -1336,11 +1341,6 @@ Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
    190,000         +0.00       +5.6621  +1,139,417.72     +638.4716  
    200,000         +0.00       +2.3059  +1,139,417.72     +640.7776  
 
-DEALER POSITIONING -- TWO VIEWS
---------------------------------------------------------------------------------
-INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
-  -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
-
 VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets --
                        assumption: dealers long calls / short puts)
 --------------------------------------------------------------------------------
@@ -1401,14 +1401,6 @@ VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets --
 Peak vanna strike: $80,000    Peak charm strike: $80,000
 Total VEX: +3.77M USD/vol pt   Total CEX: -0.31M USD/day
 
-BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
---------------------------------------------------------------------------------
-Spot Price: $64,371.10
-Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
-Trades Analyzed: 0
-
-  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
-
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
 25Δ Risk Reversal (call − put): -4.9% (Puts Richer - Downside Hedging Demand)
@@ -1445,6 +1437,14 @@ P/C RATIO BY MONEYNESS:
   ATM (±5%):     P/C = 2.83
   Near-OTM (5-15%):     P/C = 0.74
   Far-OTM (15%+):     P/C = 0.44
+
+BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
+--------------------------------------------------------------------------------
+Spot Price: $64,371.10
+Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
+Trades Analyzed: 0
+
+  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
 
 LARGE OI CHANGES (Day-over-Day)
 --------------------------------------------------------------------------------
@@ -1492,6 +1492,11 @@ OPEN INTEREST & VOLUME BY STRIKE
     71,000           2           0        0.40        0.00  
     72,000           1           0        0.00        0.00  
     73,000          31           0        0.00        0.00  
+
+DEALER POSITIONING -- TWO VIEWS
+--------------------------------------------------------------------------------
+INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
+  -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
 
 GEX/DEX ANALYSIS (Gamma & Delta Exposure)
 --------------------------------------------------------------------------------
@@ -1549,11 +1554,6 @@ Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
     72,000         +0.00       +0.0001  -4,137,795.98     -201.3912  
     73,000         +0.00       +0.0006  -4,137,795.98     -201.3906  
 
-DEALER POSITIONING -- TWO VIEWS
---------------------------------------------------------------------------------
-INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
-  -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
-
 VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets --
                        assumption: dealers long calls / short puts)
 --------------------------------------------------------------------------------
@@ -1584,14 +1584,6 @@ VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets --
 --------------------------------------------------------------------------------
 Peak vanna strike: $63,000    Peak charm strike: $63,000
 Total VEX: +0.09M USD/vol pt   Total CEX: +0.14M USD/day
-
-BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
---------------------------------------------------------------------------------
-Spot Price: $64,371.10
-Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
-Trades Analyzed: 0
-
-  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
 
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
@@ -1630,6 +1622,14 @@ P/C RATIO BY MONEYNESS:
   ATM (±5%):     P/C = 1.56
   Near-OTM (5-15%):     P/C = 0.23
   Far-OTM (15%+):     P/C = 0.00
+
+BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
+--------------------------------------------------------------------------------
+Spot Price: $64,371.10
+Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
+Trades Analyzed: 0
+
+  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
 
 LARGE OI CHANGES (Day-over-Day)
 --------------------------------------------------------------------------------
@@ -1710,6 +1710,11 @@ OPEN INTEREST & VOLUME BY STRIKE
    100,000         154           0        0.00        0.00  
    105,000         168           1        0.00        0.60  
    110,000         104           0        0.00        0.00  
+
+DEALER POSITIONING -- TWO VIEWS
+--------------------------------------------------------------------------------
+INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
+  -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
 
 GEX/DEX ANALYSIS (Gamma & Delta Exposure)
 --------------------------------------------------------------------------------
@@ -1794,11 +1799,6 @@ Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
    105,000         +0.00       +0.0934  +18,724,439.47   +3,446.3058  
    110,000         +0.00       +0.3969  +18,724,439.47   +3,446.7027  
 
-DEALER POSITIONING -- TWO VIEWS
---------------------------------------------------------------------------------
-INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
-  -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
-
 VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets --
                        assumption: dealers long calls / short puts)
 --------------------------------------------------------------------------------
@@ -1857,14 +1857,6 @@ VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets --
 Peak vanna strike: $72,000    Peak charm strike: $72,000
 Total VEX: +5.00M USD/vol pt   Total CEX: -2.28M USD/day
 
-BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
---------------------------------------------------------------------------------
-Spot Price: $64,371.10
-Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
-Trades Analyzed: 0
-
-  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
-
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
 25Δ Risk Reversal (call − put): -4.7% (Puts Richer - Downside Hedging Demand)
@@ -1916,6 +1908,14 @@ P/C RATIO BY MONEYNESS:
   Near-OTM (5-15%):     P/C = 0.57
   Far-OTM (15%+):     P/C = 0.47
 
+BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
+--------------------------------------------------------------------------------
+Spot Price: $64,371.10
+Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
+Trades Analyzed: 0
+
+  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
+
 LARGE OI CHANGES (Day-over-Day)
 --------------------------------------------------------------------------------
       Strike  Type     Prev OI     Curr OI      Change   Change%
@@ -1965,6 +1965,11 @@ OPEN INTEREST & VOLUME BY STRIKE
     71,000           0           0        0.10        0.00  
     72,000           0           0        0.00        0.00  
     73,000           0           0        0.00        0.00  
+
+DEALER POSITIONING -- TWO VIEWS
+--------------------------------------------------------------------------------
+INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
+  -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
 
 GEX/DEX ANALYSIS (Gamma & Delta Exposure)
 --------------------------------------------------------------------------------
@@ -2023,11 +2028,6 @@ Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
     72,000         +0.00       +0.0000   +225,662.55      -39.8493  
     73,000         +0.00       +0.0000   +225,662.55      -39.8493  
 
-DEALER POSITIONING -- TWO VIEWS
---------------------------------------------------------------------------------
-INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
-  -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
-
 VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets --
                        assumption: dealers long calls / short puts)
 --------------------------------------------------------------------------------
@@ -2057,14 +2057,6 @@ VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets --
 --------------------------------------------------------------------------------
 Peak vanna strike: $65,000    Peak charm strike: $65,000
 Total VEX: +0.10M USD/vol pt   Total CEX: -0.45M USD/day
-
-BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
---------------------------------------------------------------------------------
-Spot Price: $64,371.10
-Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
-Trades Analyzed: 0
-
-  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
 
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
@@ -2104,6 +2096,14 @@ P/C RATIO BY MONEYNESS:
   ATM (±5%):     P/C = 0.78
   Near-OTM (5-15%):     P/C = 2.02
   Far-OTM (15%+):     P/C = 0.00
+
+BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
+--------------------------------------------------------------------------------
+Spot Price: $64,371.10
+Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
+Trades Analyzed: 0
+
+  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
 
 LARGE OI CHANGES (Day-over-Day)
 --------------------------------------------------------------------------------
@@ -2157,6 +2157,11 @@ OPEN INTEREST & VOLUME BY STRIKE
     69,000          92           0       92.10        0.00  
     70,000           1           0        1.00        0.00  
     71,000           0           0        0.00        0.00  
+
+DEALER POSITIONING -- TWO VIEWS
+--------------------------------------------------------------------------------
+INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
+  -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
 
 GEX/DEX ANALYSIS (Gamma & Delta Exposure)
 --------------------------------------------------------------------------------
@@ -2213,11 +2218,6 @@ Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
     70,000       +414.36       +0.0088    -60,952.92       -3.4892  
     71,000         +0.00       +0.0000    -60,952.92       -3.4892  
 
-DEALER POSITIONING -- TWO VIEWS
---------------------------------------------------------------------------------
-INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
-  -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
-
 VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets --
                        assumption: dealers long calls / short puts)
 --------------------------------------------------------------------------------
@@ -2242,14 +2242,6 @@ VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets --
 --------------------------------------------------------------------------------
 Peak vanna strike: $69,000    Peak charm strike: $69,000
 Total VEX: -0.01M USD/vol pt   Total CEX: +0.07M USD/day
-
-BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
---------------------------------------------------------------------------------
-Spot Price: $64,371.10
-Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
-Trades Analyzed: 0
-
-  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
 
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
@@ -2287,6 +2279,14 @@ P/C RATIO BY MONEYNESS:
   ATM (±5%):     P/C = 0.66
   Near-OTM (5-15%):     P/C = 1.04
   Far-OTM (15%+):     P/C = 0.00
+
+BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
+--------------------------------------------------------------------------------
+Spot Price: $64,371.10
+Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
+Trades Analyzed: 0
+
+  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
 
 CONTEXT
 --------------------------------------------------------------------------------
@@ -2366,6 +2366,11 @@ OPEN INTEREST & VOLUME BY STRIKE
    110,000         194          46        0.00        0.00  
    115,000         182           3        0.00        0.00  
    120,000       1,059           4        0.00        0.00  
+
+DEALER POSITIONING -- TWO VIEWS
+--------------------------------------------------------------------------------
+INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
+  -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
 
 GEX/DEX ANALYSIS (Gamma & Delta Exposure)
 --------------------------------------------------------------------------------
@@ -2459,11 +2464,6 @@ Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
    115,000         +0.00       -3.2000  +75,912,120.58   +2,088.1151  
    120,000         +0.00       -3.5000  +75,912,120.58   +2,084.6151  
 
-DEALER POSITIONING -- TWO VIEWS
---------------------------------------------------------------------------------
-INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
-  -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
-
 VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets --
                        assumption: dealers long calls / short puts)
 --------------------------------------------------------------------------------
@@ -2531,14 +2531,6 @@ VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets --
 Peak vanna strike: $70,000    Peak charm strike: $70,000
 Total VEX: +13.09M USD/vol pt   Total CEX: -44.75M USD/day
 
-BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
---------------------------------------------------------------------------------
-Spot Price: $64,371.10
-Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
-Trades Analyzed: 0
-
-  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
-
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
 25Δ Risk Reversal (call − put): -4.3% (Puts Richer - Downside Hedging Demand)
@@ -2589,6 +2581,14 @@ P/C RATIO BY MONEYNESS:
   Near-OTM (5-15%):     P/C = 0.21
   Far-OTM (15%+):     P/C = 0.35
 
+BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
+--------------------------------------------------------------------------------
+Spot Price: $64,371.10
+Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
+Trades Analyzed: 0
+
+  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
+
 LARGE OI CHANGES (Day-over-Day)
 --------------------------------------------------------------------------------
   No significant OI changes (>20%) detected
@@ -2637,6 +2637,11 @@ OPEN INTEREST & VOLUME BY STRIKE
     75,000       2,468           0        8.80        0.00  
     77,000       1,005           0        0.00        0.00  
     80,000          39           0        1.60        0.00  
+
+DEALER POSITIONING -- TWO VIEWS
+--------------------------------------------------------------------------------
+INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
+  -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
 
 GEX/DEX ANALYSIS (Gamma & Delta Exposure)
 --------------------------------------------------------------------------------
@@ -2691,11 +2696,6 @@ Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
     77,000   +416,435.67      +17.4066  +23,339,499.74   +1,426.1560  
     80,000         +0.00       +0.4431  +23,339,499.74   +1,426.5991  
 
-DEALER POSITIONING -- TWO VIEWS
---------------------------------------------------------------------------------
-INFERRED DEALER VIEW UNAVAILABLE (no trade history for this expiry since T0 (currency-wide coverage 0.0% -- collector health, not this contract's own history))
-  -> falling back to the ASSUMED convention (see GEX/DEX ANALYSIS -- ASSUMED DEALER VIEW above)
-
 VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets --
                        assumption: dealers long calls / short puts)
 --------------------------------------------------------------------------------
@@ -2723,14 +2723,6 @@ VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets --
 --------------------------------------------------------------------------------
 Peak vanna strike: $70,000    Peak charm strike: $70,000
 Total VEX: +6.06M USD/vol pt   Total CEX: -8.61M USD/day
-
-BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
---------------------------------------------------------------------------------
-Spot Price: $64,371.10
-Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
-Trades Analyzed: 0
-
-  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
 
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
@@ -2766,6 +2758,14 @@ P/C RATIO BY MONEYNESS:
   ATM (±5%):     P/C = 0.68
   Near-OTM (5-15%):     P/C = 0.12
   Far-OTM (15%+):     P/C = 0.02
+
+BUY/SELL FLOW ANALYSIS (Trade Direction-Based)
+--------------------------------------------------------------------------------
+Spot Price: $64,371.10
+Window: 2026-07-24 18:34 -> 2026-07-25 18:34 UTC
+Trades Analyzed: 0
+
+  ** INSUFFICIENT FLOW DATA ** - 0 trade(s) in window, 5 required. Flow section suppressed.
 
 LARGE OI CHANGES (Day-over-Day)
 --------------------------------------------------------------------------------

@@ -16,9 +16,16 @@ from coding.core.analytics.reporting.report_formatter import (
 )
 from coding.core.analytics.results.analysis_result import (
     ExpirationBundle,
+    IvPercentileResult,
     MarketMetricsResult,
+    OiChangesResult,
     OnChainAnalysisResult,
 )
+from coding.core.analytics.results.dealer_inventory_results import (
+    DealerInventoryKeyLevels,
+    DealerInventoryResult,
+)
+from coding.core.analytics.results.exposure_profile_results import ExposureProfileResult
 from coding.core.analytics.results.expiry_results import (
     ExpirationAnalysisResult,
     MaxPainResult,
@@ -40,6 +47,13 @@ from coding.core.analytics.results.market_wide_results import (
     SkewTermStructureResult,
     TermStructureEntry,
     TermStructureResult,
+)
+from coding.core.analytics.results.vol_surface_results import (
+    MoneynessBucket,
+    PutCallByMoneyness,
+    SecondOrderGreeks,
+    SkewResult,
+    VolSurfaceResult,
 )
 
 GENERATED_AT = datetime(2026, 7, 25, 12, 0, 0)
@@ -331,6 +345,99 @@ def test_render_expiration_from_result_includes_fixed_strike_vol_section_when_pr
     text = formatter.render_expiration_from_result(result, "10MAR26")
     assert "FIXED-STRIKE VOL CHANGE" in text
     assert "no comparable prior snapshot" in text
+
+
+def test_render_expiration_from_result_section_order_matches_spec():
+    """
+    institutional_metrics_spec.md section 9(b) per-expiry order (Task D2):
+    POSITIONING -> GEX/DEX PROFILE BY STRIKE -> VANNA/CHARM PROFILE -> SKEW
+    -> DELTA-ADJUSTED FLOW -> FIXED-STRIKE VOL CHANGE -> OI CHANGES ->
+    CONTEXT. Every section populated at once so the index-ordering
+    assertion actually exercises the full sequence, not just a subset.
+    """
+    formatter = OnChainReportFormatter()
+
+    dealer_inventory = DealerInventoryResult(
+        strike_rows=(), key_levels=DealerInventoryKeyLevels(call_resistance=None, put_support=None, hvl=None),
+        total_inferred_gex=0.0, total_inferred_dex=0.0, spot_price=95000.0, currency="BTC",
+        t0_epoch_ms=0, coverage=0.0, violation_rate=0.0, n_signed_trades=0,
+        render_inferred=False, unavailable_reason="insufficient coverage",
+    )
+    gex_dex = GexDexResult(
+        strike_rows=(), cumulative_gex={}, cumulative_dex={},
+        key_levels=GexDexKeyLevels(call_resistance=None, put_support=None, hvl=None, gamma_flip=None),
+        spot_price=95000.0, total_net_gex=1234.5, total_net_dex=6.7, currency="BTC",
+    )
+    exposure_profile = ExposureProfileResult(
+        strike_rows=(), spot_price=95000.0, currency="BTC",
+        total_vex_holder=0.0, total_cex_holder=0.0,
+        total_vex_assumed_dealer=0.0, total_cex_assumed_dealer=0.0,
+    )
+    vol_surface = VolSurfaceResult(
+        expiration="10MAR26", spot_price=95000.0, iv_by_strike=(),
+        skew_25d=SkewResult(
+            put_25d_iv=None, call_25d_iv=None, put_25d_strike=None,
+            call_25d_strike=None, interpretation="insufficient chain",
+        ),
+        pc_by_moneyness=PutCallByMoneyness(
+            atm=MoneynessBucket(range_label="+/-5%", call_oi=0, put_oi=0, ratio=0.0, bias="N/A"),
+            near_otm=MoneynessBucket(range_label="5-15%", call_oi=0, put_oi=0, ratio=0.0, bias="N/A"),
+            far_otm=MoneynessBucket(range_label="15%+", call_oi=0, put_oi=0, ratio=0.0, bias="N/A"),
+        ),
+        second_order_greeks=SecondOrderGreeks(
+            vanna_exposure_holder=0.0, charm_exposure_holder=0.0,
+            vanna_signal="N/A", charm_signal="N/A", skipped_instruments=0,
+            dealer_vanna_exposure=0.0, dealer_charm_exposure=0.0,
+        ),
+        atm_iv=60.0, vwap_iv=None, mark_iv_average=None, traded_instrument_count=0,
+    )
+    flow = FlowResult(
+        flow_data={}, expiration_totals=FlowTotals(0.0, 0.0, 0.0, 0.0),
+        bias_interpretation="Insufficient flow data", flow_trend="Insufficient flow data",
+        top_buy_strikes=(), top_sell_strikes=(), trade_count=3, spot_price=95000.0,
+        window_start_ms=0, window_end_ms=86_400_000, lookback_hours=24.0,
+        sufficient_data=False, low_confidence=False,
+    )
+    fixed_strike_vol = FixedStrikeVolResult(
+        expiration="10MAR26", today_date=date(2026, 7, 31),
+        prior_date=None, expected_prior_date=date(2026, 7, 30),
+        stale_prior=True, spot_today=95000.0, spot_prior=None,
+        spot_move_pct=None, atm_iv_today=None, atm_iv_prior=None, d_atm=None,
+        rows=(), n_strikes_matched=0, n_strikes_unmatched=0, regime="INDETERMINATE",
+    )
+    oi_changes = OiChangesResult(rows=(), total_significant=0, has_previous_snapshot=True)
+    iv_percentile = IvPercentileResult(atm_strike=95000.0, current_iv=60.0, percentile=50.0, history_days=90)
+
+    bundle = ExpirationBundle(
+        expiration="10MAR26", analysis=_make_analysis("10MAR26"),
+        gex_dex=gex_dex, flow=flow, vol_surface=vol_surface,
+        oi_changes=oi_changes, iv_percentile=iv_percentile, trend=None,
+        flow_chart_paths={}, enriched_instruments=(),
+        dealer_inventory=dealer_inventory, exposure_profile=exposure_profile,
+        fixed_strike_vol=fixed_strike_vol,
+    )
+    result = _make_result(expirations=(bundle,))
+    text = formatter.render_expiration_from_result(result, "10MAR26")
+
+    idx_positioning = text.index("DEALER POSITIONING")
+    idx_gex_dex = text.index("GEX/DEX ANALYSIS")
+    idx_vanna_charm = text.index("VANNA / CHARM PROFILE")
+    idx_skew = text.index("VOLATILITY SURFACE ANALYSIS")
+    idx_flow = text.index("BUY/SELL FLOW ANALYSIS")
+    idx_fixed_strike_vol = text.index("FIXED-STRIKE VOL CHANGE")
+    idx_oi_changes = text.index("LARGE OI CHANGES")
+    idx_context = text.index("CONTEXT")
+
+    assert (
+        idx_positioning
+        < idx_gex_dex
+        < idx_vanna_charm
+        < idx_skew
+        < idx_flow
+        < idx_fixed_strike_vol
+        < idx_oi_changes
+        < idx_context
+    )
 
 
 def test_render_market_wide_from_result_empty_returns_empty_string():
