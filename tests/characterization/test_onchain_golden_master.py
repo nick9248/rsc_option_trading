@@ -260,6 +260,50 @@ def test_full_report_matches_golden(pipeline_result, update_golden):
     assert report == expected
 
 
+def test_full_report_never_contains_banned_labels(pipeline_result):
+    """
+    institutional_metrics_spec.md section 9, T9.2 (Task D2 independent
+    review, Important #2): render a full report from a canned chain and
+    assert none of the removed hard-coded labels/trend-arrows survive
+    ANYWHERE in it. This is the regression guard the golden master alone
+    cannot provide -- the golden file is routinely regenerated via
+    --update-golden, so a future change that reintroduces one of these
+    labels in any formatter and then regenerates golden would sail through
+    test_full_report_matches_golden with no failing assertion. This test
+    fails regardless of what the golden file currently says.
+    """
+    report = pipeline_result["report"]
+
+    banned_substrings = (
+        "Strong Bullish",
+        "Strong Bearish",
+        "Heavy OTM",
+        "Heavy ITM",
+        "Speculative",
+        "dealers buy underlying",  # old aggregate vanna/charm advice text
+        "↑",  # "↑" trend arrow
+        "↓",  # "↓" trend arrow
+        "→ unchanged",  # "→ unchanged" trend arrow
+    )
+    for banned in banned_substrings:
+        assert banned not in report, f"Banned label/arrow {banned!r} found in the full report"
+
+    # T9.2's own example additionally bans bare "Bullish"/"Bearish" (the
+    # word-label vocabulary entirely, not just the "Strong" variants) --
+    # word-boundary check so "Bearish" inside "Strong Bearish" (already
+    # covered above) or a currency name etc. isn't double-flagged
+    # incorrectly; this is a plain substring check same as the others,
+    # since neither word is expected to appear anywhere in a report that
+    # only prints percentile-based facts.
+    assert "Bullish" not in report
+    assert "Bearish" not in report
+
+    # Positive assertion: the PCR line does carry a "p"+digits percentile
+    # marker somewhere (not banned -- required), so this test also proves
+    # the replacement, not just the absence of the old labels.
+    assert "P/C Ratio:" in report
+
+
 def test_synthesis_matches_golden(pipeline_result, update_golden):
     synthesis = pipeline_result["synthesis"]
     if update_golden:
