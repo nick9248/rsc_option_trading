@@ -15,7 +15,10 @@ from typing import Any, Dict, List, Optional
 from coding.core.analytics.black_scholes_calculator import BlackScholesCalculator
 from coding.core.analytics.delta_flow_calculator import DeltaFlowCalculator
 from coding.core.analytics.gex_dex_calculator import GexDexCalculator
-from coding.core.analytics.market_wide_calculator import MarketWideCalculator
+from coding.core.analytics.market_wide_calculator import (
+    DERIBIT_SETTLEMENT_HOUR_UTC,
+    MarketWideCalculator,
+)
 from coding.core.analytics.on_chain_analyzer import OnChainMetricsCalculator
 from coding.core.analytics.results.delta_flow_results import FlowBucket
 from coding.core.analytics.volatility_surface_calculator import VolatilitySurfaceCalculator
@@ -407,6 +410,21 @@ class ProspectiveCollector:
             self._persist_delta_flow(currency, hour)
         except Exception as e:
             logger.error(f"    Error computing delta flow: {e}")
+
+        # 8. Write today's daily_oi_snapshots anchor -- institutional_
+        # metrics_spec.md section 7(c) Migration M8 (Task E4). Gated
+        # internally to fire only when the real UTC clock's hour is
+        # exactly Deribit's 08:00 settlement hour (own try/except,
+        # isolated from steps 1-7 above, same isolation pattern as
+        # _fetch_dvol_history_row above). Reuses this cycle's already-
+        # fetched book-summary instrument list (step 2) -- no extra API
+        # call, no dependency on step 3's on-chain analysis internals.
+        if book_result and book_result.get("instruments"):
+            logger.info(f"  Checking {currency} daily OI anchor (08:00 UTC gate)...")
+            try:
+                self._save_daily_oi_anchor(currency, book_result.get("instruments"))
+            except Exception as e:
+                logger.error(f"    Error saving daily OI anchor: {e}")
 
         return {
             "trades": trades,
@@ -1028,6 +1046,109 @@ class ProspectiveCollector:
             logger.warning(
                 f"    Failed to compute/save RR25/BF25 skew for {expiration}: {e}"
             )
+
+    def _save_daily_oi_anchor(
+        self,
+        currency: str,
+        instruments: List[Dict],
+        now_utc: Optional[datetime] = None,
+    ) -> None:
+        """
+        Write today's per-strike OI/mark_iv anchor to daily_oi_snapshots --
+        one repository call per expiration present in ``instruments`` --
+        gated to fire ONLY when the current UTC hour is exactly Deribit's
+        08:00 settlement hour (institutional_metrics_spec.md section 7(c)
+        Migration M8, Task E4).
+
+        ``daily_oi_snapshots`` has exactly the right shape for Task C8's
+        ``FixedStrikeVolCalculator``/``get_chain_iv_at`` (per-strike
+        ``mark_iv``) but was GUI-triggered only -- [verified] only 5 of the
+        last 40 days present (87.5% missing) -- and its old 5-column
+        conflict key meant the stored value for a given day was "whatever
+        the last GUI run of that day happened to capture", not a fixed
+        anchor. This method makes the daemon the authority; the pre-
+        existing GUI call (``on_chain_analysis_service.py``) is untouched
+        and keeps upserting the same day (now landing on the same
+        ``snapshot_hour_utc`` default via migration 023's column default,
+        since it never passes the param explicitly).
+
+        Builds a throwaway ``OnChainMetricsCalculator`` from
+        ``instruments`` -- the SAME already-fetched book-summary list
+        ``_fetch_book_summary`` (step 2 of ``_collect_currency``) just
+        stored to ``snapshots`` -- purely to reuse its
+        ``parse_instruments()`` (already carries strike/option_type/
+        open_interest/mark_iv, exactly what ``save_daily_oi_snapshot``
+        needs) and ``forward_price_by_expiration`` (computed at
+        construction time from ``instruments`` alone -- no index-price API
+        call needed, unlike ``_run_onchain_analysis``'s analyzer, which
+        also calls ``set_index_price``). Zero extra API calls.
+
+        Uses each expiration's own forward price as ``underlying_price``,
+        matching the settlement-space anchor convention the existing GUI
+        call already uses (bugfix_spec.md Item 7) and Task C8's
+        ``get_chain_iv_at`` expects.
+
+        ``now_utc`` is threaded explicitly (not read internally) so tests
+        can freeze the clock instead of waiting for a live 08:00 UTC tick
+        -- matches this campaign's established ``now_utc``-threading
+        convention. Reuses ``MarketWideCalculator.DERIBIT_SETTLEMENT_
+        HOUR_UTC`` (already imported in this module) rather than a fresh
+        literal ``8`` -- the same constant this table's own reader/writer
+        pair already documents as the eventual Migration M8 anchor
+        (repository.py's ``_FIXED_STRIKE_VOL_ANCHOR_HOUR_UTC`` docstring).
+
+        Per-expiration failures are isolated with ``continue`` (matching
+        ``_run_onchain_analysis``'s per-expiration loop convention) so one
+        bad expiration's chain never blocks the rest.
+
+        Args:
+            currency: Currency symbol (BTC, ETH).
+            instruments: Raw book-summary instrument list for this cycle
+                (the same list already passed to ``_run_onchain_analysis``).
+            now_utc: Injectable UTC clock for tests; defaults to the real
+                UTC clock (``datetime.now(timezone.utc)``) -- NEVER naive-
+                local ``datetime.now()``, the exact bug class that hit this
+                table's ``save_daily_oi_snapshot``/``get_previous_oi_
+                snapshot`` pair twice already in Task C8.
+        """
+        now_utc = now_utc or datetime.now(timezone.utc)
+        if now_utc.hour != DERIBIT_SETTLEMENT_HOUR_UTC:
+            logger.debug(
+                f"    Skipping daily OI anchor for {currency} -- "
+                f"current UTC hour {now_utc.hour} != "
+                f"{DERIBIT_SETTLEMENT_HOUR_UTC}"
+            )
+            return
+
+        if not instruments:
+            return
+
+        analyzer = OnChainMetricsCalculator(data=instruments, currency=currency)
+        grouped = analyzer.parse_instruments()
+
+        for expiration, parsed_instruments in grouped.items():
+            try:
+                forward_price = analyzer.forward_price_by_expiration.get(expiration)
+                if forward_price is None:
+                    logger.warning(
+                        f"    No forward price for {currency} {expiration} -- "
+                        f"skipping daily OI anchor for this expiration"
+                    )
+                    continue
+
+                self.repo.save_daily_oi_snapshot(
+                    currency=currency,
+                    expiration=expiration,
+                    instruments=parsed_instruments,
+                    underlying_price=forward_price,
+                    snapshot_date=now_utc.date(),
+                    snapshot_hour_utc=DERIBIT_SETTLEMENT_HOUR_UTC,
+                )
+            except Exception as e:
+                logger.warning(
+                    f"    Failed to save daily OI anchor for {currency} {expiration}: {e}"
+                )
+                continue
 
     def _enrich_with_greeks(
         self,

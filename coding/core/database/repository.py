@@ -1221,12 +1221,26 @@ class DatabaseRepository:
         expiration: str,
         instruments: List[Dict[str, Any]],
         underlying_price: float,
-        snapshot_date: Optional[datetime] = None
+        snapshot_date: Optional[datetime] = None,
+        snapshot_hour_utc: int = 8,
     ) -> int:
         """
         Save daily OI snapshot for all instruments in an expiration.
 
-        Uses UPSERT to avoid duplicates within the same day.
+        Uses UPSERT to avoid duplicates within the same (date, hour).
+
+        institutional_metrics_spec.md section 7(c) Migration M8 (Task E4):
+        ``snapshot_hour_utc`` (migration 023) is now part of the conflict
+        key so ``ProspectiveCollector``'s daemon write at 08:00 UTC can
+        never be silently overwritten by a later GUI run
+        (``on_chain_analysis_service.py``, still calling this method with
+        no explicit hour, per its "harmless, upserts the same day" design)
+        at a DIFFERENT hour of the same day. The literal default of ``8``
+        here matches the column's own DB default and Deribit's settlement
+        hour (``MarketWideCalculator.DERIBIT_SETTLEMENT_HOUR_UTC`` /
+        ``GexDexCalculator._DERIBIT_SETTLEMENT_HOUR_UTC`` / this class's
+        own ``_FIXED_STRIKE_VOL_ANCHOR_HOUR_UTC``) -- a caller that omits
+        it (the GUI) still lands on the same anchor hour the daemon uses.
 
         Args:
             currency: Currency symbol.
@@ -1234,7 +1248,9 @@ class DatabaseRepository:
             instruments: List of enriched instrument dicts with strike, option_type,
                         open_interest, mark_iv.
             underlying_price: Current underlying price.
-            snapshot_date: Date for snapshot. Uses today if not provided.
+            snapshot_date: Date for snapshot. Uses today (UTC) if not provided.
+            snapshot_hour_utc: UTC hour this row anchors to. Defaults to 8
+                (Deribit settlement), matching the column's DB default.
 
         Returns:
             Number of rows upserted.
@@ -1261,12 +1277,19 @@ class DatabaseRepository:
 
         try:
             with self._db_cursor() as cursor:
+                # institutional_metrics_spec.md section 7(c) Migration M8
+                # (Task E4): snapshot_hour_utc is now part of both the
+                # inserted columns AND the ON CONFLICT target (migration
+                # 023 widened the unique constraint to match) -- this is
+                # what actually prevents a later run at a different hour
+                # of the same day from overwriting the daemon's 08:00 UTC
+                # anchor row.
                 insert_sql = """
                     INSERT INTO daily_oi_snapshots (
-                        snapshot_date, currency, expiration, strike,
+                        snapshot_date, snapshot_hour_utc, currency, expiration, strike,
                         option_type, open_interest, mark_iv, underlying_price
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (snapshot_date, currency, expiration, strike, option_type)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (snapshot_date, snapshot_hour_utc, currency, expiration, strike, option_type)
                     DO UPDATE SET
                         open_interest = EXCLUDED.open_interest,
                         mark_iv = EXCLUDED.mark_iv,
@@ -1277,6 +1300,7 @@ class DatabaseRepository:
                 for inst in instruments:
                     rows.append((
                         snap_date,
+                        snapshot_hour_utc,
                         currency,
                         expiration,
                         inst["strike"],
@@ -1290,7 +1314,7 @@ class DatabaseRepository:
 
                 logger.info(
                     f"Saved {len(rows)} daily OI snapshots for "
-                    f"{currency} {expiration} ({snap_date})"
+                    f"{currency} {expiration} ({snap_date} {snapshot_hour_utc:02d}:00 UTC)"
                 )
                 return len(rows)
 
