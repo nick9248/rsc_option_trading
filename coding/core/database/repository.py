@@ -926,6 +926,8 @@ class DatabaseRepository:
                     mark_iv = EXCLUDED.mark_iv,
                     open_interest = EXCLUDED.open_interest,
                     index_price = EXCLUDED.index_price,
+                    futures_price = EXCLUDED.futures_price,
+                    basis = EXCLUDED.basis,
                     avg_delta = EXCLUDED.avg_delta,
                     avg_gamma = EXCLUDED.avg_gamma,
                     avg_theta = EXCLUDED.avg_theta,
