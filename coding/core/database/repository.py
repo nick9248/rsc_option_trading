@@ -1761,38 +1761,6 @@ class DatabaseRepository:
                   open_price, high, low, close, volume))
             logger.debug(f"Saved OHLCV candle for {instrument_name} at {date}: close={close:.2f}")
 
-    def save_external_metrics(
-        self,
-        date,
-        fear_greed_value,
-        fear_greed_classification,
-        btc_dominance,
-        eth_dominance
-    ) -> None:
-        """
-        Save external sentiment metrics to the database.
-
-        Args:
-            date: Datetime for this snapshot.
-            fear_greed_value: Fear & Greed index value (0-100).
-            fear_greed_classification: Classification string (e.g., "Extreme Fear").
-            btc_dominance: BTC market dominance percentage.
-            eth_dominance: ETH market dominance percentage.
-        """
-        with self._db_cursor() as cursor:
-            cursor.execute("""
-                INSERT INTO external_metrics (
-                    date, fear_greed_value, fear_greed_classification,
-                    btc_dominance, eth_dominance
-                ) VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (date) DO UPDATE SET
-                    fear_greed_value = EXCLUDED.fear_greed_value,
-                    fear_greed_classification = EXCLUDED.fear_greed_classification,
-                    btc_dominance = EXCLUDED.btc_dominance,
-                    eth_dominance = EXCLUDED.eth_dominance
-            """, (date, fear_greed_value, fear_greed_classification, btc_dominance, eth_dominance))
-            logger.info(f"Saved external metrics: Fear&Greed={fear_greed_value}, BTC dom={btc_dominance}")
-
     def save_onchain_snapshot(
         self,
         snapshot_hour,

@@ -89,3 +89,4 @@ graphify-out/
 # Ad-hoc session reports
 report_*.txt
 
+scratch_backups/

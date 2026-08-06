@@ -1,20 +1,30 @@
 # Tables to drop later (user decision required)
 
-Written during the foundation-cleanup sprint (2026-07-13). These tables are no
-longer written to by any surviving code path, but **no DROP TABLE has been run
-against them** — dropping tables is irreversible data loss and is left to an
-explicit user decision, per this repo's CLAUDE.md rules and the cleanup spec
-(`SHOULD_BE_DONE.md`).
+Written during the foundation-cleanup sprint (2026-07-13). These tables were no
+longer written to by any surviving code path — dropping tables is irreversible
+data loss and was left to an explicit user decision, per this repo's CLAUDE.md
+rules and the cleanup spec (`SHOULD_BE_DONE.md`).
+
+**UPDATE 2026-08-06 (onchain-overhaul campaign, Wave E task E5): user approved
+dropping the confirmed-dead tables below.** Migration `024_drop_dead_tables.sql`
+executed the drops on the local DB. CSV backups of every row in every dropped
+table were taken first (`scratch_backups/<table>_backup_20260806.csv`,
+gitignored, local-only, not committed) as a safety net given this project has
+no down-migration tooling. Entries below are annotated `DROPPED in migration
+024` rather than removed, per this file's own "deprecation without deletion"
+convention — the history stays, only the live schema changes.
 
 ## Strategy system tables (item 2 - strategy system removed entirely)
 
 - `strategy_signals` (migrations 001, 002) - scored strategy evaluation output.
   No writer remains after `coding/core/strategy/` + `coding/service/strategy/`
   were deleted. `save_strategy_signal` / `get_strategy_signals` removed from
-  `repository.py` 2026-07-14 (zero live callers).
+  `repository.py` 2026-07-14 (zero live callers). **DROPPED in migration 024
+  (2026-08-06, 132 rows backed up).**
 - `otm_signals` (migration 011) - OTM contract finder signal output. No writer
   remains after `coding/service/strategy/otm/` was deleted. `save_otm_signals`
-  removed from `repository.py` 2026-07-14 (zero live callers).
+  removed from `repository.py` 2026-07-14 (zero live callers). **DROPPED in
+  migration 024 (2026-08-06, 0 rows).**
 
 Not dropped: `dvol_history` (migration 011) - despite living in the same
 migration file as `otm_signals`, this table is NOT strategy-specific. It is
@@ -68,11 +78,19 @@ data every hour into `onchain_analysis_snapshots` / `hourly_snapshots`:
   the short-term categorization this table had. Not backfilled (see audit
   note below). **Writer and reader both removed** 2026-07-14
   (`save_levels`, `get_levels_history` - unlike max_pain/open_interest/volume,
-  nothing in live code read this one).
+  nothing in live code read this one). **DROPPED in migration 024 (2026-08-06,
+  21,052 rows backed up).** Trend/history tracking of GEX/DEX/levels-family
+  metrics — the original motivation for this table — is superseded by
+  `onchain_analysis_snapshots` (daemon-written hourly, current calculation)
+  plus Task C1's `HistoricalNormalizer` percentile/z-score history, both
+  shipped in this same campaign; this table's data used the pre-refactor
+  calculation and had been frozen since 2026-07-14 regardless.
 - `gex_dex` - per-expiration GEX/DEX + key levels. Superseded by
   `onchain_analysis_snapshots.total_net_gex` / `total_net_dex` /
   `call_resistance_strike` / `put_support_strike` / `hvl_level`. **Writer and
   reader both removed** 2026-07-14 (`save_gex_dex`, `get_gex_dex_history`).
+  **DROPPED in migration 024 (2026-08-06, 2,662 rows backed up).** Same
+  trend-supersession note as `levels` above.
 
 ### Audit note on the `volume`/`levels` partial gaps
 
@@ -109,14 +127,43 @@ daemon / backfill scripts - untouched by this decision).
   and its reader (`get_regime_detections`) were deleted 2026-07-14. Was
   briefly listed as a "required" table in `scripts/validate_system.py`
   (`_check_required_tables`) - that entry was removed in the same commit.
+  **DROPPED in migration 024 (2026-08-06, 33 rows backed up).** Discovered
+  during the 2026-08-06 audit, not in the original E5 task list — approved
+  by the user as a separate decision alongside `technical_indicators`.
 - `technical_indicators` - SMA/EMA/ADX/ATR/RSI/MACD daily indicator values.
   Its only writer (`scripts/backfill_technical_indicators.py`) and only
   reader/consumer (`TechnicalIndicatorCalculator`, used exclusively by
   `RegimeDetectionService`) were both deleted 2026-07-14 - nothing in
   `synthesis.py`, the morning-note pipeline, or on-chain analysis ever used
   this calculator (verified by grep before deletion). `repository.py`'s
-  `save_technical_indicators` was removed in the same commit.
+  `save_technical_indicators` was removed in the same commit. **DROPPED in
+  migration 024 (2026-08-06, 1,547 rows backed up).** Same discovery/approval
+  note as `regime_detections` above.
 
 Not touched: `synthesis.py` has its own internal `RegimeClassifier` class -
 unrelated to the deleted `MarketRegimeDetector`, has no import of any deleted
 module, and was left alone.
+
+## Additional dead tables discovered during the 2026-08-06 audit (Wave E, task E5)
+
+Not previously tracked in this file — found during the onchain-overhaul
+campaign's infra audit, verified zero-reader/zero-writer, approved by the
+user, dropped in the same migration as the tables above.
+
+- `external_metrics` - Fear & Greed Index + CoinGecko global market data.
+  Writer: `scripts/backfill_external_metrics.py` -> `DatabaseRepository.
+  save_external_metrics` (never scheduled, manual-only). **Reader: NONE,
+  ever** - unlike every table above, this one never had a downstream
+  consumer even while it was actively written (frozen 2026-04-22). **DROPPED
+  in migration 024 (2026-08-06, 109 rows backed up).** `save_external_metrics`
+  removed from `repository.py` in the same commit as the drop;
+  `scripts/backfill_external_metrics.py` left in place (targets a now-dropped
+  table, would error if run — file deletion is a separate decision from the
+  table drop, not made here).
+- `displacement_signals` - never referenced in `coding/` or `scripts/`, and
+  **not defined in any migration file** (`000` through `023`) - created
+  outside the migration system entirely, no CREATE to point at for
+  documentation. **DROPPED in migration 024 (2026-08-06, 0 rows).**
+- `vol_predictions` - same undocumented-origin caveat as `displacement_signals`.
+  2 rows, some ad-hoc manual insert, not a real dataset. **DROPPED in
+  migration 024 (2026-08-06, 2 rows backed up).**

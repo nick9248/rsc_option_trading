@@ -140,18 +140,6 @@ SYNC_TABLES = [
         "conflict_target": None,
     },
     {
-        "name": "gex_dex",
-        "watermark_col": "captured_at",
-        "watermark_type": "timestamp",
-        "conflict_target": None,
-    },
-    {
-        "name": "levels",
-        "watermark_col": "captured_at",
-        "watermark_type": "timestamp",
-        "conflict_target": None,
-    },
-    {
         "name": "onchain_volatility_snapshots",
         "watermark_col": "reconstructed_at",
         "watermark_type": "timestamp",
