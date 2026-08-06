@@ -205,16 +205,49 @@ class TestBasicJoin:
         assert table.rows[0].call_oi == 20.0
         assert table.rows[0].put_oi == 8.0
 
-    def test_gex_dex_absent_defaults_to_zero_not_none(self):
+    def test_gex_dex_absent_yields_none_not_zero(self):
+        """
+        Independent review (Task D3 round 1, Important #1): a total
+        Greeks-fetch outage leaves ``bundle.gex_dex`` entirely None -- the
+        row must say "we have no data" (None), not "flat exposure" (0.0).
+        A 0.0 default is indistinguishable from a real zero reading and,
+        rendered by the GUI's `sign_value >= 0` coloring, paints an outage
+        as a uniform green "positive gamma" column.
+        """
         analysis = _analysis([(95000.0, 20.0, 8.0)])
         bundle = _bundle(analysis, gex_dex=None)
 
         table = build_levels_table(bundle)
 
         row = table.rows[0]
-        assert row.net_gex_holder == 0.0
-        assert row.net_gex_assumed == 0.0
-        assert row.net_dex == 0.0
+        assert row.net_gex_holder is None
+        assert row.net_gex_assumed is None
+        assert row.net_dex is None
+        assert table.gex_dex_available is False
+
+    def test_gex_dex_present_but_row_missing_for_this_strike_yields_none(self):
+        """
+        The *partial*-outage path: gex_dex is present (some strikes have
+        Greeks), but this specific strike's legs failed and it has no
+        entry in ``gex_dex.strike_rows`` -- still None, not 0.0, and
+        ``gex_dex_available`` stays True since the section itself is
+        present (this flag is whole-section scope, not per-row).
+        """
+        analysis = _analysis([(90000.0, 0.0, 0.0), (95000.0, 0.0, 0.0)])
+        gex_dex = _gex_dex_result([
+            _gex_dex_row(90000.0, gamma_exposure_holder=100.0, net_gex=50.0, net_dex=-10.0),
+            # 95000.0 has no row -- simulates a per-strike Greeks-fetch failure.
+        ])
+        bundle = _bundle(analysis, gex_dex=gex_dex)
+
+        table = build_levels_table(bundle)
+
+        assert table.gex_dex_available is True
+        missing_row = table.rows[1]
+        assert missing_row.strike == 95000.0
+        assert missing_row.net_gex_holder is None
+        assert missing_row.net_gex_assumed is None
+        assert missing_row.net_dex is None
 
 
 class TestGexDexJoin:
@@ -306,14 +339,46 @@ class TestVexCex:
         assert table.rows[0].vex == 123.0
         assert table.rows[0].cex == -45.0
 
-    def test_exposure_profile_absent_defaults_to_zero(self):
+    def test_exposure_profile_absent_yields_none_not_zero(self):
+        """
+        Independent review (Task D3 round 1, Important #1): same
+        whole-section-outage argument as gex_dex above -- a total
+        exposure-profile computation failure must read as "no data"
+        (None), not "flat exposure" (0.0).
+        """
         analysis = _analysis([(95000.0, 0.0, 0.0)])
         bundle = _bundle(analysis, exposure_profile=None)
 
         table = build_levels_table(bundle)
 
-        assert table.rows[0].vex == 0.0
-        assert table.rows[0].cex == 0.0
+        assert table.rows[0].vex is None
+        assert table.rows[0].cex is None
+        assert table.exposure_available is False
+
+    def test_exposure_profile_present_but_row_missing_for_this_strike_yields_none(self):
+        """
+        Partial-outage path for exposure profile: mirrors
+        ExposureProfileCalculator's own documented behavior of dropping a
+        strike's legs on missing/non-finite mark_iv while that strike
+        still has real OI upstream (still shows up in
+        analysis.strike_rows, just absent from exposure_profile.strike_rows).
+        """
+        analysis = _analysis([(90000.0, 0.0, 0.0), (95000.0, 0.0, 0.0)])
+        exposure_profile = _exposure_profile_result([
+            ExposureStrikeRow(strike=90000.0, call_oi=0.0, put_oi=0.0, call_vanna=0.0, put_vanna=0.0,
+                               call_charm=0.0, put_charm=0.0, vex_holder=10.0, cex_holder=5.0,
+                               vex_assumed_dealer=1.0, cex_assumed_dealer=1.0),
+            # 95000.0 has no row -- simulates a skipped-instruments strike.
+        ])
+        bundle = _bundle(analysis, exposure_profile=exposure_profile)
+
+        table = build_levels_table(bundle)
+
+        assert table.exposure_available is True
+        missing_row = table.rows[1]
+        assert missing_row.strike == 95000.0
+        assert missing_row.vex is None
+        assert missing_row.cex is None
 
 
 class TestNetTakerFlow:

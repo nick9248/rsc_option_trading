@@ -28,6 +28,20 @@ class LevelsTableRow:
     view) -- the GUI's sign-convention radio button selects which of
     these three drives row coloring; it does not compute a fourth.
 
+    ``net_gex_holder``/``net_gex_assumed``/``net_dex``/``vex``/``cex`` are
+    ``None`` when this strike has no matching row in the relevant source
+    (``GexDexResult.strike_rows``/``ExposureProfileResult.strike_rows``) --
+    e.g. a total Greeks-fetch outage (the whole section is absent), a
+    *partial* Greeks-fetch failure (this specific strike's legs failed
+    while others succeeded), or ``ExposureProfileCalculator`` dropping a
+    strike's legs on missing/non-finite ``mark_iv``. Independent review
+    (Task D3 round 1, Important #1) caught an earlier version of this
+    dataclass defaulting these to ``0.0`` instead -- indistinguishable from
+    "this strike really has flat/zero exposure" and, worse, rendered by the
+    GUI as a uniform green ("positive") column on a total outage. ``None``
+    here matches the convention ``net_gex_inferred``/``net_taker_flow``/
+    ``delta_1d_iv`` already used correctly below.
+
     ``net_gex_inferred`` is ``None`` when the inferred view's coverage
     gate (``DealerInventoryResult.render_inferred``) failed for this
     expiration -- never a silently-substituted 0.
@@ -63,12 +77,12 @@ class LevelsTableRow:
     strike: float
     call_oi: float
     put_oi: float
-    net_gex_holder: float
-    net_gex_assumed: float
+    net_gex_holder: Optional[float]
+    net_gex_assumed: Optional[float]
     net_gex_inferred: Optional[float]
-    net_dex: float
-    vex: float
-    cex: float
+    net_dex: Optional[float]
+    vex: Optional[float]
+    cex: Optional[float]
     net_taker_flow: Optional[float]
     delta_1d_iv: Optional[float]
     is_call_wall_assumed: bool = False
@@ -86,6 +100,21 @@ class LevelsTable:
 
     expiration: str
     rows: Tuple[LevelsTableRow, ...]  # sorted by strike ascending
+    gex_dex_available: bool
+    """Whether ``GexDexResult`` was present for this expiration at all
+    (independent review, Task D3 round 1, Important #1) -- False means
+    every row's ``net_gex_holder``/``net_gex_assumed``/``net_dex`` is
+    None (a total Greeks-fetch outage). A row's individual fields can
+    still be None even when this is True (a *partial* outage affecting
+    only some strikes) -- this flag only reports the whole-section case,
+    matching ``inferred_available``'s own scope."""
+
+    exposure_available: bool
+    """Whether ``ExposureProfileResult`` was present for this expiration
+    at all -- False means every row's ``vex``/``cex`` is None (a total
+    exposure-profile computation failure). Same whole-section-only scope
+    as ``gex_dex_available`` -- see that field's docstring."""
+
     inferred_available: bool
     """Whether ``net_gex_inferred``/``is_*_inferred`` carry real data for
     this expiration (``DealerInventoryResult.render_inferred``) -- False

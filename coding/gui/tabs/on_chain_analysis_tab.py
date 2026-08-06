@@ -11,7 +11,7 @@ Provides interface to:
 """
 
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 from PySide6.QtWidgets import (
     QWidget,
@@ -37,7 +37,11 @@ from PySide6.QtGui import QFont, QColor, QBrush
 
 from coding.core.analytics.historical_normalizer import NormalizedMetric
 from coding.core.analytics.levels_table_builder import build_levels_table
-from coding.core.analytics.reporting.historical_context_formatter import format_metric_value
+from coding.core.analytics.reporting.historical_context_formatter import (
+    METRIC_ORDER,
+    format_metric_value,
+    metric_label,
+)
 from coding.core.analytics.results.levels_table_results import LevelsTable, LevelsTableRow
 from coding.gui.components.log_viewer import LogViewer, GuiLogHandler
 from coding.gui.dialogs.flow_charts_window import FlowChartsWindow
@@ -58,13 +62,25 @@ _GUI_LOG_LOGGER_NAME = "coding.service.on_chain"
 # Task D3 (institutional_metrics_spec.md section 9(c)): Levels tab column
 # order/labels and index constants (used both for building the table and
 # for the sign-convention coloring logic below).
+#
+# Independent review (round 1, Important #2): the spec's sign-convention
+# radio has 3 options (holder/assumed dealer/inferred) but the first
+# implementation only ever displayed 2 GEX columns, silently mapping
+# "holder" onto the "assumed" column's coloring -- and since holder-side
+# gamma exposure (call_gamma + put_gamma) is structurally always >= 0,
+# selecting "holder" painted that column uniformly green on every expiry,
+# conveying no information. Ruling: a third, always-visible "Net GEX
+# (holder)" column displays `LevelsTableRow.net_gex_holder` (already
+# computed, previously wasted); the radio then does exactly what its name
+# says -- pick which of three REAL, displayed columns' sign drives
+# coloring. No column's displayed values change with the radio.
 _LEVELS_COLUMN_LABELS = (
-    "Strike", "Call OI", "Put OI", "Net GEX (assumed)", "Net GEX (inferred)",
-    "Net DEX", "VEX", "CEX", "Net taker flow", "Δ1d IV",
+    "Strike", "Call OI", "Put OI", "Net GEX (holder)", "Net GEX (assumed)",
+    "Net GEX (inferred)", "Net DEX", "VEX", "CEX", "Net taker flow", "Δ1d IV",
 )
 (
-    _COL_STRIKE, _COL_CALL_OI, _COL_PUT_OI, _COL_GEX_ASSUMED, _COL_GEX_INFERRED,
-    _COL_DEX, _COL_VEX, _COL_CEX, _COL_FLOW, _COL_IV_CHANGE,
+    _COL_STRIKE, _COL_CALL_OI, _COL_PUT_OI, _COL_GEX_HOLDER, _COL_GEX_ASSUMED,
+    _COL_GEX_INFERRED, _COL_DEX, _COL_VEX, _COL_CEX, _COL_FLOW, _COL_IV_CHANGE,
 ) = range(len(_LEVELS_COLUMN_LABELS))
 
 _METRICS_COLUMN_LABELS = ("Metric", "Value", "p30", "z30", "p90", "z90", "Regime")
@@ -573,6 +589,13 @@ class OnChainAnalysisTab(QWidget):
         self.levels_table.setRowCount(0)
         self.metrics_table.setRowCount(0)
 
+        # Minor (independent review round 1): reset sign-convention state
+        # too -- leaving "Inferred" checked-but-now-disabled (or checked at
+        # all) from a previous run's data would be stale once that data is
+        # gone.
+        self.assumed_radio.setChecked(True)
+        self.inferred_radio.setEnabled(False)
+
     def _load_analysis(self) -> None:
         """Build queue from selected currencies and start processing."""
         if self.worker is not None and self.worker.isRunning():
@@ -668,6 +691,17 @@ class OnChainAnalysisTab(QWidget):
         self.expiry_combo.blockSignals(False)
 
         if self.expiry_combo.count() == 0:
+            # Minor (independent review round 1): a result with zero
+            # expirations (expiration_names() empty) leaves the combo
+            # empty, so _on_expiry_selection_changed never fires -- but
+            # normalized_metrics is a currency-wide field, not per-expiry,
+            # so it should still surface for the most recently analyzed
+            # currency rather than leaving the strip permanently blank.
+            self._current_levels_table = None
+            self.levels_table.setRowCount(0)
+            latest_result = self._results_by_currency.get(self._last_analyzed_currency)
+            if latest_result is not None:
+                self._populate_normalized_metrics_table(latest_result.normalized_metrics)
             return
 
         index_to_select = 0
@@ -703,6 +737,12 @@ class OnChainAnalysisTab(QWidget):
         if result is None:
             return
 
+        # normalized_metrics is currency-wide, not per-expiry -- populate it
+        # unconditionally once a result is found, so a missing/absent bundle
+        # below (which only affects the Levels table) never leaves this
+        # strip blank (Minor, independent review round 1).
+        self._populate_normalized_metrics_table(result.normalized_metrics)
+
         bundle = result.bundle(expiration)
         if bundle is None:
             self._current_levels_table = None
@@ -712,7 +752,6 @@ class OnChainAnalysisTab(QWidget):
         self._current_levels_table = build_levels_table(bundle)
         self._update_sign_convention_availability()
         self._populate_levels_table()
-        self._populate_normalized_metrics_table(result.normalized_metrics)
 
     def _update_sign_convention_availability(self) -> None:
         """Enable/disable the "Inferred" radio per the loaded expiry's gate result."""
@@ -767,6 +806,7 @@ class OnChainAnalysisTab(QWidget):
             self._set_cell(row_index, _COL_STRIKE, row.strike, decimals=0, row_data=row)
             self._set_cell(row_index, _COL_CALL_OI, row.call_oi, decimals=0)
             self._set_cell(row_index, _COL_PUT_OI, row.put_oi, decimals=0)
+            self._set_cell(row_index, _COL_GEX_HOLDER, row.net_gex_holder, decimals=2)
             self._set_cell(row_index, _COL_GEX_ASSUMED, row.net_gex_assumed, decimals=2)
             self._set_cell(row_index, _COL_GEX_INFERRED, row.net_gex_inferred, decimals=2)
             self._set_cell(row_index, _COL_DEX, row.net_dex, decimals=2)
@@ -810,14 +850,17 @@ class OnChainAnalysisTab(QWidget):
         currently-selected sign convention (Task D3).
 
         "Row coloring: positive/negative on the ACTIVE GEX column only" --
-        both GEX columns are reset to neutral first so exactly one column
-        carries a color signal at a time. "Holder" and "assumed dealer"
-        both drive the "Net GEX (assumed)" column (they are both views
-        derived from the same GexDexResult per-strike data); "inferred"
-        drives the separate "Net GEX (inferred)" column (a distinct
-        DealerInventoryResult per-strike source) -- documented judgment
-        call, see levels_table_builder module docstring and the D3
-        completion report.
+        all three GEX columns are reset to neutral first so exactly one
+        column carries a color signal at a time. Each of the 3 sign
+        conventions (holder / assumed dealer / inferred) has its own
+        always-visible column ("Net GEX (holder)" / "Net GEX (assumed)" /
+        "Net GEX (inferred)") -- independent review round 1, Important #2:
+        an earlier version mapped "holder" onto the "assumed" column's
+        coloring with no displayed "holder" column at all, which always
+        rendered green (holder-side gamma exposure is structurally >= 0)
+        regardless of the expiry's real data. No column's displayed
+        VALUES change with the radio -- only which column is "active" for
+        coloring.
 
         Iterates the table's CURRENT visual row order (0..rowCount()) and
         reads each row's ``LevelsTableRow`` back off the Strike cell's
@@ -843,17 +886,17 @@ class OnChainAnalysisTab(QWidget):
             if row is None:
                 continue
 
+            holder_item = self.levels_table.item(visual_row, _COL_GEX_HOLDER)
             assumed_item = self.levels_table.item(visual_row, _COL_GEX_ASSUMED)
             inferred_item = self.levels_table.item(visual_row, _COL_GEX_INFERRED)
-            if assumed_item is not None:
-                assumed_item.setBackground(neutral_brush)
-            if inferred_item is not None:
-                inferred_item.setBackground(neutral_brush)
+            for gex_item in (holder_item, assumed_item, inferred_item):
+                if gex_item is not None:
+                    gex_item.setBackground(neutral_brush)
 
-            if convention == _CONVENTION_INFERRED:
+            if convention == _CONVENTION_HOLDER:
+                active_item, sign_value = holder_item, row.net_gex_holder
+            elif convention == _CONVENTION_INFERRED:
                 active_item, sign_value = inferred_item, row.net_gex_inferred
-            elif convention == _CONVENTION_HOLDER:
-                active_item, sign_value = assumed_item, row.net_gex_holder
             else:
                 active_item, sign_value = assumed_item, row.net_gex_assumed
 
@@ -913,13 +956,23 @@ class OnChainAnalysisTab(QWidget):
         Fill the normalized-metric strip from Task C1's ``HistoricalNormalizer``
         output (Task D3): Metric | Value | p30 | z30 | p90 | z90 | Regime.
 
-        ``format_metric_value`` (shared with the text report's HISTORICAL
-        CONTEXT section) supplies the per-unit value formatting; every
-        other column is a bare number/label, formatted directly.
+        Row order and the "Metric" column's label both reuse the text
+        report's own conventions (``METRIC_ORDER``/``metric_label``,
+        historical_context_formatter.py) instead of raw dict keys/
+        insertion order (Minor, independent review round 1) -- same "reuse
+        the report's formatting" rationale that motivated
+        ``format_metric_value`` below: a metric not in the fixed order
+        (forward-compatible with a future metric) is still appended after
+        the ordered ones, matching ``format_historical_context_section``'s
+        own fallback.
         """
-        self.metrics_table.setRowCount(len(metrics))
-        for row_index, metric in enumerate(metrics.values()):
-            self.metrics_table.setItem(row_index, 0, QTableWidgetItem(metric.name))
+        ordered_names = [name for name in METRIC_ORDER if name in metrics]
+        ordered_names += [name for name in metrics if name not in METRIC_ORDER]
+
+        self.metrics_table.setRowCount(len(ordered_names))
+        for row_index, name in enumerate(ordered_names):
+            metric = metrics[name]
+            self.metrics_table.setItem(row_index, 0, QTableWidgetItem(metric_label(metric.name)))
             self.metrics_table.setItem(
                 row_index, 1, QTableWidgetItem(format_metric_value(metric.value, metric.unit))
             )

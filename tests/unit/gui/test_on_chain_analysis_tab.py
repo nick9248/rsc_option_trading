@@ -200,6 +200,7 @@ class TestLevelsTablePopulation:
         tab._current_levels_table = LevelsTable(
             expiration="27MAR26",
             rows=(_row(95000.0, call_oi=20.0, put_oi=8.0, net_gex_assumed=-1234.5),),
+            gex_dex_available=True, exposure_available=True,
             inferred_available=False, net_taker_flow_available=False, delta_1d_iv_available=False,
         )
 
@@ -218,6 +219,7 @@ class TestLevelsTablePopulation:
         tab._current_levels_table = LevelsTable(
             expiration="27MAR26",
             rows=(_row(95000.0, net_gex_inferred=None, net_taker_flow=None, delta_1d_iv=None),),
+            gex_dex_available=True, exposure_available=True,
             inferred_available=False, net_taker_flow_available=False, delta_1d_iv_available=False,
         )
 
@@ -236,6 +238,7 @@ class TestLevelsTablePopulation:
         tab._current_levels_table = LevelsTable(
             expiration="27MAR26",
             rows=(_row(95000.0), _row(9000.0), _row(20000.0)),
+            gex_dex_available=True, exposure_available=True,
             inferred_available=False, net_taker_flow_available=False, delta_1d_iv_available=False,
         )
 
@@ -255,6 +258,7 @@ class TestLevelsTablePopulation:
         tab._current_levels_table = LevelsTable(
             expiration="27MAR26",
             rows=(_row(95000.0, net_gex_assumed=-500.0), _row(100000.0, net_gex_assumed=500.0)),
+            gex_dex_available=True, exposure_available=True,
             inferred_available=False, net_taker_flow_available=False, delta_1d_iv_available=False,
         )
         tab.assumed_radio.setChecked(True)
@@ -265,7 +269,12 @@ class TestLevelsTablePopulation:
         positive_item = tab.levels_table.item(1, tab_module._COL_GEX_ASSUMED)
         assert negative_item.background().color().name() == QColor(Colors.LOSS).name()
         assert positive_item.background().color().name() == QColor(Colors.PROFIT).name()
-        # The inferred column carries no signal when "assumed" is active.
+        # Neither the holder nor the inferred column carries a signal
+        # while "assumed" is active -- exactly one column colors at a time.
+        assert (
+            tab.levels_table.item(0, tab_module._COL_GEX_HOLDER).background().color().name()
+            == QColor(Colors.SURFACE).name()
+        )
         assert (
             tab.levels_table.item(0, tab_module._COL_GEX_INFERRED).background().color().name()
             == QColor(Colors.SURFACE).name()
@@ -273,20 +282,75 @@ class TestLevelsTablePopulation:
 
         tab.close()
 
-    def test_switching_to_holder_convention_recolors_using_holder_value(self, qapp):
+    def test_switching_to_holder_convention_colors_its_own_column_not_assumed(self, qapp):
+        """
+        Independent review round 1, Important #2: "Holder" must drive its
+        own always-visible "Net GEX (holder)" column -- not repaint the
+        "Net GEX (assumed)" column using the holder value (the earlier,
+        rejected design, which always rendered that column green since
+        holder-side gamma exposure is structurally >= 0, regardless of
+        the expiry's real assumed-dealer data).
+        """
         tab = OnChainAnalysisTab()
-        # assumed is negative (would color red) but holder is positive (must color green)
+        # holder is negative (must color red on its own column); assumed is
+        # positive (must reset to neutral once "assumed" is no longer active).
         tab._current_levels_table = LevelsTable(
             expiration="27MAR26",
-            rows=(_row(95000.0, net_gex_assumed=-500.0, net_gex_holder=250.0),),
+            rows=(_row(95000.0, net_gex_assumed=500.0, net_gex_holder=-250.0),),
+            gex_dex_available=True, exposure_available=True,
             inferred_available=False, net_taker_flow_available=False, delta_1d_iv_available=False,
         )
         tab._populate_levels_table()
 
         tab.holder_radio.setChecked(True)
 
-        item = tab.levels_table.item(0, tab_module._COL_GEX_ASSUMED)
-        assert item.background().color().name() == QColor(Colors.PROFIT).name()
+        holder_item = tab.levels_table.item(0, tab_module._COL_GEX_HOLDER)
+        assumed_item = tab.levels_table.item(0, tab_module._COL_GEX_ASSUMED)
+        assert holder_item.background().color().name() == QColor(Colors.LOSS).name()
+        assert assumed_item.background().color().name() == QColor(Colors.SURFACE).name()
+        # The displayed assumed value itself is untouched by the radio.
+        assert assumed_item.text() == "500.00"
+
+        tab.close()
+
+    def test_holder_column_displays_the_holder_value_regardless_of_convention(self, qapp):
+        """The "Net GEX (holder)" column's displayed number never changes
+        with the radio -- only which column is colored changes."""
+        tab = OnChainAnalysisTab()
+        tab._current_levels_table = LevelsTable(
+            expiration="27MAR26",
+            rows=(_row(95000.0, net_gex_holder=42.5),),
+            gex_dex_available=True, exposure_available=True,
+            inferred_available=False, net_taker_flow_available=False, delta_1d_iv_available=False,
+        )
+        tab._populate_levels_table()
+
+        assert tab.levels_table.item(0, tab_module._COL_GEX_HOLDER).text() == "42.50"
+
+        tab.assumed_radio.setChecked(True)
+        assert tab.levels_table.item(0, tab_module._COL_GEX_HOLDER).text() == "42.50"
+
+        tab.close()
+
+    def test_none_holder_value_skips_coloring_and_renders_na(self, qapp):
+        """
+        Independent review round 1, Important #1: a missing gex_dex row
+        for this strike means net_gex_holder is None, not 0.0 -- the
+        holder column must show "N/A" and must not be colored either way.
+        """
+        tab = OnChainAnalysisTab()
+        tab._current_levels_table = LevelsTable(
+            expiration="27MAR26",
+            rows=(_row(95000.0, net_gex_holder=None, net_gex_assumed=None, net_dex=None, vex=None, cex=None),),
+            gex_dex_available=False, exposure_available=False,
+            inferred_available=False, net_taker_flow_available=False, delta_1d_iv_available=False,
+        )
+        tab._populate_levels_table()
+        tab.holder_radio.setChecked(True)
+
+        holder_item = tab.levels_table.item(0, tab_module._COL_GEX_HOLDER)
+        assert holder_item.text() == "N/A"
+        assert holder_item.background().color().name() == QColor(Colors.SURFACE).name()
 
         tab.close()
 
@@ -294,6 +358,7 @@ class TestLevelsTablePopulation:
         tab = OnChainAnalysisTab()
         tab._current_levels_table = LevelsTable(
             expiration="27MAR26", rows=(_row(95000.0),),
+            gex_dex_available=True, exposure_available=True,
             inferred_available=False, net_taker_flow_available=False, delta_1d_iv_available=False,
         )
 
@@ -308,6 +373,7 @@ class TestLevelsTablePopulation:
         tab._current_levels_table = LevelsTable(
             expiration="27MAR26",
             rows=(_row(95000.0, net_gex_inferred=-77.0),),
+            gex_dex_available=True, exposure_available=True,
             inferred_available=True, net_taker_flow_available=False, delta_1d_iv_available=False,
         )
         tab._update_sign_convention_availability()
@@ -339,6 +405,7 @@ class TestLevelsTablePopulation:
                 _row(100000.0, is_call_wall_assumed=True),
                 _row(105000.0),
             ),
+            gex_dex_available=True, exposure_available=True,
             inferred_available=False, net_taker_flow_available=False, delta_1d_iv_available=False,
         )
 
@@ -378,6 +445,7 @@ class TestLevelsTablePopulation:
                 _row(85000.0, net_gex_assumed=-500.0, is_put_support_assumed=True),
                 _row(100000.0, net_gex_assumed=700.0, is_call_wall_assumed=True),
             ),
+            gex_dex_available=True, exposure_available=True,
             inferred_available=False, net_taker_flow_available=False, delta_1d_iv_available=False,
         )
         tab._populate_levels_table()
@@ -428,13 +496,51 @@ class TestNormalizedMetricsStripPopulation:
         tab._populate_normalized_metrics_table(metrics)
 
         assert tab.metrics_table.rowCount() == 2
-        assert tab.metrics_table.item(0, 0).text() == "net_gex"
+        # Human-readable labels (Minor, independent review round 1) --
+        # not the raw dict key.
+        assert tab.metrics_table.item(0, 0).text() == "Net GEX"
+        assert tab.metrics_table.item(1, 0).text() == "PCR (OI)"
         assert tab.metrics_table.item(0, 2).text() == "72.0"
         assert tab.metrics_table.item(0, 3).text() == "+0.85"
         assert tab.metrics_table.item(0, 6).text() == "ELEVATED"
         # insufficient history -> N/A, not a crash/blank
         assert tab.metrics_table.item(1, 2).text() == "N/A"
         assert tab.metrics_table.item(1, 6).text() == "N/A"
+
+        tab.close()
+
+    def test_row_order_follows_report_metric_order_not_dict_insertion_order(self, qapp):
+        """
+        Minor (independent review round 1): the dict is built with "funding"
+        inserted before "net_gex" -- the strip must still render net_gex
+        first, matching METRIC_ORDER (the same order the text report's
+        HISTORICAL CONTEXT section uses), not raw insertion order.
+        """
+        tab = OnChainAnalysisTab()
+        metrics = {
+            "funding": NormalizedMetric(
+                name="funding", value=0.0002, percentile_30d=50.0, z_30d=0.1,
+                percentile_90d=50.0, z_90d=0.1, regime_30d="NORMAL", n_30d=30, n_90d=90,
+                sufficient=True, unit="%",
+            ),
+            "net_gex": NormalizedMetric(
+                name="net_gex", value=1_500_000.0, percentile_30d=72.0, z_30d=0.85,
+                percentile_90d=64.0, z_90d=0.5, regime_30d="ELEVATED", n_30d=30, n_90d=90,
+                sufficient=True, unit="USD",
+            ),
+            "some_future_metric": NormalizedMetric(
+                name="some_future_metric", value=1.0, percentile_30d=50.0, z_30d=0.0,
+                percentile_90d=50.0, z_90d=0.0, regime_30d="NORMAL", n_30d=30, n_90d=90,
+                sufficient=True, unit="ratio",
+            ),
+        }
+
+        tab._populate_normalized_metrics_table(metrics)
+
+        labels_in_order = [tab.metrics_table.item(i, 0).text() for i in range(tab.metrics_table.rowCount())]
+        # net_gex before funding (METRIC_ORDER), and the unrecognized key
+        # (forward-compat) appended last, falling back to its raw name.
+        assert labels_in_order == ["Net GEX", "Funding (8h)", "some_future_metric"]
 
         tab.close()
 
@@ -512,5 +618,64 @@ class TestExpirySelectorWiring:
         assert tab.levels_table.item(0, tab_module._COL_STRIKE).text() == "95,000"
         assert tab.levels_table.item(0, tab_module._COL_STRIKE).toolTip() == "Max Pain"
         assert "REPORT TEXT" in tab.report_display.toPlainText()
+
+        tab.close()
+
+    def test_metrics_strip_populates_even_when_result_has_no_expirations(self, qapp):
+        """
+        Minor (independent review round 1): a result whose
+        ``expiration_names()`` is empty leaves the expiry combo empty, so
+        ``_on_expiry_selection_changed`` never fires -- but
+        ``normalized_metrics`` is currency-wide, not per-expiry, so the
+        strip must still populate for the most recently analyzed currency
+        rather than staying permanently blank.
+        """
+        from datetime import datetime
+
+        from coding.core.analytics.historical_normalizer import NormalizedMetric as NM
+        from coding.core.analytics.results.analysis_result import MarketMetricsResult, OnChainAnalysisResult
+
+        result = OnChainAnalysisResult(
+            currency="BTC", underlying_price=95000.0, generated_at=datetime(2026, 7, 25, 12, 0, 0),
+            market_metrics=MarketMetricsResult(dvol=None, iv_percentile=None, iv_rank=None, current_funding=None, funding_8h=None),
+            expirations=(), market_wide=MagicMock(), parsed_instruments={}, atm_iv_by_expiration={},
+            recent_trades=(),
+            normalized_metrics={
+                "net_gex": NM(name="net_gex", value=1.0, percentile_30d=50.0, z_30d=0.0,
+                              percentile_90d=50.0, z_90d=0.0, regime_30d="NORMAL", n_30d=30, n_90d=90,
+                              sufficient=True, unit="USD"),
+            },
+        )
+
+        fake_output = MagicMock()
+        fake_output.report_text = "REPORT TEXT"
+        fake_output.result = result
+
+        tab = OnChainAnalysisTab()
+        tab._last_analyzed_currency = "BTC"
+
+        tab._on_analysis_finished(fake_output)
+
+        assert tab.expiry_combo.count() == 0
+        assert tab.levels_table.rowCount() == 0
+        assert tab.metrics_table.rowCount() == 1
+        assert tab.metrics_table.item(0, 0).text() == "Net GEX"
+
+        tab.close()
+
+
+class TestClearResetsSignConvention:
+    def test_clear_resets_radios_and_disables_inferred(self, qapp):
+        """Minor (independent review round 1): _clear() must not leave a
+        previous run's sign-convention state (e.g. "Inferred" checked and
+        enabled) stale once that run's data is gone."""
+        tab = OnChainAnalysisTab()
+        tab.inferred_radio.setEnabled(True)
+        tab.inferred_radio.setChecked(True)
+
+        tab._clear()
+
+        assert tab.assumed_radio.isChecked() is True
+        assert tab.inferred_radio.isEnabled() is False
 
         tab.close()

@@ -35,6 +35,17 @@ _METRIC_LABELS = {
     "funding": "Funding (8h)",
 }
 
+METRIC_ORDER = _METRIC_ORDER
+"""
+Public alias of the fixed metric render order (Task D3, institutional_
+metrics_spec.md section 9(c), independent review round 1 Minor): the GUI's
+normalized-metric strip reuses this so its row order matches the text
+report's HISTORICAL CONTEXT section instead of raw dict insertion order.
+Any metric key not in this tuple is forward-compatible -- callers append it
+after the ordered ones, matching ``format_historical_context_section``'s
+own fallback below.
+"""
+
 
 def _format_value(value: float, unit: str) -> str:
     """Format ``value`` for display according to its unit."""
@@ -78,19 +89,17 @@ def format_metric_value(value: float, unit: str) -> str:
     return _format_value(value, unit)
 
 
-def format_window_summary(
-    percentile: Optional[float],
-    z: Optional[float],
-    regime: Optional[str],
-    n: int,
-    sufficient: bool,
-) -> str:
+def metric_label(name: str) -> str:
     """
-    Public wrapper of ``_format_window`` (institutional_metrics_spec.md
-    section 9(c), Task D3) -- see ``format_metric_value``'s docstring for
-    why the GUI reuses this instead of re-deriving it.
+    Public wrapper of ``_METRIC_LABELS`` (Task D3, independent review
+    round 1 Minor): the GUI's normalized-metric strip needs the same
+    human-readable label the text report already uses (e.g. "Net GEX" for
+    the raw key ``net_gex``), so it reuses this instead of rendering the
+    raw dict key. Falls back to the raw key when unrecognized -- same
+    forward-compatible convention ``format_historical_context_section``
+    itself uses for a metric outside the fixed order.
     """
-    return _format_window(percentile, z, regime, n, sufficient)
+    return _METRIC_LABELS.get(name, name)
 
 
 def _format_metric_line(metric: NormalizedMetric) -> str:

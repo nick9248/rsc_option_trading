@@ -92,6 +92,8 @@ def build_levels_table(bundle: ExpirationBundle) -> LevelsTable:
         else {}
     )
 
+    gex_dex_available = gex_dex is not None
+    exposure_available = exposure_profile is not None
     inferred_available = dealer_inventory is not None and dealer_inventory.render_inferred
 
     net_taker_flow_available = flow is not None and flow.sufficient_data
@@ -164,13 +166,13 @@ def build_levels_table(bundle: ExpirationBundle) -> LevelsTable:
                 call_oi=strike_row.call_oi,
                 put_oi=strike_row.put_oi,
                 net_gex_holder=(
-                    gex_dex_row.gamma_exposure_holder if gex_dex_row is not None else 0.0
+                    gex_dex_row.gamma_exposure_holder if gex_dex_row is not None else None
                 ),
-                net_gex_assumed=gex_dex_row.net_gex if gex_dex_row is not None else 0.0,
+                net_gex_assumed=gex_dex_row.net_gex if gex_dex_row is not None else None,
                 net_gex_inferred=(dealer_row.inferred_gex if dealer_row is not None else None),
-                net_dex=gex_dex_row.net_dex if gex_dex_row is not None else 0.0,
-                vex=exposure_row.vex_holder if exposure_row is not None else 0.0,
-                cex=exposure_row.cex_holder if exposure_row is not None else 0.0,
+                net_dex=gex_dex_row.net_dex if gex_dex_row is not None else None,
+                vex=exposure_row.vex_holder if exposure_row is not None else None,
+                cex=exposure_row.cex_holder if exposure_row is not None else None,
                 net_taker_flow=net_taker_flow,
                 delta_1d_iv=_combine_average(call_iv_change, put_iv_change),
                 is_call_wall_assumed=(
@@ -194,6 +196,8 @@ def build_levels_table(bundle: ExpirationBundle) -> LevelsTable:
     return LevelsTable(
         expiration=bundle.expiration,
         rows=tuple(rows),
+        gex_dex_available=gex_dex_available,
+        exposure_available=exposure_available,
         inferred_available=inferred_available,
         net_taker_flow_available=net_taker_flow_available,
         delta_1d_iv_available=delta_1d_iv_available,
