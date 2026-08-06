@@ -1657,6 +1657,49 @@ class DatabaseRepository:
             """, (currency, index_name, timestamp, date, dvol))
             logger.info(f"Saved DVOL for {index_name}: {dvol:.2f}")
 
+    def save_dvol_history_row(
+        self,
+        currency: str,
+        timestamp: datetime,
+        dvol_value: float
+    ) -> int:
+        """
+        Persist one row to dvol_history (infra_spec.md section 1 / Task E3).
+
+        dvol_history is a SEPARATE table from volatility_index_history
+        (written by save_dvol above) -- it feeds iv_percentile_365d /
+        expected-move calculations that need >24h of history
+        (on_chain_analysis_service.py:244-250). Prior to this method it was
+        only ever written by the one-time scripts/backfill_dvol_history.py.
+
+        Architectural note: DVOLFetcher.save_to_db() (coding/service/deribit/
+        dvol_fetcher.py) already has an idempotent insert with this exact
+        ON CONFLICT clause, but it takes a raw psycopg2 connection and lives
+        in the Service layer. This repository (Core layer) must not import
+        a Service-layer class -- that would invert the project's Core ->
+        Service dependency direction. The insert SQL is therefore
+        re-declared here rather than reused; both call sites share the same
+        (asset, timestamp) idempotency key by convention, not shared code.
+
+        Args:
+            currency: Asset symbol (BTC or ETH) -- stored as `asset`.
+            timestamp: UTC-aware timestamp for this DVOL reading.
+            dvol_value: The DVOL index value.
+
+        Returns:
+            1 if a new row was inserted, 0 if (asset, timestamp) already
+            existed (ON CONFLICT DO NOTHING).
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO dvol_history (asset, timestamp, dvol_value)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (asset, timestamp) DO NOTHING
+            """, (currency, timestamp, dvol_value))
+            inserted = cursor.rowcount
+        logger.info(f"Saved dvol_history row for {currency}: {dvol_value} (inserted={inserted})")
+        return inserted
+
     def save_ohlcv(
         self,
         currency: str,

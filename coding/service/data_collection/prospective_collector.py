@@ -23,6 +23,7 @@ from coding.core.config import SUPPORTED_CURRENCIES
 from coding.core.database.repository import DatabaseRepository
 from coding.service.data_collection.hourly_aggregation_service import HourlyAggregationService
 from coding.service.deribit.deribit_api_service import DeribitApiService
+from coding.service.deribit.dvol_fetcher import DVOLFetcher
 from coding.service.on_chain.forward_testing_harness import ForwardTestingHarness
 from coding.service.on_chain.volatility_reconstruction_service import VolatilityReconstructionService
 from coding.service.scanner.butterfly_scan_service import ButterflyScanService
@@ -65,6 +66,13 @@ class ProspectiveCollector:
         self.api = api_service or DeribitApiService()
         self.repo = repository or DatabaseRepository()
         self.aggregation_service = HourlyAggregationService(repository=self.repo)
+        # infra_spec.md section 1 / Task E3: dvol_history is a separate
+        # table from volatility_index_history (_fetch_dvol below) -- was
+        # only ever written by the one-time scripts/backfill_dvol_history.py
+        # before this. DVOLFetcher has no api/repository dependency of its
+        # own (calls the Deribit REST endpoint directly), so it's just
+        # instantiated once here for reuse across cycles.
+        self._dvol_fetcher = DVOLFetcher()
         self._forward_harness = ForwardTestingHarness(repository=self.repo)
         self._volatility_reconstruction = VolatilityReconstructionService(repository=self.repo)
         # institutional_metrics_spec.md section 6 / task C7: signed delta-
@@ -357,6 +365,18 @@ class ProspectiveCollector:
             self._fetch_dvol(currency)
         except Exception as e:
             logger.error(f"    Error fetching DVOL: {e}")
+
+        # 4b. Fetch and store dvol_history row (infra_spec.md section 1 /
+        # Task E3). A SEPARATE table from volatility_index_history above --
+        # feeds iv_percentile_365d / expected-move calcs that need >24h of
+        # history (on_chain_analysis_service.py:244-250). Own try/except,
+        # isolated from step 4's _fetch_dvol -- a failure in one must never
+        # suppress, or be suppressed by, the other.
+        logger.info(f"  Fetching {currency} dvol_history row...")
+        try:
+            self._fetch_dvol_history_row(currency)
+        except Exception as e:
+            logger.error(f"    Error fetching dvol_history row: {e}")
 
         # 5. Fetch and store funding rate data
         logger.info(f"  Fetching {currency} funding rate...")
@@ -1129,6 +1149,60 @@ class ProspectiveCollector:
 
         except Exception as e:
             logger.error(f"    Failed to fetch/save DVOL: {e}")
+            raise
+
+    def _fetch_dvol_history_row(self, currency: str) -> None:
+        """
+        Fetch the latest DVOL value and persist it to dvol_history
+        (infra_spec.md section 1 / Task E3).
+
+        This is a SEPARATE table from volatility_index_history (written by
+        `_fetch_dvol` above) -- dvol_history feeds iv_percentile_365d /
+        expected-move calculations that need >24h of history
+        (on_chain_analysis_service.py:244-250, VolatilityReconstructionService,
+        market_wide_calculator.py), which volatility_index_history alone
+        can't serve. Before this method existed, dvol_history was only ever
+        written by the one-time scripts/backfill_dvol_history.py (its own
+        docstring says "one-time backfill") -- it fed data through
+        2026-07-16 and then went silently stale, undetected for 9 days
+        because the health check monitoring it was LOCAL-only (see Task E3
+        Part 2 / database_local_checker.py).
+
+        `DVOLFetcher.fetch_latest()` returns only the latest DVOL value (a
+        float, or None on any fetch error) -- it does not expose the
+        underlying candle's own timestamp. This method pairs that value
+        with the current UTC hour (truncated to the top of the hour, not
+        `datetime.now()` at full precision) before persisting, so repeated
+        daemon runs within the same hour (e.g. after a crash/restart, since
+        this cycle runs every 30 minutes per unified_scheduler.py) dedup
+        correctly against dvol_history's `UNIQUE (asset, timestamp)`
+        constraint via `save_dvol_history_row`'s `ON CONFLICT DO NOTHING`.
+
+        Persists via `DatabaseRepository.save_dvol_history_row` -- never a
+        raw connection directly from this collector, matching every other
+        daemon writer in this class.
+
+        Args:
+            currency: Currency symbol (BTC, ETH).
+        """
+        try:
+            dvol_value = self._dvol_fetcher.fetch_latest(currency)
+
+            if dvol_value is None:
+                logger.warning(f"    No dvol_history value returned for {currency}")
+                return
+
+            snapshot_hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+            self.repo.save_dvol_history_row(
+                currency=currency,
+                timestamp=snapshot_hour,
+                dvol_value=dvol_value,
+            )
+
+            logger.info(f"    Saved dvol_history row: {dvol_value:.2f}")
+
+        except Exception as e:
+            logger.error(f"    Failed to fetch/save dvol_history row: {e}")
             raise
 
     def _fetch_funding_rate(self, currency: str) -> None:

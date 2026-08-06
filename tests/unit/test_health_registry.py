@@ -1,5 +1,8 @@
+from unittest.mock import MagicMock
+
 from coding.core.health.models import CheckEnvironment, CheckResult, CheckStatus
 from coding.service.health.base import HealthCheck
+from coding.service.health.checkers.database_local_checker import DatabaseLocalFreshnessCheck
 from coding.service.health.registry import run_checks
 
 
@@ -45,6 +48,25 @@ def test_run_checks_both_environment_runs_everywhere():
     checker = _PassingCheck()
     assert "Passing" in run_checks(CheckEnvironment.LOCAL, repo=None, checkers=[checker])
     assert "Passing" in run_checks(CheckEnvironment.VPS, repo=None, checkers=[checker])
+
+
+def test_database_local_freshness_check_runs_under_vps_environment():
+    """Regression for Task E3: DatabaseLocalFreshnessCheck's category must
+    appear when run_checks is invoked with CheckEnvironment.VPS, not just
+    LOCAL -- that closes the actual monitoring gap, since
+    scripts/check_vps_health.py's VPS cron is the only automated health
+    run and scripts/validate_system.py's LOCAL run only fires when a human
+    remembers to run it by hand."""
+    checker = DatabaseLocalFreshnessCheck()
+    checker.run = MagicMock(return_value=[
+        CheckResult(name="dvol_history freshness", status=CheckStatus.WARN, message="stale"),
+    ])
+
+    grouped_vps = run_checks(CheckEnvironment.VPS, repo=None, checkers=[checker])
+    assert "Database — Local" in grouped_vps
+
+    grouped_local = run_checks(CheckEnvironment.LOCAL, repo=None, checkers=[checker])
+    assert "Database — Local" in grouped_local
 
 
 def test_run_checks_contains_exceptions_as_fail_result():

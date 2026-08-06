@@ -2,7 +2,7 @@
 
 from datetime import datetime, timedelta
 
-from coding.core.health.models import CheckStatus
+from coding.core.health.models import CheckEnvironment, CheckStatus
 from coding.service.health.checkers.database_local_checker import DatabaseLocalFreshnessCheck
 
 
@@ -74,6 +74,17 @@ def test_freshness_handles_ms_epoch_conversion():
     check = DatabaseLocalFreshnessCheck()
     result = check._freshness_result(cursor, "historical_trades", "trade_timestamp", "ms_epoch", 2.0, 24.0)
     assert result.status == CheckStatus.PASS
+
+
+def test_environment_is_both_so_it_runs_under_local_and_vps():
+    """Task E3 fix: previously tagged CheckEnvironment.LOCAL, which meant
+    this check (and its dvol_history staleness WARN/FAIL) only ever ran
+    when a human manually ran scripts/validate_system.py -- the only
+    automated/cron health run, scripts/check_vps_health.py, only runs
+    CheckEnvironment.VPS-tagged checks and never saw it. Tagging BOTH makes
+    it run under both entry points via registry.run_checks' existing
+    ``checker.environment == CheckEnvironment.BOTH`` passthrough."""
+    assert DatabaseLocalFreshnessCheck.environment == CheckEnvironment.BOTH
 
 
 def test_safe_table_checks_isolates_failure_and_rolls_back():

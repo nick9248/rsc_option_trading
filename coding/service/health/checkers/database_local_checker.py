@@ -39,7 +39,17 @@ class DatabaseLocalFreshnessCheck(HealthCheck):
     """
 
     category = "Database — Local"
-    environment = CheckEnvironment.LOCAL
+    # Task E3: was CheckEnvironment.LOCAL, which meant this check (and its
+    # dvol_history staleness WARN/FAIL, see _DAILY_TABLES above) only ever
+    # ran when a human manually ran scripts/validate_system.py. The only
+    # automated/cron-scheduled health run is scripts/check_vps_health.py on
+    # the VPS, which only runs CheckEnvironment.VPS-tagged checks -- it
+    # never saw this one. BOTH makes registry.run_checks' existing
+    # `checker.environment == CheckEnvironment.BOTH` passthrough run this
+    # check under every entry point, so it monitors the VPS's own database
+    # (where the daemon actually writes) via the VPS cron, not just
+    # whatever local DB a human happens to query by hand.
+    environment = CheckEnvironment.BOTH
 
     def run(self, repo) -> List[CheckResult]:
         results: List[CheckResult] = []
