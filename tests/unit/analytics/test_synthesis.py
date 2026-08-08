@@ -515,6 +515,18 @@ class TestScoreVannaCharm:
             iv_pctile=70, gex_total=6_000_000, spot=100000)
         assert weight == 0.15
 
+    def test_none_iv_pctile_treated_as_mid_range_neutral(self):
+        """
+        Task G2-B: iv_pctile=None (unavailable) must not crash (the old
+        signature had no None handling and would raise on `iv_pctile >
+        60`) and must not fabricate a directional vanna signal -- it's
+        treated the same as the mid-range 40-60 band, which already
+        produces vanna_signal=0.0 with no fabricated direction.
+        """
+        score, _, _ = ScoringEngine.score_vanna_charm(
+            net_vanna=0.001, net_charm=0, iv_pctile=None)
+        assert score == 0.0
+
 
 # =============================================================================
 # TESTS: score_futures_basis — no basis_back
@@ -635,6 +647,17 @@ class TestFragilityDetection:
         # But funding_ann = 0.02 * 3 * 365 = 21.9% > 15%
         mult, level = ScoringEngine.detect_fragility(scores, funding_8h=0.02)
         assert mult == 0.7  # MODERATE
+
+    def test_none_funding_8h_no_crash_returns_none_level(self):
+        """
+        Task G2-B: funding_8h=None must not crash (the old code computed
+        `funding_8h * 3 * 365` unconditionally) and must not claim a
+        fragility verdict it has no data to support.
+        """
+        scores = [(2.0, 0.8, "DEX strong bullish"), (1.5, 0.7, "P/C bullish")]
+        mult, level = ScoringEngine.detect_fragility(scores, funding_8h=None)
+        assert mult == 1.0
+        assert level == "NONE"
 
 
 # =============================================================================
@@ -815,7 +838,16 @@ class TestBuildMarketWide:
         assert market.vrp == 4.0
         assert market.futures_basis == {"27MAR26": 1.5}
 
-    def test_empty_structured_returns_defaults(self):
+    def test_empty_structured_preserves_none_not_fabricated_zero(self):
+        """
+        Task G2-B (Wave G fresh audit, BLOCKER): this test used to assert
+        ``market.dvol == 0.0`` as the CORRECT behavior for genuinely-
+        missing data -- that was itself the bug. A ``None`` from every
+        Optional section of ``MarketWideResult`` must reach
+        ``MarketWideMetrics`` as ``None``, never a fabricated ``0.0`` --
+        a fabricated zero is indistinguishable from a real measurement
+        and gets scored as one.
+        """
         empty_mw = MarketWideResult(
             spot_price=50000.0, currency="BTC", dvol=None, iv_percentile_365d=None,
             aggregate_gex_dex=None, term_structure=None, futures_basis=None,
@@ -827,11 +859,61 @@ class TestBuildMarketWide:
 
         market = SynthesisMapper.build_market_wide(result)
         assert market.spot_price == 50000.0
-        assert market.dvol == 0.0
+        assert market.dvol is None
+        assert market.iv_percentile_365d is None
+        assert market.funding_rate is None
+        assert market.funding_8h is None
+        assert market.rv_10d is None
+        assert market.rv_20d is None
+        assert market.rv_30d is None
+        assert market.vrp is None
+        assert market.cone_10d_pctile is None
+        assert market.cone_20d_pctile is None
+        assert market.cone_30d_pctile is None
+        assert market.perp_oi is None
+        assert market.btc_eth_price_corr is None
+        assert market.btc_eth_dvol_corr is None
+        assert market.failed_sections == ()
         # Empty shape normalizes to CONTANGO with spread=0 per v2.0 spec
         assert market.term_structure_shape == "CONTANGO"
         assert market.term_structure_spread == 0.0
         assert market.futures_basis == {}
+
+    def test_present_but_null_funding_fields_stay_none_not_zero(self):
+        """
+        PerpetualFundingResult.funding_rate/funding_8h are independently
+        Optional[float] even when the ``funding`` object itself exists.
+        Must still surface as None, not 0.0.
+        """
+        mw = MarketWideResult(
+            spot_price=65000.0, currency="BTC", dvol=None, iv_percentile_365d=None,
+            aggregate_gex_dex=None, term_structure=None, futures_basis=None,
+            realized_volatility=None, variance_risk_premium=None, volatility_cone=None,
+            perpetual_funding=PerpetualFundingResult(
+                perp_open_interest=500_000.0, funding_rate=None, funding_8h=None,
+                funding_trend="Stable", history_points=0,
+            ),
+            block_trades=None, cross_asset_correlation=None, failed_sections=(),
+        )
+        result = make_onchain_result(market_wide=mw)
+        market = SynthesisMapper.build_market_wide(result)
+        assert market.funding_rate is None
+        assert market.funding_8h is None
+        assert market.perp_oi == 500_000.0
+
+    def test_failed_sections_threaded_through_to_metrics(self):
+        """Task G2-B Finding 3: MarketWideResult.failed_sections must
+        reach MarketWideMetrics.failed_sections unchanged."""
+        mw = MarketWideResult(
+            spot_price=65000.0, currency="BTC", dvol=None, iv_percentile_365d=None,
+            aggregate_gex_dex=None, term_structure=None, futures_basis=None,
+            realized_volatility=None, variance_risk_premium=None, volatility_cone=None,
+            perpetual_funding=None, block_trades=None, cross_asset_correlation=None,
+            failed_sections=("futures_basis", "perpetual_funding"),
+        )
+        result = make_onchain_result(market_wide=mw)
+        market = SynthesisMapper.build_market_wide(result)
+        assert market.failed_sections == ("futures_basis", "perpetual_funding")
 
     def test_flat_shape_normalized_to_contango(self):
         """Non-standard shape values must be normalized."""
@@ -1128,6 +1210,64 @@ class TestSynthesisEngineRun:
         assert "Direction:" in result
         assert "Vol Regime:" in result
         assert "Fragility:" in result
+
+    def test_run_missing_market_data_discloses_insufficient_data_not_fabricated_extremes(self):
+        """
+        Task G2-B (BLOCKER), end-to-end: every field that can genuinely
+        be missing is None. The output must not crash, must not contain
+        the fabricated-extreme text a 0.0 stand-in used to produce (e.g.
+        "Extremely cheap — strong buy-vol" for IV percentile, or "Neutral
+        leverage" for funding), and must visibly disclose the gaps in a
+        DATA QUALITY section.
+        """
+        engine = SynthesisEngine()
+        market = make_market_wide(
+            dvol=None, iv_percentile_365d=None, funding_rate=None, funding_8h=None,
+            rv_10d=None, rv_20d=None, rv_30d=None, vrp=None,
+            cone_10d_pctile=None, cone_20d_pctile=None, cone_30d_pctile=None,
+            perp_oi=None, btc_eth_price_corr=None, btc_eth_dvol_corr=None,
+        )
+        expiry = make_expiry_metrics()
+        result = engine.run(market, [expiry])
+
+        assert isinstance(result, str)
+        assert "DATA QUALITY" in result
+        assert "insufficient data" in result.lower()
+        # The old fabricated-zero failure mode: missing IV percentile
+        # scored as the single most extreme, most confident signal.
+        assert "extremely cheap" not in result.lower()
+        assert "strong buy-vol" not in result.lower()
+        # The old fabricated-zero failure mode for funding: "Neutral
+        # leverage" is a real claim about a real (if unremarkable) reading.
+        assert "Neutral leverage" not in result
+
+    def test_run_failed_sections_disclosed_in_data_quality(self):
+        """Task G2-B Finding 3: a non-empty failed_sections must surface
+        in the assembled output, distinct from ordinary insufficient-data
+        gaps."""
+        engine = SynthesisEngine()
+        market = make_market_wide(failed_sections=("futures_basis", "perpetual_funding"))
+        expiry = make_expiry_metrics()
+        result = engine.run(market, [expiry])
+        assert "DATA QUALITY" in result
+        assert "futures_basis" in result
+        assert "perpetual_funding" in result
+
+    def test_run_regime_narrative_gex_matches_scorer_gex_not_largest_expiry(self):
+        """
+        Task G2-B Finding 2: the regime narrative's "+X.XM GEX" figure
+        must describe the SAME value the vol-regime scorer used (the
+        market-wide aggregate, when available) -- not the largest-OI
+        expiry's own GEX. Confirmed live case: narrative said "+13.7M
+        GEX" while the true aggregate was "+86.8M" (6.3x off). Reproduced
+        here with the same order of magnitude.
+        """
+        engine = SynthesisEngine()
+        market = make_market_wide(aggregate_total_gex=86_800_000.0)
+        expiry = make_expiry_metrics(total_gex=13_700_000.0)
+        result = engine.run(market, [expiry])
+        assert "86.8M GEX" in result
+        assert "13.7M GEX" not in result
 
     def test_run_with_minimal_expiries(self):
         engine = SynthesisEngine()

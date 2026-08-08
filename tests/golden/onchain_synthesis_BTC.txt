@@ -38,6 +38,8 @@ TRADE RECOMMENDATIONS:
 PRIMARY — Long Straddle/Strangle (25SEP26): Cheap IV favors owning volatility. Buy ATM straddle or 25-delta strangle.
 DEFENSIVE — Reduce sizing, favor defined-risk structures only. Consider long straddle on 25SEP26 to capture the regime shift.
 
+DATA QUALITY: All market-wide sections computed successfully.
+
 SCORING DETAIL:
   Direction: NEUTRAL (confidence: 13%)
   Fragility: NONE

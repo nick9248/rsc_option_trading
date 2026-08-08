@@ -128,12 +128,31 @@ class ExpiryMetrics:
 
 @dataclass
 class MarketWideMetrics:
-    """Parsed market-wide metrics"""
+    """
+    Parsed market-wide metrics.
+
+    Task G2-B (Wave G fresh audit, BLOCKER): every field below that can
+    genuinely be absent upstream (the source calculation never ran, or
+    raised) is ``Optional[float]`` with a ``None`` default — NOT ``0.0``.
+    Before this fix, ``SynthesisMapper.build_market_wide`` collapsed a
+    real ``None`` (e.g. ``MarketWideResult.dvol is None`` because DVOL
+    was unavailable) into a fabricated ``0.0`` via ``mw.dvol or 0.0``.
+    That fabricated zero then flowed into scorers with no ``None``
+    branch (e.g. ``score_iv_percentile``) and was scored as the SAME
+    thing as a genuinely-measured 0 — for ``iv_percentile_365d`` this
+    meant "no data" silently became "IV 0th pctile: Extremely cheap —
+    strong buy-vol", the single strongest, highest-confidence signal the
+    scorer can emit, for a metric that was never measured. Every scorer
+    consuming these fields now has an explicit ``None`` branch that
+    returns a neutral score at (near-)zero weight/confidence and an
+    "insufficient data" message, instead of silently treating absence as
+    a measured extreme.
+    """
     spot_price: float
-    dvol: float
-    iv_percentile_365d: float
-    funding_rate: float
-    funding_8h: float
+    dvol: Optional[float]
+    iv_percentile_365d: Optional[float]
+    funding_rate: Optional[float]
+    funding_8h: Optional[float]
 
     # Term structure
     term_structure_shape: str  # "CONTANGO" or "BACKWARDATION"
@@ -141,18 +160,22 @@ class MarketWideMetrics:
     term_structure_spread_signed: float = 0.0  # signed pts (back - front) — used for display
     iv_by_dte: Dict[int, float] = field(default_factory=dict)
 
-    # Realized vol
-    rv_10d: float = 0.0
-    rv_20d: float = 0.0
-    rv_30d: float = 0.0
+    # Realized vol. None exactly when MarketWideResult.realized_volatility
+    # is None (the whole RV calculation never ran) -- NOT a measured 0.0.
+    rv_10d: Optional[float] = None
+    rv_20d: Optional[float] = None
+    rv_30d: Optional[float] = None
 
-    # VRP
-    vrp: float = 0.0
+    # VRP. None exactly when MarketWideResult.variance_risk_premium is
+    # None (DVOL or realized vol unavailable) -- NOT a measured 0.0.
+    vrp: Optional[float] = None
 
-    # Vol cone
-    cone_10d_pctile: float = 0.0
-    cone_20d_pctile: float = 0.0
-    cone_30d_pctile: float = 0.0
+    # Vol cone. None exactly when MarketWideResult.volatility_cone is
+    # None, OR that specific window was never computed -- NOT a measured
+    # 0th percentile.
+    cone_10d_pctile: Optional[float] = None
+    cone_20d_pctile: Optional[float] = None
+    cone_30d_pctile: Optional[float] = None
 
     # Futures basis. Optional[float] values (Decision D12, bugfix_spec.md
     # Item 5): None for a suppressed sub-daily/expired tenor. See the
@@ -160,13 +183,16 @@ class MarketWideMetrics:
     # already relies on this being possible at runtime.
     futures_basis: Dict[str, Optional[float]] = field(default_factory=dict)
 
-    # Perp
-    perp_oi: float = 0.0
+    # Perp. None exactly when MarketWideResult.perpetual_funding is None
+    # (the whole funding calculation never ran) -- NOT a measured 0 OI.
+    perp_oi: Optional[float] = None
     perp_funding_trend: str = "Stable"
 
-    # Cross-asset
-    btc_eth_price_corr: float = 0.0
-    btc_eth_dvol_corr: float = 0.0
+    # Cross-asset. None exactly when MarketWideResult.cross_asset_correlation
+    # is None, or the underlying correlation itself is None (insufficient
+    # sample) -- NOT a measured zero correlation.
+    btc_eth_price_corr: Optional[float] = None
+    btc_eth_dvol_corr: Optional[float] = None
 
     # Block trades (institutional_metrics_spec.md section 9 / Migration M2,
     # Task D1 review round 2, Important #3): `blocks` is grouped by
@@ -184,6 +210,16 @@ class MarketWideMetrics:
     aggregate_call_resistance: Optional[Dict] = None
     aggregate_put_support: Optional[Dict] = None
     aggregate_hvl: Optional[float] = None
+
+    # Task G2-B Finding 3: names of MarketWideResult sections whose
+    # calculation raised (threaded through from
+    # MarketWideOrchestrator.run(), which used to hardcode this at `()`
+    # unconditionally -- see market_wide_orchestrator.py). Read by
+    # SynthesisEngine.run() to disclose which inputs are missing because
+    # of an actual error, distinct from inputs that are simply not
+    # computed yet (those already disclose via the Optional fields above
+    # being None).
+    failed_sections: Tuple[str, ...] = ()
 
 
 # =============================================================================
@@ -320,14 +356,23 @@ class ScoringEngine:
             return (-2.0, dte_weight, f"Max pain ${max_pain:,.0f} is {distance_pct:+.1f}% below — strong downward pull")
 
     @staticmethod
-    def score_funding(funding_8h: float) -> Tuple[float, float, str]:
+    def score_funding(funding_8h: Optional[float]) -> Tuple[float, float, str]:
         """
         Funding rate interpretation. Uses funding_8h only.
 
         Annualized rate = funding_8h × 3 × 365.
         Positive funding → crowded long → contrarian bearish.
         Negative funding → crowded short → contrarian bullish.
+
+        Task G2-B: `funding_8h is None` means the perpetual-funding
+        section never ran/no reading was available -- weight-zero the
+        same way ``score_flow_gated`` already does for insufficient flow
+        data, rather than defaulting to 0.0 (which would silently score
+        as "Neutral leverage", a real claim about a real measurement).
         """
+        if funding_8h is None:
+            return (0.0, 0.0, "Funding: insufficient data — weight zero")
+
         ann_rate = funding_8h * 3 * 365
 
         if abs(ann_rate) < 5:
@@ -427,7 +472,7 @@ class ScoringEngine:
 
     @staticmethod
     def score_vanna_charm(net_vanna: float, net_charm: float,
-                          iv_pctile: float = 50.0, gex_total: float = 0.0,
+                          iv_pctile: Optional[float] = 50.0, gex_total: float = 0.0,
                           spot: float = 100000.0) -> Tuple[float, float, str]:
         """
         Second-order Greeks interpretation.
@@ -440,7 +485,16 @@ class ScoringEngine:
         Zero inputs produce 0 signal (no phantom signals).
 
         Gamma-adjusted weight: negative GEX amplifies, positive GEX dampens.
+
+        Task G2-B: ``iv_pctile=None`` (IV percentile unavailable) is
+        treated the same as the mid-range 40-60 band -- "no clear IV
+        direction" is already the correct, honest description of "we
+        don't know," and that band already produces vanna_signal=0.0
+        with no fabricated direction, so no separate branch is needed.
         """
+        if iv_pctile is None:
+            iv_pctile = 50.0
+
         # Vanna signal (IV-regime-conditional)
         if net_vanna == 0:
             vanna_signal = 0.0
@@ -503,7 +557,7 @@ class ScoringEngine:
     # -------------------------------------------------------------------------
 
     @staticmethod
-    def score_iv_percentile(iv_pctile: float) -> Tuple[float, float, str]:
+    def score_iv_percentile(iv_pctile: Optional[float]) -> Tuple[float, float, str]:
         """
         IV Percentile interpretation for vol regime.
 
@@ -513,7 +567,20 @@ class ScoringEngine:
             25-75th → Normal (0)              — neutral
             < 25th → Cheap (-1)               — buy vol
             < 10th → Extremely cheap (-2)     — strong buy vol
+
+        Task G2-B (BLOCKER): ``iv_pctile=None`` (IV percentile unavailable)
+        used to be silently converted to ``0.0`` upstream by
+        ``SynthesisMapper.build_market_wide`` and fell into the final
+        ``else`` branch below -- "IV 0th pctile: Extremely cheap — strong
+        buy-vol" (score -2.0, confidence/weight 0.8), the single strongest
+        and most confident signal this scorer can emit, for a metric that
+        was never measured. None now gets its own explicit branch: a
+        neutral score at zero weight, with the reasoning saying plainly
+        that the data is missing.
         """
+        if iv_pctile is None:
+            return (0.0, 0.0, "IV percentile: insufficient data — weight zero, no signal")
+
         if iv_pctile > 90:
             return (2.0, 0.8, f"IV {iv_pctile:.0f}th pctile: Extremely expensive — strong sell-vol edge")
         elif iv_pctile > 75:
@@ -526,8 +593,8 @@ class ScoringEngine:
             return (-2.0, 0.8, f"IV {iv_pctile:.0f}th pctile: Extremely cheap — strong buy-vol")
 
     @staticmethod
-    def score_vrp(vrp: float, rv_10d: float, rv_20d: float, rv_30d: float,
-                  cone_30d_pctile: float) -> Tuple[float, float, str]:
+    def score_vrp(vrp: Optional[float], rv_10d: Optional[float], rv_20d: Optional[float],
+                  rv_30d: Optional[float], cone_30d_pctile: Optional[float]) -> Tuple[float, float, str]:
         """
         Variance Risk Premium interpretation with stale-data correction.
 
@@ -542,21 +609,46 @@ class ScoringEngine:
 
         Forward VRP = DVOL - avg(10d RV, 20d RV)
         Use forward VRP when 30d cone percentile > 85th or < 15th.
+
+        Task G2-B (BLOCKER): ``vrp=None`` (DVOL or realized vol
+        unavailable) used to be silently converted to ``0.0`` upstream,
+        landing in the "Neutral" band at weight 0.5 -- a claim that vol is
+        fairly priced, when in fact nothing was measured. ``vrp=None``
+        now returns a neutral score at zero weight instead. The
+        stale-data correction inputs (``rv_10d``/``rv_20d``/``rv_30d``/
+        ``cone_30d_pctile``) can independently be None (that section
+        failed while VRP itself succeeded) -- the correction is skipped
+        (falls back to raw ``vrp``) rather than crashing or fabricating a
+        correction from a missing percentile/RV window.
         """
+        if vrp is None:
+            return (0.0, 0.0, "VRP: insufficient data (DVOL or realized volatility unavailable) — weight zero")
+
         # Stale-data correction: only for cone > 85 (spike inflated 30d RV)
         # Cone < 15 (abnormally quiet) uses raw VRP — 10d/20d are equally quiet
-        if cone_30d_pctile > 85:
+        if (cone_30d_pctile is not None and cone_30d_pctile > 85
+                and rv_10d is not None and rv_20d is not None and rv_30d is not None):
             forward_rv = (rv_10d + rv_20d) / 2
             dvol_approx = vrp + rv_30d
             forward_vrp = dvol_approx - forward_rv
             effective_vrp = forward_vrp
             stale_note = (f"30d RV at {cone_30d_pctile:.0f}th pctile (STALE). "
                           f"Forward VRP using 10d/20d avg: {forward_vrp:+.1f}pts")
-        elif cone_30d_pctile < 15:
+        elif cone_30d_pctile is not None and cone_30d_pctile > 85:
+            # Cone says stale but the RV windows needed for the forward-VRP
+            # correction are themselves missing — disclose the gap rather
+            # than silently applying (or silently skipping) the correction.
+            effective_vrp = vrp
+            stale_note = (f"30d RV at {cone_30d_pctile:.0f}th pctile (STALE), but 10d/20d/30d RV "
+                          f"unavailable — forward-VRP correction skipped, using raw VRP")
+        elif cone_30d_pctile is not None and cone_30d_pctile < 15:
             effective_vrp = vrp
             stale_note = (f"30d RV at {cone_30d_pctile:.0f}th pctile — abnormally quiet period. "
                           f"If realized vol reverts to historical norms, VRP will compress. "
                           f"Treat current sell-vol edge as potentially overstated")
+        elif cone_30d_pctile is None:
+            effective_vrp = vrp
+            stale_note = "30d RV percentile: insufficient data — stale-data correction not applied"
         else:
             effective_vrp = vrp
             stale_note = f"30d RV within normal range"
@@ -663,7 +755,7 @@ class ScoringEngine:
     @staticmethod
     def detect_fragility(
             all_direction_scores: List[Tuple[float, float, str]],
-            funding_8h: float
+            funding_8h: Optional[float]
     ) -> Tuple[float, str]:
         """
         Detect fragile crowding setups where flow consensus is strong
@@ -671,7 +763,18 @@ class ScoringEngine:
 
         Returns (multiplier, level): HIGH→0.5, MODERATE→0.7, NONE→1.0.
         This is NOT a scorer — it's a post-hoc confidence multiplier.
+
+        Task G2-B: ``funding_8h=None`` (funding data unavailable) cannot
+        support a fragility claim one way or the other -- return the
+        no-op multiplier (1.0, "NONE") rather than treating a fabricated
+        0.0 as "definitely not crowded" (which happened to be harmless
+        under the old thresholds here, since 0.0 never exceeds the ±15%
+        annualized bands, but was still the wrong reason to reach the
+        right answer).
         """
+        if funding_8h is None:
+            return (1.0, "NONE")
+
         # Compute directional avg excluding funding scores
         non_funding = [(s, w, r) for s, w, r in all_direction_scores
                        if "funding" not in r.lower()]
@@ -936,15 +1039,24 @@ class NarrativeGenerator:
     # VOL RECOMMENDATION TEMPLATES
     # -------------------------------------------------------------------------
 
+    # Task G2-B: ``{iv_pctile}`` has NO numeric format spec (was
+    # ``{iv_pctile:.0f}``) -- ``generate_vol_narrative`` pre-formats it
+    # into a display string ("73" or "insufficient data") before calling
+    # ``.format()``, since a bare ``:.0f`` spec cannot render "insufficient
+    # data" without raising. ``vrp``/``skew`` keep their numeric specs:
+    # every template that references ``vrp`` is only ever selected when
+    # ``vrp`` is not None (see ``generate_vol_narrative``'s ``vrp is None``
+    # branch, which forces the "neutral" template -- the one template with
+    # no ``vrp``/``iv_pctile`` placeholders at all).
     VOL_TEMPLATES = {
         "sell_strong": (
-            "Volatility is expensive (IV at {iv_pctile:.0f}th percentile, "
+            "Volatility is expensive (IV at {iv_pctile}th percentile, "
             "VRP {vrp:+.1f}pts). {vrp_adjustment} "
             "Sell premium in {sell_expiry} where ATM IV is {sell_iv:.1f}%. "
             "RR25 at {skew:+.1f}% makes {rich_side} puts the higher-edge side to sell."
         ),
         "sell_moderate": (
-            "Volatility is moderately elevated (IV at {iv_pctile:.0f}th percentile). "
+            "Volatility is moderately elevated (IV at {iv_pctile}th percentile). "
             "{vrp_adjustment} "
             "Selling premium has edge but size conservatively. "
             "Favor {sell_expiry} expiry, {rich_side} side."
@@ -954,7 +1066,7 @@ class NarrativeGenerator:
             "Focus on directional trades with defined risk structures."
         ),
         "buy_moderate": (
-            "Volatility is cheap (IV at {iv_pctile:.0f}th percentile, "
+            "Volatility is cheap (IV at {iv_pctile}th percentile, "
             "VRP {vrp:+.1f}pts). Long vol positions have edge. "
             "Buy {buy_expiry} straddles or strangles. Favor {cheap_side} side."
         ),
@@ -1024,8 +1136,8 @@ class NarrativeGenerator:
     @classmethod
     def generate_vol_narrative(
             cls,
-            iv_pctile: float,
-            vrp: float,
+            iv_pctile: Optional[float],
+            vrp: Optional[float],
             vrp_adjustment: str,
             risk_reversal_25d: float,
             sell_expiry: str,
@@ -1046,10 +1158,23 @@ class NarrativeGenerator:
         match (mechanically: substitute risk_reversal_25d = -skew into the
         prior skew>8/skew>=4/skew<4 boundaries -- same decision boundaries,
         opposite-signed input, no new thresholds introduced).
+
+        Task G2-B: ``vrp=None`` (VRP unavailable) forces ``template_key``
+        to "neutral" -- the one template with no ``{vrp}``/``{iv_pctile}``
+        placeholder, so it can never fabricate a directional vol call from
+        missing data, and never crashes trying to format ``None`` with a
+        numeric spec. ``iv_pctile=None`` is pre-formatted into a plain
+        "insufficient data" string (the templates' ``{iv_pctile}``
+        placeholder carries no format spec for exactly this reason) so it
+        can still render inside a "sell"/"buy" template driven by a real,
+        non-None ``vrp``.
         """
+        iv_pctile_display = f"{iv_pctile:.0f}" if iv_pctile is not None else "insufficient data"
 
         # Determine which template — unified ±5 thresholds matching VRP scorer
-        if vrp > 10:
+        if vrp is None:
+            template_key = "neutral"
+        elif vrp > 10:
             template_key = "sell_strong"
         elif vrp > 5:
             template_key = "sell_moderate"
@@ -1072,7 +1197,7 @@ class NarrativeGenerator:
         template = cls.VOL_TEMPLATES[template_key]
 
         return template.format(
-            iv_pctile=iv_pctile,
+            iv_pctile=iv_pctile_display,
             vrp=vrp,
             vrp_adjustment=vrp_adjustment,
             skew=risk_reversal_25d,
@@ -1086,10 +1211,10 @@ class NarrativeGenerator:
     @classmethod
     def generate_risk_factors(
             cls,
-            cone_30d_pctile: float,
+            cone_30d_pctile: Optional[float],
             gex_total: float,
             largest_expiry_dte: int,
-            funding_8h: float,
+            funding_8h: Optional[float],
             risk_reversal_25d: float,
             spot: float = 100000.0,
             fragility_multiplier: float = 1.0,
@@ -1103,11 +1228,17 @@ class NarrativeGenerator:
         legacy put-call ``skew`` -- the "Extreme skew" threshold below is
         re-signed to match (rr = -skew; puts-rich extreme is now a large
         NEGATIVE risk reversal).
+
+        Task G2-B: ``cone_30d_pctile``/``funding_8h`` can now be None
+        (unavailable) -- both threshold checks below are skipped, never
+        evaluated against a fabricated 0.0, when their input is missing.
+        A missing input is not itself a "risk factor" to report here; the
+        run-level DATA QUALITY section is where its absence gets disclosed.
         """
 
         risks = []
 
-        if cone_30d_pctile > 90:
+        if cone_30d_pctile is not None and cone_30d_pctile > 90:
             risks.append(
                 f"30d RV at {cone_30d_pctile:.0f}th percentile — recent extreme move may repeat or mean-revert violently")
 
@@ -1124,7 +1255,7 @@ class NarrativeGenerator:
             risks.append(f"Major expiry in {largest_expiry_dte} DTE — pin risk and gamma spike around max pain")
 
         # Funding threshold: |funding_8h| > 0.03% per 8h (~32.85% ann)
-        if abs(funding_8h) > 0.03:
+        if funding_8h is not None and abs(funding_8h) > 0.03:
             direction = "long" if funding_8h > 0 else "short"
             ann_rate = abs(funding_8h) * 3 * 365
             level = "Extreme" if ann_rate > 20 else "Elevated"
@@ -1152,7 +1283,7 @@ class NarrativeGenerator:
             cls,
             regime: MarketRegime,
             vol_regime: VolRegime,
-            iv_pctile: float,
+            iv_pctile: Optional[float],
             risk_reversal_25d: float,
             gex_total: float,
             near_term_expiry: str,
@@ -1177,6 +1308,13 @@ class NarrativeGenerator:
         not the legacy put-call ``skew`` -- every threshold below is
         re-signed to match (rr = -skew; same decision boundaries, no new
         thresholds introduced).
+
+        Task G2-B: ``iv_pctile=None`` (IV percentile unavailable) must not
+        silently satisfy an IV threshold check via a fabricated 0.0 --
+        both IV-gated strategies below now require ``iv_pctile is not
+        None`` before comparing it, so a missing IV percentile can never
+        trigger "cheap IV, buy vol" (the old ``0.0 < 30`` phantom trigger)
+        or be blocked from "expensive IV, sell vol" for the wrong reason.
         """
         recommendations = []
 
@@ -1188,7 +1326,7 @@ class NarrativeGenerator:
             MarketRegime.RANGE_BOUND_ELEVATED,
         )
         if (regime in range_bound_regimes and
-                iv_pctile > 70 and
+                iv_pctile is not None and iv_pctile > 70 and
                 vol_regime != VolRegime.EXPLOSIVE):
             # RR25-adjusted IC (re-signed: was skew > 8 / skew < 2)
             if risk_reversal_25d < -8:
@@ -1214,7 +1352,7 @@ class NarrativeGenerator:
             )
 
         # Strategy 2: Long vol conditions
-        if vol_regime == VolRegime.EXPLOSIVE or iv_pctile < 30:
+        if vol_regime == VolRegime.EXPLOSIVE or (iv_pctile is not None and iv_pctile < 30):
             recommendations.append(
                 f"PRIMARY — Long Straddle/Strangle ({far_term_expiry}): "
                 f"{'Explosive gamma regime' if vol_regime == VolRegime.EXPLOSIVE else 'Cheap IV'} "
@@ -1467,30 +1605,65 @@ class SynthesisEngine:
 
         # =====================================================================
         # STEP 4: Calculate forward VRP for narrative
+        #
+        # Task G2-B: every input here (market.rv_10d/rv_20d, market.dvol,
+        # market.vrp, market.cone_30d_pctile) can now genuinely be None.
+        # The old code assumed all five were always real floats -- with
+        # the mapper fix above, that assumption is false whenever a
+        # section's calculation didn't run, so every branch below is
+        # guarded and discloses "insufficient data" instead of silently
+        # computing a forward-VRP proxy (or a stale-data correction) from
+        # a fabricated zero.
         # =====================================================================
 
-        forward_rv = (market.rv_10d + market.rv_20d) / 2
-        forward_vrp = market.dvol - forward_rv
+        forward_rv = (
+            (market.rv_10d + market.rv_20d) / 2
+            if market.rv_10d is not None and market.rv_20d is not None
+            else None
+        )
+        forward_vrp = (
+            market.dvol - forward_rv
+            if market.dvol is not None and forward_rv is not None
+            else None
+        )
         effective_vrp = market.vrp
 
-        if market.cone_30d_pctile > 85:
-            signals_agree = (market.vrp >= 0) == (forward_vrp >= 0)
-            agreement_note = (
-                "Confirms primary signal direction."
-                if signals_agree
-                else f"Conflicts with primary VRP ({market.vrp:+.1f}pts) — treat as uncertain."
-            )
+        if market.vrp is None:
             vrp_adjustment = (
-                f"NOTE [model]: 30d RV at {market.cone_30d_pctile:.0f}th pctile — "
-                f"may be inflated by a prior extreme move. "
-                f"Forward VRP proxy using 10d/20d avg RV ({forward_rv:.1f}%) = {forward_vrp:+.1f}pts. "
-                f"{agreement_note} "
-                f"Primary VRP ({market.vrp:+.1f}pts) drives this recommendation."
+                "VRP: insufficient data (DVOL or realized volatility unavailable) — "
+                "no stale-data correction applied."
             )
-        elif market.cone_30d_pctile < 15:
+        elif market.cone_30d_pctile is not None and market.cone_30d_pctile > 85:
+            if forward_vrp is not None:
+                signals_agree = (market.vrp >= 0) == (forward_vrp >= 0)
+                agreement_note = (
+                    "Confirms primary signal direction."
+                    if signals_agree
+                    else f"Conflicts with primary VRP ({market.vrp:+.1f}pts) — treat as uncertain."
+                )
+                vrp_adjustment = (
+                    f"NOTE [model]: 30d RV at {market.cone_30d_pctile:.0f}th pctile — "
+                    f"may be inflated by a prior extreme move. "
+                    f"Forward VRP proxy using 10d/20d avg RV ({forward_rv:.1f}%) = {forward_vrp:+.1f}pts. "
+                    f"{agreement_note} "
+                    f"Primary VRP ({market.vrp:+.1f}pts) drives this recommendation."
+                )
+            else:
+                vrp_adjustment = (
+                    f"NOTE [model]: 30d RV at {market.cone_30d_pctile:.0f}th pctile — may be "
+                    f"inflated by a prior extreme move, but the forward-VRP proxy is unavailable "
+                    f"(10d/20d RV or DVOL missing). "
+                    f"Primary VRP ({market.vrp:+.1f}pts) drives this recommendation, uncorrected."
+                )
+        elif market.cone_30d_pctile is not None and market.cone_30d_pctile < 15:
             vrp_adjustment = (
                 f"NOTE: 30d RV at {market.cone_30d_pctile:.0f}th pctile — unusually calm period. "
                 f"VRP may compress further if realized vol reverts to mean."
+            )
+        elif market.cone_30d_pctile is None:
+            vrp_adjustment = (
+                "30d RV percentile: insufficient data — cannot assess whether the primary "
+                "VRP is representative of current conditions."
             )
         else:
             vrp_adjustment = "30d RV within normal range. VRP is representative."
@@ -1505,13 +1678,25 @@ class SynthesisEngine:
 
         header = self._generate_header(market, overall_direction, vol_regime, market_regime)
 
+        # Task G2-B Finding 2: the regime/risk/trade narratives below must
+        # describe the SAME GEX value ``gex_for_regime`` (STEP 3) already
+        # used to classify vol_regime -- not ``largest_expiry.total_gex``.
+        # Before this fix, the vol-regime score correctly preferred the
+        # market-wide aggregate GEX (falling back to the largest-OI
+        # expiry only when the aggregate is unavailable/zero), while every
+        # narrative sentence quoting a "+X.XM GEX" figure was fed the
+        # largest-OI expiry's OWN gamma regardless -- on the confirmed
+        # live case, the narrative read "+13.7M GEX" (that one expiry's
+        # value) in a sentence describing the market's positioning, while
+        # the true market-wide aggregate was "+86.8M" (6.3x larger). The
+        # text and the number it's allegedly describing must agree.
         regime_narrative = self.narrator.generate_regime_narrative(
             regime=market_regime,
             spot=spot,
             put_support=put_support,
             call_resistance=call_resistance,
             max_pain=max_pain,
-            gex_total=largest_expiry.total_gex,
+            gex_total=gex_for_regime,
             conflict_detail=regime_reason if market_regime == MarketRegime.TRANSITION else "",
             transition_window=self._estimate_transition_window(expiries_sorted),
         )
@@ -1555,7 +1740,7 @@ class SynthesisEngine:
 
         risk_narrative = self.narrator.generate_risk_factors(
             cone_30d_pctile=market.cone_30d_pctile,
-            gex_total=largest_expiry.total_gex,
+            gex_total=gex_for_regime,
             largest_expiry_dte=largest_expiry.dte,
             funding_8h=market.funding_8h,
             risk_reversal_25d=largest_expiry.risk_reversal_25d,
@@ -1570,7 +1755,7 @@ class SynthesisEngine:
             vol_regime=vol_regime,
             iv_pctile=market.iv_percentile_365d,
             risk_reversal_25d=largest_expiry.risk_reversal_25d,
-            gex_total=largest_expiry.total_gex,
+            gex_total=gex_for_regime,
             near_term_expiry=best_sell_expiry.expiry,
             far_term_expiry=meaningful_far.expiry,
             skew_expiry=largest_expiry.expiry,
@@ -1582,6 +1767,41 @@ class SynthesisEngine:
         # =====================================================================
         # STEP 6: Assemble final output
         # =====================================================================
+
+        # Task G2-B Finding 1 + Finding 3: a component scored as
+        # "insufficient data" must be visibly disclosed in the assembled
+        # output, not just quietly weighted to (near-)zero inside an
+        # average. `dir_reasons`/`vol_reasons` (classify_direction/
+        # classify_vol_regime's own reasoning lists) filter out exactly
+        # the zero-score entries this fix introduces, so they can't carry
+        # this disclosure -- collect it explicitly instead.
+        data_quality_notes: List[str] = []
+        if iv_pctile_score[2].startswith("IV percentile: insufficient data"):
+            data_quality_notes.append(iv_pctile_score[2])
+        if vrp_score[2].startswith("VRP: insufficient data"):
+            data_quality_notes.append(vrp_score[2])
+        funding_note = next(
+            (r for _, w, r in all_direction_scores if r.startswith("Funding: insufficient data") and w == 0.0),
+            None,
+        )
+        if funding_note is not None:
+            data_quality_notes.append(funding_note)
+        if market.failed_sections:
+            data_quality_notes.append(
+                "Sections that raised an error during calculation (not simply "
+                f"unavailable): {', '.join(market.failed_sections)}"
+            )
+
+        if data_quality_notes:
+            data_quality_block = "DATA QUALITY:\n" + "\n".join(
+                f"  - {note}" for note in data_quality_notes
+            )
+        else:
+            data_quality_block = "DATA QUALITY: All market-wide sections computed successfully."
+
+        effective_vrp_display = (
+            f"{effective_vrp:+.1f}pts" if effective_vrp is not None else "insufficient data"
+        )
 
         synthesis = f"""{header}
 
@@ -1602,13 +1822,15 @@ VOL ASSESSMENT: {vol_narrative}
 TRADE RECOMMENDATIONS:
 {trade_narrative}
 
+{data_quality_block}
+
 SCORING DETAIL:
   Direction: {overall_direction.name} (confidence: {dir_confidence:.0%})
   Fragility: {fragility_level}
   Near-term: {near_direction.name} | Far-term: {far_direction.name}
   Vol Regime: {vol_regime.value}
   Market Regime: {market_regime.value}
-  Effective VRP: {effective_vrp:+.1f}pts | RR25: {largest_expiry.risk_reversal_25d:+.1f}%
+  Effective VRP: {effective_vrp_display} | RR25: {largest_expiry.risk_reversal_25d:+.1f}%
 """
 
         return synthesis
@@ -1624,12 +1846,31 @@ SCORING DETAIL:
             vol_regime: VolRegime,
             market_regime: MarketRegime
     ) -> str:
-        """Generate the dashboard header."""
+        """
+        Generate the dashboard header.
+
+        Task G2-B: every market-wide field interpolated below can now be
+        None (genuinely unavailable) -- each gets pre-formatted into a
+        safe display string ("N/A") instead of applying a numeric format
+        spec directly to a value that might be None (which would raise
+        TypeError) or silently substituting 0.0 (which would render as a
+        real, confident-looking measurement).
+        """
         # Bug fix: safe IV access — find first DTE >= 5 instead of fragile index access
         front_iv = next(
             (v for k, v in sorted(market.iv_by_dte.items()) if k >= 5),
             0.0
         )
+
+        dvol_str = f"{market.dvol:.1f}%" if market.dvol is not None else "N/A"
+        iv_pctile_str = f"{market.iv_percentile_365d:.0f}th" if market.iv_percentile_365d is not None else "N/A"
+        rv_10d_str = f"{market.rv_10d:.1f}%" if market.rv_10d is not None else "N/A"
+        rv_20d_str = f"{market.rv_20d:.1f}%" if market.rv_20d is not None else "N/A"
+        rv_30d_str = f"{market.rv_30d:.1f}%" if market.rv_30d is not None else "N/A"
+        cone_30d_str = f"{market.cone_30d_pctile:.0f}th cone" if market.cone_30d_pctile is not None else "cone N/A"
+        vrp_str = f"{market.vrp:+.1f}pts" if market.vrp is not None else "N/A (insufficient data)"
+        funding_rate_str = f"{market.funding_rate:.4f}%" if market.funding_rate is not None else "N/A"
+        funding_8h_str = f"{market.funding_8h:.4f}%" if market.funding_8h is not None else "N/A"
 
         return f"""================================================================================
 EXECUTIVE SYNTHESIS — BTC OPTIONS MARKET
@@ -1638,10 +1879,10 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 BTC ${market.spot_price:,.2f} | Regime: {market_regime.value.upper().replace('_', ' ')}
 Direction: {direction.name} | Vol: {vol_regime.value.upper()}
 ────────────────────────────────────────────────────────────────────────────────
-DVOL: {market.dvol:.1f}%  | IV Pctile: {market.iv_percentile_365d:.0f}th  | ATM IV (front): ~{front_iv:.1f}%
-10d RV: {market.rv_10d:.1f}%  | 20d RV: {market.rv_20d:.1f}%  | 30d RV: {market.rv_30d:.1f}% ({market.cone_30d_pctile:.0f}th cone)
-VRP: {market.vrp:+.1f}pts  | Term Structure: {market.term_structure_shape} ({market.term_structure_spread_signed:+.1f}pts)
-Perp Funding: {market.funding_rate:.4f}%  | 8h: {market.funding_8h:.4f}%
+DVOL: {dvol_str}  | IV Pctile: {iv_pctile_str}  | ATM IV (front): ~{front_iv:.1f}%
+10d RV: {rv_10d_str}  | 20d RV: {rv_20d_str}  | 30d RV: {rv_30d_str} ({cone_30d_str})
+VRP: {vrp_str}  | Term Structure: {market.term_structure_shape} ({market.term_structure_spread_signed:+.1f}pts)
+Perp Funding: {funding_rate_str}  | 8h: {funding_8h_str}
 ────────────────────────────────────────────────────────────────────────────────"""
 
     def _generate_timeframe_section(
@@ -1960,20 +2201,39 @@ class SynthesisMapper:
         # RV values from calculator are decimals (e.g. 0.585 = 58.5%).
         # dvol and vrp are in percentage points (e.g. 58.7, -7.6).
         # Multiply RV by 100 here so all vol fields share the same scale.
+        #
+        # Task G2-B: `rv is None` means the realized-volatility calculation
+        # never ran (MarketWideOrchestrator._calculate_realized_volatility
+        # returned None) -- genuinely missing, not a measured 0.0. Preserve
+        # None so score_vrp's None branch (not a fabricated-zero branch)
+        # fires downstream.
         rv = mw.realized_volatility
-        rv_10d = (rv.rv_10d if rv is not None else 0.0) * 100
-        rv_20d = (rv.rv_20d if rv is not None else 0.0) * 100
-        rv_30d = (rv.rv_30d if rv is not None else 0.0) * 100
+        rv_10d = (rv.rv_10d * 100) if rv is not None else None
+        rv_20d = (rv.rv_20d * 100) if rv is not None else None
+        rv_30d = (rv.rv_30d * 100) if rv is not None else None
 
         # API funding values are also decimals (e.g. -0.000201 = -0.0201%).
         # Multiply by 100 so score_funding thresholds (5/10/20%) work correctly.
+        #
+        # Task G2-B: two independent None cases, both genuinely "no data",
+        # neither a measured 0.0 -- (1) `funding is None`: the whole
+        # perpetual-funding phase never ran; (2) `funding.funding_rate`/
+        # `funding.funding_8h` is None even though `funding` exists: the
+        # ticker itself returned no reading for that specific field
+        # (PerpetualFundingResult declares both Optional). The old
+        # `(funding.funding_rate or 0.0) if funding is not None else 0.0`
+        # collapsed BOTH cases into a fabricated zero.
         funding = mw.perpetual_funding
         funding_rate = (
-            (funding.funding_rate or 0.0) if funding is not None else 0.0
-        ) * 100
+            funding.funding_rate * 100
+            if funding is not None and funding.funding_rate is not None
+            else None
+        )
         funding_8h = (
-            (funding.funding_8h or 0.0) if funding is not None else 0.0
-        ) * 100
+            funding.funding_8h * 100
+            if funding is not None and funding.funding_8h is not None
+            else None
+        )
 
         # Validate term_structure_shape: must be CONTANGO or BACKWARDATION only
         ts = mw.term_structure
@@ -2049,8 +2309,15 @@ class SynthesisMapper:
 
         return MarketWideMetrics(
             spot_price=mw.spot_price or result.underlying_price,
-            dvol=mw.dvol or 0.0,
-            iv_percentile_365d=mw.iv_percentile_365d or 0.0,
+            # Task G2-B (BLOCKER): `mw.dvol`/`mw.iv_percentile_365d` are
+            # already Optional[float] on MarketWideResult -- None means
+            # genuinely unavailable. `mw.dvol or 0.0` used to collapse
+            # that None (and a legitimate 0.0) into the same fabricated
+            # zero; pass the value straight through so downstream scorers
+            # see the real None and take their explicit insufficient-data
+            # branch instead of scoring a phantom extreme.
+            dvol=mw.dvol,
+            iv_percentile_365d=mw.iv_percentile_365d,
             funding_rate=funding_rate,
             funding_8h=funding_8h,
             term_structure_shape=ts_shape,
@@ -2060,27 +2327,38 @@ class SynthesisMapper:
             rv_10d=rv_10d,
             rv_20d=rv_20d,
             rv_30d=rv_30d,
-            vrp=(mw.variance_risk_premium.vrp if mw.variance_risk_premium is not None else 0.0),
+            # None exactly when the VRP calculation never ran (dvol or
+            # 30d RV unavailable) -- not a measured 0.0.
+            vrp=(mw.variance_risk_premium.vrp if mw.variance_risk_premium is not None else None),
+            # `.get(window)` (no default) so a window missing from the
+            # dict -- OR the whole `volatility_cone` result being None --
+            # both yield None, never a fabricated 0th percentile.
             cone_10d_pctile=(
-                mw.volatility_cone.percentile_by_window.get(10, 0.0)
-                if mw.volatility_cone is not None else 0.0
+                mw.volatility_cone.percentile_by_window.get(10)
+                if mw.volatility_cone is not None else None
             ),
             cone_20d_pctile=(
-                mw.volatility_cone.percentile_by_window.get(20, 0.0)
-                if mw.volatility_cone is not None else 0.0
+                mw.volatility_cone.percentile_by_window.get(20)
+                if mw.volatility_cone is not None else None
             ),
             cone_30d_pctile=(
-                mw.volatility_cone.percentile_by_window.get(30, 0.0)
-                if mw.volatility_cone is not None else 0.0
+                mw.volatility_cone.percentile_by_window.get(30)
+                if mw.volatility_cone is not None else None
             ),
             futures_basis=futures_basis,
-            perp_oi=(funding.perp_open_interest if funding is not None else 0.0) or 0.0,
+            # None exactly when the perpetual-funding phase never ran --
+            # not a measured zero open interest.
+            perp_oi=(funding.perp_open_interest if funding is not None else None),
             perp_funding_trend=(funding.funding_trend if funding is not None else "Stable"),
+            # CrossAssetCorrelationResult.price_correlation/dvol_correlation
+            # are already Optional[float] (None on insufficient sample) --
+            # pass through unchanged instead of collapsing to 0.0, same as
+            # `corr is None` (the whole correlation phase never ran).
             btc_eth_price_corr=(
-                (corr.price_correlation or 0.0) if corr is not None else 0.0
+                corr.price_correlation if corr is not None else None
             ),
             btc_eth_dvol_corr=(
-                (corr.dvol_correlation or 0.0) if corr is not None else 0.0
+                corr.dvol_correlation if corr is not None else None
             ),
             blocks=blocks,
             large_prints=large_prints,
@@ -2089,6 +2367,10 @@ class SynthesisMapper:
             aggregate_call_resistance=aggregate_call_resistance,
             aggregate_put_support=aggregate_put_support,
             aggregate_hvl=aggregate_hvl,
+            # Task G2-B Finding 3: thread the orchestrator's real
+            # failed-sections list through instead of dropping it on the
+            # floor -- MarketWideResult already carries it correctly.
+            failed_sections=tuple(mw.failed_sections),
         )
 
     @classmethod
