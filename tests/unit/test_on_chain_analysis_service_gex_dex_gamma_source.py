@@ -183,3 +183,221 @@ class TestBsGammaReplacesTickerGamma:
 
         enriched = analyzer.enriched_instruments["31DEC26"][0]
         assert enriched["gamma"] is None
+
+
+def _ticker_ok(**overrides):
+    ticker = {
+        "greeks": {"gamma": 1e-05, "delta": 0.5, "vega": 10.0, "theta": -3.0},
+        "mark_iv": 60.0,
+        "underlying_price": 95000.0,
+        "best_bid_price": 0.1,
+        "best_ask_price": 0.11,
+    }
+    ticker.update(overrides)
+    return ticker
+
+
+class TestDroppedInstrumentsFeedCompletenessSignal:
+    """
+    Wave G re-review, Important #1: a ticker fetch that raises (rate-
+    limiting, API errors) drops the instrument entirely BEFORE it ever
+    reaches ``GexDexCalculator._aggregate_by_strike`` -- so the original
+    bug 2 fix (which only tracks a null greek on an instrument that
+    ARRIVES) never saw it. Reproduces the exact scenario the task's own
+    motivating audit cited: "31 of 830 instruments (3.7%) dropped due to
+    rate-limiting; one expiry lost 34.49% of its OI-weighted
+    representation, and the report still printed EVIDENCE: OI/GEX from
+    full book."
+    """
+
+    def test_dropped_instrument_counted_in_completeness_signal(self, frozen_clock):
+        frozen_clock(_FROZEN_EPOCH)
+
+        def get_ticker(instrument_name):
+            if instrument_name == "BTC-31DEC26-52000-C":
+                raise Exception("429 Too Many Requests")
+            return _ticker_ok()
+
+        service = _make_service()
+        service.api.get_ticker.side_effect = get_ticker
+
+        analyzer = _FakeAnalyzer(
+            currency="BTC", index_price=95000.0,
+            parsed_data={"31DEC26": [
+                _instrument("BTC-31DEC26-50000-C", 50000.0, "C", oi=500.0),
+                _instrument("BTC-31DEC26-51000-C", 51000.0, "C", oi=300.0),
+                _instrument("BTC-31DEC26-52000-C", 52000.0, "C", oi=200.0),  # dropped
+            ]},
+        )
+
+        aggregate_result, _ = service._fetch_greeks_and_store_gex_dex(
+            analyzer, progress_callback=lambda msg: None,
+        )
+
+        # Existing, correct behavior unchanged: a dropped instrument never
+        # appears in the enriched list.
+        assert len(analyzer.enriched_instruments["31DEC26"]) == 2
+
+        assert aggregate_result is not None
+        assert aggregate_result.instruments_missing_gamma == 1
+        assert aggregate_result.oi_missing_gamma == pytest.approx(200.0)
+
+    def test_dropped_instruments_defeat_full_book_claim(self, frozen_clock):
+        """
+        The actual motivating scenario, end to end: a partial chain (some
+        instruments dropped to rate-limiting) must not let the report
+        claim "OI/GEX from full book".
+        """
+        frozen_clock(_FROZEN_EPOCH)
+
+        def get_ticker(instrument_name):
+            if instrument_name == "BTC-31DEC26-52000-C":
+                raise Exception("429 Too Many Requests")
+            return _ticker_ok()
+
+        service = _make_service()
+        service.api.get_ticker.side_effect = get_ticker
+
+        analyzer = _FakeAnalyzer(
+            currency="BTC", index_price=95000.0,
+            parsed_data={"31DEC26": [
+                _instrument("BTC-31DEC26-50000-C", 50000.0, "C", oi=500.0),
+                _instrument("BTC-31DEC26-51000-C", 51000.0, "C", oi=300.0),
+                # Dropped OI is 200 out of 800 total (25%) -- comfortably
+                # analogous to the audit's cited 34.49% and well above the
+                # 5% disclosure threshold.
+                _instrument("BTC-31DEC26-52000-C", 52000.0, "C", oi=200.0),
+            ]},
+        )
+
+        aggregate_result, _ = service._fetch_greeks_and_store_gex_dex(
+            analyzer, progress_callback=lambda msg: None,
+        )
+
+        from coding.core.analytics.reporting.report_formatter import OnChainReportFormatter
+
+        claim = OnChainReportFormatter._book_completeness_claim(aggregate_result)
+        assert "full book" not in claim
+        assert "INCOMPLETE" in claim
+        assert "1 instrument" in claim
+
+
+class TestFullExpiryFailureStillDisclosable:
+    """
+    Wave G re-review, Important #2: if EVERY ticker fetch for an
+    expiration fails, the old code left ``bundle.gex_dex`` as ``None`` --
+    and ``report_formatter.py`` fell through to the legacy unconditional
+    "OI/GEX from full book" claim for that case, the ONE scenario where
+    the claim is KNOWN false (0% represented), not merely possibly
+    incomplete.
+    """
+
+    def test_all_instruments_dropped_still_produces_disclosable_gex_dex(self, frozen_clock):
+        frozen_clock(_FROZEN_EPOCH)
+
+        service = _make_service()
+        service.api.get_ticker.side_effect = Exception("429 Too Many Requests")
+
+        analyzer = _FakeAnalyzer(
+            currency="BTC", index_price=95000.0,
+            parsed_data={"31DEC26": [
+                _instrument("BTC-31DEC26-50000-C", 50000.0, "C", oi=500.0),
+                _instrument("BTC-31DEC26-51000-C", 51000.0, "C", oi=300.0),
+            ]},
+        )
+
+        aggregate_result, _ = service._fetch_greeks_and_store_gex_dex(
+            analyzer, progress_callback=lambda msg: None,
+        )
+
+        # Nothing to enrich -- existing, correct behavior unchanged.
+        assert "31DEC26" not in analyzer.enriched_instruments
+
+        assert aggregate_result is not None
+        assert aggregate_result.instruments_missing_gamma == 2
+        assert aggregate_result.oi_missing_gamma == pytest.approx(800.0)
+        assert aggregate_result.total_net_gex == pytest.approx(0.0)
+
+        from coding.core.analytics.reporting.report_formatter import OnChainReportFormatter
+
+        claim = OnChainReportFormatter._book_completeness_claim(aggregate_result)
+        assert "full book" not in claim
+        assert "100.0%" in claim
+
+    def test_all_instruments_dropped_still_calls_builder_set_gex_dex(self, frozen_clock):
+        """
+        Proves the actual production wiring: ``bundle.gex_dex`` (built via
+        ``builder.set_gex_dex``) is populated for this expiration, not
+        left ``None`` -- the exact fix report_formatter.py's
+        ``_book_completeness_claim`` relies on to tell "no data" apart
+        from "100% failure".
+        """
+        frozen_clock(_FROZEN_EPOCH)
+
+        service = _make_service()
+        service.api.get_ticker.side_effect = Exception("429 Too Many Requests")
+
+        analyzer = _FakeAnalyzer(
+            currency="BTC", index_price=95000.0,
+            parsed_data={"31DEC26": [
+                _instrument("BTC-31DEC26-50000-C", 50000.0, "C", oi=500.0),
+            ]},
+        )
+        builder = MagicMock()
+
+        service._fetch_greeks_and_store_gex_dex(
+            analyzer, progress_callback=lambda msg: None, builder=builder,
+        )
+
+        builder.set_gex_dex.assert_called_once()
+        called_expiration, called_result = builder.set_gex_dex.call_args[0]
+        assert called_expiration == "31DEC26"
+        assert called_result is not None
+        assert called_result.instruments_missing_gamma == 1
+        assert called_result.oi_missing_gamma == pytest.approx(500.0)
+
+
+class TestComputeBsGammaInputGuards:
+    """
+    Wave G re-review (Minor): ``_compute_bs_gamma``'s docstring claims it
+    "never fabricates a 0.0" -- but the old truthiness guards
+    (``not strike`` / ``not mark_iv``) let a NEGATIVE strike/mark_iv sail
+    straight through (``not -50000`` is ``False`` in Python), reaching
+    ``BlackScholesCalculator.calculate_greeks``'s blanket
+    ``except Exception``, which silently returns an all-zero-greeks dict.
+    These prove the fix: explicit numeric range checks, never truthiness.
+    """
+
+    def test_negative_strike_returns_none_not_zero(self):
+        bs = BlackScholesCalculator()
+        item = {"strike": -50000.0, "instrument_name": "BTC-31DEC26-50000-C"}
+        result = OnChainAnalysisService._compute_bs_gamma(
+            bs, item, 60.0, 95000.0, datetime.now(timezone.utc),
+        )
+        assert result is None
+
+    def test_negative_mark_iv_returns_none_not_zero(self):
+        bs = BlackScholesCalculator()
+        item = {"strike": 50000.0, "instrument_name": "BTC-31DEC26-50000-C"}
+        result = OnChainAnalysisService._compute_bs_gamma(
+            bs, item, -60.0, 95000.0, datetime.now(timezone.utc),
+        )
+        assert result is None
+
+    def test_absurd_mark_iv_returns_none_not_zero(self):
+        bs = BlackScholesCalculator()
+        item = {"strike": 50000.0, "instrument_name": "BTC-31DEC26-50000-C"}
+        result = OnChainAnalysisService._compute_bs_gamma(
+            bs, item, 1e10, 95000.0, datetime.now(timezone.utc),
+        )
+        assert result is None
+
+    def test_sane_mark_iv_still_computes_normally(self):
+        """Guardrail didn't break the ordinary case."""
+        bs = BlackScholesCalculator()
+        item = {"strike": 50000.0, "instrument_name": "BTC-31DEC26-50000-C"}
+        result = OnChainAnalysisService._compute_bs_gamma(
+            bs, item, 60.0, 95000.0, datetime.now(timezone.utc),
+        )
+        assert result is not None
+        assert result > 0

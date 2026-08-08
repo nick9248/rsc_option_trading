@@ -380,6 +380,37 @@ def test_render_expiration_from_result_discloses_gap_when_gex_dex_incomplete():
     assert "40.0%" in text or "40%" in text
 
 
+def test_render_expiration_from_result_100pct_failure_discloses_not_full_book():
+    """
+    Wave G re-review, Important #2: a GexDexResult with NO strike rows at
+    all (every instrument for this expiration failed its ticker fetch --
+    OnChainAnalysisService._fetch_greeks_and_store_gex_dex's `else` branch)
+    but a real, positive ``oi_missing_gamma`` must disclose 100% missing,
+    not divide-by-zero its way back to the legacy "full book" claim. This
+    is a genuinely DIFFERENT case from ``gex_dex is None`` (there were no
+    instruments at all) -- see
+    ``test_render_expiration_from_result_no_gex_dex_keeps_legacy_full_book_claim``.
+    """
+    formatter = OnChainReportFormatter()
+    gex_dex = GexDexResult(
+        strike_rows=(),
+        cumulative_gex={}, cumulative_dex={},
+        key_levels=GexDexKeyLevels(call_resistance=None, put_support=None, hvl=None, gamma_flip=None),
+        spot_price=95000.0, total_net_gex=0.0, total_net_dex=0.0, currency="BTC",
+        instruments_missing_gamma=2, oi_missing_gamma=800.0,
+    )
+    bundle = ExpirationBundle(
+        expiration="10MAR26", analysis=_make_analysis("10MAR26"), gex_dex=gex_dex, flow=None,
+        vol_surface=None, oi_changes=None, iv_percentile=None, trend=None,
+        flow_chart_paths={}, enriched_instruments=(),
+    )
+    result = _make_result(expirations=(bundle,))
+    text = formatter.render_expiration_from_result(result, "10MAR26", NOW_UTC)
+    assert "EVIDENCE: OI/GEX from full book" not in text
+    assert "INCOMPLETE" in text
+    assert "100.0%" in text
+
+
 def test_render_expiration_from_result_no_gex_dex_keeps_legacy_full_book_claim():
     """
     ``gex_dex is None`` (no GEX/DEX data at all for this expiration) keeps

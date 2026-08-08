@@ -126,6 +126,24 @@ _DEALER_INVENTORY_VIOLATION_GATE = 0.05
 # for why currency-wide `coverage` cannot stand in for it.
 _DEALER_INVENTORY_MAX_EXCLUSION_RATE = 0.20
 
+# Task G2-A (Wave G re-review, Minor): _compute_bs_gamma's own docstring
+# claims it "never fabricates a 0.0" -- but BlackScholesCalculator.
+# calculate_greeks has a blanket `except Exception` that returns all-zero
+# greeks on any internal failure (e.g. math.log/math.exp domain/overflow
+# errors), and the reviewer directly reproduced that fallback firing --
+# silently -- via a negative strike (the old `not strike`/`not mark_iv`
+# guards below are the M1/#5/#6 truthiness bug: `not -50000` is False, so
+# a NEGATIVE strike/mark_iv sailed straight past them) and via an "absurd"
+# mark_iv large enough to overflow a float squaring inside the d1/d2 math.
+# The guarantee was only true by accident (upstream input shape, not this
+# function's own contract). Closed at the source with explicit numeric
+# range checks instead of truthiness checks, plus a sane upper ceiling on
+# mark_iv: 1000% annualized IV is already far beyond anything Deribit's
+# real book has shown even during extreme crypto vol spikes (typical peak
+# is low hundreds of percent) -- a documented, generous ceiling, not a
+# tuned statistical bound.
+_MAX_SANE_MARK_IV_PCT = 1000.0
+
 
 class OnChainAnalysisService:
     """
@@ -1213,21 +1231,40 @@ class OnChainAnalysisService:
             The BS-computed gamma, or ``None`` (never a fabricated 0.0 --
             a real "could not compute" case, not "zero exposure") if
             ``mark_iv``/``strike``/``underlying_price``/the instrument
-            name are missing or unparseable, or the option has already
-            passed its 08:00 UTC settlement (``time_to_expiry <= 0``). A
-            ``None`` return is exactly the "missing gamma" case
+            name are missing, non-positive, unparseable, or outside a
+            sane range (see ``_MAX_SANE_MARK_IV_PCT``), or the option has
+            already passed its 08:00 UTC settlement (``time_to_expiry <=
+            0``). A ``None`` return is exactly the "missing gamma" case
             ``GexDexCalculator._aggregate_by_strike``'s completeness
             tracking (Task G2-A, bug 2) is built to detect -- the
             instrument's open_interest still counts toward its strike,
             but its gamma contribution reads as a disclosed gap rather
             than a silent 0.0.
+
+            Wave G re-review (Minor): every guard below is an explicit
+            numeric range check (``is None or <= 0``), never a bare
+            truthiness check (``not x``) -- ``not -50000`` is ``False`` in
+            Python, so a truthiness guard silently lets a negative
+            strike/mark_iv straight through to
+            ``BlackScholesCalculator.calculate_greeks``, whose blanket
+            ``except Exception`` then returns an all-zero-greeks dict
+            that this method used to return unchecked -- a fabricated
+            0.0 masquerading as "computed successfully", exactly what
+            this method's contract promises never happens.
         """
-        if not mark_iv or not underlying_price or underlying_price <= 0:
+        if underlying_price is None or underlying_price <= 0:
+            return None
+
+        if (
+            mark_iv is None
+            or mark_iv <= 0
+            or mark_iv > _MAX_SANE_MARK_IV_PCT
+        ):
             return None
 
         strike = item.get("strike")
         name = item.get("instrument_name", "")
-        if not strike or not name:
+        if strike is None or strike <= 0 or not name:
             return None
 
         parsed = bs_calculator.parse_instrument_name(name)
@@ -1308,6 +1345,23 @@ class OnChainAnalysisService:
 
             # Fetch Greeks for each instrument
             instruments_with_greeks = []
+            # Wave G re-review (Important #1): a ticker fetch that raises
+            # (rate-limiting, API errors) drops the instrument entirely --
+            # correct, you can't use data you don't have -- but the drop
+            # must still feed the SAME completeness signal
+            # GexDexResult.instruments_missing_gamma/oi_missing_gamma
+            # carries for a null-greek-after-arrival instrument (Task
+            # G2-A bug 2). Without this, the exact scenario that motivated
+            # this whole task (31/830 instruments dropped to rate-
+            # limiting, one expiry losing 34.49% of its OI-weighted
+            # representation) still reads as a clean "full book" -- the
+            # drop never reached _aggregate_by_strike, so it never
+            # incremented anything. Tracked here, at the actual drop site,
+            # and folded into the per-expiry GexDexResult below (and, for
+            # the elif instruments: branch further down, when EVERY
+            # instrument in this expiration fails).
+            dropped_instrument_count = 0
+            dropped_instrument_oi = 0.0
             for i, item in enumerate(instruments):
                 try:
                     ticker = self.api.get_ticker(item["instrument_name"])
@@ -1364,6 +1418,8 @@ class OnChainAnalysisService:
                         )
                 except Exception as e:
                     logger.warning(f"Failed to fetch Greeks for {item['instrument_name']}: {e}")
+                    dropped_instrument_count += 1
+                    dropped_instrument_oi += item.get("open_interest") or 0
 
             # Store enriched instruments for downstream calculators
             if instruments_with_greeks:
@@ -1389,6 +1445,22 @@ class OnChainAnalysisService:
                 # rendering is render_full_from_result's job now
                 # (format_gex_dex_section, operating on the typed result).
                 gex_result = calculator.calculate()
+                # Wave G re-review (Important #1): fold this expiration's
+                # dropped-before-fetch instruments into the SAME
+                # completeness fields _aggregate_by_strike already
+                # populates for a null-greek-after-arrival instrument --
+                # one combined signal, not two. GexDexResult is frozen, so
+                # this composes via dataclasses.replace rather than the
+                # calculator tracking something it structurally cannot
+                # see (dropped instruments never reach it at all).
+                if dropped_instrument_count > 0:
+                    gex_result = dataclasses.replace(
+                        gex_result,
+                        instruments_missing_gamma=(
+                            gex_result.instruments_missing_gamma + dropped_instrument_count
+                        ),
+                        oi_missing_gamma=gex_result.oi_missing_gamma + dropped_instrument_oi,
+                    )
                 gex_dex_typed_by_expiry[expiration] = gex_result
                 if builder is not None:
                     builder.set_gex_dex(expiration, gex_result)
@@ -1495,6 +1567,47 @@ class OnChainAnalysisService:
 
                 if fixed_strike_vol_result is not None and builder is not None:
                     builder.set_fixed_strike_vol(expiration, fixed_strike_vol_result)
+            else:
+                # Wave G re-review (Important #2): EVERY instrument in
+                # this expiration failed its ticker fetch (100% drop) --
+                # `instruments` above is guaranteed non-empty here (the
+                # `if not instruments: continue` gate at the top of this
+                # loop already handled "no instruments at all"), so this
+                # branch is specifically "we tried, and nothing came
+                # back", not "there was nothing to try". Leaving
+                # bundle.gex_dex as None for this case (the old behavior)
+                # let report_formatter.py fall through to its legacy
+                # unconditional "OI/GEX from full book" claim -- the ONE
+                # case where that claim is KNOWN false (0% represented),
+                # not merely possibly incomplete. Building an explicit,
+                # fully-degenerate GexDexResult (0 gamma/delta everywhere,
+                # spot-only, no strikes) and stamping its completeness
+                # fields to "100% missing" routes this through the exact
+                # same disclosure machinery bug 2 already built --
+                # instruments_missing_gamma > 0 unconditionally triggers
+                # the DATA COMPLETENESS line, and the OI-weighted
+                # percentage (100%, since there is zero represented OI to
+                # divide by anything else) unconditionally fails the
+                # EVIDENCE line's "full book" gate.
+                logger.warning(
+                    f"OnChainAnalysisService: all {len(instruments)} instruments "
+                    f"for {analyzer.currency} {expiration} failed their ticker "
+                    "fetch -- recording a fully-degenerate GEX/DEX result "
+                    "(100% completeness gap) rather than leaving gex_dex as "
+                    "None, so the report cannot claim 'full book' for this "
+                    "expiration."
+                )
+                empty_gex_result = GexDexCalculator(
+                    [], analyzer.index_price, currency=analyzer.currency,
+                ).calculate()
+                empty_gex_result = dataclasses.replace(
+                    empty_gex_result,
+                    instruments_missing_gamma=dropped_instrument_count,
+                    oi_missing_gamma=dropped_instrument_oi,
+                )
+                gex_dex_typed_by_expiry[expiration] = empty_gex_result
+                if builder is not None:
+                    builder.set_gex_dex(expiration, empty_gex_result)
 
         # Aggregate GEX/DEX across all expirations after per-expiry loop
         aggregate_result = None

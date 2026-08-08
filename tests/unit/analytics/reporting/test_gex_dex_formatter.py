@@ -152,6 +152,25 @@ def test_aggregate_gex_dex_section_completeness_line_when_gap_present():
     assert "3 instrument(s)" in text
 
 
+def test_gex_dex_section_completeness_line_shows_100pct_when_no_strike_rows():
+    """
+    Wave G re-review, Important #2: an expiration where EVERY instrument
+    failed its ticker fetch has no strike rows at all (nothing to divide
+    a percentage by) but a real, positive oi_missing_gamma -- must show
+    100%, not silently omit the percentage or crash.
+    """
+    result = _make_result(
+        strike_rows=(), cumulative_gex={}, cumulative_dex={},
+        key_levels=GexDexKeyLevels(call_resistance=None, put_support=None, hvl=None, gamma_flip=None),
+        total_net_gex=0.0, total_net_dex=0.0,
+        instruments_missing_gamma=2, oi_missing_gamma=800.0,
+    )
+    text = format_gex_dex_section(result, "BTC")
+    assert "DATA COMPLETENESS" in text
+    assert "2 instrument(s)" in text
+    assert "100.0% of total OI" in text
+
+
 def test_gex_dex_section_no_levels_found():
     result = _make_result(
         key_levels=GexDexKeyLevels(call_resistance=None, put_support=None, hvl=None, gamma_flip=None)

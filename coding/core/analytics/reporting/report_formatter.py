@@ -446,16 +446,33 @@ class OnChainReportFormatter:
         keeps the legacy unconditional wording -- there is nothing to gate
         on here, matching every other extra_sections entry's "no data ->
         no new disclosure" convention rather than a fabricated worst-case
-        claim.
+        claim. This is now a genuinely different case from "every
+        instrument in this expiration failed its ticker fetch" (Wave G
+        re-review, Important #2): the service layer
+        (``_fetch_greeks_and_store_gex_dex``) builds an explicit,
+        fully-degenerate ``GexDexResult`` for that 100%-failure case
+        instead of leaving ``gex_dex`` as ``None`` -- ``None`` here means
+        "there were no instruments to begin with", never "we tried and
+        got nothing back".
         """
         if gex_dex is None:
             return "OI/GEX from full book"
 
-        total_oi = sum(row.call_oi + row.put_oi for row in gex_dex.strike_rows)
-        if total_oi <= 0 or gex_dex.oi_missing_gamma <= 0:
+        if gex_dex.oi_missing_gamma <= 0:
             return "OI/GEX from full book"
 
-        missing_pct = gex_dex.oi_missing_gamma / total_oi
+        total_oi = sum(row.call_oi + row.put_oi for row in gex_dex.strike_rows)
+        if total_oi > 0:
+            missing_pct = min(gex_dex.oi_missing_gamma / total_oi, 1.0)
+        else:
+            # Wave G re-review (Important #2): every bit of "book" that
+            # exists for this expiration IS the missing part (e.g. a
+            # 100%-ticker-fetch-failure expiration -- strike_rows is
+            # empty, there is nothing represented at all). This is 100%
+            # missing, not a division-by-zero excuse to fall back to the
+            # claim this branch exists to withdraw.
+            missing_pct = 1.0
+
         if missing_pct <= _GEX_DEX_MAX_MISSING_OI_PCT_FOR_FULL_BOOK_CLAIM:
             return "OI/GEX from full book"
 

@@ -85,13 +85,22 @@ def _key_levels_and_totals_lines(result: GexDexResult, dex_unit: str) -> list:
     # point readers look for it, even a small one.
     if result.instruments_missing_gamma > 0:
         total_oi = sum(row.call_oi + row.put_oi for row in result.strike_rows)
-        pct_note = ""
         if total_oi > 0:
-            pct_note = f" ({result.oi_missing_gamma / total_oi:.1%} of total OI)"
+            pct_note = f" ({min(result.oi_missing_gamma / total_oi, 1.0):.1%} of total OI)"
+        elif result.oi_missing_gamma > 0:
+            # Wave G re-review (Important #2): total_oi == 0 with a real
+            # OI gap means every instrument this expiration had was
+            # dropped before it ever reached the strike table (100%
+            # ticker-fetch failure) -- 100% missing, not "nothing to
+            # compute a percentage from".
+            pct_note = " (100.0% of total OI)"
+        else:
+            pct_note = ""
         lines.append(
             f"DATA COMPLETENESS: {result.instruments_missing_gamma} instrument(s) "
-            f"({result.oi_missing_gamma:,.2f} OI){pct_note} had missing gamma/delta -- "
-            "contributed 0 exposure here, but their OI is still counted above"
+            f"({result.oi_missing_gamma:,.2f} OI){pct_note} had missing gamma/delta or "
+            "failed their ticker fetch entirely -- excluded from or zeroed out of the "
+            "exposure totals above"
         )
         lines.append("")
 

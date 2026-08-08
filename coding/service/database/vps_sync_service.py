@@ -32,8 +32,8 @@ after cleanup runs -- callers (e.g. SyncWorker) decide how to report that,
 this class does not swallow it.
 """
 import logging
+import time
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Callable, List, Optional
 
 import psycopg2
@@ -103,7 +103,15 @@ class VpsSyncService:
             if progress_callback is not None:
                 progress_callback(message)
 
-        start = datetime.now()
+        # Wave G re-review (Minor, folded in from the G2-A completeness-
+        # disclosure round): this is an ELAPSED-duration measurement, not
+        # a wall-clock timestamp -- time.monotonic() is immune to a DST
+        # step or NTP correction landing mid-sync, unlike datetime.now(),
+        # which would otherwise silently produce a wildly wrong (even
+        # negative) duration. Same bug class this campaign keeps
+        # re-finding under the naive-local-vs-UTC banner, just manifesting
+        # here as "wrong clock source for a duration" instead.
+        start = time.monotonic()
         tunnel = None
         vps_conn = None
         local_conn = None
@@ -131,7 +139,7 @@ class VpsSyncService:
 
             _pull_health_json()
 
-            duration = (datetime.now() - start).total_seconds()
+            duration = time.monotonic() - start
             return VpsSyncResult(
                 success=len(errors) == 0,
                 total_rows=total_rows,
