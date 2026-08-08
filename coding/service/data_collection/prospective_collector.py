@@ -124,7 +124,20 @@ class ProspectiveCollector:
             Collection result with status and counts
         """
         currencies = currencies or SUPPORTED_CURRENCIES
-        hour = hour or datetime.now().replace(minute=0, second=0, microsecond=0)
+        # Wave G fresh-audit finding (metric-verification): this default was
+        # naive-local datetime.now(), the exact banned bug class this campaign
+        # has fixed a dozen times elsewhere -- dormant on the VPS only because
+        # its OS clock happens to already be UTC (confirmed Task C7), so it
+        # silently mislabels snapshot_hour by the host's UTC offset whenever
+        # this method is called without an explicit hour on a non-UTC host
+        # (reproduced live: a local test run at 02:04 local / 00:04 UTC wrote
+        # snapshot_hour=02:00 instead of 00:00). Explicit UTC, then drop tzinfo
+        # to match this column's storage convention (timestamp without time
+        # zone, populated with UTC-valued naive datetimes throughout this
+        # codebase -- see repository.py's own established pattern).
+        hour = hour or datetime.now(timezone.utc).replace(
+            minute=0, second=0, microsecond=0, tzinfo=None
+        )
 
         logger.info("=" * 60)
         logger.info(f"Starting collection for hour: {hour}")
