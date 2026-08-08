@@ -1358,7 +1358,7 @@ def generate_iron_condor_payoff_chart(
     inject_theme_toggle_js (which can only remap colors set explicitly on
     the figure, never colors baked into a `template=...` string).
     """
-    from coding.service.scanner.defined_risk_candidate_builder import iron_condor_payoff
+    from coding.core.analytics.payoff_calculator import iron_condor_payoff
 
     theme = get_chart_theme()
 
@@ -1422,7 +1422,7 @@ def generate_butterfly_payoff_chart(
     currency: str, expiry: str, dte: float, future_price: float, candidate: Dict[str, float],
 ) -> go.Figure:
     """Long call butterfly payoff-at-expiry chart. Same visual contract as generate_iron_condor_payoff_chart."""
-    from coding.service.scanner.defined_risk_candidate_builder import butterfly_payoff
+    from coding.core.analytics.payoff_calculator import butterfly_payoff
 
     theme = get_chart_theme()
 

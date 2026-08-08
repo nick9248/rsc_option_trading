@@ -1,19 +1,24 @@
 """
 Tests for the defined-risk payoff chart functions. Verifies the P&L curve
 at a handful of settlement points matches the hand-computed payoff (same
-formulas as defined_risk_candidate_builder.iron_condor_payoff/butterfly_payoff),
-not just that a Figure object comes back. Also verifies the charts carry
+formulas as payoff_calculator.iron_condor_payoff/butterfly_payoff), not
+just that a Figure object comes back. Also verifies the charts carry
 the same visual language as generate_straddle_payoff_chart (explicit
 theme colors, strike/breakeven annotations, a stats box) since that is
 what makes them compatible with inject_theme_toggle_js -- a chart built
 with template="plotly_dark" instead of explicit colors silently breaks
 the light/dark toggle (see chart_generator.py history).
+
+Wave G task G2-F fix 2: iron_condor_payoff/butterfly_payoff moved from
+coding.service.scanner.defined_risk_candidate_builder to
+coding.core.analytics.payoff_calculator (Core layer) -- chart_generator.py
+(Core) was importing them from Service, a dependency-inversion violation.
 """
 from coding.core.analytics.chart_generator import (
     generate_butterfly_payoff_chart,
     generate_iron_condor_payoff_chart,
 )
-from coding.service.scanner.defined_risk_candidate_builder import (
+from coding.core.analytics.payoff_calculator import (
     butterfly_payoff,
     iron_condor_payoff,
 )

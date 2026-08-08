@@ -24,6 +24,17 @@ uniformly by cost_or_credit for both.
 import math
 from typing import Dict, List, Optional
 
+# Wave G task G2-F fix 2: iron_condor_payoff/butterfly_payoff moved to
+# coding.core.analytics.payoff_calculator (Core layer -- they're pure math,
+# no API/DB access) since chart_generator.py (Core) was importing them from
+# here (Service), a dependency-inversion violation. Re-exported here so this
+# module's existing callers (defined_risk_forward_test_harness.py, tests/
+# unit/test_defined_risk_candidate_builder.py) keep working unchanged.
+from coding.core.analytics.payoff_calculator import (  # noqa: F401
+    butterfly_payoff,
+    iron_condor_payoff,
+)
+
 MAX_SPREAD_PCT = 0.15
 MIN_OPEN_INTEREST = 25
 
@@ -153,18 +164,3 @@ def build_butterfly_candidates(liquid: Dict[float, Dict], F: float, sigma_sqrt_t
                 "reward_risk": max_profit / cost,
             })
     return rows
-
-
-def iron_condor_payoff(candidate: Dict, settlement: float) -> float:
-    """pnl in USD; caller divides by candidate['max_loss'] for return %, not cost_or_credit."""
-    k1, k2, k3, k4 = candidate["short_call"], candidate["long_call"], candidate["short_put"], candidate["long_put"]
-    call_spread_owed = max(settlement - k1, 0) - max(settlement - k2, 0)
-    put_spread_owed = max(k3 - settlement, 0) - max(k4 - settlement, 0)
-    return candidate["cost_or_credit"] - call_spread_owed - put_spread_owed
-
-
-def butterfly_payoff(candidate: Dict, settlement: float) -> float:
-    """pnl in USD; caller divides by candidate['cost_or_credit'] for return %."""
-    k1, k2, k3 = candidate["k1"], candidate["k2"], candidate["k3"]
-    payout = max(settlement - k1, 0) - 2 * max(settlement - k2, 0) + max(settlement - k3, 0)
-    return payout - candidate["cost_or_credit"]
