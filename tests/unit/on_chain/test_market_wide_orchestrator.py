@@ -112,8 +112,7 @@ class TestCalculateFuturesBasis:
         orchestrator = MarketWideOrchestrator(api=api)
 
         result = orchestrator._calculate_futures_basis(
-            "BTC", _FakeAnalyzer(), _calc(), progress_callback=lambda m: None,
-        )
+            "BTC", _FakeAnalyzer(), _calc(), progress_callback=lambda m: None, failed=[])
         assert result is None
 
     def test_dated_future_produces_basis_result(self):
@@ -123,8 +122,7 @@ class TestCalculateFuturesBasis:
         orchestrator = MarketWideOrchestrator(api=api)
 
         result = orchestrator._calculate_futures_basis(
-            "BTC", _FakeAnalyzer(), _calc(), progress_callback=lambda m: None,
-        )
+            "BTC", _FakeAnalyzer(), _calc(), progress_callback=lambda m: None, failed=[])
         assert result is not None
         assert len(result.entries) == 1
 
@@ -134,8 +132,7 @@ class TestCalculateFuturesBasis:
         orchestrator = MarketWideOrchestrator(api=api)
 
         result = orchestrator._calculate_futures_basis(
-            "BTC", _FakeAnalyzer(), _calc(), progress_callback=lambda m: None,
-        )
+            "BTC", _FakeAnalyzer(), _calc(), progress_callback=lambda m: None, failed=[])
         assert result is None
 
     def test_null_ticker_index_price_falls_back_to_analyzer_index_price(self):
@@ -150,8 +147,7 @@ class TestCalculateFuturesBasis:
         orchestrator = MarketWideOrchestrator(api=api)
 
         result = orchestrator._calculate_futures_basis(
-            "BTC", _FakeAnalyzer(underlying_price=90000.0), _calc(), progress_callback=lambda m: None,
-        )
+            "BTC", _FakeAnalyzer(underlying_price=90000.0), _calc(), progress_callback=lambda m: None, failed=[])
         assert result is not None
         assert len(result.entries) == 1
         assert result.entries[0].index_price == 90000.0
@@ -167,7 +163,7 @@ class TestFetchPriceHistory:
         api.get_tradingview_chart_data.return_value = _price_points(5, now_ms)
         orchestrator = MarketWideOrchestrator(api=api)
 
-        history = orchestrator._fetch_price_history("BTC", progress_callback=lambda m: None)
+        history = orchestrator._fetch_price_history("BTC", progress_callback=lambda m: None, failed=[])
         assert len(history) == 5
         assert history[0]["close"] == 90_000.0
 
@@ -176,7 +172,7 @@ class TestFetchPriceHistory:
         api.get_tradingview_chart_data.side_effect = RuntimeError("api down")
         orchestrator = MarketWideOrchestrator(api=api)
 
-        history = orchestrator._fetch_price_history("BTC", progress_callback=lambda m: None)
+        history = orchestrator._fetch_price_history("BTC", progress_callback=lambda m: None, failed=[])
         assert history == []
 
 
@@ -185,7 +181,7 @@ class TestCalculateRealizedVolatility:
 
     def test_empty_price_history_returns_none_and_empty_dict(self):
         orchestrator = MarketWideOrchestrator(api=MagicMock())
-        result, rv_values = orchestrator._calculate_realized_volatility(_calc(), [])
+        result, rv_values = orchestrator._calculate_realized_volatility(_calc(), [], failed=[])
         assert result is None
         assert rv_values == {}
 
@@ -198,7 +194,7 @@ class TestCalculateRealizedVolatility:
             {"timestamp": ts / 1000, "close": c}
             for ts, c in zip(history["ticks"], history["close"])
         ]
-        result, rv_values = orchestrator._calculate_realized_volatility(_calc(), price_history)
+        result, rv_values = orchestrator._calculate_realized_volatility(_calc(), price_history, failed=[])
         assert result is not None
         assert set(result.rv_by_window.keys()) == {10, 20, 30}
         assert rv_values == result.rv_by_window
@@ -209,14 +205,14 @@ class TestCalculateVrp:
 
     def test_zero_rv_30d_returns_none(self):
         orchestrator = MarketWideOrchestrator(api=MagicMock())
-        result = orchestrator._calculate_vrp(_calc(dvol=65.0), dvol=65.0, rv_values={})
+        result = orchestrator._calculate_vrp(_calc(dvol=65.0), dvol=65.0, rv_values={}, failed=[])
         assert result is None
 
     def test_positive_rv_30d_produces_result_even_with_dvol_none(self):
         """A6-carried-finding-adjacent gate: dvol unavailable must not drop
         the whole section when rv_30d is usable."""
         orchestrator = MarketWideOrchestrator(api=MagicMock())
-        result = orchestrator._calculate_vrp(_calc(dvol=None), dvol=None, rv_values={30: 0.5})
+        result = orchestrator._calculate_vrp(_calc(dvol=None), dvol=None, rv_values={30: 0.5}, failed=[])
         assert result is not None
         assert result.dvol is None
         assert result.rv_30d == 0.5
@@ -227,7 +223,7 @@ class TestCalculateVolatilityCone:
 
     def test_insufficient_price_history_returns_none(self):
         orchestrator = MarketWideOrchestrator(api=MagicMock())
-        result = orchestrator._calculate_volatility_cone(_calc(), [{"timestamp": 0, "close": 90000.0}] * 20)
+        result = orchestrator._calculate_volatility_cone(_calc(), [{"timestamp": 0, "close": 90000.0}] * 20, failed=[])
         assert result is None
 
     def test_sufficient_price_history_produces_result(self, frozen_clock):
@@ -239,7 +235,7 @@ class TestCalculateVolatilityCone:
             {"timestamp": ts / 1000, "close": c}
             for ts, c in zip(history["ticks"], history["close"])
         ]
-        result = orchestrator._calculate_volatility_cone(_calc(), price_history)
+        result = orchestrator._calculate_volatility_cone(_calc(), price_history, failed=[])
         assert result is not None
         assert set(result.percentile_by_window.keys()) == {10, 20, 30}
 
@@ -253,7 +249,7 @@ class TestCalculatePerpetualFunding:
         api.get_ticker.return_value = {"open_interest": 1000.0, "current_funding": None, "funding_8h": None}
         orchestrator = MarketWideOrchestrator(api=api)
 
-        result = orchestrator._calculate_perpetual_funding("BTC", _calc(), progress_callback=lambda m: None)
+        result = orchestrator._calculate_perpetual_funding("BTC", _calc(), progress_callback=lambda m: None, failed=[])
         assert result is None
 
     def test_funding_available_produces_result(self):
@@ -262,7 +258,7 @@ class TestCalculatePerpetualFunding:
         api.get_ticker.return_value = {"open_interest": 1000.0, "current_funding": 0.0002, "funding_8h": 0.0001}
         orchestrator = MarketWideOrchestrator(api=api)
 
-        result = orchestrator._calculate_perpetual_funding("BTC", _calc(), progress_callback=lambda m: None)
+        result = orchestrator._calculate_perpetual_funding("BTC", _calc(), progress_callback=lambda m: None, failed=[])
         assert result is not None
         assert result.funding_8h == 0.0001
         assert result.funding_rate == 0.0002
@@ -274,8 +270,7 @@ class TestCalculateBlockTrades:
     def test_no_recent_trades_returns_none(self):
         orchestrator = MarketWideOrchestrator(api=MagicMock())
         result = orchestrator._calculate_block_trades(
-            _FakeAnalyzer(recent_trades=[]), _calc(), progress_callback=lambda m: None,
-        )
+            _FakeAnalyzer(recent_trades=[]), _calc(), progress_callback=lambda m: None, failed=[])
         assert result is None
 
     def test_block_trade_above_threshold_detected(self):
@@ -284,8 +279,7 @@ class TestCalculateBlockTrades:
                    "instrument_name": "BTC-27MAR26-100000-C", "direction": "buy",
                    "timestamp": 1700000000000, "iv": 60.0}]
         result = orchestrator._calculate_block_trades(
-            _FakeAnalyzer(recent_trades=trades), _calc(), progress_callback=lambda m: None,
-        )
+            _FakeAnalyzer(recent_trades=trades), _calc(), progress_callback=lambda m: None, failed=[])
         assert result is not None
         assert result.total_detected == 1
         assert result.trades[0].notional == 500_000.0
@@ -310,8 +304,7 @@ class TestCalculateBlockTrades:
              "combo_id": "BTC-STRD-1AUG26-63000"},
         ]
         result = orchestrator._calculate_block_trades(
-            _FakeAnalyzer(recent_trades=trades), _calc(), progress_callback=lambda m: None,
-        )
+            _FakeAnalyzer(recent_trades=trades), _calc(), progress_callback=lambda m: None, failed=[])
         assert result is not None
         assert len(result.blocks) == 1
         block = result.blocks[0]
@@ -337,8 +330,7 @@ class TestCalculateBlockTrades:
         )
         result = orchestrator._calculate_block_trades(
             _FakeAnalyzer(recent_trades=[{"amount": 1.0, "index_price": None}]),
-            calc, progress_callback=lambda m: None,
-        )
+            calc, progress_callback=lambda m: None, failed=[])
         assert result is None
 
 
@@ -352,8 +344,7 @@ class TestCalculateCrossAssetCorrelation:
         orchestrator = MarketWideOrchestrator(api=api)
 
         result = orchestrator._calculate_cross_asset_correlation(
-            "BTC", _calc(), price_history=[], progress_callback=lambda m: None,
-        )
+            "BTC", _calc(), price_history=[], progress_callback=lambda m: None, failed=[])
         assert result is not None
         assert result.price_correlation is None
         assert result.dvol_correlation is None
@@ -364,8 +355,7 @@ class TestCalculateCrossAssetCorrelation:
         orchestrator = MarketWideOrchestrator(api=api)
 
         result = orchestrator._calculate_cross_asset_correlation(
-            "BTC", _calc(), price_history=[], progress_callback=lambda m: None,
-        )
+            "BTC", _calc(), price_history=[], progress_callback=lambda m: None, failed=[])
         assert result is None
 
 

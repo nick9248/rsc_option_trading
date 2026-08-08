@@ -122,10 +122,22 @@ class MarketWideOrchestrator:
                 field of this same result.
 
         Returns:
-            The typed ``MarketWideResult`` (failed_sections is always
-            ``()`` — no phase here currently populates it; see
-            refactor_design_spec.md's risk register for the known gap).
+            The typed ``MarketWideResult``. Task G2-B Finding 3:
+            ``failed_sections`` now genuinely reflects which phases raised
+            during this call, instead of being hardcoded to ``()``
+            unconditionally. Each of the 7 phases below that has its own
+            try/except (every phase except term-structure, which has none
+            and so cannot fail this way -- an unhandled exception there
+            propagates out of ``run()`` entirely, a separate, larger
+            failure mode not in scope here) appends its own section name
+            to ``failed`` in its except block, right where the exception
+            is already being caught and logged -- this never shares a
+            try/except with a pre-existing call whose failure it could
+            suppress, it only records a failure that block was already
+            about to swallow.
         """
+        failed: List[str] = []
+
         dvol = analyzer.market_metrics.get("dvol")
         # bugfix_spec.md Item 7 anchor table: these are all cross-expiration,
         # market-wide metrics (RV/VRP/vol cone/correlation/block-trade
@@ -135,17 +147,17 @@ class MarketWideOrchestrator:
         )
 
         term_structure_result = self._calculate_term_structure(analyzer, calc, progress_callback)
-        basis_result = self._calculate_futures_basis(currency, analyzer, calc, progress_callback)
+        basis_result = self._calculate_futures_basis(currency, analyzer, calc, progress_callback, failed)
 
-        price_history = self._fetch_price_history(currency, progress_callback)
-        realized_volatility_result, rv_values = self._calculate_realized_volatility(calc, price_history)
-        vrp_result = self._calculate_vrp(calc, dvol, rv_values)
-        volatility_cone_result = self._calculate_volatility_cone(calc, price_history)
+        price_history = self._fetch_price_history(currency, progress_callback, failed)
+        realized_volatility_result, rv_values = self._calculate_realized_volatility(calc, price_history, failed)
+        vrp_result = self._calculate_vrp(calc, dvol, rv_values, failed)
+        volatility_cone_result = self._calculate_volatility_cone(calc, price_history, failed)
 
-        funding_result = self._calculate_perpetual_funding(currency, calc, progress_callback)
-        block_trades_result = self._calculate_block_trades(analyzer, calc, progress_callback)
+        funding_result = self._calculate_perpetual_funding(currency, calc, progress_callback, failed)
+        block_trades_result = self._calculate_block_trades(analyzer, calc, progress_callback, failed)
         correlation_result = self._calculate_cross_asset_correlation(
-            currency, calc, price_history, progress_callback
+            currency, calc, price_history, progress_callback, failed
         )
 
         return MarketWideResult(
@@ -162,7 +174,7 @@ class MarketWideOrchestrator:
             perpetual_funding=funding_result,
             block_trades=block_trades_result,
             cross_asset_correlation=correlation_result,
-            failed_sections=(),
+            failed_sections=tuple(failed),
         )
 
     # -- Phase 1: IV term structure ---------------------------------------
@@ -204,7 +216,7 @@ class MarketWideOrchestrator:
 
     def _calculate_futures_basis(
         self, currency: str, analyzer: OnChainMetricsCalculator, calc: MarketWideCalculator,
-        progress_callback,
+        progress_callback, failed: List[str],
     ):
         """Fetch dated futures and compute annualized basis."""
         try:
@@ -246,11 +258,14 @@ class MarketWideOrchestrator:
 
         except Exception as e:
             logger.warning(f"Failed to calculate futures basis: {e}")
+            failed.append("futures_basis")
             return None
 
     # -- Shared fetch for phases 3/4/5/8: daily price history --------------
 
-    def _fetch_price_history(self, currency: str, progress_callback) -> List[Dict[str, Any]]:
+    def _fetch_price_history(
+        self, currency: str, progress_callback, failed: List[str],
+    ) -> List[Dict[str, Any]]:
         """180 days of daily close prices for this currency's perpetual --
         feeds realized volatility, VRP, volatility cone, and (sliced to the
         last 35 days) cross-asset correlation."""
@@ -277,11 +292,14 @@ class MarketWideOrchestrator:
 
         except Exception as e:
             logger.warning(f"Failed to fetch price history for RV/VRP/Vol Cone: {e}")
+            failed.append("price_history")
             return []
 
     # -- Phase 3: realized volatility (multi-window) ------------------------
 
-    def _calculate_realized_volatility(self, calc: MarketWideCalculator, price_history):
+    def _calculate_realized_volatility(
+        self, calc: MarketWideCalculator, price_history, failed: List[str],
+    ):
         """Returns (RealizedVolatilityResult | None, rv_values dict) — the
         dict is threaded into the VRP phase for its rv_30d input."""
         if not price_history:
@@ -292,12 +310,14 @@ class MarketWideOrchestrator:
             return result, rv_values
         except Exception as e:
             logger.warning(f"Failed to calculate realized volatility: {e}")
+            failed.append("realized_volatility")
             return None, {}
 
     # -- Phase 4: VRP ---------------------------------------------------------
 
     def _calculate_vrp(
         self, calc: MarketWideCalculator, dvol: Optional[float], rv_values: Dict[int, float],
+        failed: List[str],
     ) -> Optional[VarianceRiskPremiumResult]:
         """
         dvol is Optional on VarianceRiskPremiumResult and the calculator's
@@ -317,12 +337,13 @@ class MarketWideOrchestrator:
             )
         except Exception as e:
             logger.warning(f"Failed to calculate VRP: {e}")
+            failed.append("variance_risk_premium")
             return None
 
     # -- Phase 5: volatility cone -----------------------------------------
 
     def _calculate_volatility_cone(
-        self, calc: MarketWideCalculator, price_history,
+        self, calc: MarketWideCalculator, price_history, failed: List[str],
     ) -> Optional[VolatilityConeResult]:
         """
         Mirrors calculate_volatility_cone's own "Insufficient price history"
@@ -360,12 +381,13 @@ class MarketWideOrchestrator:
             )
         except Exception as e:
             logger.warning(f"Failed to calculate volatility cone: {e}")
+            failed.append("volatility_cone")
             return None
 
     # -- Phase 6: perpetual funding trend -----------------------------------
 
     def _calculate_perpetual_funding(
-        self, currency: str, calc: MarketWideCalculator, progress_callback,
+        self, currency: str, calc: MarketWideCalculator, progress_callback, failed: List[str],
     ) -> Optional[PerpetualFundingResult]:
         """
         Reads the ticker's raw Optional funding values directly and gates
@@ -402,12 +424,14 @@ class MarketWideOrchestrator:
 
         except Exception as e:
             logger.warning(f"Failed to calculate perpetual funding trend: {e}")
+            failed.append("perpetual_funding")
             return None
 
     # -- Phase 7: block trades -----------------------------------------------
 
     def _calculate_block_trades(
         self, analyzer: OnChainMetricsCalculator, calc: MarketWideCalculator, progress_callback,
+        failed: List[str],
     ) -> Optional[BlockTradesResult]:
         """
         Reuses trade data already fetched during the VWAP IV phase.
@@ -470,12 +494,14 @@ class MarketWideOrchestrator:
             )
         except Exception as e:
             logger.warning(f"Failed to calculate block trades: {e}")
+            failed.append("block_trades")
             return None
 
     # -- Phase 8: cross-asset correlation ------------------------------------
 
     def _calculate_cross_asset_correlation(
         self, currency: str, calc: MarketWideCalculator, price_history, progress_callback,
+        failed: List[str],
     ) -> Optional[CrossAssetCorrelationResult]:
         """Price + DVOL correlation vs. the other major currency."""
         try:
@@ -541,4 +567,5 @@ class MarketWideOrchestrator:
 
         except Exception as e:
             logger.warning(f"Failed to calculate cross-asset correlation: {e}")
+            failed.append("cross_asset_correlation")
             return None
