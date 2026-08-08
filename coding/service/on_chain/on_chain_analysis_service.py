@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
+from coding.core.analytics.black_scholes_calculator import BlackScholesCalculator
 from coding.core.analytics.buy_sell_flow_analyzer import BuySellFlowAnalyzer
 from coding.core.analytics.chart_generator import (
     generate_flow_distribution_chart,
@@ -1175,6 +1176,83 @@ class OnChainAnalysisService:
             return None
         return ForwardVolResult(buckets=buckets)
 
+    @staticmethod
+    def _compute_bs_gamma(
+        bs_calculator: BlackScholesCalculator,
+        item: Dict[str, Any],
+        mark_iv: Optional[float],
+        underlying_price: Optional[float],
+        now_utc: datetime,
+    ) -> Optional[float]:
+        """
+        Task G2-A (Wave G fresh audit, metric-verification agent): compute
+        gamma from ``mark_iv`` via ``BlackScholesCalculator`` instead of
+        trusting ``ticker.greeks.gamma`` directly.
+
+        Deribit's ticker ``greeks.gamma`` is heavily quantized/rounded --
+        confirmed against a live 883-ticker sample (this task's audit):
+        211/533 (a separate live sample cited in the task brief) and,
+        independently, 242/870 non-null tickers in this repo's own
+        recorded fixture (tests/fixtures/onchain/BTC_20260725_203222/
+        tickers.json.gz) all read exactly ``1e-05``, and only 31 distinct
+        gamma values exist across those 870 tickers at all. This
+        understated aggregate GEX by ~6.2% and, on one 321-DTE expiry, by
+        up to 1.9x versus the value ``ProspectiveCollector._enrich_with_
+        greeks`` (the daemon path) computes and persists from the exact
+        same ``mark_iv`` -- that daemon path is structurally forced into
+        BS-derived gamma (``get_book_summary`` carries no ``greeks`` key
+        at all), and this method makes the report/GUI path agree with it
+        for the same expiry/hour instead of disagreeing.
+
+        delta/vega/theta are deliberately NOT recomputed here -- the same
+        sample showed 803/707/750 distinct values (out of 870) for those
+        three fields respectively, precise enough to trust directly from
+        the ticker; only gamma is bad at ticker precision.
+
+        Returns:
+            The BS-computed gamma, or ``None`` (never a fabricated 0.0 --
+            a real "could not compute" case, not "zero exposure") if
+            ``mark_iv``/``strike``/``underlying_price``/the instrument
+            name are missing or unparseable, or the option has already
+            passed its 08:00 UTC settlement (``time_to_expiry <= 0``). A
+            ``None`` return is exactly the "missing gamma" case
+            ``GexDexCalculator._aggregate_by_strike``'s completeness
+            tracking (Task G2-A, bug 2) is built to detect -- the
+            instrument's open_interest still counts toward its strike,
+            but its gamma contribution reads as a disclosed gap rather
+            than a silent 0.0.
+        """
+        if not mark_iv or not underlying_price or underlying_price <= 0:
+            return None
+
+        strike = item.get("strike")
+        name = item.get("instrument_name", "")
+        if not strike or not name:
+            return None
+
+        parsed = bs_calculator.parse_instrument_name(name)
+        if parsed is None:
+            return None
+
+        # Mirrors ProspectiveCollector._enrich_with_greeks's own naive-UTC
+        # convention exactly (BlackScholesCalculator.parse_instrument_name
+        # always builds a naive-UTC 08:00 expiry_time) -- a naive-LOCAL
+        # "now" here would reintroduce the same tau error this campaign
+        # already fixed for that daemon path.
+        now_utc_naive = now_utc.replace(tzinfo=None) if now_utc.tzinfo is not None else now_utc
+        time_to_expiry = bs_calculator.calculate_time_to_expiry(now_utc_naive, parsed["expiry_time"])
+        if time_to_expiry <= 0:
+            return None
+
+        calc = bs_calculator.calculate_greeks(
+            spot_price=float(underlying_price),
+            strike_price=float(strike),
+            time_to_expiry=time_to_expiry,
+            implied_volatility=float(mark_iv) / 100.0,
+            option_type=parsed["option_type"],
+        )
+        return calc["gamma"]
+
     def _fetch_greeks_and_store_gex_dex(
         self,
         analyzer: OnChainMetricsCalculator,
@@ -1214,6 +1292,13 @@ class OnChainAnalysisService:
         # between the two days -> skip the expiry").
         fixed_strike_vol_now_utc = datetime.now(timezone.utc)
 
+        # Task G2-A (Wave G fresh audit, bug 1): one BlackScholesCalculator
+        # instance for the whole per-expiry loop below (no per-instrument
+        # construction cost; the class holds no per-instrument state) --
+        # see _compute_bs_gamma's docstring for why gamma is computed here
+        # instead of read from the ticker directly.
+        bs_calculator = BlackScholesCalculator()
+
         for expiration in analyzer.get_expirations():
             instruments = analyzer.parsed_data.get(expiration, [])
             if not instruments:
@@ -1241,7 +1326,6 @@ class OnChainAnalysisService:
 
                     item_with_greeks = item.copy()
                     item_with_greeks["delta"] = greeks.get("delta")
-                    item_with_greeks["gamma"] = greeks.get("gamma")
                     item_with_greeks["theta"] = greeks.get("theta")
                     item_with_greeks["vega"] = greeks.get("vega")
                     item_with_greeks["mark_iv"] = ticker.get("mark_iv")
@@ -1262,6 +1346,16 @@ class OnChainAnalysisService:
                     # instrument dict.
                     item_with_greeks["bid_price"] = ticker.get("best_bid_price")
                     item_with_greeks["ask_price"] = ticker.get("best_ask_price")
+                    # Task G2-A (Wave G fresh audit, bug 1): gamma is NEVER
+                    # read from ticker.greeks.gamma here (unlike delta/vega/
+                    # theta above, which stay ticker-sourced) -- see
+                    # _compute_bs_gamma's docstring for why. This is the one
+                    # deliberate exception to this loop's "trust the
+                    # ticker" convention.
+                    item_with_greeks["gamma"] = self._compute_bs_gamma(
+                        bs_calculator, item, item_with_greeks["mark_iv"],
+                        item_with_greeks["underlying_price"], fixed_strike_vol_now_utc,
+                    )
                     instruments_with_greeks.append(item_with_greeks)
 
                     if (i + 1) % 20 == 0:

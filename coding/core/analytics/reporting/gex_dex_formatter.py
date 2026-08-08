@@ -75,6 +75,26 @@ def _key_levels_and_totals_lines(result: GexDexResult, dex_unit: str) -> list:
 
     lines.append("")
 
+    # Task G2-A (Wave G fresh audit, bug 2): disclose the completeness gap
+    # directly in this section whenever there is one -- not just via the
+    # header EVIDENCE line's now-conditional "full book" claim. Only
+    # rendered when instruments_missing_gamma > 0 (matches the
+    # "no data -> no section" convention every other conditional block in
+    # this file already uses); no threshold gate here, unlike the
+    # EVIDENCE line's claim -- ANY known gap is worth surfacing at the
+    # point readers look for it, even a small one.
+    if result.instruments_missing_gamma > 0:
+        total_oi = sum(row.call_oi + row.put_oi for row in result.strike_rows)
+        pct_note = ""
+        if total_oi > 0:
+            pct_note = f" ({result.oi_missing_gamma / total_oi:.1%} of total OI)"
+        lines.append(
+            f"DATA COMPLETENESS: {result.instruments_missing_gamma} instrument(s) "
+            f"({result.oi_missing_gamma:,.2f} OI){pct_note} had missing gamma/delta -- "
+            "contributed 0 exposure here, but their OI is still counted above"
+        )
+        lines.append("")
+
     # bugfix_spec.md Item 8: holder-side raw exposures -- pure arithmetic on
     # observable OI/Greeks, no positioning assumption. No actor is named here.
     lines.append("EXPOSURES -- HOLDER SIDE (raw, no positioning assumption)")

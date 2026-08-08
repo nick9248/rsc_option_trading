@@ -37,7 +37,11 @@ from coding.core.analytics.results.expiry_results import (
 )
 from coding.core.analytics.results.fixed_strike_vol_results import FixedStrikeVolResult
 from coding.core.analytics.results.flow_results import FlowResult, FlowTotals
-from coding.core.analytics.results.gex_dex_results import GexDexKeyLevels, GexDexResult
+from coding.core.analytics.results.gex_dex_results import (
+    GexDexKeyLevels,
+    GexDexResult,
+    GexDexStrikeRow,
+)
 from coding.core.analytics.historical_normalizer import NormalizedMetric
 from coding.core.analytics.results.market_wide_results import (
     BlockTradesResult,
@@ -301,6 +305,88 @@ def test_render_expiration_from_result_unknown_expiration_returns_empty():
 
 
 def test_render_expiration_from_result_includes_evidence_line_when_flow_present():
+    formatter = OnChainReportFormatter()
+    flow = FlowResult(
+        flow_data={}, expiration_totals=FlowTotals(0.0, 0.0, 0.0, 0.0),
+        bias_interpretation="Insufficient flow data", flow_trend="Insufficient flow data",
+        top_buy_strikes=(), top_sell_strikes=(), trade_count=3, spot_price=95000.0,
+        window_start_ms=0, window_end_ms=86_400_000, lookback_hours=24.0,
+        sufficient_data=False, low_confidence=False,
+    )
+    bundle = ExpirationBundle(
+        expiration="10MAR26", analysis=_make_analysis("10MAR26"), gex_dex=None, flow=flow,
+        vol_surface=None, oi_changes=None, iv_percentile=None, trend=None,
+        flow_chart_paths={}, enriched_instruments=(),
+    )
+    result = _make_result(expirations=(bundle,))
+    text = formatter.render_expiration_from_result(result, "10MAR26", NOW_UTC)
+    assert "EVIDENCE: OI/GEX from full book | Flow: INSUFFICIENT (3 trades in 24h)" in text
+
+
+def _make_gex_dex_result(instruments_missing_gamma=0, oi_missing_gamma=0.0, call_oi=100.0):
+    return GexDexResult(
+        strike_rows=(
+            GexDexStrikeRow(
+                strike=70000.0, call_gamma=1.0, put_gamma=0.0, call_delta=1.0, put_delta=0.0,
+                call_oi=call_oi, put_oi=0.0, net_gex=1.0, net_dex=1.0, net_gamma=1.0,
+                cumulative_gex=1.0, cumulative_dex=1.0,
+            ),
+        ),
+        cumulative_gex={70000.0: 1.0}, cumulative_dex={70000.0: 1.0},
+        key_levels=GexDexKeyLevels(call_resistance=None, put_support=None, hvl=None, gamma_flip=None),
+        spot_price=95000.0, total_net_gex=1.0, total_net_dex=1.0, currency="BTC",
+        instruments_missing_gamma=instruments_missing_gamma, oi_missing_gamma=oi_missing_gamma,
+    )
+
+
+def test_render_expiration_from_result_full_book_claim_when_gex_dex_complete():
+    """
+    Task G2-A (Wave G fresh audit, bug 2): a GexDexResult with no
+    completeness gap keeps the unconditional "full book" wording.
+    """
+    formatter = OnChainReportFormatter()
+    gex_dex = _make_gex_dex_result(instruments_missing_gamma=0, oi_missing_gamma=0.0, call_oi=100.0)
+    bundle = ExpirationBundle(
+        expiration="10MAR26", analysis=_make_analysis("10MAR26"), gex_dex=gex_dex, flow=None,
+        vol_surface=None, oi_changes=None, iv_percentile=None, trend=None,
+        flow_chart_paths={}, enriched_instruments=(),
+    )
+    result = _make_result(expirations=(bundle,))
+    text = formatter.render_expiration_from_result(result, "10MAR26", NOW_UTC)
+    assert "EVIDENCE: OI/GEX from full book | Flow: NOT ANALYZED" in text
+
+
+def test_render_expiration_from_result_discloses_gap_when_gex_dex_incomplete():
+    """
+    Task G2-A (Wave G fresh audit, bug 2): a GexDexResult whose OI-weighted
+    completeness gap exceeds the disclosure threshold must NOT print the
+    unconditional "full book" claim -- the live audit's exact failure mode
+    (one expiry lost 34.49% of its OI-weighted representation while the
+    report still printed "EVIDENCE: OI/GEX from full book" for it).
+    """
+    formatter = OnChainReportFormatter()
+    # 40 of 100 total OI missing gamma -> 40%, well above the 5% threshold.
+    gex_dex = _make_gex_dex_result(instruments_missing_gamma=3, oi_missing_gamma=40.0, call_oi=100.0)
+    bundle = ExpirationBundle(
+        expiration="10MAR26", analysis=_make_analysis("10MAR26"), gex_dex=gex_dex, flow=None,
+        vol_surface=None, oi_changes=None, iv_percentile=None, trend=None,
+        flow_chart_paths={}, enriched_instruments=(),
+    )
+    result = _make_result(expirations=(bundle,))
+    text = formatter.render_expiration_from_result(result, "10MAR26", NOW_UTC)
+    assert "EVIDENCE: OI/GEX from full book" not in text
+    assert "INCOMPLETE" in text
+    assert "3" in text
+    assert "40.0%" in text or "40%" in text
+
+
+def test_render_expiration_from_result_no_gex_dex_keeps_legacy_full_book_claim():
+    """
+    ``gex_dex is None`` (no GEX/DEX data at all for this expiration) keeps
+    the legacy unconditional wording -- there is nothing to gate on, and
+    fabricating a worst-case disclosure would violate every other
+    extra_sections entry's "no data -> no new disclosure" convention.
+    """
     formatter = OnChainReportFormatter()
     flow = FlowResult(
         flow_data={}, expiration_totals=FlowTotals(0.0, 0.0, 0.0, 0.0),

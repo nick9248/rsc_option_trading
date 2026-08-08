@@ -200,6 +200,29 @@ class GexDexResult:
     dealer_delta_exposure_total: Optional[float] = None
     """-total_net_dex -- the assumed-dealer view."""
 
+    # --- Additive fields (Task G2-A, Wave G fresh audit / bug 2) ---
+    instruments_missing_gamma: int = 0
+    """Count of instruments folded into ``strike_rows`` by
+    ``GexDexCalculator._aggregate_by_strike`` whose gamma OR delta was
+    null/missing (ticker fetch succeeded -- unlike a rate-limited/failed
+    fetch, which is correctly dropped before this point -- but the greek
+    itself came back empty, or this service's BS-gamma fallback could not
+    compute one). Their open_interest still counts toward the strike/
+    total OI (that OI is real and observed); their gamma/delta
+    CONTRIBUTION is 0.0, not "unknown" -- this field is what makes that
+    distinguishable from a strike that genuinely has zero exposure.
+    Mirrors ``GexDexKeyLevels.legs_skipped``'s naming convention for a
+    different failure mode (this is ``_aggregate_by_strike``'s own gate,
+    not ``GammaProfileCalculator``'s)."""
+
+    oi_missing_gamma: float = 0.0
+    """Sum of open_interest belonging to ``instruments_missing_gamma`` --
+    the OI-weighted magnitude of the completeness gap. A live audit found
+    one expiry lost 34.49% of its OI-weighted representation this way
+    while the report still claimed "OI/GEX from full book" -- this is the
+    figure that claim must be gated on
+    (report_formatter._GEX_DEX_MAX_MISSING_OI_PCT_FOR_FULL_BOOK_CLAIM)."""
+
     def __post_init__(self) -> None:
         if self.dealer_gamma_exposure_total is None:
             object.__setattr__(self, "dealer_gamma_exposure_total", self.total_net_gex)
@@ -273,6 +296,9 @@ class GexDexResult:
             "delta_exposure_holder_total": self.delta_exposure_holder_total,
             "dealer_gamma_exposure_total": self.dealer_gamma_exposure_total,
             "dealer_delta_exposure_total": self.dealer_delta_exposure_total,
+            # Task G2-A (additive):
+            "instruments_missing_gamma": self.instruments_missing_gamma,
+            "oi_missing_gamma": self.oi_missing_gamma,
         }
         if self.expiration_count is not None:
             result["expiration_count"] = self.expiration_count

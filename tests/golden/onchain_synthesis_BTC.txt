@@ -13,15 +13,15 @@ Perp Funding: 0.0000%  | 8h: 0.0003%
 
 TRANSITION regime. Conflicting signals: near-term BEARISH vs far-term BULLISH Market structure is shifting — expect regime change within 1 days (model: GEX sign change at 27JUL26, OI 2,346). Priority: reduce position sizing, favor defined-risk structures, wait for clarity.
 
-NEAR-TERM (0-7 DTE): BEARISH bias | GEX +79.9M (dampening) | OI: 154,865 contracts
+NEAR-TERM (0-7 DTE): BEARISH bias | GEX +85.4M (dampening) | OI: 154,865 contracts
   31JUL26 (5d): MaxPain $64,000 (-0.6%) | P/C 0.29 | ATM IV 36.2% | RR25 -4.3% | Flow: Insufficient flow data
   26JUL26 (0d): MaxPain $64,000 (-0.6%) | P/C 0.72 | ATM IV 14.8% | RR25 -1.6% | Flow: Insufficient flow data
 
-MID-TERM (7-30 DTE): NEUTRAL bias | GEX +25.3M (dampening) | OI: 24,185 contracts
+MID-TERM (7-30 DTE): NEUTRAL bias | GEX +25.9M (dampening) | OI: 24,185 contracts
   7AUG26 (12d): MaxPain $64,000 (-0.7%) | P/C 0.13 | ATM IV 35.8% | RR25 -3.7% | Flow: Insufficient flow data
   14AUG26 (19d): MaxPain $65,000 (+0.8%) | P/C 0.30 | ATM IV 35.1% | RR25 -4.2% | Flow: Insufficient flow data
 
-FAR-TERM (30+ DTE): BULLISH bias | GEX +25.8M (dampening) | OI: 257,391 contracts
+FAR-TERM (30+ DTE): BULLISH bias | GEX +28.6M (dampening) | OI: 257,391 contracts
   25SEP26 (61d): MaxPain $70,000 (+8.0%) | P/C 0.58 | ATM IV 36.7% | RR25 -5.0% | Flow: Insufficient flow data
   25DEC26 (152d): MaxPain $70,000 (+6.9%) | P/C 0.56 | ATM IV 40.8% | RR25 -4.7% | Flow: Insufficient flow data
 
@@ -39,7 +39,7 @@ PRIMARY — Long Straddle/Strangle (25SEP26): Cheap IV favors owning volatility.
 DEFENSIVE — Reduce sizing, favor defined-risk structures only. Consider long straddle on 25SEP26 to capture the regime shift.
 
 SCORING DETAIL:
-  Direction: NEUTRAL (confidence: 12%)
+  Direction: NEUTRAL (confidence: 13%)
   Fragility: NONE
   Near-term: BEARISH | Far-term: BULLISH
   Vol Regime: suppressed

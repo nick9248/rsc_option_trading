@@ -71,10 +71,22 @@ from coding.core.analytics.results.analysis_result import (
 )
 from coding.core.analytics.results.expiry_results import ExpirationAnalysisResult
 from coding.core.analytics.results.flow_results import FlowResult
+from coding.core.analytics.results.gex_dex_results import GexDexResult
 from coding.core.analytics.results.vol_surface_results import VolSurfaceResult
 
 _SEPARATOR = "=" * 80
 _SUB_SEPARATOR = "-" * 80
+
+# Task G2-A (Wave G fresh audit, bug 2): "EVIDENCE: OI/GEX from full book"
+# is a factual completeness claim, not decoration -- a live audit found one
+# expiry lost 34.49% of its OI-weighted representation to dropped/null-
+# greeks instruments (GexDexResult.oi_missing_gamma) while this line still
+# printed the claim unconditionally. Same convention as on_chain_analysis_
+# service.py's _DEALER_INVENTORY_MAX_EXCLUSION_RATE (Task C3): a round,
+# documented starting point, not a statistically-derived cutoff -- above
+# this OI-weighted gap, the aggregated GEX/DEX no longer represents "the
+# book", so the claim must be withdrawn rather than asserted anyway.
+_GEX_DEX_MAX_MISSING_OI_PCT_FOR_FULL_BOOK_CLAIM = 0.05
 
 # Fixed order market-wide sections are rendered in -- institutional_
 # metrics_spec.md section 9(b)'s market-wide order (Task D2 final reorder
@@ -410,7 +422,7 @@ class OnChainReportFormatter:
             analysis=bundle.analysis,
             trend=bundle.trend,
             extra_sections=tuple(extra_sections),
-            evidence_line=self._evidence_line_from_flow(bundle.flow),
+            evidence_line=self._evidence_line_from_flow(bundle.flow, bundle.gex_dex),
             vol_surface=bundle.vol_surface,
         )
         # bugfix_spec.md Item 7 anchor table: format_context_section's
@@ -423,19 +435,56 @@ class OnChainReportFormatter:
         return self.render_expiration(render_input, bundle.analysis.underlying_price, now_utc)
 
     @staticmethod
-    def _evidence_line_from_flow(flow: Optional[FlowResult]) -> Optional[str]:
+    def _book_completeness_claim(gex_dex: Optional[GexDexResult]) -> str:
+        """
+        Task G2-A (Wave G fresh audit, bug 2): the "OI/GEX from full book"
+        wording is only true when ``gex_dex``'s own completeness
+        bookkeeping (``instruments_missing_gamma``/``oi_missing_gamma``,
+        set by ``GexDexCalculator._aggregate_by_strike``) says so.
+
+        ``gex_dex is None`` (no GEX/DEX data at all for this expiration)
+        keeps the legacy unconditional wording -- there is nothing to gate
+        on here, matching every other extra_sections entry's "no data ->
+        no new disclosure" convention rather than a fabricated worst-case
+        claim.
+        """
+        if gex_dex is None:
+            return "OI/GEX from full book"
+
+        total_oi = sum(row.call_oi + row.put_oi for row in gex_dex.strike_rows)
+        if total_oi <= 0 or gex_dex.oi_missing_gamma <= 0:
+            return "OI/GEX from full book"
+
+        missing_pct = gex_dex.oi_missing_gamma / total_oi
+        if missing_pct <= _GEX_DEX_MAX_MISSING_OI_PCT_FOR_FULL_BOOK_CLAIM:
+            return "OI/GEX from full book"
+
+        return (
+            f"OI/GEX INCOMPLETE -- {gex_dex.instruments_missing_gamma} instrument(s) "
+            f"({missing_pct:.1%} of OI) missing gamma/delta, contributed 0 exposure"
+        )
+
+    @staticmethod
+    def _evidence_line_from_flow(
+        flow: Optional[FlowResult], gex_dex: Optional[GexDexResult] = None,
+    ) -> Optional[str]:
         """
         bugfix_spec.md Item 6 / F6.3.4 (carried from A4 review): the same
         evidence-caveat text ``OnChainAnalyzer._build_evidence_line``
         builds from the dict bookkeeping, built here directly from the
         typed ``FlowResult`` — the two must stay in lockstep since both
         render the same per-expiration header line.
+
+        Task G2-A (Wave G fresh audit, bug 2): the "OI/GEX from full book"
+        half of this line is now conditional -- see
+        ``_book_completeness_claim``.
         """
+        book_claim = OnChainReportFormatter._book_completeness_claim(gex_dex)
         if flow is None:
-            return "EVIDENCE: OI/GEX from full book | Flow: NOT ANALYZED"
+            return f"EVIDENCE: {book_claim} | Flow: NOT ANALYZED"
         status = "OK" if flow.sufficient_data else "INSUFFICIENT"
         return (
-            f"EVIDENCE: OI/GEX from full book | "
+            f"EVIDENCE: {book_claim} | "
             f"Flow: {status} ({flow.trade_count} trades in {flow.lookback_hours:.0f}h)"
         )
 

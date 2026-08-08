@@ -125,6 +125,33 @@ def test_gex_dex_section_gamma_profile_no_crossing():
     assert "none within ±50% of spot (net GEX positive across the whole range)" in text
 
 
+def test_gex_dex_section_no_completeness_line_when_complete():
+    """Task G2-A (Wave G fresh audit, bug 2): the default fixture has no
+    completeness gap -- no DATA COMPLETENESS line should render."""
+    text = format_gex_dex_section(_make_result(), "BTC")
+    assert "DATA COMPLETENESS" not in text
+
+
+def test_gex_dex_section_completeness_line_when_gap_present():
+    """
+    Task G2-A (Wave G fresh audit, bug 2): a non-zero
+    instruments_missing_gamma/oi_missing_gamma must be disclosed directly
+    in the GEX/DEX section, not just gated on the header EVIDENCE line.
+    """
+    result = _make_result(instruments_missing_gamma=5, oi_missing_gamma=42.5)
+    text = format_gex_dex_section(result, "BTC")
+    assert "DATA COMPLETENESS" in text
+    assert "5 instrument(s)" in text
+    assert "42.5" in text
+
+
+def test_aggregate_gex_dex_section_completeness_line_when_gap_present():
+    result = _make_result(instruments_missing_gamma=3, oi_missing_gamma=10.0, expiration_count=4)
+    text = format_aggregate_gex_dex_section(result, 93000.0, "BTC")
+    assert "DATA COMPLETENESS" in text
+    assert "3 instrument(s)" in text
+
+
 def test_gex_dex_section_no_levels_found():
     result = _make_result(
         key_levels=GexDexKeyLevels(call_resistance=None, put_support=None, hvl=None, gamma_flip=None)

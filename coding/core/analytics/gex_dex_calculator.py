@@ -106,6 +106,11 @@ class GexDexCalculator:
         self.spot_price = spot_price
         self.currency = currency
         self.strike_data: Dict[float, Dict[str, Any]] = {}
+        # Task G2-A: reset by _aggregate_by_strike() on every calculate()
+        # call; initialized here too so an instance never exposes these as
+        # missing attributes before calculate() runs.
+        self.instruments_missing_gamma: int = 0
+        self.oi_missing_gamma: float = 0.0
 
     def calculate(self) -> GexDexResult:
         """
@@ -130,6 +135,8 @@ class GexDexCalculator:
         return self._build_result(
             self.strike_data, cumulative, key_levels, self.spot_price, self.currency,
             gamma_profile=gamma_profile,
+            instruments_missing_gamma=self.instruments_missing_gamma,
+            oi_missing_gamma=self.oi_missing_gamma,
         )
 
     @staticmethod
@@ -258,6 +265,8 @@ class GexDexCalculator:
         currency: str,
         expiration_count: Optional[int] = None,
         gamma_profile: Optional[Dict[str, Any]] = None,
+        instruments_missing_gamma: int = 0,
+        oi_missing_gamma: float = 0.0,
     ) -> GexDexResult:
         """Assemble a typed ``GexDexResult`` from the internal dict-based working state."""
         gamma_profile = gamma_profile or {}
@@ -310,10 +319,33 @@ class GexDexCalculator:
             total_net_dex=sum(d["net_dex"] for d in strike_data.values()),
             currency=currency,
             expiration_count=expiration_count,
+            instruments_missing_gamma=instruments_missing_gamma,
+            oi_missing_gamma=oi_missing_gamma,
         )
 
     def _aggregate_by_strike(self) -> None:
-        """Aggregate instrument data by strike price."""
+        """
+        Aggregate instrument data by strike price.
+
+        Task G2-A (Wave G fresh audit, bug 2): an instrument whose ticker
+        fetch failed outright is already correctly dropped before this
+        method ever sees it (the per-instrument try/except in
+        ``OnChainAnalysisService._fetch_greeks_and_store_gex_dex`` --
+        that's fine, you can't use data you don't have). What this method
+        guards against is the DIFFERENT case: an instrument that DOES
+        arrive here, but with a null/missing gamma or delta (ticker greeks
+        came back empty, or this service's BS-gamma fallback couldn't
+        compute one -- e.g. missing mark_iv). Its open_interest still
+        counts toward the strike's OI (that OI is real and observed,
+        unlike the gamma/delta value) -- but the resulting gap is now
+        tracked in ``self.instruments_missing_gamma``/``self.
+        oi_missing_gamma`` instead of silently reading as "this strike has
+        zero gamma exposure", indistinguishable from a strike that
+        genuinely does.
+        """
+        self.instruments_missing_gamma = 0
+        self.oi_missing_gamma = 0.0
+
         for item in self.instruments:
             strike = item.get("strike")
             if strike is None:
@@ -327,9 +359,22 @@ class GexDexCalculator:
             # exploitable, just an internal inconsistency between two
             # extractions of the same field in the same file.
             option_type = (item.get("option_type") or "").upper()
-            gamma = item.get("gamma") or 0
-            delta = item.get("delta") or 0
+            gamma_raw = item.get("gamma")
+            delta_raw = item.get("delta")
             oi = item.get("open_interest") or 0
+
+            # Explicit None-check (not `gamma_raw or 0`): a two-arg-.get()-
+            # style truthiness check cannot distinguish "gamma is None"
+            # (unknown -- the completeness gap this task tracks) from
+            # "gamma is a real, exactly-zero value" (a deep OTM/expired
+            # leg with genuinely no gamma). Same bug class this campaign
+            # has fixed repeatedly under the M1/#5/#6 label elsewhere.
+            if gamma_raw is None or delta_raw is None:
+                self.instruments_missing_gamma += 1
+                self.oi_missing_gamma += oi
+
+            gamma = gamma_raw or 0
+            delta = delta_raw or 0
 
             if strike not in self.strike_data:
                 self.strike_data[strike] = {
@@ -585,11 +630,21 @@ class GexDexCalculator:
         """
         merged_strike_data: Dict[float, Dict[str, Any]] = {}
         expiration_count = 0
+        # Task G2-A (Wave G fresh audit, bug 2): each per-expiry
+        # GexDexResult already carries its own completeness gap
+        # (instruments_missing_gamma/oi_missing_gamma, set by
+        # _aggregate_by_strike) -- summed here the same way expiration_
+        # count is, so the aggregate result discloses the market-wide
+        # gap, not just each individual expiry's.
+        instruments_missing_gamma = 0
+        oi_missing_gamma = 0.0
 
         for expiry, result in gex_dex_by_expiry.items():
             if expiry == "AGGREGATE":
                 continue
             expiration_count += 1
+            instruments_missing_gamma += result.instruments_missing_gamma
+            oi_missing_gamma += result.oi_missing_gamma
 
             for row in result.strike_rows:
                 if row.strike not in merged_strike_data:
@@ -621,6 +676,8 @@ class GexDexCalculator:
                 {"call_resistance": None, "put_support": None, "hvl": None, "gamma_flip": None},
                 spot_price, currency, expiration_count=expiration_count,
                 gamma_profile=no_data_gamma_profile,
+                instruments_missing_gamma=instruments_missing_gamma,
+                oi_missing_gamma=oi_missing_gamma,
             )
 
         # Inject merged strike data into a temporary calculator instance and re-run formulas
@@ -635,6 +692,8 @@ class GexDexCalculator:
             agg_calc.strike_data, cumulative, key_levels, spot_price, currency,
             expiration_count=expiration_count,
             gamma_profile=no_data_gamma_profile,
+            instruments_missing_gamma=instruments_missing_gamma,
+            oi_missing_gamma=oi_missing_gamma,
         )
 
     @staticmethod
