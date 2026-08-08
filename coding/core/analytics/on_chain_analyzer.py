@@ -414,12 +414,14 @@ class OnChainMetricsCalculator:
         Max pain is the strike where option writers (sellers) pay the minimum
         to option buyers. It's where the most options expire worthless.
 
-        Formula:
-        For each candidate strike K:
-          - Call loss at strike S: max(0, K - S) * call_OI
-          - Put loss at strike S: max(0, S - K) * put_OI
-          - Total pain = sum of all call + put losses
-        Max Pain = K with minimum total pain
+        Formula (Wave G task G2-F fix: this docstring previously had the
+        call/put terms swapped relative to the code below -- the code was
+        always correct; only the docstring was inverted):
+        For each candidate settlement price S:
+          - Call loss at strike K: max(0, S - K) * call_OI
+          - Put loss at strike K: max(0, K - S) * put_OI
+          - Total pain = sum over all strikes K of call + put losses
+        Max Pain = S with minimum total pain
 
         Args:
             strike_data: Dict mapping strike -> {call_oi, put_oi}.
