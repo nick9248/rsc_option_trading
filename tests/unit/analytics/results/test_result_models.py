@@ -287,11 +287,14 @@ def test_gex_dex_result_to_dict_matches_legacy_shape():
             # fixture constructs GexDexStrikeRow directly, not through
             # GexDexCalculator, which is the only path that scales it by
             # S^2*0.01). dealer_gamma_exposure/delta_exposure_holder alias
-            # net_gex/net_dex; dealer_delta_exposure negates net_dex.
+            # net_gex/net_dex. Task G2-D fix 2: dealer_delta_exposure is
+            # call_delta - put_delta = 0.6 - (-0.4) = 1.0 (long calls/short
+            # puts, matching dealer_gamma_exposure's convention) -- NOT
+            # -net_dex (-0.2, the pre-fix "short everything" bug).
             "gamma_exposure_holder": 2.0,
             "delta_exposure_holder": 0.2,
             "dealer_gamma_exposure": 1_000_000.0,
-            "dealer_delta_exposure": -0.2,
+            "dealer_delta_exposure": 1.0,
         }
     }
     assert d["cumulative_gex"] == {95000.0: 1_000_000.0}
@@ -313,11 +316,15 @@ def test_gex_dex_result_to_dict_matches_legacy_shape():
     assert d["total_net_dex"] == 0.2
     # bugfix_spec.md Item 8 (additive): totals default from
     # total_net_gex/total_net_dex (dealer aliases) and summed strike_rows
-    # (gamma_exposure_holder_total).
+    # (gamma_exposure_holder_total). Task G2-D fix 2:
+    # dealer_delta_exposure_total also sums from strike_rows now
+    # (call_delta - put_delta per strike = 1.0 for this single row) --
+    # it cannot validly alias total_net_dex (0.2), which has already
+    # discarded the call/put split this field needs.
     assert d["gamma_exposure_holder_total"] == 2.0
     assert d["delta_exposure_holder_total"] == 0.2
     assert d["dealer_gamma_exposure_total"] == 1_000_000.0
-    assert d["dealer_delta_exposure_total"] == -0.2
+    assert d["dealer_delta_exposure_total"] == 1.0
     assert "expiration_count" not in d
 
 

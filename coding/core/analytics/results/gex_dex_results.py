@@ -74,8 +74,16 @@ class GexDexStrikeRow:
     """Alias of ``net_gex`` (same value, correctly-labelled name)."""
 
     dealer_delta_exposure: Optional[float] = None
-    """-net_dex -- the assumed-dealer view (dealers are short what
-    customers, i.e. holders, hold)."""
+    """call_delta - put_delta -- the assumed-dealer view: dealers long
+    calls / short puts, the SAME long-calls/short-puts SPLIT convention
+    ``dealer_gamma_exposure`` (``net_gex`` = call_gamma - put_gamma)
+    already uses. Task G2-D fix 2 (confirmed live by an independent
+    audit): this was previously ``-net_dex`` (``-(call_delta +
+    put_delta)``, i.e. "dealers are short EVERYTHING a holder holds") --
+    a DIFFERENT, contradictory convention from the one
+    ``dealer_gamma_exposure`` uses and the one the ASSUMED DEALER VIEW
+    report block's own parenthetical states. The two formulas only
+    coincide when ``put_delta`` is 0, never true for a real book."""
 
     def __post_init__(self) -> None:
         if self.gamma_exposure_holder is None:
@@ -85,7 +93,7 @@ class GexDexStrikeRow:
         if self.dealer_gamma_exposure is None:
             object.__setattr__(self, "dealer_gamma_exposure", self.net_gex)
         if self.dealer_delta_exposure is None:
-            object.__setattr__(self, "dealer_delta_exposure", -self.net_dex)
+            object.__setattr__(self, "dealer_delta_exposure", self.call_delta - self.put_delta)
 
 
 @dataclass(frozen=True)
@@ -198,7 +206,14 @@ class GexDexResult:
     """Alias of ``total_net_gex`` (same value, correctly-labelled name)."""
 
     dealer_delta_exposure_total: Optional[float] = None
-    """-total_net_dex -- the assumed-dealer view."""
+    """Sigma over strike_rows.dealer_delta_exposure (call_delta -
+    put_delta per strike) -- the long-calls/short-puts assumed-dealer
+    view, matching dealer_gamma_exposure_total's own convention (Task
+    G2-D fix 2). Cannot be derived from total_net_dex (call_delta +
+    put_delta) the way the pre-fix ``-total_net_dex`` default was --
+    that quantity has already discarded exactly the call/put split this
+    field needs, which is why that default was a genuine convention
+    mismatch, not just a sign quirk."""
 
     # --- Additive fields (Task G2-A, Wave G fresh audit / bug 2) ---
     instruments_missing_gamma: int = 0
@@ -229,7 +244,17 @@ class GexDexResult:
         if self.delta_exposure_holder_total is None:
             object.__setattr__(self, "delta_exposure_holder_total", self.total_net_dex)
         if self.dealer_delta_exposure_total is None:
-            object.__setattr__(self, "dealer_delta_exposure_total", -self.total_net_dex)
+            # Task G2-D fix 2: summed from strike_rows, matching
+            # gamma_exposure_holder_total's own fallback pattern just
+            # below -- there is no top-level "total" field this can
+            # validly alias (total_net_dex is call_delta + put_delta,
+            # which has already discarded the call/put split this field
+            # needs), unlike dealer_gamma_exposure_total's alias of
+            # total_net_gex above.
+            dealer_delta_total = (
+                sum(row.dealer_delta_exposure for row in self.strike_rows) if self.strike_rows else 0.0
+            )
+            object.__setattr__(self, "dealer_delta_exposure_total", dealer_delta_total)
         if self.gamma_exposure_holder_total is None:
             total = sum(row.gamma_exposure_holder for row in self.strike_rows) if self.strike_rows else 0.0
             object.__setattr__(self, "gamma_exposure_holder_total", total)

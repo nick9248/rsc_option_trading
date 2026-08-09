@@ -728,14 +728,23 @@ class TestHolderDealerSignConvention:
           gamma_exposure_holder = (0.0024+0.0029)*1e8 = 530,000.00
           dealer_gamma_exposure = (0.0024-0.0029)*1e8 = -50,000.00
           delta_exposure_holder = (50-25)+(12-56) = -19.0
-          dealer_delta_exposure = +19.0
+
+        Task G2-D fix 2: dealer_delta_exposure is call_delta - put_delta
+          (long calls/short puts, matching dealer_gamma_exposure's own
+          convention), summed per strike:
+            K=100,000: (50) - (-25) = 75
+            K=110,000: (12) - (-56) = 68
+            dealer_delta_exposure_total = 75 + 68 = 143.0
+          NOT -delta_exposure_holder (= +19.0) -- that was the pre-fix bug
+          (short EVERYTHING a holder holds, contradicting the gamma line's
+          own long-calls/short-puts assumption printed right above it).
         """
         r = GexDexCalculator(self.FIXTURE, 100_000.0, "BTC").calculate()
 
         assert r.gamma_exposure_holder_total == pytest.approx(530_000.0)
         assert r.dealer_gamma_exposure_total == pytest.approx(-50_000.0)
         assert r.delta_exposure_holder_total == pytest.approx(-19.0)
-        assert r.dealer_delta_exposure_total == pytest.approx(19.0)
+        assert r.dealer_delta_exposure_total == pytest.approx(143.0)
         # legacy aliases unchanged
         assert r.total_net_gex == pytest.approx(r.dealer_gamma_exposure_total)
         assert r.total_net_dex == pytest.approx(r.delta_exposure_holder_total)
@@ -750,6 +759,52 @@ class TestHolderDealerSignConvention:
         r = GexDexCalculator([], 100_000.0, "BTC").calculate()
         assert r.gamma_exposure_holder_total == 0.0
         assert r.dealer_gamma_exposure_total == 0.0
+
+
+class TestDealerDeltaMatchesGammaConvention:
+    """
+    Task G2-D fix 2 (confirmed live by an independent audit, verified from
+    raw Greeks): the ASSUMED DEALER VIEW report block states ONE
+    convention ("dealers long calls / short puts") but, before this fix,
+    computed Dealer Gamma and Dealer Delta with TWO DIFFERENT conventions:
+      Dealer Gamma = call_gamma - put_gamma        (long calls/short puts)
+      Dealer Delta = -(call_delta + put_delta)     (short EVERYTHING)
+    Applying the gamma line's own stated assumption to delta means
+    call_delta - put_delta, not -(call_delta + put_delta) -- the two only
+    coincide when put_delta is 0, which is never true for a real book.
+
+    Fixture reproduces the audit's own worked numbers exactly: a single
+    strike with call_delta*OI = +137.53, put_delta*OI = -78.53 (OI folded
+    into a delta of exactly +-1.0 for a clean product).
+    """
+
+    FIXTURE = [
+        {"strike": 65_000.0, "option_type": "C", "gamma": 0.0, "delta": 1.0, "open_interest": 137.53},
+        {"strike": 65_000.0, "option_type": "P", "gamma": 0.0, "delta": -1.0, "open_interest": 78.53},
+    ]
+
+    def test_dealer_delta_is_call_minus_put_not_negated_holder_sum(self):
+        r = GexDexCalculator(self.FIXTURE, 65_000.0, "BTC").calculate()
+
+        row = r.strike_rows[0]
+        assert row.call_delta == pytest.approx(137.53)
+        assert row.put_delta == pytest.approx(-78.53)
+
+        # Holder-side (unaffected by this fix): the raw sum a holder holds.
+        assert row.delta_exposure_holder == pytest.approx(59.0, abs=1e-6)
+        assert r.delta_exposure_holder_total == pytest.approx(59.0, abs=1e-6)
+
+        # The OLD (buggy) convention: -(call_delta + put_delta) = -59.0006
+        # -- "dealers net short delta, hedge by buying". Must NOT be this.
+        wrong_short_everything = -(row.call_delta + row.put_delta)
+        assert row.dealer_delta_exposure != pytest.approx(wrong_short_everything)
+        assert r.dealer_delta_exposure_total != pytest.approx(wrong_short_everything)
+
+        # The CORRECT convention, matching dealer_gamma_exposure's own
+        # long-calls/short-puts split: call_delta - put_delta = +216.06 --
+        # "dealers net long delta, hedge by selling".
+        assert row.dealer_delta_exposure == pytest.approx(216.06, abs=1e-6)
+        assert r.dealer_delta_exposure_total == pytest.approx(216.06, abs=1e-6)
 
 
 class TestCalculateRolloffProfile:

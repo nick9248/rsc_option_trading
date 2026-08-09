@@ -321,6 +321,11 @@ class GexDexCalculator:
             expiration_count=expiration_count,
             instruments_missing_gamma=instruments_missing_gamma,
             oi_missing_gamma=oi_missing_gamma,
+            # Task G2-D fix 2: explicit, like total_net_gex/total_net_dex
+            # above -- summed from the SAME per-strike dealer_delta_exposure
+            # (call_delta - put_delta) computed in _calculate_gex_dex, not
+            # left to GexDexResult.__post_init__'s fallback.
+            dealer_delta_exposure_total=sum(d["dealer_delta_exposure"] for d in strike_data.values()),
         )
 
     def _aggregate_by_strike(self) -> None:
@@ -415,6 +420,18 @@ class GexDexCalculator:
         holder sum, unlabelled, for delta). ``net_gex``/``net_dex`` keep
         their values and meaning unchanged -- ``dealer_gamma_exposure``/
         ``delta_exposure_holder`` are exact aliases of them.
+
+        Task G2-D fix 2 (confirmed live by an independent audit, verified
+        from raw Greeks): ``dealer_delta_exposure`` used to be
+        ``-net_dex`` -- i.e. ``-(call_delta + put_delta)``, "dealers are
+        short EVERYTHING a holder holds". That contradicts the ASSUMED
+        DEALER VIEW report block's own stated assumption ("dealers long
+        calls / short puts"), which ``dealer_gamma_exposure`` (``net_gex``
+        = ``call_gamma - put_gamma``) already correctly follows. The two
+        conventions only coincide when ``put_delta`` is 0 -- never true
+        for a real book. ``dealer_delta_exposure`` is now
+        ``call_delta - put_delta``, the same long-calls/short-puts split
+        applied to delta instead of gamma.
         """
         spot_squared = self.spot_price ** 2
         for strike, data in self.strike_data.items():
@@ -431,13 +448,16 @@ class GexDexCalculator:
             data["net_gamma"] = net_gamma
 
             # Item 8: holder-side raw gamma exposure and the dealer-side
-            # aliases/negation.
+            # aliases. Task G2-D fix 2: dealer_delta_exposure is the
+            # long-calls/short-puts SPLIT (call_delta - put_delta),
+            # matching dealer_gamma_exposure's own convention -- NOT a
+            # blanket negation of the holder sum (that was the bug).
             data["gamma_exposure_holder"] = (
                 (data["call_gamma"] + data["put_gamma"]) * spot_squared * 0.01
             )
             data["delta_exposure_holder"] = data["net_dex"]
             data["dealer_gamma_exposure"] = data["net_gex"]
-            data["dealer_delta_exposure"] = -data["net_dex"]
+            data["dealer_delta_exposure"] = data["call_delta"] - data["put_delta"]
 
     def _calculate_cumulative_profiles(self) -> Dict[str, Dict[float, float]]:
         """

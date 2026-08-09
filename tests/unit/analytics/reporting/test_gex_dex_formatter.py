@@ -73,15 +73,58 @@ def test_gex_dex_section_key_levels_and_totals():
     assert "Delta Exposure: -0.2000 BTC" in text  # = total_net_dex (holder), unchanged
     assert "Option holders are net short delta" in text
 
-    # Assumed dealer view: total_net_gex/total_net_dex unchanged values, now clearly labelled.
+    # Assumed dealer view: total_net_gex unchanged; dealer delta now
+    # follows dealer_delta_exposure_total's own fallback (Task G2-D fix
+    # 2): summed call_delta - put_delta per strike_row -- row1
+    # (0.6-(-0.4)=1.0) + row2 (0.3-(-0.7)=1.0) = 2.0. NOT -total_net_dex
+    # (+0.2, the pre-fix "short everything" bug this fixture used to
+    # assert).
     assert "ASSUMED DEALER VIEW  (assumption: dealers long calls / short puts for" in text
     assert "Dealer Gamma:   +500,000.00 USD per 1% move" in text
     assert "POSITIVE: dealers long gamma, stabilizing (buy dips/sell rallies)" in text
-    assert "Dealer Delta:   +0.2000 BTC" in text  # = -total_net_dex
+    assert "Dealer Delta:   +2.0000 BTC" in text
     # bugfix_spec.md Item 8 fix-review (Critical #2, then round-2 Important
     # finding): mechanics only, present tense, no directional bull/bear call
     # and no spot-direction claim (that's gamma's story, told two lines up).
+    # This sentence's sign matches the corrected +2.0000 value (still
+    # positive/"net long" here -- the pre-fix +0.2000 also happened to be
+    # positive for this particular fixture, so the SIGN didn't flip in
+    # this example even though the MAGNITUDE and underlying convention did;
+    # test_gex_dex_calculator.py::TestDealerDeltaMatchesGammaConvention
+    # covers a fixture where the fix does flip the sign).
     assert "Dealers net long delta; hedging back to neutral means selling the underlying" in text
+
+
+def test_gex_dex_section_dealer_delta_flips_sign_and_narrative_with_audit_numbers():
+    """
+    Task G2-D fix 2: reproduces the audit's own worked numbers exactly --
+    call_delta*OI = +137.53, put_delta*OI = -78.53. The PRE-FIX formula
+    (-(call_delta + put_delta) = -59.0006) printed "Dealers net short
+    delta; hedging back to neutral means buying the underlying". The
+    CORRECT long-calls/short-puts convention (call_delta - put_delta =
+    +216.06) flips both the number AND the narrative sentence to "Dealers
+    net long delta; hedging back to neutral means selling the underlying"
+    -- this is the exact scenario the independent audit found broken.
+    """
+    result = _make_result(
+        strike_rows=(
+            GexDexStrikeRow(
+                strike=65_000.0, call_gamma=0.0, put_gamma=0.0,
+                call_delta=137.53, put_delta=-78.53,
+                call_oi=1.0, put_oi=1.0, net_gex=0.0, net_dex=59.0,
+                net_gamma=0.0, cumulative_gex=0.0, cumulative_dex=59.0,
+            ),
+        ),
+        cumulative_gex={65_000.0: 0.0},
+        cumulative_dex={65_000.0: 59.0},
+        total_net_gex=0.0,
+        total_net_dex=59.0,
+    )
+    text = format_gex_dex_section(result, "BTC")
+
+    assert "Dealer Delta:   +216.0600 BTC" in text
+    assert "Dealers net long delta; hedging back to neutral means selling the underlying" in text
+    assert "Dealers net short delta; hedging back to neutral means buying the underlying" not in text
 
 
 def test_gex_dex_section_holder_block_names_no_actor():
@@ -195,7 +238,18 @@ def test_gex_dex_section_strike_table_ascending_with_notes():
 
 
 def test_gex_dex_section_neutral_environment():
-    result = _make_result(total_net_gex=0.0, total_net_dex=0.0)
+    result = _make_result(
+        total_net_gex=0.0, total_net_dex=0.0,
+        # Task G2-D fix 2: dealer_delta_exposure_total's fallback now sums
+        # call_delta - put_delta from strike_rows (the only mathematically
+        # sound source -- total_net_dex, call_delta + put_delta, cannot
+        # derive it) instead of aliasing the overridden total_net_dex
+        # directly. This fixture's default strike_rows are non-neutral by
+        # construction (they exist to exercise the strike table below), so
+        # the neutral-dealer-delta case needs its own explicit override,
+        # same as total_net_gex/total_net_dex above.
+        dealer_delta_exposure_total=0.0,
+    )
     text = format_gex_dex_section(result, "BTC")
     assert "-> NEUTRAL" in text  # dealer gamma
     assert "Dealers delta-neutral" in text

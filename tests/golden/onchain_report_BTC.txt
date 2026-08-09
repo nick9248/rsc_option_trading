@@ -65,8 +65,8 @@ ASSUMED DEALER VIEW  (assumption: dealers long calls / short puts for
 --------------------------------------------------------------------------------
   Dealer Gamma:   +2,011,790.38 USD per 1% move
                   -> POSITIVE: dealers long gamma, stabilizing (buy dips/sell rallies)
-  Dealer Delta:   -156.1756 BTC
-                  -> Dealers net short delta; hedging back to neutral means buying the underlying
+  Dealer Delta:   +363.9842 BTC
+                  -> Dealers net long delta; hedging back to neutral means selling the underlying
 
 GAMMA PROFILE (re-priced, sticky-strike):
   Net GEX at spot $64,371: +1,931,956.40 USD (POSITIVE - dealers long gamma (stabilizing))
@@ -261,7 +261,7 @@ ASSUMED DEALER VIEW  (assumption: dealers long calls / short puts for
 --------------------------------------------------------------------------------
   Dealer Gamma:   +4,486,978.77 USD per 1% move
                   -> POSITIVE: dealers long gamma, stabilizing (buy dips/sell rallies)
-  Dealer Delta:   +873.5490 BTC
+  Dealer Delta:   +18,158.0388 BTC
                   -> Dealers net long delta; hedging back to neutral means selling the underlying
 
 GAMMA PROFILE (re-priced, sticky-strike):
@@ -530,8 +530,8 @@ ASSUMED DEALER VIEW  (assumption: dealers long calls / short puts for
 --------------------------------------------------------------------------------
   Dealer Gamma:   +523,738.64 USD per 1% move
                   -> POSITIVE: dealers long gamma, stabilizing (buy dips/sell rallies)
-  Dealer Delta:   -733.4117 BTC
-                  -> Dealers net short delta; hedging back to neutral means buying the underlying
+  Dealer Delta:   +1,291.2069 BTC
+                  -> Dealers net long delta; hedging back to neutral means selling the underlying
 
 GAMMA PROFILE (re-priced, sticky-strike):
   Net GEX at spot $64,371: +509,677.43 USD (POSITIVE - dealers long gamma (stabilizing))
@@ -779,7 +779,7 @@ ASSUMED DEALER VIEW  (assumption: dealers long calls / short puts for
 --------------------------------------------------------------------------------
   Dealer Gamma:   +3,935,305.82 USD per 1% move
                   -> POSITIVE: dealers long gamma, stabilizing (buy dips/sell rallies)
-  Dealer Delta:   +4,954.5167 BTC
+  Dealer Delta:   +19,170.2195 BTC
                   -> Dealers net long delta; hedging back to neutral means selling the underlying
 
 GAMMA PROFILE (re-priced, sticky-strike):
@@ -1037,8 +1037,8 @@ ASSUMED DEALER VIEW  (assumption: dealers long calls / short puts for
 --------------------------------------------------------------------------------
   Dealer Gamma:   +8,023,815.01 USD per 1% move
                   -> POSITIVE: dealers long gamma, stabilizing (buy dips/sell rallies)
-  Dealer Delta:   -63.4573 BTC
-                  -> Dealers net short delta; hedging back to neutral means buying the underlying
+  Dealer Delta:   +273.8904 BTC
+                  -> Dealers net long delta; hedging back to neutral means selling the underlying
 
 GAMMA PROFILE (re-priced, sticky-strike):
   Net GEX at spot $64,371: +7,961,036.28 USD (POSITIVE - dealers long gamma (stabilizing))
@@ -1261,8 +1261,8 @@ ASSUMED DEALER VIEW  (assumption: dealers long calls / short puts for
 --------------------------------------------------------------------------------
   Dealer Gamma:   +1,250,791.24 USD per 1% move
                   -> POSITIVE: dealers long gamma, stabilizing (buy dips/sell rallies)
-  Dealer Delta:   -640.7776 BTC
-                  -> Dealers net short delta; hedging back to neutral means buying the underlying
+  Dealer Delta:   +4,963.0680 BTC
+                  -> Dealers net long delta; hedging back to neutral means selling the underlying
 
 GAMMA PROFILE (re-priced, sticky-strike):
   Net GEX at spot $64,371: +873,024.57 USD (POSITIVE - dealers long gamma (stabilizing))
@@ -1500,7 +1500,7 @@ ASSUMED DEALER VIEW  (assumption: dealers long calls / short puts for
 --------------------------------------------------------------------------------
   Dealer Gamma:   -4,174,139.51 USD per 1% move
                   -> NEGATIVE: dealers short gamma, amplifying volatility
-  Dealer Delta:   +201.3906 BTC
+  Dealer Delta:   +361.4735 BTC
                   -> Dealers net long delta; hedging back to neutral means selling the underlying
 
 GAMMA PROFILE (re-priced, sticky-strike):
@@ -1716,8 +1716,8 @@ ASSUMED DEALER VIEW  (assumption: dealers long calls / short puts for
 --------------------------------------------------------------------------------
   Dealer Gamma:   +18,444,110.95 USD per 1% move
                   -> POSITIVE: dealers long gamma, stabilizing (buy dips/sell rallies)
-  Dealer Delta:   -3,446.7027 BTC
-                  -> Dealers net short delta; hedging back to neutral means buying the underlying
+  Dealer Delta:   +9,484.5533 BTC
+                  -> Dealers net long delta; hedging back to neutral means selling the underlying
 
 GAMMA PROFILE (re-priced, sticky-strike):
   Net GEX at spot $64,371: +17,503,661.56 USD (POSITIVE - dealers long gamma (stabilizing))
@@ -1968,7 +1968,7 @@ ASSUMED DEALER VIEW  (assumption: dealers long calls / short puts for
 --------------------------------------------------------------------------------
   Dealer Gamma:   +227,790.05 USD per 1% move
                   -> POSITIVE: dealers long gamma, stabilizing (buy dips/sell rallies)
-  Dealer Delta:   +39.8493 BTC
+  Dealer Delta:   +215.1338 BTC
                   -> Dealers net long delta; hedging back to neutral means selling the underlying
 
 GAMMA PROFILE (re-priced, sticky-strike):
@@ -2158,7 +2158,7 @@ ASSUMED DEALER VIEW  (assumption: dealers long calls / short puts for
 --------------------------------------------------------------------------------
   Dealer Gamma:   -67,291.15 USD per 1% move
                   -> NEGATIVE: dealers short gamma, amplifying volatility
-  Dealer Delta:   +3.4892 BTC
+  Dealer Delta:   +9.7435 BTC
                   -> Dealers net long delta; hedging back to neutral means selling the underlying
 
 GAMMA PROFILE (re-priced, sticky-strike):
@@ -2365,8 +2365,8 @@ ASSUMED DEALER VIEW  (assumption: dealers long calls / short puts for
 --------------------------------------------------------------------------------
   Dealer Gamma:   +81,381,683.48 USD per 1% move
                   -> POSITIVE: dealers long gamma, stabilizing (buy dips/sell rallies)
-  Dealer Delta:   -2,084.6151 BTC
-                  -> Dealers net short delta; hedging back to neutral means buying the underlying
+  Dealer Delta:   +16,501.9386 BTC
+                  -> Dealers net long delta; hedging back to neutral means selling the underlying
 
 GAMMA PROFILE (re-priced, sticky-strike):
   Net GEX at spot $64,371: +79,856,830.38 USD (POSITIVE - dealers long gamma (stabilizing))
@@ -2634,8 +2634,8 @@ ASSUMED DEALER VIEW  (assumption: dealers long calls / short puts for
 --------------------------------------------------------------------------------
   Dealer Gamma:   +23,843,120.29 USD per 1% move
                   -> POSITIVE: dealers long gamma, stabilizing (buy dips/sell rallies)
-  Dealer Delta:   -1,426.5991 BTC
-                  -> Dealers net short delta; hedging back to neutral means buying the underlying
+  Dealer Delta:   +2,518.0636 BTC
+                  -> Dealers net long delta; hedging back to neutral means selling the underlying
 
 GAMMA PROFILE (re-priced, sticky-strike):
   Net GEX at spot $64,371: +23,152,242.71 USD (POSITIVE - dealers long gamma (stabilizing))
@@ -2785,8 +2785,8 @@ ASSUMED DEALER VIEW  (assumption: dealers long calls / short puts for
 --------------------------------------------------------------------------------
   Dealer Gamma:   +139,887,693.98 USD per 1% move
                   -> POSITIVE: dealers long gamma, stabilizing (buy dips/sell rallies)
-  Dealer Delta:   -2,478.9444 BTC
-                  -> Dealers net short delta; hedging back to neutral means buying the underlying
+  Dealer Delta:   +73,311.3141 BTC
+                  -> Dealers net long delta; hedging back to neutral means selling the underlying
 
 GAMMA PROFILE (re-priced, sticky-strike):
   Net GEX at spot $64,371: not available (UNKNOWN - insufficient data to re-price)
