@@ -89,7 +89,14 @@ class TestMarketWideCalculator:
 
     def test_realized_volatility_multi_window(self, calculator):
         prices = _make_price_history(60)
-        report, rv_values = calculator.calculate_realized_volatility_multi_window(prices)
+        # Task G2-C: now_utc is a required, explicit, timezone-aware
+        # parameter (VRPCalculator.calculate_realized_volatility no longer
+        # defaults it internally to a naive, non-deterministic
+        # datetime.now()). Real "now" is correct here since _make_price_
+        # history anchors its synthetic bars on time.time() (real "now").
+        report, rv_values = calculator.calculate_realized_volatility_multi_window(
+            prices, now_utc=datetime.now(timezone.utc)
+        )
 
         assert "REALIZED VOLATILITY" in report
         assert 10 in rv_values
@@ -101,8 +108,27 @@ class TestMarketWideCalculator:
 
     def test_realized_volatility_insufficient_data(self, calculator):
         prices = _make_price_history(5)
-        report, rv_values = calculator.calculate_realized_volatility_multi_window(prices)
+        report, rv_values = calculator.calculate_realized_volatility_multi_window(
+            prices, now_utc=datetime.now(timezone.utc)
+        )
         assert "Insufficient" in report
+
+    def test_realized_volatility_multi_window_is_deterministic_across_timezone_representations(self, calculator):
+        """
+        Task G2-C regression guard at the MarketWideCalculator layer (the
+        actual live pipeline entry point the audit exercised): two now_utc
+        values representing the exact same instant, expressed in different
+        timezones, must produce identical rv_values -- proving the fix
+        holds through this method's own threading of now_utc into
+        VRPCalculator, not just inside VRPCalculator directly.
+        """
+        prices = _make_price_history(60)
+        anchor = datetime.now(timezone.utc)
+        _, rv_utc = calculator.calculate_realized_volatility_multi_window(prices, now_utc=anchor)
+        _, rv_other_tz = calculator.calculate_realized_volatility_multi_window(
+            prices, now_utc=anchor.astimezone(timezone(timedelta(hours=-7)))
+        )
+        assert rv_utc == rv_other_tz
 
     def test_vrp(self, calculator):
         rv_30d = 0.50  # 50% realized vol

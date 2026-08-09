@@ -301,11 +301,20 @@ class MarketWideOrchestrator:
         self, calc: MarketWideCalculator, price_history, failed: List[str],
     ):
         """Returns (RealizedVolatilityResult | None, rv_values dict) — the
-        dict is threaded into the VRP phase for its rv_30d input."""
+        dict is threaded into the VRP phase for its rv_30d input.
+
+        Task G2-C: resolves its own ``now_utc`` here (this module is in
+        tests/conftest.py's frozen-clock list), same per-phase-local pattern
+        ``_calculate_term_structure`` above already uses -- rather than
+        letting ``calculate_realized_volatility_multi_window`` default to a
+        naive ``datetime.now()`` internally (the confirmed non-determinism
+        bug: the RV window boundary used to depend on the calling machine's
+        local timezone and wall-clock hour)."""
         if not price_history:
             return None, {}
         try:
-            _, rv_values = calc.calculate_realized_volatility_multi_window(price_history)
+            now_utc = datetime.now(timezone.utc)
+            _, rv_values = calc.calculate_realized_volatility_multi_window(price_history, now_utc)
             result = RealizedVolatilityResult(rv_by_window=dict(rv_values)) if rv_values else None
             return result, rv_values
         except Exception as e:

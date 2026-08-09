@@ -396,12 +396,25 @@ class MarketWideCalculator:
     def calculate_realized_volatility_multi_window(
         self,
         price_history: List[Dict[str, float]],
+        now_utc: datetime,
     ) -> Tuple[str, Dict[int, float]]:
         """
         Calculate realized volatility for 10d, 20d, 30d windows.
 
         Args:
             price_history: List of dicts with 'timestamp' and 'close' keys.
+            now_utc: Anchor for each window's lookback filter, timezone-aware
+                UTC. Required (institutional_metrics_spec.md Wave G Task
+                G2-C) -- ``VRPCalculator.calculate_realized_volatility``
+                used to default this to a naive ``datetime.now()`` when the
+                caller (this method) didn't pass one, which made the 20d/30d
+                RV values non-deterministic (they flipped by multiple vol
+                points depending on the calling machine's local timezone and
+                wall-clock hour, since the window-boundary comparison mixed
+                a naive-local "now" against UTC-stamped bars). Callers must
+                pass ``datetime.now(timezone.utc)`` (or an already-resolved
+                ``now_utc`` they have threaded through), never construct a
+                fresh naive clock read here.
 
         Returns:
             Tuple of (formatted report string, dict of window -> rv_value).
@@ -421,7 +434,7 @@ class MarketWideCalculator:
 
         for window in [10, 20, 30]:
             rv = self.vrp_calculator.calculate_realized_volatility(
-                price_history, window_days=window
+                price_history, window_days=window, reference_time=now_utc
             )
             rv_values[window] = rv
 

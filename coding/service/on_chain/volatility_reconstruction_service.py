@@ -18,7 +18,7 @@ Two-pass design (the table itself documents why — see migration 012):
 import logging
 import math
 from collections import Counter
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from coding.core.analytics.exposure_profile_calculator import ExposureProfileCalculator
@@ -313,10 +313,22 @@ class VolatilityReconstructionService:
         """
         VRP = IV - RV, reusing VRPCalculator as-is.
 
-        Passes reference_time=snapshot_hour so the RV lookback window anchors on
-        the historical hour rather than "now" (see vrp_calculator.py
-        calculate_realized_volatility — its date filter is `now`-relative by
-        default, which would silently filter out all historical price_history).
+        Passes reference_time=snapshot_hour (made timezone-aware -- see
+        below) so the RV lookback window anchors on the historical hour
+        rather than "now" (Task G2-C: vrp_calculator.py's
+        calculate_realized_volatility now REQUIRES an explicit,
+        timezone-aware reference_time -- it no longer defaults to a naive,
+        non-deterministic datetime.now()).
+
+        ``snapshot_hour`` arrives naive (``get_distinct_snapshot_hours_with_
+        expirations`` -- DatabaseRepository's naive-UTC-datetime convention:
+        the value IS UTC, it simply carries no tzinfo). ``.replace(tzinfo=
+        timezone.utc)`` attaches that timezone rather than reinterpreting
+        the value -- never call ``.timestamp()``/compare naively on it
+        directly, which would silently treat it as the machine's LOCAL
+        timezone instead (this method's own price_history construction
+        below had exactly that bug: ``row["date"].timestamp()`` on a
+        naive-UTC value, fixed the same way).
 
         Returns all-None when ohlcv_history has no coverage for the window
         (table starts 2026-03-14 — TASKS.md Track B verified facts) or when
@@ -325,14 +337,15 @@ class VolatilityReconstructionService:
         window_start = snapshot_hour - timedelta(days=self.VRP_LOOKBACK_DAYS + 5)
         ohlcv_rows = self.repo.get_ohlcv_by_date_range(currency, window_start, snapshot_hour)
         price_history = [
-            {"timestamp": row["date"].timestamp(), "close": row["close"]}
+            {"timestamp": row["date"].replace(tzinfo=timezone.utc).timestamp(), "close": row["close"]}
             for row in ohlcv_rows
         ]
 
         vrp_calc = VRPCalculator(currency=currency, lookback_days=self.VRP_LOOKBACK_DAYS)
         # VRPCalculator uses numpy internally (np.std/np.mean) -> np.float64 results.
         # psycopg2 can't adapt those directly, so cast to plain Python float at the boundary.
-        realized_vol = float(vrp_calc.calculate_realized_volatility(price_history, reference_time=snapshot_hour))
+        snapshot_hour_utc = snapshot_hour.replace(tzinfo=timezone.utc) if snapshot_hour.tzinfo is None else snapshot_hour
+        realized_vol = float(vrp_calc.calculate_realized_volatility(price_history, reference_time=snapshot_hour_utc))
         if realized_vol <= 0:
             return {"vrp_absolute": None, "vrp_percentage": None, "realized_vol": None}
 

@@ -12,7 +12,7 @@ suggests options are cheap.
 
 import logging
 import math
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 
@@ -47,7 +47,8 @@ class VRPCalculator:
         self,
         price_history: List[Dict[str, float]],
         window_days: Optional[int] = None,
-        reference_time: Optional[datetime] = None
+        *,
+        reference_time: datetime,
     ) -> float:
         """
         Calculate realized volatility from price history.
@@ -55,12 +56,21 @@ class VRPCalculator:
         Uses log returns and annualized standard deviation.
 
         Args:
-            price_history: List of dicts with 'timestamp' and 'close' keys.
+            price_history: List of dicts with 'timestamp' and 'close' keys
+                (timestamp is a Unix epoch in seconds, UTC — unambiguous).
             window_days: Optional window in days (uses lookback_days if not specified).
-            reference_time: Anchor for the lookback window (defaults to datetime.now()
-                for live use). Pass the historical snapshot time when reconstructing
-                RV for a past hour — otherwise the window is filtered relative to
-                "now" and historical price_history gets filtered out entirely.
+            reference_time: Anchor for the lookback window. Required,
+                timezone-aware UTC (``reference_time.tzinfo`` must be set) —
+                passed explicitly by the caller (e.g. ``datetime.now(timezone.
+                utc)`` for live use, or an already-resolved historical
+                snapshot instant when reconstructing RV for a past hour) so
+                this Core class never reads the wall clock itself, matching
+                ``ExposureProfileCalculator``'s convention. A naive
+                ``reference_time`` compared against the timezone-aware bar
+                timestamps below raises ``TypeError`` rather than silently
+                producing a wrong, machine-local-timezone-dependent window
+                boundary (the confirmed bug this parameter's requiredness
+                closes — see institutional_metrics_spec.md Wave G Task G2-C).
 
         Returns:
             Annualized realized volatility as percentage (e.g., 0.80 for 80%).
@@ -70,13 +80,17 @@ class VRPCalculator:
             return 0.0
 
         window_days = window_days or self.lookback_days
-        reference_time = reference_time or datetime.now()
 
-        # Filter to window
+        # Filter to window. Bar timestamps are converted with an explicit
+        # tz=timezone.utc (never bare datetime.fromtimestamp(), which
+        # interprets the epoch in the machine's LOCAL timezone) so the
+        # comparison against reference_time is always apples-to-apples UTC,
+        # regardless of what timezone the calling machine is configured
+        # with or what hour-of-day reference_time happens to carry.
         cutoff_time = reference_time - timedelta(days=window_days)
         filtered_prices = [
             p for p in price_history
-            if datetime.fromtimestamp(p.get("timestamp", 0)) >= cutoff_time
+            if datetime.fromtimestamp(p.get("timestamp", 0), tz=timezone.utc) >= cutoff_time
         ]
 
         if len(filtered_prices) < 2:

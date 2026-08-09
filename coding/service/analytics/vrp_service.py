@@ -5,7 +5,7 @@ Orchestrates data fetching and VRP calculation for options analysis.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
 from coding.core.analytics.vrp_calculator import VRPCalculator
@@ -61,8 +61,13 @@ class VRPService:
             logger.error("Failed to fetch price history")
             return self._empty_result()
 
-        # Calculate realized volatility
-        realized_vol = calculator.calculate_realized_volatility(price_history)
+        # Calculate realized volatility. Task G2-C: reference_time is now a
+        # required, explicit, UTC-aware parameter on VRPCalculator (Core
+        # must not read the wall clock itself) -- this Service layer is the
+        # right place to resolve "now".
+        realized_vol = calculator.calculate_realized_volatility(
+            price_history, reference_time=datetime.now(timezone.utc)
+        )
 
         logger.info(f"Realized Volatility ({lookback_days}d): {realized_vol * 100:.2f}%")
 
