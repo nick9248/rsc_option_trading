@@ -12,13 +12,15 @@ from coding.core.analytics.reporting.historical_context_formatter import (
 
 
 def _metric(name, value, unit, percentile_30d=61.0, z_30d=0.35, percentile_90d=44.0,
-            z_90d=-0.12, regime_30d="ELEVATED", n_30d=720, n_90d=2160, sufficient=True):
+            z_90d=-0.12, regime_30d="ELEVATED", n_30d=720, n_90d=2160, sufficient=True,
+            span_days_30d=None, span_days_90d=None):
     return NormalizedMetric(
         name=name, value=value,
         percentile_30d=percentile_30d, z_30d=z_30d,
         percentile_90d=percentile_90d, z_90d=z_90d,
         regime_30d=regime_30d, n_30d=n_30d, n_90d=n_90d,
         sufficient=sufficient, unit=unit,
+        span_days_30d=span_days_30d, span_days_90d=span_days_90d,
     )
 
 
@@ -147,3 +149,73 @@ def test_no_stale_prefix_when_stale_since_is_none():
     metrics = {"dvol": _metric("dvol", 37.69, "vol pts")}
     text = format_historical_context_section(metrics, stale_since=None)
     assert "STALE" not in text
+
+
+def test_sample_size_n_disclosed_on_successful_percentile():
+    """
+    Task G2-E: previously n was only printed on the refusal path
+    ("n/a (18 obs)") -- a reader could see WHY a value was withheld but not
+    how much (or how little) data backs a value that IS shown. n must now
+    be visible on the success path too.
+    """
+    metrics = {"net_gex": _metric("net_gex", 22_700_000.0, "USD", n_30d=720, n_90d=2160)}
+    text = format_historical_context_section(metrics)
+    assert "30d: p61" in text
+    assert "720 obs" in text
+    assert "90d: p44" in text
+    assert "2160 obs" in text
+
+
+def test_span_days_disclosed_on_successful_percentile_when_known():
+    metrics = {
+        "net_gex": _metric(
+            "net_gex", 22_700_000.0, "USD",
+            span_days_30d=30.4, span_days_90d=91.2,
+        )
+    }
+    text = format_historical_context_section(metrics)
+    assert "30.4d" in text
+    assert "91.2d" in text
+
+
+def test_g2e_high_count_short_span_renders_as_insufficient_90d():
+    """
+    Task G2-E confirmed case reproduced at the formatter level: a 90d
+    window with n=89 (>= MIN_OBS) but only a 3.75-day span must render the
+    SAME "n/a (N obs)" fallback the count-insufficient case already uses --
+    not a silently-relabeled window, and not the old bug's confident
+    "p97 z+2.49 EXTREME HIGH".
+    """
+    metrics = {
+        "net_gex": _metric(
+            "net_gex", 22_700_000.0, "USD",
+            percentile_30d=None, z_30d=None, percentile_90d=None, z_90d=None,
+            regime_30d=None, n_30d=89, n_90d=89, sufficient=False,
+            span_days_30d=3.75, span_days_90d=3.75,
+        )
+    }
+    text = format_historical_context_section(metrics)
+    assert "30d: n/a (89 obs" in text
+    assert "90d: n/a (89 obs" in text
+    assert "EXTREME HIGH" not in text
+    assert "p97" not in text
+
+
+def test_90d_window_gated_on_span_even_when_n_is_sufficient():
+    """
+    The formatter recomputes 90d sufficiency at render time (regime_90d is
+    not stored on NormalizedMetric). That recompute must now also check
+    span_days_90d, not just n_90d >= MIN_OBS -- otherwise a metric with
+    n_90d=2160 but a short span_days_90d would still render a (wrong)
+    percentile via the "or percentile is None" short-circuit only by
+    accident of normalize() already having gated it upstream; the
+    formatter's own sufficiency recompute must independently agree.
+    """
+    metrics = {
+        "net_gex": _metric(
+            "net_gex", 22_700_000.0, "USD",
+            n_90d=2160, span_days_90d=10.0,  # n passes, span fails (10 < 72)
+        )
+    }
+    text = format_historical_context_section(metrics)
+    assert "90d: n/a (2160 obs" in text

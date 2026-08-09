@@ -65,16 +65,28 @@ def _format_value(value: float, unit: str) -> str:
     return f"{value}"
 
 
-def _format_window(percentile, z, regime, n: int, sufficient: bool) -> str:
+def _format_window(
+    percentile, z, regime, n: int, sufficient: bool, span_days: Optional[float] = None,
+) -> str:
     """
     Format one window's ("30d" or "90d") percentile/z/regime, or the
     insufficient-history fallback.
+
+    Task G2-E: the sample size ``n`` is now disclosed on BOTH branches, not
+    just the refusal one -- previously a reader could see why a value was
+    withheld ("n/a (18 obs)") but had no way to see how much (or how
+    little) data backs a value that IS shown. ``span_days`` (the oldest
+    observation's age in days) is appended too when the caller has it, on
+    both branches, since the whole point of this disclosure is to let a
+    reader catch a high-n-but-short-span series (the confirmed bug this
+    task fixes) even where sufficient=True was rendered correctly.
     """
+    span_suffix = f", {span_days:.1f}d" if span_days is not None else ""
     if not sufficient or percentile is None:
-        return f"n/a ({n} obs)"
+        return f"n/a ({n} obs{span_suffix})"
     z_str = f"z{z:+.2f}" if z is not None else "z n/a"
     regime_str = regime if regime is not None else "n/a"
-    return f"p{percentile:.0f}  {z_str}  {regime_str}"
+    return f"p{percentile:.0f}  {z_str}  {regime_str}  ({n} obs{span_suffix})"
 
 
 def format_metric_value(value: float, unit: str) -> str:
@@ -108,16 +120,24 @@ def _format_metric_line(metric: NormalizedMetric) -> str:
 
     window_30d = _format_window(
         metric.percentile_30d, metric.z_30d, metric.regime_30d,
-        metric.n_30d, metric.sufficient,
+        metric.n_30d, metric.sufficient, metric.span_days_30d,
     )
 
     # regime_90d is not stored on NormalizedMetric (section 1(c)'s dataclass
     # only has regime_30d) -- recompute it from percentile_90d here.
-    sufficient_90d = metric.n_90d >= HistoricalNormalizer.MIN_OBS
+    # Task G2-E: sufficient_90d now also checks calendar span, via the same
+    # HistoricalNormalizer.has_sufficient_span classmethod normalize() uses
+    # for the 30d gate, so the two windows can't silently disagree on what
+    # "sufficient" means.
+    sufficient_90d = metric.n_90d >= HistoricalNormalizer.MIN_OBS and (
+        HistoricalNormalizer.has_sufficient_span(
+            metric.span_days_90d, HistoricalNormalizer.WINDOW_DAYS_90D,
+        )
+    )
     regime_90d = HistoricalNormalizer.regime_label(metric.percentile_90d)
     window_90d = _format_window(
         metric.percentile_90d, metric.z_90d, regime_90d,
-        metric.n_90d, sufficient_90d,
+        metric.n_90d, sufficient_90d, metric.span_days_90d,
     )
 
     return f"{label:<16} {value_str:<14} 30d: {window_30d}  |  90d: {window_90d}"

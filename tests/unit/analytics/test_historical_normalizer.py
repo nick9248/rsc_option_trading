@@ -142,6 +142,117 @@ class TestNormalize:
         assert result.unit == "vol pts"
 
 
+class TestCalendarSpanGate:
+    """
+    Task G2-E: HistoricalNormalizer's sufficiency gate previously only
+    checked observation COUNT (n >= MIN_OBS). A front-month expiry's own
+    percentile series is keyed to that expiry's own identifier, which
+    structurally cannot exist -- and so cannot have been observed by the
+    hourly collector -- 30 or 90 days before its own expiration. Confirmed
+    live case (cross-checked against the DB): one expiry's GEX series had
+    89 hourly observations (>= MIN_OBS for BOTH windows) spanning only 3.75
+    calendar days (oldest=2026-08-04 08:00, newest=2026-08-08 02:00), yet
+    the report rendered "90d: p97 z+2.49 EXTREME HIGH" as if it had genuine
+    90-day depth.
+    """
+
+    def setup_method(self):
+        self.normalizer = HistoricalNormalizer()
+
+    def test_g2e_confirmed_case_89_obs_3_75_day_span_is_insufficient_both_windows(self):
+        # Reproduces the audit's exact confirmed numbers: n=89 (>= MIN_OBS
+        # for 30d AND 90d) but the oldest observation is only 3.75 days
+        # old -- nowhere near 80% of either the 30d (24d) or 90d (72d)
+        # threshold. A distinct value per point so a real (non-degenerate)
+        # percentile/z would have been computed had the gate not caught it.
+        history = [float(i) for i in range(89)]
+        result = self.normalizer.normalize(
+            name="net_gex", value=999.0,
+            history_30d=history, history_90d=history, unit="USD",
+            oldest_age_days_30d=3.75, oldest_age_days_90d=3.75,
+        )
+        assert result.n_30d == 89
+        assert result.n_90d == 89
+        # Old (buggy) gate: n=89 >= MIN_OBS=30 -> would have reported
+        # "sufficient" for BOTH windows. The fixed gate must refuse both.
+        assert result.sufficient is False
+        assert result.percentile_30d is None
+        assert result.z_30d is None
+        assert result.regime_30d is None
+        assert result.percentile_90d is None
+        assert result.z_90d is None
+        assert result.span_days_30d == pytest.approx(3.75)
+        assert result.span_days_90d == pytest.approx(3.75)
+
+    def test_genuine_30d_span_still_renders_sufficient(self):
+        # Don't over-tighten: a series that genuinely has ~30 days of
+        # depth (span >= 80% of 30 days = 24 days) must still be usable.
+        history = [float(i) for i in range(720)]  # hourly for 30 days
+        result = self.normalizer.normalize(
+            name="net_gex", value=999.0,
+            history_30d=history, history_90d=history, unit="USD",
+            oldest_age_days_30d=30.0, oldest_age_days_90d=30.0,
+        )
+        assert result.sufficient is True
+        assert result.percentile_30d is not None
+        # The 90d window has the same 30-day-old data -- genuinely
+        # insufficient for a 90d claim (30/90 = 33% < 80%), and the fixed
+        # gate must say so rather than silently rendering a "90d" label
+        # backed by only 30 days of history.
+        assert result.percentile_90d is None
+
+    def test_genuine_90d_span_renders_sufficient_for_both_windows(self):
+        history = [float(i) for i in range(2160)]  # hourly for 90 days
+        result = self.normalizer.normalize(
+            name="net_gex", value=999.0,
+            history_30d=history, history_90d=history, unit="USD",
+            oldest_age_days_30d=90.0, oldest_age_days_90d=90.0,
+        )
+        assert result.sufficient is True
+        assert result.percentile_30d is not None
+        assert result.percentile_90d is not None
+
+    def test_span_exactly_at_80_percent_threshold_is_sufficient(self):
+        # 24.0 / 30.0 == 0.8 exactly -- boundary is inclusive (>=).
+        history = [1.0] * 30
+        result = self.normalizer.normalize(
+            name="test_metric", value=1.5,
+            history_30d=history, history_90d=history, unit="USD",
+            oldest_age_days_30d=24.0, oldest_age_days_90d=24.0,
+        )
+        assert result.sufficient is True
+
+    def test_span_just_under_80_percent_threshold_is_insufficient(self):
+        history = [1.0] * 30
+        result = self.normalizer.normalize(
+            name="test_metric", value=1.5,
+            history_30d=history, history_90d=history, unit="USD",
+            oldest_age_days_30d=23.9, oldest_age_days_90d=23.9,
+        )
+        assert result.sufficient is False
+        assert result.percentile_30d is None
+
+    def test_none_span_exempts_the_gate_backward_compatible(self):
+        # Callers that don't supply span data (this class's own count-only
+        # tests, or a not-yet-wired caller) keep the prior n-only gate --
+        # None must not be misread as "span is zero."
+        history = [1.0] * 30
+        result = self.normalizer.normalize(
+            name="test_metric", value=1.5,
+            history_30d=history, history_90d=history, unit="USD",
+        )
+        assert result.sufficient is True
+        assert result.span_days_30d is None
+        assert result.span_days_90d is None
+
+    def test_has_sufficient_span_static_boundaries(self):
+        assert HistoricalNormalizer.has_sufficient_span(None, 30.0) is True
+        assert HistoricalNormalizer.has_sufficient_span(24.0, 30.0) is True
+        assert HistoricalNormalizer.has_sufficient_span(23.999, 30.0) is False
+        assert HistoricalNormalizer.has_sufficient_span(72.0, 90.0) is True
+        assert HistoricalNormalizer.has_sufficient_span(71.999, 90.0) is False
+
+
 class TestRegimeLadder:
     """institutional_metrics_spec.md section 1(b): single 7-band ladder."""
 

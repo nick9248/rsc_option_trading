@@ -51,9 +51,21 @@ def _make_repo_mock():
     default -- get_metric_freshness must return None or a real datetime,
     never an auto-generated MagicMock (which would blow up
     datetime.now(mock.tzinfo) in _compute_historical_context_staleness).
+
+    Task G2-E: get_metric_history_oldest_timestamp needs the same None
+    default for the same reason --
+    OnChainAnalysisService._oldest_observation_age_days calls
+    datetime.now(oldest_ts.tzinfo) on whatever it returns, which blows up
+    on an auto-generated MagicMock. None here means "span unknown," which
+    HistoricalNormalizer.has_sufficient_span treats as exempt from the
+    span gate -- i.e. these tests (which don't exercise span-awareness
+    itself; see test_historical_normalizer.py's TestCalendarSpanGate and
+    test_on_chain_analysis_service_normalized_metrics_span.py for that)
+    keep the prior n-only sufficiency behavior.
     """
     repo = MagicMock()
     repo.get_metric_freshness.return_value = None
+    repo.get_metric_history_oldest_timestamp.return_value = None
     return repo
 
 

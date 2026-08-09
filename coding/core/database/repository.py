@@ -3158,6 +3158,92 @@ class DatabaseRepository:
 
         return [float(row[0]) for row in rows if row[0] is not None]
 
+    def get_metric_history_oldest_timestamp(
+        self,
+        table: str,
+        column: str,
+        currency: str,
+        lookback_hours: int,
+        expiration: Optional[str] = None,
+        time_column: Optional[str] = None,
+    ) -> Optional[datetime]:
+        """
+        Timestamp of the oldest non-NULL observation ``get_metric_history``
+        (same args) would return for this exact same window (Task G2-E).
+
+        HistoricalNormalizer's 30d/90d sufficiency gate previously only
+        checked observation COUNT (n >= MIN_OBS). Confirmed bug: a
+        per-expiry series keyed to one specific expiration string (e.g. net
+        GEX for "8AUG26") can satisfy n >= MIN_OBS for BOTH the 30d and 90d
+        windows while spanning only a few calendar days -- a front-month
+        expiry, by definition, has not existed (and so has not been
+        observed by the hourly collector) 30 or 90 days before its own
+        expiration. The caller compares this timestamp's age against the
+        claimed window size to add a calendar-span requirement on top of
+        the count gate (see ``HistoricalNormalizer.has_sufficient_span``).
+
+        Filters identically to ``get_metric_history`` -- same whitelist,
+        same lookback/expiration predicate, and the same NULL-dropping
+        (``AND {column} IS NOT NULL``) -- so "how many observations" and
+        "how far back do they go" always describe the exact same row set.
+        Deliberately a separate query rather than folding a timestamp
+        column into ``get_metric_history``'s own SELECT: that method has
+        many other callers (PCR classification, RR/BF skew percentiles)
+        that don't need span data and whose existing ``List[float]``
+        return contract this task must not disturb.
+
+        Returns:
+            The oldest matching row's time-column value, or None if the
+            window has zero qualifying rows.
+
+        Raises:
+            ValueError: (table, column) is not in the whitelist -- same
+                whitelist, same "programming bug, not a data issue"
+                contract as ``get_metric_history``, so callers can apply
+                the identical except-ValueError-vs-except-Exception
+                handling to both calls.
+        """
+        key = (table, column)
+        if key not in self._METRIC_HISTORY_WHITELIST:
+            raise ValueError(
+                f"get_metric_history_oldest_timestamp: ({table!r}, {column!r}) is not "
+                f"whitelisted. Allowed pairs: {sorted(self._METRIC_HISTORY_WHITELIST)}"
+            )
+        col = self._METRIC_HISTORY_WHITELIST[key] if time_column is None else time_column
+        extra_filter = self._METRIC_HISTORY_EXTRA_FILTER.get(table)
+        extra_clause = f" AND {extra_filter}" if extra_filter else ""
+
+        if expiration is not None:
+            sql = (
+                f"SELECT MIN({col}) FROM {table} "
+                f"WHERE currency = %s AND expiration = %s "
+                f"AND {col} >= NOW() - INTERVAL '1 hour' * %s "
+                f"AND {column} IS NOT NULL"
+                f"{extra_clause}"
+            )
+            params = (currency, expiration, lookback_hours)
+        else:
+            sql = (
+                f"SELECT MIN({col}) FROM {table} "
+                f"WHERE currency = %s "
+                f"AND {col} >= NOW() - INTERVAL '1 hour' * %s "
+                f"AND {column} IS NOT NULL"
+                f"{extra_clause}"
+            )
+            params = (currency, lookback_hours)
+
+        try:
+            with self._db_cursor() as cursor:
+                cursor.execute(sql, params)
+                row = cursor.fetchone()
+        except Exception as exc:
+            logger.warning(
+                "get_metric_history_oldest_timestamp(%s, %s) failed: %s", table, column, exc,
+            )
+            return None
+
+        return row[0] if row and row[0] is not None else None
+
     # institutional_metrics_spec.md section 1(c) / C1 review Important #4:
     # "STALE: history ends {ts}" requires knowing how fresh the queried
     # history actually is. Derived from the same table set

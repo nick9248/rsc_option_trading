@@ -620,6 +620,66 @@ class OnChainAnalysisService:
         threshold = datetime.now(most_stale.tzinfo) - timedelta(hours=self._STALENESS_THRESHOLD_HOURS)
         return most_stale if most_stale < threshold else None
 
+    def _oldest_observation_age_days(
+        self,
+        table: str,
+        column: str,
+        currency: str,
+        lookback_hours: int,
+        expiration: Optional[str] = None,
+        time_column: Optional[str] = None,
+    ) -> Optional[float]:
+        """
+        Age in days of the oldest observation
+        ``repository.get_metric_history`` (same args) actually returned, or
+        None if unavailable. Feeds ``HistoricalNormalizer``'s calendar-span
+        gate (Task G2-E) via ``MetricSpec.oldest_age_days_30d``/``_90d`` --
+        the gate that catches a per-expiry series racking up n >= MIN_OBS
+        observations while spanning only a handful of calendar days (a
+        front-month expiry, by definition, has not existed -- and so has
+        not been observed by the hourly collector -- 30 or 90 days before
+        its own expiration).
+
+        Deliberately isolated in its OWN try/except, separate from the
+        try/except already wrapping each metric's ``get_metric_history``
+        call below: a failure here must never be attributed to, or
+        suppress visibility of, a pre-existing history-fetch failure (this
+        task's isolation constraint). A failure here degrades gracefully
+        to "span unknown" (None) for just this one window --
+        ``HistoricalNormalizer.has_sufficient_span`` treats None as exempt
+        from the gate (falls back to the prior count-only behavior for
+        that window) rather than discarding an otherwise-successful
+        history fetch over a span-lookup problem.
+        """
+        try:
+            oldest_ts = self.repository.get_metric_history_oldest_timestamp(
+                table=table, column=column, currency=currency,
+                lookback_hours=lookback_hours, expiration=expiration,
+                time_column=time_column,
+            )
+        except ValueError as exc:
+            logger.error(
+                "Oldest-timestamp lookup for %s.%s hit a whitelist violation "
+                "(programming bug, not a data issue): %s", table, column, exc,
+            )
+            return None
+        except Exception as exc:
+            logger.warning(
+                "Failed to fetch oldest timestamp for %s.%s (%s): %s",
+                table, column, currency, exc,
+            )
+            return None
+
+        if oldest_ts is None:
+            return None
+        # Same tz-defensive pattern _compute_historical_context_staleness
+        # already uses below (datetime.now(most_stale.tzinfo)): the DB
+        # driver may return a naive or aware datetime depending on the
+        # column type, so match "now"'s tz-awareness to what was actually
+        # returned rather than assuming UTC-aware.
+        now = datetime.now(oldest_ts.tzinfo)
+        return (now - oldest_ts).total_seconds() / 86400.0
+
     def _build_normalized_metrics(
         self,
         analyzer: OnChainMetricsCalculator,
@@ -703,6 +763,14 @@ class OnChainAnalysisService:
                         currency=currency, lookback_hours=lookback_90d, expiration=front_month,
                     ),
                     unit="USD",
+                    oldest_age_days_30d=self._oldest_observation_age_days(
+                        table="onchain_analysis_snapshots", column="total_net_gex",
+                        currency=currency, lookback_hours=lookback_30d, expiration=front_month,
+                    ),
+                    oldest_age_days_90d=self._oldest_observation_age_days(
+                        table="onchain_analysis_snapshots", column="total_net_gex",
+                        currency=currency, lookback_hours=lookback_90d, expiration=front_month,
+                    ),
                 ))
                 tables_used.append(("onchain_analysis_snapshots", front_month))
             except ValueError as exc:
@@ -751,6 +819,21 @@ class OnChainAnalysisService:
                         currency=currency, expiration=front_month, metric_name="total_oi (90d)",
                     ),
                     unit="coins",
+                    # total_oi's history is the element-wise sum of
+                    # total_call_oi + total_put_oi, both fetched with
+                    # identical WHERE/ORDER BY clauses against the same
+                    # table (_sum_paired_history's own row-alignment
+                    # assumption) -- total_call_oi's oldest timestamp is
+                    # therefore representative of the summed series' span
+                    # too.
+                    oldest_age_days_30d=self._oldest_observation_age_days(
+                        table="onchain_analysis_snapshots", column="total_call_oi",
+                        currency=currency, lookback_hours=lookback_30d, expiration=front_month,
+                    ),
+                    oldest_age_days_90d=self._oldest_observation_age_days(
+                        table="onchain_analysis_snapshots", column="total_call_oi",
+                        currency=currency, lookback_hours=lookback_90d, expiration=front_month,
+                    ),
                 ))
                 tables_used.append(("onchain_analysis_snapshots", front_month))
             except ValueError as exc:
@@ -776,6 +859,14 @@ class OnChainAnalysisService:
                             currency=currency, lookback_hours=lookback_90d, expiration=front_month,
                         ),
                         unit="ratio",
+                        oldest_age_days_30d=self._oldest_observation_age_days(
+                            table="onchain_analysis_snapshots", column="put_call_ratio_oi",
+                            currency=currency, lookback_hours=lookback_30d, expiration=front_month,
+                        ),
+                        oldest_age_days_90d=self._oldest_observation_age_days(
+                            table="onchain_analysis_snapshots", column="put_call_ratio_oi",
+                            currency=currency, lookback_hours=lookback_90d, expiration=front_month,
+                        ),
                     ))
                     tables_used.append(("onchain_analysis_snapshots", front_month))
                 except ValueError as exc:
@@ -803,6 +894,14 @@ class OnChainAnalysisService:
                         currency=currency, lookback_hours=lookback_90d, time_column="date",
                     ),
                     unit="vol pts",
+                    oldest_age_days_30d=self._oldest_observation_age_days(
+                        table="volatility_index_history", column="dvol",
+                        currency=currency, lookback_hours=lookback_30d, time_column="date",
+                    ),
+                    oldest_age_days_90d=self._oldest_observation_age_days(
+                        table="volatility_index_history", column="dvol",
+                        currency=currency, lookback_hours=lookback_90d, time_column="date",
+                    ),
                 ))
                 tables_used.append(("volatility_index_history", None))
             except ValueError as exc:
@@ -838,6 +937,14 @@ class OnChainAnalysisService:
                     history_30d=[v * scale for v in raw_history_30d],
                     history_90d=[v * scale for v in raw_history_90d],
                     unit="%",
+                    oldest_age_days_30d=self._oldest_observation_age_days(
+                        table="funding_rate_history", column="funding_rate",
+                        currency=currency, lookback_hours=lookback_30d, time_column="date",
+                    ),
+                    oldest_age_days_90d=self._oldest_observation_age_days(
+                        table="funding_rate_history", column="funding_rate",
+                        currency=currency, lookback_hours=lookback_90d, time_column="date",
+                    ),
                 ))
                 tables_used.append(("funding_rate_history", None))
             except ValueError as exc:

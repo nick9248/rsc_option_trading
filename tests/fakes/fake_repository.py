@@ -200,6 +200,35 @@ class FakeDatabaseRepository:
             )
         return []
 
+    def get_metric_history_oldest_timestamp(
+        self,
+        table: str,
+        column: str,
+        currency: str,
+        lookback_hours: int,
+        expiration: Optional[str] = None,
+        time_column: Optional[str] = None,
+    ) -> Optional[datetime]:
+        """
+        Task G2-E: this offline fixture never recorded a metric-history
+        table (see ``get_metric_history`` above), so there is no oldest
+        timestamp to replay either -- returns None honestly. Combined with
+        ``get_metric_history`` returning ``[]``, every normalized metric's
+        n_30d/n_90d is already 0 against this fixture, so the calendar-span
+        gate this method feeds never has a chance to matter here (n=0 <
+        MIN_OBS already fails the count gate on its own) -- this is purely
+        about not raising AttributeError on the new call, same as
+        get_metric_freshness's existing "un-whitelisted call fails loudly,
+        even offline" contract below.
+        """
+        key = (table, column)
+        if key not in DatabaseRepository._METRIC_HISTORY_WHITELIST:
+            raise ValueError(
+                f"get_metric_history_oldest_timestamp: ({table!r}, {column!r}) is not "
+                f"whitelisted. Allowed pairs: {sorted(DatabaseRepository._METRIC_HISTORY_WHITELIST)}"
+            )
+        return None
+
     def get_metric_freshness(
         self,
         table: str,
