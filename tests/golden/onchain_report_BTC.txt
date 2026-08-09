@@ -119,7 +119,7 @@ Total VEX: +0.55M USD/vol pt   Total CEX: -0.47M USD/day
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
 25Δ Risk Reversal (call − put): -4.2% (Puts Richer - Downside Hedging Demand)
-  25d Put: 38.3% (K=61,000, Δ=-0.250)  |  25d Call: 34.1% (K=68,000, Δ=+0.265)
+  25d Put: 38.3% (K=61,500, Δ=-0.250)  |  25d Call: 34.1% (K=69,000, Δ=+0.250)
 
 ATM IV: 35.1%
 
@@ -402,8 +402,8 @@ Total VEX: +14.57M USD/vol pt   Total CEX: -1.81M USD/day
 
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
-25Δ Risk Reversal (call − put): -4.7% (Puts Richer - Downside Hedging Demand)
-  25d Put: 44.0% (K=56,000, Δ=-0.244)  |  25d Call: 39.3% (K=80,000, Δ=+0.254)
+25Δ Risk Reversal (call − put): -4.6% (Puts Richer - Downside Hedging Demand)
+  25d Put: 43.9% (K=57,000, Δ=-0.250)  |  25d Call: 39.3% (K=81,000, Δ=+0.250)
 
 ATM IV: 40.8%
 
@@ -629,8 +629,8 @@ Total VEX: +0.35M USD/vol pt   Total CEX: -0.02M USD/day
 
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
-25Δ Risk Reversal (call − put): -4.6% (Puts Richer - Downside Hedging Demand)
-  25d Put: 45.8% (K=55,000, Δ=-0.253)  |  25d Call: 41.1% (K=95,000, Δ=+0.244)
+25Δ Risk Reversal (call − put): -4.7% (Puts Richer - Downside Hedging Demand)
+  25d Put: 45.8% (K=54,500, Δ=-0.250)  |  25d Call: 41.1% (K=93,500, Δ=+0.250)
 
 ATM IV: 43.1%
 
@@ -924,8 +924,8 @@ Total VEX: +12.22M USD/vol pt   Total CEX: -3.36M USD/day
 
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
-25Δ Risk Reversal (call − put): -5.0% (Puts Much Richer - Strong Downside Hedging Demand)
-  25d Put: 40.4% (K=58,000, Δ=-0.226)  |  25d Call: 35.3% (K=72,000, Δ=+0.257)
+25Δ Risk Reversal (call − put): -4.5% (Puts Richer - Downside Hedging Demand)
+  25d Put: 39.8% (K=59,000, Δ=-0.250)  |  25d Call: 35.3% (K=73,000, Δ=+0.250)
 
 ATM IV: 36.7%
 
@@ -1108,8 +1108,7 @@ Total VEX: -0.03M USD/vol pt   Total CEX: +1.72M USD/day
 
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
-25Δ Risk Reversal (call − put): -1.6% (Puts Richer - Downside Hedging Demand)
-  25d Put: 16.4% (K=64,000, Δ=-0.182)  |  25d Call: 14.8% (K=64,500, Δ=+0.368)
+25Δ Risk Reversal: insufficient chain
 
 ATM IV: 14.8%
 
@@ -1389,8 +1388,8 @@ Total VEX: +3.77M USD/vol pt   Total CEX: -0.31M USD/day
 
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
-25Δ Risk Reversal (call − put): -4.9% (Puts Richer - Downside Hedging Demand)
-  25d Put: 45.2% (K=55,000, Δ=-0.247)  |  25d Call: 40.3% (K=88,000, Δ=+0.241)
+25Δ Risk Reversal (call − put): -4.8% (Puts Richer - Downside Hedging Demand)
+  25d Put: 45.1% (K=55,500, Δ=-0.250)  |  25d Call: 40.3% (K=87,000, Δ=+0.250)
 
 ATM IV: 42.1%
 
@@ -1570,8 +1569,8 @@ Total VEX: +0.09M USD/vol pt   Total CEX: +0.14M USD/day
 
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
-25Δ Risk Reversal (call − put): -4.2% (Puts Richer - Downside Hedging Demand)
-  25d Put: 27.7% (K=63,500, Δ=-0.223)  |  25d Call: 23.5% (K=65,000, Δ=+0.266)
+25Δ Risk Reversal (call − put): -3.8% (Puts Richer - Downside Hedging Demand)
+  25d Put: 27.3% (K=63,750, Δ=-0.250)  |  25d Call: 23.5% (K=65,250, Δ=+0.250)
 
 ATM IV: 24.5%
 
@@ -1840,8 +1839,8 @@ Total VEX: +5.00M USD/vol pt   Total CEX: -2.28M USD/day
 
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
-25Δ Risk Reversal (call − put): -4.7% (Puts Richer - Downside Hedging Demand)
-  25d Put: 38.9% (K=60,000, Δ=-0.247)  |  25d Call: 34.2% (K=70,000, Δ=+0.235)
+25Δ Risk Reversal (call − put): -4.6% (Puts Richer - Downside Hedging Demand)
+  25d Put: 38.8% (K=60,500, Δ=-0.250)  |  25d Call: 34.2% (K=69,500, Δ=+0.250)
 
 ATM IV: 35.4%
 
@@ -2038,8 +2037,8 @@ Total VEX: +0.10M USD/vol pt   Total CEX: -0.45M USD/day
 
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
-25Δ Risk Reversal (call − put): -4.7% (Puts Richer - Downside Hedging Demand)
-  25d Put: 32.8% (K=63,000, Δ=-0.212)  |  25d Call: 28.1% (K=65,500, Δ=+0.234)
+25Δ Risk Reversal (call − put): -4.1% (Puts Richer - Downside Hedging Demand)
+  25d Put: 32.3% (K=63,250, Δ=-0.250)  |  25d Call: 28.2% (K=65,250, Δ=+0.250)
 
 ATM IV: 29.2%
 
@@ -2222,7 +2221,7 @@ Total VEX: -0.01M USD/vol pt   Total CEX: +0.07M USD/day
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
 25Δ Risk Reversal (call − put): -3.3% (Puts Richer - Downside Hedging Demand)
-  25d Put: 34.3% (K=63,000, Δ=-0.257)  |  25d Call: 31.0% (K=66,000, Δ=+0.212)
+  25d Put: 34.4% (K=62,750, Δ=-0.250)  |  25d Call: 31.1% (K=65,750, Δ=+0.250)
 
 ATM IV: 32.2%
 
@@ -2507,8 +2506,8 @@ Total VEX: +13.09M USD/vol pt   Total CEX: -44.75M USD/day
 
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
-25Δ Risk Reversal (call − put): -4.3% (Puts Richer - Downside Hedging Demand)
-  25d Put: 38.9% (K=62,000, Δ=-0.207)  |  25d Call: 34.6% (K=66,000, Δ=+0.291)
+25Δ Risk Reversal (call − put): -3.6% (Puts Richer - Downside Hedging Demand)
+  25d Put: 38.3% (K=62,500, Δ=-0.250)  |  25d Call: 34.7% (K=66,500, Δ=+0.250)
 
 ATM IV: 36.2%
 
@@ -2698,8 +2697,8 @@ Total VEX: +6.06M USD/vol pt   Total CEX: -8.61M USD/day
 
 VOLATILITY SURFACE ANALYSIS
 --------------------------------------------------------------------------------
-25Δ Risk Reversal (call − put): -3.7% (Puts Richer - Downside Hedging Demand)
-  25d Put: 37.8% (K=62,000, Δ=-0.278)  |  25d Call: 34.1% (K=67,000, Δ=+0.281)
+25Δ Risk Reversal (call − put): -4.1% (Puts Richer - Downside Hedging Demand)
+  25d Put: 38.3% (K=61,500, Δ=-0.250)  |  25d Call: 34.2% (K=67,500, Δ=+0.250)
 
 ATM IV: 35.8%
 

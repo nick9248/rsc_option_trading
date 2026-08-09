@@ -51,8 +51,16 @@ VWAP_AGGRESSION_THRESHOLD_POINTS = 1.0
 MINIMUM_TRADED_INSTRUMENTS_FOR_AGGRESSION = 2
 
 # institutional_metrics_spec.md section 3(b) -- delta-space interpolation
-# for RR25/BF25 (replaces the nearest-delta pick used by
-# _calculate_25_delta_risk_reversal, which is unaffected and stays as-is).
+# for RR25/BF25. Task G2-D fix 1 (Wave G fresh audit): this REPLACES the
+# nearest-delta pick that used to live in the now-deleted
+# _calculate_25_delta_risk_reversal/_find_closest_delta -- that ungated
+# picker had no gate on how close its "closest to +-0.25" selection
+# actually was, so the per-expiry report and the market-wide report could
+# (and, per the audit, did) disagree on the same expiry's RR25, sometimes
+# comparing two unrelated points on the smile (e.g. a 21-delta put against
+# a 36-delta call) and still printing a labelled "Balanced" reading. There
+# is now exactly one risk-reversal computation
+# (calculate_risk_reversal_butterfly, below) used by both report sections.
 MIN_ABS_DELTA_FOR_INTERPOLATION = 0.02
 MAX_ABS_DELTA_FOR_INTERPOLATION = 0.98
 TARGET_ABS_DELTA_25D = 0.25
@@ -139,7 +147,7 @@ class VolatilitySurfaceCalculator:
             Call ``.to_dict()`` for the legacy dict shape.
         """
         iv_by_strike_rows = self._calculate_iv_by_strike_rows()
-        skew_dict = self._calculate_25_delta_risk_reversal()
+        skew_dict = self._skew_dict_from_risk_reversal_butterfly()
         pc_dict = self._calculate_pc_by_moneyness()
         second_order_dict = self._calculate_second_order_greeks()
         atm_iv = self._calculate_atm_iv()
@@ -218,63 +226,95 @@ class VolatilitySurfaceCalculator:
         rows.sort(key=lambda r: (r.strike, r.option_type))
         return rows
 
-    def _calculate_25_delta_risk_reversal(self) -> Dict[str, Any]:
+    def _skew_dict_from_risk_reversal_butterfly(self) -> Dict[str, Any]:
         """
-        Calculate the 25-delta risk reversal: 25d Call IV - 25d Put IV
-        (bugfix_spec.md Item 9 -- the market convention: SpotGamma, MenthorQ,
-        Glassnode's ``options.25DeltaSkewCallPutAll`` all define it this way).
+        Build the per-expiry SkewResult dict shape from
+        ``calculate_risk_reversal_butterfly()`` -- the SAME bracket-gated
+        delta-interpolation the market-wide SKEW TERM STRUCTURE section
+        uses (Task G2-D fix 1). There is exactly one risk-reversal
+        computation; this method only adapts its shape/adds the
+        per-expiry interpretation label, it does not recompute anything.
 
-        Positive risk reversal = calls more expensive (upside speculation).
-        Negative risk reversal = puts more expensive (downside hedging demand).
-
-        The instrument selection and the IV numbers themselves were already
-        correct (confirmed by the audit) -- only the SIGN and the name
-        (previously "skew" = put IV - call IV, a non-standard, unqualified
-        convention that reads backwards against Deribit/Glassnode) changed.
+        Deletes the old ``_calculate_25_delta_risk_reversal``/
+        ``_find_closest_delta`` (the ungated nearest-delta picker): that
+        picker had no gate on how close its ±0.25 pick actually was, so it
+        could (and, per an independent audit, did) disagree with the
+        market-wide method on the same expiry -- one live example compared
+        a 21-delta put against a 36-delta call and still labelled the
+        result "Balanced".
 
         Returns:
             Dict with put_25d_iv, call_25d_iv, put_25d_strike,
-            call_25d_strike, put_25d_delta, call_25d_delta (the ACTUAL
-            selected deltas, so a thin book's "closest to ±0.25" pick is
-            visible to the reader -- bugfix_spec.md 9.4), risk_reversal_25d
-            (PRIMARY, market convention), put_over_call_skew_25d (legacy
-            sign, explicitly named), and interpretation.
+            call_25d_strike, put_25d_delta, call_25d_delta (exactly
+            ±TARGET_ABS_DELTA_25D by construction of the interpolation --
+            None together with the corresponding IV when that side isn't
+            bracketed), risk_reversal_25d (PRIMARY, market convention),
+            put_over_call_skew_25d (legacy sign, explicitly named), and
+            interpretation ("insufficient chain" -- the same fallback
+            string market_wide_formatter.py's _format_rr25_cell/
+            _format_bf25_cell already use -- when the chain doesn't
+            bracket the target tightly enough on either side, OR when
+            calculate_risk_reversal_butterfly() raised unexpectedly).
+
+        Isolation (matches ``_calculate_gamma_profile``'s guard on
+        ``GammaProfileCalculator.calculate()`` just above): ``calculate()``
+        also builds ``iv_by_strike``/``pc_by_moneyness``/
+        ``second_order_greeks``/``atm_iv`` for this SAME expiry, and
+        ``OnChainAnalysisService._calculate_volatility_surface`` calls
+        ``calculate_risk_reversal_butterfly()`` a SECOND time right after
+        (to persist the full bf_25d/n_quotes_used dict into
+        ``volatility_skew_history``) in its own isolated try/except (Task
+        C4 review Important #2) so a failure there never drops the
+        already-stored vol-surface result. Before this method existed,
+        that second call was the ONLY caller, so a bug in the
+        interpolation logic could only ever take out the SKEW TERM
+        STRUCTURE section. Now that this method also calls it, an
+        unguarded exception here would propagate out of ``calculate()``
+        and take out the ENTIRE per-expiry volatility-surface result
+        (including the unrelated fields above) too -- a strictly worse
+        blast radius than before this task. Catching it here and
+        degrading to the same "insufficient chain" shape used for a
+        genuinely-unbracketed chain preserves the pre-existing isolation
+        guarantee.
         """
-        # Find instruments closest to ±0.25 delta. independent review round
-        # 4 (Minor): gate on mark_iv is not None here too (not just delta)
-        # -- _find_closest_delta's own `valid` filter already excludes a
-        # null-mark_iv candidate from being selected (verified: this
-        # method does not currently crash on one), so this is "gate before
-        # compute" applied one layer earlier, matching C3's standard,
-        # rather than a live-bug fix -- purely additive, no behavior
-        # change (the redundant check inside _find_closest_delta stays,
-        # since other callers may pass it unfiltered lists).
-        puts = [
-            i for i in self.instruments
-            if i["option_type"] == "P" and i.get("delta") is not None and i.get("mark_iv") is not None
-        ]
-        calls = [
-            i for i in self.instruments
-            if i["option_type"] == "C" and i.get("delta") is not None and i.get("mark_iv") is not None
-        ]
-
-        put_25d = self._find_closest_delta(puts, -0.25)
-        call_25d = self._find_closest_delta(calls, 0.25)
-
-        if put_25d is None or call_25d is None:
+        try:
+            rr_bf = self.calculate_risk_reversal_butterfly()
+        except Exception:
+            logger.error(
+                "VolatilitySurfaceCalculator: calculate_risk_reversal_butterfly "
+                "failed unexpectedly for expiration %s -- degrading skew_25d to "
+                "'insufficient chain' rather than aborting the whole volatility "
+                "surface calculation (Task G2-D fix 1 isolation)",
+                self.expiration, exc_info=True,
+            )
             return {
                 "put_25d_iv": None,
                 "call_25d_iv": None,
+                "put_25d_strike": None,
+                "call_25d_strike": None,
                 "put_25d_delta": None,
                 "call_25d_delta": None,
                 "risk_reversal_25d": None,
                 "put_over_call_skew_25d": None,
-                "interpretation": "Insufficient data",
+                "interpretation": "insufficient chain",
             }
 
-        put_iv = put_25d.get("mark_iv", 0)
-        call_iv = call_25d.get("mark_iv", 0)
-        risk_reversal = call_iv - put_iv
+        call_iv = rr_bf["call_25d_iv"]
+        put_iv = rr_bf["put_25d_iv"]
+        risk_reversal = rr_bf["rr_25d"]
+
+        if risk_reversal is None or call_iv is None or put_iv is None:
+            return {
+                "put_25d_iv": put_iv,
+                "call_25d_iv": call_iv,
+                "put_25d_strike": rr_bf["put_25d_strike"],
+                "call_25d_strike": rr_bf["call_25d_strike"],
+                "put_25d_delta": None,
+                "call_25d_delta": None,
+                "risk_reversal_25d": None,
+                "put_over_call_skew_25d": None,
+                "interpretation": "insufficient chain",
+            }
 
         if risk_reversal < -RISK_REVERSAL_STRONG_POINTS:
             interpretation = "Puts Much Richer - Strong Downside Hedging Demand"
@@ -290,29 +330,18 @@ class VolatilitySurfaceCalculator:
         return {
             "put_25d_iv": put_iv,
             "call_25d_iv": call_iv,
-            "put_25d_strike": put_25d["strike"],
-            "call_25d_strike": call_25d["strike"],
-            "put_25d_delta": put_25d.get("delta"),
-            "call_25d_delta": call_25d.get("delta"),
+            "put_25d_strike": rr_bf["put_25d_strike"],
+            "call_25d_strike": rr_bf["call_25d_strike"],
+            # Exactly the target delta by construction of the delta-space
+            # interpolation used to compute call_iv/put_iv above -- unlike
+            # the deleted nearest-delta picker, this is never an
+            # approximation of ±0.25, it IS ±0.25 whenever not None.
+            "put_25d_delta": -TARGET_ABS_DELTA_25D,
+            "call_25d_delta": TARGET_ABS_DELTA_25D,
             "risk_reversal_25d": risk_reversal,
             "put_over_call_skew_25d": -risk_reversal,
             "interpretation": interpretation,
         }
-
-    def _find_closest_delta(
-        self,
-        instruments: List[Dict],
-        target_delta: float
-    ) -> Optional[Dict]:
-        """Find instrument with delta closest to target."""
-        if not instruments:
-            return None
-
-        valid = [i for i in instruments if i.get("delta") is not None and i.get("mark_iv") is not None]
-        if not valid:
-            return None
-
-        return min(valid, key=lambda i: abs(i["delta"] - target_delta))
 
     def _build_delta_points(self, option_type: str) -> List[Dict[str, float]]:
         """
@@ -394,9 +423,11 @@ class VolatilitySurfaceCalculator:
         Never extrapolates: if the full chain does not reach
         ``target_abs_delta`` on this side (no quote with |delta| <= target,
         or none with |delta| >= target), returns None. This is the
-        replacement for ``_find_closest_delta``'s "closest, however far"
-        pick -- ``_find_closest_delta`` and ``_calculate_25_delta_risk_
-        reversal`` are unchanged and still used by other consumers.
+        replacement for the deleted ``_find_closest_delta``'s "closest,
+        however far" pick (Task G2-D fix 1: the last consumer of that
+        picker, ``_calculate_25_delta_risk_reversal``, is also deleted --
+        both are gone, not "unchanged and still used by other consumers"
+        as this docstring previously (incorrectly) scoped them).
 
         Args:
             option_type: "C" or "P".
@@ -450,9 +481,17 @@ class VolatilitySurfaceCalculator:
         """
         Calculate the full-chain, delta-interpolated 25-delta risk reversal
         and butterfly (institutional_metrics_spec.md section 3(b)/(c),
-        Migration M3 / Task C4). Additive: does not replace
-        ``_calculate_25_delta_risk_reversal``/``skew_25d`` (nearest-delta
-        pick, kept unchanged for other consumers).
+        Migration M3 / Task C4).
+
+        Task G2-D fix 1: this IS now the single risk-reversal computation
+        for both report paths -- ``calculate()``'s ``skew_25d`` (per-
+        expiry) derives from this method's output via
+        ``_skew_dict_from_risk_reversal_butterfly``, and the market-wide
+        SKEW TERM STRUCTURE section already called this method directly.
+        Previously additive alongside a separate ungated nearest-delta
+        picker (``_calculate_25_delta_risk_reversal``); that picker is
+        deleted -- the two report sections could disagree on the same
+        expiry's RR25 before this fix.
 
         RR25 = IV(25d call) - IV(25d put)  (call - put; negative = puts
             bid = downside skew).

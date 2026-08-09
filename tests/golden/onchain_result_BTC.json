@@ -2544,13 +2544,13 @@
           "vanna_signal": "IV drop \u2192 dealers buy underlying (bullish)"
         },
         "skew_25d": {
-          "call_25d_iv": 34.07,
-          "call_25d_strike": 68000.0,
+          "call_25d_iv": 34.124041471048514,
+          "call_25d_strike": 69000.0,
           "interpretation": "Puts Richer - Downside Hedging Demand",
-          "put_25d_iv": 38.29,
-          "put_25d_strike": 61000.0,
-          "put_over_call_skew_25d": 4.219999999999999,
-          "risk_reversal_25d": -4.219999999999999
+          "put_25d_iv": 38.28847747281201,
+          "put_25d_strike": 61500.0,
+          "put_over_call_skew_25d": 4.164436001763498,
+          "risk_reversal_25d": -4.164436001763498
         }
       },
       "volume_stats": {
@@ -4190,13 +4190,13 @@
           "vanna_signal": "IV drop \u2192 dealers buy underlying (bullish)"
         },
         "skew_25d": {
-          "call_25d_iv": 39.32,
-          "call_25d_strike": 80000.0,
+          "call_25d_iv": 39.302939852042456,
+          "call_25d_strike": 81000.0,
           "interpretation": "Puts Richer - Downside Hedging Demand",
-          "put_25d_iv": 44.0,
-          "put_25d_strike": 56000.0,
-          "put_over_call_skew_25d": 4.68,
-          "risk_reversal_25d": -4.68
+          "put_25d_iv": 43.86647489539749,
+          "put_25d_strike": 57000.0,
+          "put_over_call_skew_25d": 4.5635350433550315,
+          "risk_reversal_25d": -4.5635350433550315
         }
       },
       "volume_stats": {
@@ -5311,13 +5311,13 @@
           "vanna_signal": "IV drop \u2192 dealers buy underlying (bullish)"
         },
         "skew_25d": {
-          "call_25d_iv": 41.15,
-          "call_25d_strike": 95000.0,
+          "call_25d_iv": 41.145254886929855,
+          "call_25d_strike": 93500.0,
           "interpretation": "Puts Richer - Downside Hedging Demand",
-          "put_25d_iv": 45.77,
-          "put_25d_strike": 55000.0,
-          "put_over_call_skew_25d": 4.6200000000000045,
-          "risk_reversal_25d": -4.6200000000000045
+          "put_25d_iv": 45.84210443037975,
+          "put_25d_strike": 54500.0,
+          "put_over_call_skew_25d": 4.696849543449893,
+          "risk_reversal_25d": -4.696849543449893
         }
       },
       "volume_stats": {
@@ -7007,13 +7007,13 @@
           "vanna_signal": "IV drop \u2192 dealers buy underlying (bullish)"
         },
         "skew_25d": {
-          "call_25d_iv": 35.32,
-          "call_25d_strike": 72000.0,
-          "interpretation": "Puts Much Richer - Strong Downside Hedging Demand",
-          "put_25d_iv": 40.36,
-          "put_25d_strike": 58000.0,
-          "put_over_call_skew_25d": 5.039999999999999,
-          "risk_reversal_25d": -5.039999999999999
+          "call_25d_iv": 35.317570028011204,
+          "call_25d_strike": 73000.0,
+          "interpretation": "Puts Richer - Downside Hedging Demand",
+          "put_25d_iv": 39.81628180039139,
+          "put_25d_strike": 59000.0,
+          "put_over_call_skew_25d": 4.498711772380183,
+          "risk_reversal_25d": -4.498711772380183
         }
       },
       "volume_stats": {
@@ -7778,13 +7778,13 @@
           "vanna_signal": "IV drop \u2192 dealers buy underlying (bullish)"
         },
         "skew_25d": {
-          "call_25d_iv": 14.84,
-          "call_25d_strike": 64500.0,
-          "interpretation": "Puts Richer - Downside Hedging Demand",
-          "put_25d_iv": 16.4,
-          "put_25d_strike": 64000.0,
-          "put_over_call_skew_25d": 1.5599999999999987,
-          "risk_reversal_25d": -1.5599999999999987
+          "call_25d_iv": null,
+          "call_25d_strike": null,
+          "interpretation": "insufficient chain",
+          "put_25d_iv": null,
+          "put_25d_strike": null,
+          "put_over_call_skew_25d": null,
+          "risk_reversal_25d": null
         }
       },
       "volume_stats": {
@@ -9249,13 +9249,13 @@
           "vanna_signal": "IV drop \u2192 dealers buy underlying (bullish)"
         },
         "skew_25d": {
-          "call_25d_iv": 40.3,
-          "call_25d_strike": 88000.0,
+          "call_25d_iv": 40.304040358744395,
+          "call_25d_strike": 87000.0,
           "interpretation": "Puts Richer - Downside Hedging Demand",
-          "put_25d_iv": 45.21,
-          "put_25d_strike": 55000.0,
-          "put_over_call_skew_25d": 4.910000000000004,
-          "risk_reversal_25d": -4.910000000000004
+          "put_25d_iv": 45.128882907133246,
+          "put_25d_strike": 55500.0,
+          "put_over_call_skew_25d": 4.824842548388851,
+          "risk_reversal_25d": -4.824842548388851
         }
       },
       "volume_stats": {
@@ -9995,13 +9995,13 @@
           "vanna_signal": "IV drop \u2192 dealers buy underlying (bullish)"
         },
         "skew_25d": {
-          "call_25d_iv": 23.5,
-          "call_25d_strike": 65000.0,
+          "call_25d_iv": 23.48815943728019,
+          "call_25d_strike": 65250.0,
           "interpretation": "Puts Richer - Downside Hedging Demand",
-          "put_25d_iv": 27.68,
-          "put_25d_strike": 63500.0,
-          "put_over_call_skew_25d": 4.18,
-          "risk_reversal_25d": -4.18
+          "put_25d_iv": 27.306328169822145,
+          "put_25d_strike": 63750.0,
+          "put_over_call_skew_25d": 3.818168732541956,
+          "risk_reversal_25d": -3.818168732541956
         }
       },
       "volume_stats": {
@@ -11416,13 +11416,13 @@
           "vanna_signal": "IV drop \u2192 dealers buy underlying (bullish)"
         },
         "skew_25d": {
-          "call_25d_iv": 34.16,
-          "call_25d_strike": 70000.0,
+          "call_25d_iv": 34.17356429047302,
+          "call_25d_strike": 69500.0,
           "interpretation": "Puts Richer - Downside Hedging Demand",
-          "put_25d_iv": 38.88,
-          "put_25d_strike": 60000.0,
-          "put_over_call_skew_25d": 4.720000000000006,
-          "risk_reversal_25d": -4.720000000000006
+          "put_25d_iv": 38.813775818055234,
+          "put_25d_strike": 60500.0,
+          "put_over_call_skew_25d": 4.640211527582217,
+          "risk_reversal_25d": -4.640211527582217
         }
       },
       "volume_stats": {
@@ -12187,13 +12187,13 @@
           "vanna_signal": "IV drop \u2192 dealers buy underlying (bullish)"
         },
         "skew_25d": {
-          "call_25d_iv": 28.08,
-          "call_25d_strike": 65500.0,
+          "call_25d_iv": 28.18744530637148,
+          "call_25d_strike": 65250.0,
           "interpretation": "Puts Richer - Downside Hedging Demand",
-          "put_25d_iv": 32.76,
-          "put_25d_strike": 63000.0,
-          "put_over_call_skew_25d": 4.68,
-          "risk_reversal_25d": -4.68
+          "put_25d_iv": 32.32853426541371,
+          "put_25d_strike": 63250.0,
+          "put_over_call_skew_25d": 4.141088959042229,
+          "risk_reversal_25d": -4.141088959042229
         }
       },
       "volume_stats": {
@@ -12908,13 +12908,13 @@
           "vanna_signal": "IV drop \u2192 dealers buy underlying (bullish)"
         },
         "skew_25d": {
-          "call_25d_iv": 30.97,
-          "call_25d_strike": 66000.0,
+          "call_25d_iv": 31.14497042878265,
+          "call_25d_strike": 65750.0,
           "interpretation": "Puts Richer - Downside Hedging Demand",
-          "put_25d_iv": 34.3,
-          "put_25d_strike": 63000.0,
-          "put_over_call_skew_25d": 3.3299999999999983,
-          "risk_reversal_25d": -3.3299999999999983
+          "put_25d_iv": 34.42363797549967,
+          "put_25d_strike": 62750.0,
+          "put_over_call_skew_25d": 3.278667546717024,
+          "risk_reversal_25d": -3.278667546717024
         }
       },
       "volume_stats": {
@@ -14554,13 +14554,13 @@
           "vanna_signal": "IV drop \u2192 dealers buy underlying (bullish)"
         },
         "skew_25d": {
-          "call_25d_iv": 34.65,
-          "call_25d_strike": 66000.0,
+          "call_25d_iv": 34.66527381285567,
+          "call_25d_strike": 66500.0,
           "interpretation": "Puts Richer - Downside Hedging Demand",
-          "put_25d_iv": 38.92,
-          "put_25d_strike": 62000.0,
-          "put_over_call_skew_25d": 4.270000000000003,
-          "risk_reversal_25d": -4.270000000000003
+          "put_25d_iv": 38.301609784967454,
+          "put_25d_strike": 62500.0,
+          "put_over_call_skew_25d": 3.6363359721117803,
+          "risk_reversal_25d": -3.6363359721117803
         }
       },
       "volume_stats": {
@@ -15225,13 +15225,13 @@
           "vanna_signal": "IV drop \u2192 dealers buy underlying (bullish)"
         },
         "skew_25d": {
-          "call_25d_iv": 34.1,
-          "call_25d_strike": 67000.0,
+          "call_25d_iv": 34.18943032672438,
+          "call_25d_strike": 67500.0,
           "interpretation": "Puts Richer - Downside Hedging Demand",
-          "put_25d_iv": 37.82,
-          "put_25d_strike": 62000.0,
-          "put_over_call_skew_25d": 3.719999999999999,
-          "risk_reversal_25d": -3.719999999999999
+          "put_25d_iv": 38.33936469150886,
+          "put_25d_strike": 61500.0,
+          "put_over_call_skew_25d": 4.149934364784485,
+          "risk_reversal_25d": -4.149934364784485
         }
       },
       "volume_stats": {

@@ -18,9 +18,23 @@ from coding.core.analytics.volatility_surface_calculator import VolatilitySurfac
 
 def _make_instrument(
     strike, option_type, mark_iv=None, delta=None, gamma=None,
-    theta=None, vega=None, open_interest=100, volume=10
+    theta=None, vega=None, open_interest=100, volume=10,
+    bid_price=1.0, ask_price=1.0,
 ):
-    """Helper to create instrument dicts for testing."""
+    """
+    Helper to create instrument dicts for testing.
+
+    Task G2-D fix 1: ``bid_price``/``ask_price`` default to quoted (1.0)
+    -- the per-expiry RR25/BF25 path now runs through the same bracket-
+    gated delta-interpolation as the market-wide path
+    (``calculate_risk_reversal_butterfly``), which requires an instrument
+    to be "quoted" (``bid_price > 0 or ask_price > 0``) before it can
+    contribute a point to either side's bracket search. Real production
+    instrument dicts always carry these fields (see
+    ``on_chain_analysis_service.py``'s ticker enrichment); defaulting them
+    here keeps every existing fixture meaningful under the new gating
+    instead of silently going quote-less.
+    """
     return {
         "instrument_name": f"BTC-28MAR26-{int(strike)}-{option_type}",
         "expiration": "28MAR26",
@@ -36,6 +50,8 @@ def _make_instrument(
         "theta": theta,
         "vega": vega,
         "underlying_price": 90000,
+        "bid_price": bid_price,
+        "ask_price": ask_price,
     }
 
 
@@ -130,7 +146,12 @@ class TestVolatilitySurfaceCalculator:
         skew = result.skew_25d
         assert skew.risk_reversal_25d is None
         assert skew.skew is None
-        assert "Insufficient" in skew.interpretation
+        # Task G2-D fix 1: "insufficient chain" is the existing convention
+        # (coding/core/analytics/reporting/market_wide_formatter.py's
+        # _format_rr25_cell/_format_bf25_cell) reused here now that the
+        # per-expiry path shares calculate_risk_reversal_butterfly()'s
+        # gating with the market-wide path -- not a newly-invented string.
+        assert skew.interpretation == "insufficient chain"
 
     def test_pc_by_moneyness(self, sample_instruments):
         calc = VolatilitySurfaceCalculator(sample_instruments, 90000, "28MAR26")
@@ -320,76 +341,137 @@ class TestVolatilitySurfaceCalculator:
 class TestRiskReversalSignConvention:
     """
     bugfix_spec.md Item 9 acceptance tests (section 9.5), adapted to this
-    codebase's typed VolSurfaceResult/SkewResult (attribute access) and the
-    renamed ``_calculate_25_delta_risk_reversal`` method.
+    codebase's typed VolSurfaceResult/SkewResult (attribute access).
+
+    Task G2-D fix 1: ``_calculate_25_delta_risk_reversal``/``_find_closest_
+    delta`` (the ungated nearest-delta picker these tests used to exercise
+    directly) are DELETED -- ``calculate().skew_25d`` now derives from
+    ``calculate_risk_reversal_butterfly()`` (the same bracket-gated
+    delta-interpolation the market-wide SKEW TERM STRUCTURE section
+    already used), so every test below goes through the public
+    ``calculate()`` path instead of the deleted private method. Several
+    fixtures below had to change from a single put + single call (which
+    can only ever produce an EXACT match at |delta|=0.25 or "insufficient
+    chain" under the new bracketing -- there is no more "closest, however
+    far" fallback) to genuine two-point brackets straddling 0.25.
     """
 
-    def test_t9_1_sign_matches_market_convention(self):
-        """Hand-computed from the live pair confirmed by the audit."""
+    def test_calculate_skew_25d_matches_calculate_risk_reversal_butterfly(self):
+        """
+        There is exactly ONE risk-reversal computation now: this proves
+        the per-expiry report's ``skew_25d`` and the market-wide
+        ``calculate_risk_reversal_butterfly()`` return the literal SAME
+        numbers for the same chain -- not two independently-implemented
+        formulas that happen to agree. Uses a genuine bracket (two quotes
+        per side straddling 0.25), not the trivial a==b exact-match case,
+        so the comparison actually exercises interpolation.
+        """
         instruments = [
-            _make_instrument(62_000, "P", mark_iv=39.02, delta=-0.228),
-            _make_instrument(66_000, "C", mark_iv=34.65, delta=0.265),
+            _quoted_instrument(90_000 * 1.30, "C", 0.30, 32.0),
+            _quoted_instrument(90_000 * 1.20, "C", 0.20, 36.0),
+            _quoted_instrument(90_000 * 0.70, "P", -0.30, 40.0),
+            _quoted_instrument(90_000 * 0.80, "P", -0.20, 44.0),
         ]
-        calc = VolatilitySurfaceCalculator(instruments, 64_264.0, "31JUL26")
-        r = calc._calculate_25_delta_risk_reversal()
+        calc = VolatilitySurfaceCalculator(instruments, 90_000.0, "28MAR26")
 
-        assert r["risk_reversal_25d"] == pytest.approx(-4.37, abs=1e-9)  # 34.65 - 39.02
-        assert r["put_over_call_skew_25d"] == pytest.approx(4.37, abs=1e-9)
-        assert r["interpretation"] == "Puts Richer - Downside Hedging Demand"
+        skew = calc.calculate().skew_25d
+        rr_bf = calc.calculate_risk_reversal_butterfly()
+
+        assert rr_bf["rr_25d"] is not None
+        assert skew.risk_reversal_25d == rr_bf["rr_25d"]
+        assert skew.call_25d_iv == rr_bf["call_25d_iv"]
+        assert skew.put_25d_iv == rr_bf["put_25d_iv"]
+        assert skew.call_25d_strike == rr_bf["call_25d_strike"]
+        assert skew.put_25d_strike == rr_bf["put_25d_strike"]
+
+    def test_close_but_unbracketed_delta_reads_insufficient_not_balanced(self):
+        """
+        Confirmed live by an independent audit: the OLD ungated nearest-
+        delta picker would compare a ~21-delta put against a ~36-delta
+        call (neither close to 25-delta, no bracket on either side) and
+        still label the result "Balanced" -- reading two unrelated points
+        on the smile as a genuine 25-delta risk reversal. The properly-
+        gated method refuses to interpolate when a side is not bracketed;
+        the per-expiry path must now inherit that refusal.
+        """
+        instruments = [
+            _quoted_instrument(70_000, "P", -0.21, 45.0),
+            _quoted_instrument(58_000, "C", 0.36, 30.0),
+        ]
+        calc = VolatilitySurfaceCalculator(instruments, 64_000.0, "31JUL26")
+
+        skew = calc.calculate().skew_25d
+        assert skew.risk_reversal_25d is None
+        assert skew.interpretation == "insufficient chain"
 
     def test_t9_2_calls_richer_flips_the_label(self):
         instruments = [
-            _make_instrument(62_000, "P", mark_iv=30.00, delta=-0.25),
-            _make_instrument(66_000, "C", mark_iv=37.00, delta=0.25),
+            _quoted_instrument(62_000, "P", -0.25, 30.00),
+            _quoted_instrument(66_000, "C", 0.25, 37.00),
         ]
         calc = VolatilitySurfaceCalculator(instruments, 64_000.0, "31JUL26")
-        r = calc._calculate_25_delta_risk_reversal()
+        skew = calc.calculate().skew_25d
 
-        assert r["risk_reversal_25d"] == pytest.approx(7.00)
-        assert r["interpretation"] == "Calls Much Richer - Strong Upside Speculation"
+        assert skew.risk_reversal_25d == pytest.approx(7.00)
+        assert skew.interpretation == "Calls Much Richer - Strong Upside Speculation"
 
     def test_t9_3_report_prints_the_convention_explicitly(self):
+        """
+        Both instruments sit exactly at |delta|=0.25 (an exact bracket
+        match, not an approximate nearest-pick), so the delta-interpolated
+        read lands on exactly the target delta -- unlike the old nearest-
+        pick fixture (put -0.228 / call 0.265), which is now unbracketed
+        (single quote, wrong side of 0.25) and would read "insufficient
+        chain" instead. See test_close_but_unbracketed_delta_reads_
+        insufficient_not_balanced for that case.
+        """
         from coding.core.analytics.reporting.vol_surface_formatter import format_vol_surface_section
 
         instruments = [
-            _make_instrument(62_000, "P", mark_iv=39.02, delta=-0.228),
-            _make_instrument(66_000, "C", mark_iv=34.65, delta=0.265),
+            _quoted_instrument(62_000, "P", -0.25, 39.0),
+            _quoted_instrument(66_000, "C", 0.25, 34.6),
         ]
-        calc = VolatilitySurfaceCalculator(instruments, 64_264.0, "31JUL26")
+        calc = VolatilitySurfaceCalculator(instruments, 64_000.0, "31JUL26")
         result = calc.calculate()
         report = format_vol_surface_section(result, expiration="31JUL26")
 
         assert "25Δ Risk Reversal (call − put): -4.4%" in report
-        assert "Δ=+0.265" in report and "Δ=-0.228" in report
+        assert "Δ=+0.250" in report and "Δ=-0.250" in report
 
     def test_exactly_zero_risk_reversal_is_balanced(self):
         instruments = [
-            _make_instrument(62_000, "P", mark_iv=35.0, delta=-0.25),
-            _make_instrument(66_000, "C", mark_iv=35.0, delta=0.25),
+            _quoted_instrument(62_000, "P", -0.25, 35.0),
+            _quoted_instrument(66_000, "C", 0.25, 35.0),
         ]
         calc = VolatilitySurfaceCalculator(instruments, 64_000.0, "31JUL26")
-        r = calc._calculate_25_delta_risk_reversal()
-        assert r["risk_reversal_25d"] == pytest.approx(0.0)
-        assert r["interpretation"] == "Balanced"
+        skew = calc.calculate().skew_25d
+        assert skew.risk_reversal_25d == pytest.approx(0.0)
+        assert skew.interpretation == "Balanced"
 
-    def test_null_mark_iv_candidate_is_never_selected_even_if_closer_by_delta(self):
-        """Independent review round 4 (Minor): mark_iv is nullable per
-        deribit_schemas.py (on_chain_analysis_service.py:1221 always sets
-        the key, sometimes to None). A null-mark_iv put at exactly -0.25
-        delta (closer than any alternative) must be skipped in favor of a
-        further-but-valid candidate at -0.20 -- never selected, and never
-        reaches `call_iv - put_iv` with a None operand."""
+    def test_null_mark_iv_instrument_excluded_from_interpolation_bracket(self):
+        """
+        Independent review round 4 (Minor)'s original concern -- a null-
+        mark_iv instrument must never be used for the 25d read -- still
+        holds under delta-interpolation, via a different mechanism:
+        ``_build_delta_points`` drops any instrument with ``mark_iv is
+        None`` before bracket selection even sees it (rather than the
+        deleted nearest-delta picker's own explicit guard). A null-IV put
+        sitting exactly at |delta|=0.25 must be excluded, and the
+        surrounding valid quotes must still produce a genuine interpolated
+        read, not a hole in the chain."""
         instruments = [
-            _make_instrument(62_000, "P", mark_iv=None, delta=-0.25),  # closest, but null IV
-            _make_instrument(60_000, "P", mark_iv=32.0, delta=-0.20),  # further, valid IV
-            _make_instrument(66_000, "C", mark_iv=35.0, delta=0.25),
+            _quoted_instrument(62_000, "P", -0.25, None),  # excluded: null IV
+            _quoted_instrument(60_000, "P", -0.20, 32.0),
+            _quoted_instrument(70_000, "P", -0.30, 38.0),
+            _quoted_instrument(66_000, "C", 0.25, 30.0),
         ]
         calc = VolatilitySurfaceCalculator(instruments, 64_000.0, "31JUL26")
-        r = calc._calculate_25_delta_risk_reversal()
+        skew = calc.calculate().skew_25d
 
-        assert r["put_25d_delta"] == pytest.approx(-0.20)
-        assert r["put_25d_iv"] == pytest.approx(32.0)
-        assert r["risk_reversal_25d"] == pytest.approx(3.0)  # 35.0 - 32.0
+        # Put 25d: interpolated between the two VALID brackets (0.20/0.30),
+        # never the null-IV quote sitting exactly at 0.25.
+        assert skew.put_25d_iv == pytest.approx(35.0)  # midpoint of 32.0/38.0
+        assert skew.risk_reversal_25d == pytest.approx(-5.0)  # 30.0 - 35.0
 
 
 def _quoted_instrument(strike, option_type, delta, mark_iv, bid_price=1.0, ask_price=1.0):

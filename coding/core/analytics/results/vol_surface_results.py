@@ -53,12 +53,17 @@ class SkewResult:
     unqualified ``skew`` field)."""
 
     put_25d_delta: Optional[float] = None
-    """The ACTUAL delta of the selected 25d put (bugfix_spec.md 9.4 edge
-    case: a thin book's "closest to -0.25" pick may not be close at all --
-    this makes that visible)."""
+    """Task G2-D fix 1: exactly -TARGET_ABS_DELTA_25D (-0.25) by
+    construction of the delta-space interpolation
+    (VolatilitySurfaceCalculator.calculate_risk_reversal_butterfly) that
+    now produces this value -- None (together with put_25d_iv) when the
+    chain does not bracket 0.25 tightly enough on the put side. Previously
+    the ACTUAL delta of a nearest-delta "closest, however far" pick
+    (bugfix_spec.md 9.4); that ungated picker is deleted."""
 
     call_25d_delta: Optional[float] = None
-    """The ACTUAL delta of the selected 25d call (see put_25d_delta)."""
+    """Task G2-D fix 1: exactly +TARGET_ABS_DELTA_25D (+0.25) by
+    construction -- see put_25d_delta."""
 
     def __post_init__(self) -> None:
         # Both None (insufficient data, bugfix_spec.md 9.4) stays as-is --
