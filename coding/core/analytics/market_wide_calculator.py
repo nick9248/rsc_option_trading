@@ -130,7 +130,7 @@ class MarketWideCalculator:
         now = datetime.now(timezone.utc)
 
         for exp, iv in sorted(atm_ivs.items()):
-            dte = self._calculate_dte(exp, now)
+            dte = self.calculate_dte(exp, now)
             if dte is not None:
                 entries.append({"expiration": exp, "dte": dte, "atm_iv": iv})
 
@@ -369,7 +369,7 @@ class MarketWideCalculator:
                 expiry_label = parts[1]
             else:
                 expiry_label = name
-            days = self._calculate_days_to_expiry(expiry_label, now_utc)
+            days = self.calculate_days_to_expiry(expiry_label, now_utc)
 
             basis_pct = ((price - spot) / spot) * 100.0
 
@@ -1154,13 +1154,22 @@ class MarketWideCalculator:
             return None
 
     @classmethod
-    def _calculate_days_to_expiry(cls, expiration: str, now_utc: datetime) -> Optional[float]:
+    def calculate_days_to_expiry(cls, expiration: str, now_utc: datetime) -> Optional[float]:
         """
         Exact fractional days to 08:00 UTC settlement. May be negative
         (already expired). ``now_utc`` must be timezone-aware.
 
         bugfix_spec.md Item 5 (F5.3.1) — replaces integer, local-midnight,
         truncated-toward-negative-infinity DTE with an exact value.
+
+        Task G2-C: made public (was ``_calculate_days_to_expiry``) — this is
+        the canonical DTE calculation, already called from at least 5 sites
+        across 3 other modules (prospective_collector.py,
+        on_chain_analysis_service.py, market_wide_orchestrator.py via
+        ``calculate_dte`` below) despite the leading underscore; a
+        cross-module "private" API is its own minor issue this campaign has
+        flagged elsewhere. ``_calculate_days_to_expiry`` remains as a
+        backward-compatible alias.
         """
         expiry = cls._parse_expiry_datetime(expiration)
         if expiry is None:
@@ -1168,7 +1177,7 @@ class MarketWideCalculator:
         return (expiry - now_utc).total_seconds() / 86400.0
 
     @classmethod
-    def _calculate_dte(cls, expiration: str, now: datetime) -> Optional[int]:
+    def calculate_dte(cls, expiration: str, now: datetime) -> Optional[int]:
         """
         Calculate (non-negative) integer days to expiration from expiration
         string, for the DTE display column only
@@ -1183,8 +1192,19 @@ class MarketWideCalculator:
         Returns:
             Days to expiration (floor of the exact fractional value, clamped
             to 0 for past expirations), or None if parse fails.
+
+        Task G2-C: made public (was ``_calculate_dte``); this is also the
+        canonical replacement for ``SynthesisMapper``'s now-deleted
+        duplicate (which used naive-local ``datetime.now()``, anchored on
+        local midnight instead of 08:00 UTC settlement, and returned ``0``
+        -- not ``None`` -- on a parse failure). ``_calculate_dte`` remains
+        as a backward-compatible alias.
         """
-        exact = cls._calculate_days_to_expiry(expiration, now)
+        exact = cls.calculate_days_to_expiry(expiration, now)
         if exact is None:
             return None
         return max(int(math.floor(exact)), 0)
+
+    # Backward-compatible aliases for the pre-Task-G2-C private names.
+    _calculate_days_to_expiry = calculate_days_to_expiry
+    _calculate_dte = calculate_dte

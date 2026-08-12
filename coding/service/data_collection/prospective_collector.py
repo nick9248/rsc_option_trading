@@ -1045,7 +1045,7 @@ class ProspectiveCollector:
             skew = surface_calc.calculate_risk_reversal_butterfly()
 
             now_utc = datetime.now(timezone.utc)
-            dte_days = MarketWideCalculator._calculate_days_to_expiry(expiration, now_utc)
+            dte_days = MarketWideCalculator.calculate_days_to_expiry(expiration, now_utc)
             dte_years = (dte_days / 365.0) if dte_days is not None else None
 
             self.repo.save_volatility_skew(

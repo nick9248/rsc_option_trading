@@ -17,6 +17,7 @@ from enum import Enum, IntEnum
 import logging
 from datetime import datetime, timedelta
 
+from coding.core.analytics.market_wide_calculator import MarketWideCalculator
 from coding.core.analytics.results.analysis_result import OnChainAnalysisResult
 from coding.core.analytics.thresholds import RISK_REVERSAL_MILD_POINTS, RISK_REVERSAL_STRONG_POINTS
 
@@ -2025,16 +2026,6 @@ class SynthesisMapper:
     dict lookups, no calls back into an analyzer.
     """
 
-    @staticmethod
-    def _calculate_dte(expiration: str) -> int:
-        """Calculate days to expiration from expiration string like '27MAR26'."""
-        try:
-            exp_date = datetime.strptime(expiration, "%d%b%y")
-            dte = (exp_date - datetime.now()).days
-            return max(dte, 0)
-        except ValueError:
-            return 0
-
     @classmethod
     def build_expiry_metrics(
         cls, result: OnChainAnalysisResult, expiration: str
@@ -2057,7 +2048,18 @@ class SynthesisMapper:
         vol = bundle.vol_surface
         flow = bundle.flow
 
-        dte = cls._calculate_dte(expiration)
+        # Task G2-C: this used to be SynthesisMapper's own duplicate DTE
+        # calc (naive-local datetime.now(), local-midnight anchor, and a
+        # fabricated 0 -- not None -- on parse failure). Now delegates to
+        # the canonical MarketWideCalculator.calculate_dte (08:00 UTC
+        # settlement anchor, exact-fractional-days floor, None on parse
+        # failure -- clamped to 0 here to match this dataclass's `dte: int`
+        # field and this method's own pre-existing None-on-critical-data-
+        # missing contract, not because the canonical method fabricates 0
+        # itself). result.generated_at is this pipeline run's own already-
+        # resolved UTC "now" (OnChainAnalysisBuilder.build() stamps it) --
+        # reused here rather than reading a second, independent clock.
+        dte = MarketWideCalculator.calculate_dte(expiration, result.generated_at) or 0
 
         # Total OI and volume from parsed instruments
         total_oi = sum(i.get("open_interest", 0) for i in instruments)

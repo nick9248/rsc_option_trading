@@ -63,7 +63,7 @@ def _is_expiry_week(expiration: str, now_utc: datetime) -> bool:
     meaningful hundreds of DTE out. Reuses ``GexDexCalculator.
     _parse_expiry_dte_days`` (the exact same "DDMONYY + 08:00 UTC
     settlement" parsing convention already established there and in
-    ``MarketWideCalculator._calculate_days_to_expiry``) rather than
+    ``MarketWideCalculator.calculate_days_to_expiry``) rather than
     re-implementing expiry-string parsing a third time in the reporting
     layer -- see that method's own docstring for the convention.
 

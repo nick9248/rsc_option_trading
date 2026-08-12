@@ -2,7 +2,7 @@
 Unit tests for OnChainAnalysisBuilder (refactor_design_spec.md section T6).
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from coding.core.analytics.results.analysis_result import (
     IvPercentileResult,
@@ -133,6 +133,26 @@ class TestOnChainAnalysisBuilder:
         assert bundle.oi_changes is None
         assert bundle.iv_percentile is None
         assert bundle.exposure_profile is None
+
+    def test_generated_at_is_timezone_aware_utc(self, frozen_clock):
+        """
+        Task G2-C: build() used to stamp generated_at via naive-local
+        datetime.now() -- SynthesisMapper.build_expiry_metrics now threads
+        this value into MarketWideCalculator.calculate_dte, which requires
+        a timezone-aware UTC "now" (raises TypeError otherwise). Frozen
+        clock proves both that the value is UTC-aware and that it reflects
+        the exact frozen instant, not a local-timezone-shifted one.
+        """
+        epoch = 1785225600.0  # 2026-07-25 08:00:00 UTC, arbitrary fixed instant
+        frozen_clock(epoch)
+
+        builder = OnChainAnalysisBuilder(
+            currency="BTC", underlying_price=90000.0, parsed_instruments={},
+        )
+        result = builder.build()
+
+        assert result.generated_at.tzinfo is not None
+        assert result.generated_at == datetime.fromtimestamp(epoch, tz=timezone.utc)
 
     def test_set_exposure_profile_stored_on_bundle(self):
         """institutional_metrics_spec.md section 4 / task C5."""

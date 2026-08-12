@@ -812,7 +812,7 @@ class TestCalculateRolloffProfile:
     institutional_metrics_spec.md section 5 / Task C6 acceptance tests
     (T5.1-T5.3), verbatim numeric cases from the spec.
 
-    ``now_utc`` is constructed so ``_calculate_days_to_expiry``'s exact
+    ``now_utc`` is constructed so ``calculate_days_to_expiry``'s exact
     fractional-day math reproduces the spec's own illustrative DTEs
     (0.6d / 6.6d / 34.6d) exactly: 25JUL26, 31JUL26, and 28AUG26 are all
     08:00 UTC settlements 0, 6, and 34 calendar days apart respectively, so

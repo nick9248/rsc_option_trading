@@ -159,7 +159,7 @@ class TestBuildForwardVolCurve:
         """Timezone lesson (task brief): forward vol's DTE for a shared
         expiry must come from the SAME clock convention as
         _build_skew_term_structure's own DTE for that expiry --
-        MarketWideCalculator._calculate_days_to_expiry, so the two
+        MarketWideCalculator.calculate_days_to_expiry, so the two
         sections can never desync on the same expiration string."""
         from coding.core.analytics.market_wide_calculator import MarketWideCalculator
 

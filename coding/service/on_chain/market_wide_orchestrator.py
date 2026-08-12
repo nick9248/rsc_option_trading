@@ -199,7 +199,7 @@ class MarketWideOrchestrator:
         now = datetime.now(timezone.utc)
         entries = []
         for exp, iv in sorted(atm_ivs.items()):
-            dte = MarketWideCalculator._calculate_dte(exp, now)
+            dte = MarketWideCalculator.calculate_dte(exp, now)
             if dte is not None:
                 entries.append(TermStructureEntry(expiration=exp, dte=dte, atm_iv=iv))
         entries.sort(key=lambda e: e.dte)

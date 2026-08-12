@@ -5,7 +5,7 @@ Unit tests for SynthesisMapper, ScoringEngine, and SynthesisEngine v2.0.
 import pytest
 from typing import Optional
 from unittest.mock import MagicMock, patch
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from coding.core.analytics.synthesis import (
     SynthesisEngine,
@@ -282,7 +282,11 @@ def make_onchain_result(
     return OnChainAnalysisResult(
         currency="BTC",
         underlying_price=underlying_price,
-        generated_at=datetime.now(),
+        # Task G2-C: build_expiry_metrics now computes DTE via
+        # MarketWideCalculator.calculate_dte(expiration, result.generated_at),
+        # which requires a timezone-aware now -- generated_at must be UTC-aware
+        # here, matching OnChainAnalysisBuilder.build()'s own fix.
+        generated_at=datetime.now(timezone.utc),
         market_metrics=MarketMetricsResult(
             dvol=52.0, iv_percentile=75.0, iv_rank=None, current_funding=None, funding_8h=None,
         ),

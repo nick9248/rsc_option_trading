@@ -528,7 +528,7 @@ class OnChainAnalysisService:
         strings. Confirmed in this task's own golden fixture: string-sort
         picked "14AUG26" (19 DTE) over the true front month "26JUL26"
         (0 DTE). Parses each name as a real date instead (same "%d%b%y"
-        convention already used by ``SynthesisMapper._calculate_dte`` and
+        convention already used by ``MarketWideCalculator.calculate_dte`` and
         ``OnChainMetricsCalculator.nearest_expiry_median_underlying_
         price``) and picks the minimum.
 
@@ -1093,7 +1093,7 @@ class OnChainAnalysisService:
         entries: List[SkewTermStructureEntry] = []
         for expiration, skew in skew_by_expiry.items():
             try:
-                dte = MarketWideCalculator._calculate_days_to_expiry(expiration, now_utc)
+                dte = MarketWideCalculator.calculate_days_to_expiry(expiration, now_utc)
                 if dte is None:
                     logger.warning(
                         "Skipping skew term structure row for %s %s: "
@@ -1190,7 +1190,7 @@ class OnChainAnalysisService:
         Timezone (task brief's repeated lesson, cost fix rounds in C4,
         C5, C7, and a SECOND round in C8): ``now_utc`` is resolved ONCE
         here and reused for every expiry's DTE in this call, via
-        ``MarketWideCalculator._calculate_days_to_expiry`` -- the EXACT
+        ``MarketWideCalculator.calculate_days_to_expiry`` -- the EXACT
         same method (same clock convention, same 08:00 UTC settlement
         anchor) ``_build_skew_term_structure`` already uses for this same
         ``skew_by_expiry`` data. A shared expiry's DTE therefore uses the
@@ -1255,7 +1255,7 @@ class OnChainAnalysisService:
             # this by execution. Fixed by widening the try to match the
             # sibling's own "wrap the whole per-expiry body" convention.
             try:
-                dte = MarketWideCalculator._calculate_days_to_expiry(expiration, now_utc)
+                dte = MarketWideCalculator.calculate_days_to_expiry(expiration, now_utc)
                 if dte is None:
                     logger.warning(
                         "Skipping forward vol row for %s %s: expiration string "
@@ -2199,11 +2199,11 @@ class OnChainAnalysisService:
             # try block -- is now inside it. An early ``return None`` from
             # within a ``try`` is ordinary control flow (does not trigger
             # ``except``); moving it in only closes the gap where an
-            # unexpected exception from ``_calculate_days_to_expiry``
+            # unexpected exception from ``calculate_days_to_expiry``
             # (not just its documented ``None`` return) would have
             # propagated past this method's own "additive, never aborts
             # GEX/DEX" guarantee.
-            dte = MarketWideCalculator._calculate_days_to_expiry(expiration, now_utc)
+            dte = MarketWideCalculator.calculate_days_to_expiry(expiration, now_utc)
             if dte is None or dte <= 0:
                 return None
 

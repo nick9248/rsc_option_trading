@@ -637,21 +637,27 @@ class TestFundingRateExtractionAndTrend:
     def test_dte_calculation(self):
         # Test a known future date. now must be timezone-aware UTC per
         # bugfix_spec.md Item 5 F5.3.1 (settlement is 08:00 UTC, not local
-        # midnight) — the integer _calculate_dte is now floor(exact fractional
+        # midnight) — the integer calculate_dte is now floor(exact fractional
         # days), which floors 30.3333 -> 30, matching the pre-fix value here.
         now = datetime(2026, 2, 26, tzinfo=timezone.utc)
-        dte = MarketWideCalculator._calculate_dte("28MAR26", now)
+        dte = MarketWideCalculator.calculate_dte("28MAR26", now)
         assert dte == 30
 
     def test_dte_invalid(self):
-        dte = MarketWideCalculator._calculate_dte("INVALID", datetime.now(timezone.utc))
+        dte = MarketWideCalculator.calculate_dte("INVALID", datetime.now(timezone.utc))
         assert dte is None
 
     def test_dte_past(self):
         # Past expiration should return 0 (floor(-3.667) = -4, clamped to 0)
         now = datetime(2026, 4, 1, tzinfo=timezone.utc)
-        dte = MarketWideCalculator._calculate_dte("28MAR26", now)
+        dte = MarketWideCalculator.calculate_dte("28MAR26", now)
         assert dte == 0
+
+    def test_dte_calculation_backward_compat_alias(self):
+        """Task G2-C: _calculate_dte (the pre-rename private name) must
+        still work as a backward-compatible alias for calculate_dte."""
+        now = datetime(2026, 2, 26, tzinfo=timezone.utc)
+        assert MarketWideCalculator._calculate_dte("28MAR26", now) == 30
 
 
 class TestDvolCorrelationLogChanges:
@@ -811,17 +817,23 @@ class TestExactFractionalDaysToExpiry:
 
     def test_exact_fractional_dte_at_settlement_hour(self):
         now = datetime(2026, 7, 25, 8, 0, 0, tzinfo=timezone.utc)
-        assert MarketWideCalculator._calculate_days_to_expiry("27JUL26", now) == pytest.approx(2.0)
-        assert MarketWideCalculator._calculate_days_to_expiry("26JUL26", now) == pytest.approx(1.0)
-        assert MarketWideCalculator._calculate_days_to_expiry("25JUL26", now) == pytest.approx(0.0)
+        assert MarketWideCalculator.calculate_days_to_expiry("27JUL26", now) == pytest.approx(2.0)
+        assert MarketWideCalculator.calculate_days_to_expiry("26JUL26", now) == pytest.approx(1.0)
+        assert MarketWideCalculator.calculate_days_to_expiry("25JUL26", now) == pytest.approx(0.0)
 
     def test_exact_fractional_dte_mid_day(self):
         now2 = datetime(2026, 7, 25, 20, 0, 0, tzinfo=timezone.utc)
-        assert MarketWideCalculator._calculate_days_to_expiry("26JUL26", now2) == pytest.approx(0.5)
+        assert MarketWideCalculator.calculate_days_to_expiry("26JUL26", now2) == pytest.approx(0.5)
 
     def test_invalid_expiration_returns_none(self):
         now = datetime(2026, 7, 25, 8, 0, 0, tzinfo=timezone.utc)
-        assert MarketWideCalculator._calculate_days_to_expiry("INVALID", now) is None
+        assert MarketWideCalculator.calculate_days_to_expiry("INVALID", now) is None
+
+    def test_calculate_days_to_expiry_backward_compat_alias(self):
+        """Task G2-C: _calculate_days_to_expiry (the pre-rename private
+        name) must still work as a backward-compatible alias."""
+        now = datetime(2026, 7, 25, 8, 0, 0, tzinfo=timezone.utc)
+        assert MarketWideCalculator._calculate_days_to_expiry("27JUL26", now) == pytest.approx(2.0)
 
 
 class TestFuturesBasisAnnualization:
@@ -871,7 +883,7 @@ class TestFuturesBasisAnnualization:
         derived rather than guessed.
         """
         now_utc = datetime(2026, 7, 25, 17, 37, 9, 120_000, tzinfo=timezone.utc)
-        assert MarketWideCalculator._calculate_days_to_expiry("25DEC26", now_utc) == pytest.approx(152.5992, abs=1e-4)
+        assert MarketWideCalculator.calculate_days_to_expiry("25DEC26", now_utc) == pytest.approx(152.5992, abs=1e-4)
 
         result = calculator.calculate_futures_basis(
             [{"instrument_name": "BTC-25DEC26", "mark_price": 103_876.1, "index_price": 100_000.0}],

@@ -15,7 +15,7 @@ while the typed aggregate becomes available for T7/T8 to migrate onto.
 """
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from coding.core.analytics.results.analysis_result import (
@@ -178,7 +178,12 @@ class OnChainAnalysisBuilder:
         return OnChainAnalysisResult(
             currency=self._currency,
             underlying_price=self._underlying_price,
-            generated_at=datetime.now(),
+            # Task G2-C: naive-local datetime.now() -> explicit UTC. This is
+            # also the "now" SynthesisMapper.build_expiry_metrics threads
+            # through to MarketWideCalculator.calculate_dte (replacing its
+            # own now-deleted naive-local DTE duplicate) -- it must be
+            # timezone-aware or that call raises.
+            generated_at=datetime.now(timezone.utc),
             market_metrics=self._market_metrics or MarketMetricsResult(
                 dvol=None, iv_percentile=None, iv_rank=None,
                 current_funding=None, funding_8h=None,
