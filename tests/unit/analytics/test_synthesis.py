@@ -531,6 +531,38 @@ class TestScoreVannaCharm:
             net_vanna=0.001, net_charm=0, iv_pctile=None)
         assert score == 0.0
 
+    def test_none_net_vanna_weight_zero_insufficient_data(self):
+        """
+        Task G2-G: net_vanna=None (vol surface never computed for this
+        expiry) must NOT be treated the same as net_vanna==0 (a real
+        measurement of "no structural drift") -- the old signature had no
+        None handling and would crash on `net_vanna == 0` comparing None
+        with 0 (actually a silent False, no crash, but would then fall
+        into `net_vanna > 0` -> TypeError). A neutral score at zero
+        weight with an explicit disclosure is the correct behavior,
+        matching score_iv_percentile's/score_skew's None branches.
+        """
+        score, weight, reason = ScoringEngine.score_vanna_charm(
+            net_vanna=None, net_charm=50.0, iv_pctile=70)
+        assert score == 0.0
+        assert weight == 0.0
+        assert "insufficient data" in reason.lower()
+
+    def test_none_net_charm_weight_zero_insufficient_data(self):
+        score, weight, reason = ScoringEngine.score_vanna_charm(
+            net_vanna=0.001, net_charm=None, iv_pctile=70)
+        assert score == 0.0
+        assert weight == 0.0
+        assert "insufficient data" in reason.lower()
+
+    def test_none_net_vanna_distinct_from_measured_zero(self):
+        """A genuinely-measured net_vanna=0 must keep its own "zero"
+        signal text, not the None-branch's "insufficient data" text."""
+        _, _, zero_reason = ScoringEngine.score_vanna_charm(net_vanna=0.0, net_charm=0.0)
+        _, _, none_reason = ScoringEngine.score_vanna_charm(net_vanna=None, net_charm=None)
+        assert zero_reason != none_reason
+        assert "insufficient data" not in zero_reason.lower()
+
 
 # =============================================================================
 # TESTS: score_futures_basis — no basis_back
@@ -566,6 +598,22 @@ class TestScoreSkew:
         score, _, description = ScoringEngine.score_skew(risk_reversal_25d=6.0)
         assert score == 2.0
         assert "Calls much richer" in description.lower() or "unusual" in description.lower()
+
+    def test_none_weight_zero_insufficient_data(self):
+        """
+        Task G2-G: risk_reversal_25d=None (vol surface never computed for
+        this expiry) must NOT fall through to the ``<= MILD_POINTS``
+        branch (the old signature had no None handling and a bare
+        comparison ``None < -RISK_REVERSAL_STRONG_POINTS`` raises
+        TypeError in Python 3) -- and, if it somehow avoided crashing,
+        must never render as "RR25 +0.0%: Normal", a specific, confident
+        reading for a metric that was never measured.
+        """
+        score, weight, description = ScoringEngine.score_skew(risk_reversal_25d=None)
+        assert score == 0.0
+        assert weight == 0.0
+        assert "insufficient data" in description.lower()
+        assert "normal" not in description.lower()
 
 
 class TestScoreFuturesBasis:
@@ -822,6 +870,132 @@ class TestTradeRecommendations:
             near_term_expiry="6MAR26", far_term_expiry="27MAR26")
         assert "short call at 25-delta" in result
 
+    def test_none_risk_reversal_ic_still_recommended_with_insufficient_data_note(self):
+        """
+        Task G2-G: risk_reversal_25d=None must not crash the IC
+        skew-adjustment comparison (the old signature had no None
+        handling: `None < -8` raises TypeError in Python 3), and the IC
+        recommendation itself (justified by iv_pctile/regime/vol_regime,
+        independent of RR25) must still be produced -- only its
+        skew-adjustment sub-clause degrades to a disclosure.
+        """
+        from coding.core.analytics.synthesis import NarrativeGenerator
+        result = NarrativeGenerator.generate_trade_recommendations(
+            regime=MarketRegime.RANGE_BOUND_NEUTRAL, vol_regime=VolRegime.NORMAL,
+            iv_pctile=80, risk_reversal_25d=None, gex_total=0,
+            near_term_expiry="6MAR26", far_term_expiry="27MAR26")
+        assert "Short Iron Condor" in result
+        assert "insufficient data" in result.lower()
+
+    def test_none_risk_reversal_skips_risk_reversal_strategy(self):
+        """
+        Task G2-G: Strategy 4 (Risk Reversal) is gated ON
+        risk_reversal_25d itself (a specific "< -10%" threshold trigger)
+        -- a missing reading cannot satisfy that threshold, so the whole
+        recommendation must be skipped, not fabricated from a None
+        comparison.
+        """
+        from coding.core.analytics.synthesis import NarrativeGenerator
+        result = NarrativeGenerator.generate_trade_recommendations(
+            regime=MarketRegime.RANGE_BOUND_NEUTRAL, vol_regime=VolRegime.NORMAL,
+            iv_pctile=None, risk_reversal_25d=None, gex_total=0,
+            near_term_expiry="6MAR26", far_term_expiry="27MAR26")
+        assert "Risk Reversal" not in result
+
+    def test_none_risk_reversal_directional_strategy_discloses_insufficient_data(self):
+        """
+        Task G2-G: Strategy 3 (directional spreads) is triggered by
+        ``regime`` alone -- a missing RR25 must not block or crash the
+        recommendation the regime already justifies, and must render an
+        honest "insufficient data" annotation instead of a fabricated
+        "+0.0%".
+        """
+        from coding.core.analytics.synthesis import NarrativeGenerator
+        result = NarrativeGenerator.generate_trade_recommendations(
+            regime=MarketRegime.TRENDING_UP, vol_regime=VolRegime.NORMAL,
+            iv_pctile=50, risk_reversal_25d=None, gex_total=0,
+            near_term_expiry="6MAR26", far_term_expiry="27MAR26")
+        assert "Bull Call Spread" in result
+        assert "insufficient data" in result.lower()
+        assert "+0.0%" not in result
+
+
+# =============================================================================
+# TESTS: NarrativeGenerator None-handling (Task G2-G)
+# =============================================================================
+
+class TestGenerateRegimeNarrativeNoneLevels:
+    def test_none_put_support_call_resistance_discloses_insufficient_data(self):
+        """
+        Task G2-G: put_support/call_resistance=None (no identified GEX
+        level in this expiry's strike range) must render as an explicit
+        disclosure, not crash on a bare ``:,.0f`` format spec applied to
+        None, and not silently print "$0" -- a specific, wrong level.
+        """
+        from coding.core.analytics.synthesis import NarrativeGenerator
+        result = NarrativeGenerator.generate_regime_narrative(
+            regime=MarketRegime.RANGE_BOUND_NEUTRAL, spot=65000.0,
+            put_support=None, call_resistance=None, max_pain=65000.0,
+            gex_total=1_000_000,
+        )
+        assert "insufficient data" in result.lower()
+        assert "$0" not in result
+
+    def test_real_levels_still_render_dollar_formatted(self):
+        from coding.core.analytics.synthesis import NarrativeGenerator
+        result = NarrativeGenerator.generate_regime_narrative(
+            regime=MarketRegime.RANGE_BOUND_NEUTRAL, spot=65000.0,
+            put_support=60000.0, call_resistance=75000.0, max_pain=65000.0,
+            gex_total=1_000_000,
+        )
+        assert "$60,000" in result
+        assert "$75,000" in result
+
+
+class TestGenerateVolNarrativeNoneRiskReversal:
+    def test_none_risk_reversal_and_sell_iv_no_crash_discloses(self):
+        """
+        Task G2-G: risk_reversal_25d/sell_iv=None must not raise
+        TypeError on a direct ``:+.1f``/``:.1f`` format spec (the old
+        signature had no None handling), and must render an honest
+        disclosure rather than a fabricated reading.
+        """
+        from coding.core.analytics.synthesis import NarrativeGenerator
+        result = NarrativeGenerator.generate_vol_narrative(
+            iv_pctile=85, vrp=12.0, vrp_adjustment="30d RV within normal range.",
+            risk_reversal_25d=None, sell_expiry="6MAR26", sell_iv=None,
+            buy_expiry="27MAR26",
+        )
+        assert "insufficient data" in result.lower()
+
+    def test_real_risk_reversal_still_renders_numeric(self):
+        from coding.core.analytics.synthesis import NarrativeGenerator
+        result = NarrativeGenerator.generate_vol_narrative(
+            iv_pctile=85, vrp=12.0, vrp_adjustment="30d RV within normal range.",
+            risk_reversal_25d=-8.0, sell_expiry="6MAR26", sell_iv=49.0,
+            buy_expiry="27MAR26",
+        )
+        assert "-8.0%" in result
+        assert "49.0%" in result
+
+
+class TestGenerateRiskFactorsNoneRiskReversal:
+    def test_none_risk_reversal_skips_extreme_rr25_check_no_crash(self):
+        """
+        Task G2-G: risk_reversal_25d=None must not raise on the direct
+        ``< -12`` comparison (the old signature had no None handling),
+        and a missing reading is not itself a "risk factor" to disclose
+        here (matches the pre-existing cone_30d_pctile/funding_8h None
+        pattern in this same function) -- the run-level DATA QUALITY
+        section is where its absence is disclosed.
+        """
+        from coding.core.analytics.synthesis import NarrativeGenerator
+        result = NarrativeGenerator.generate_risk_factors(
+            cone_30d_pctile=50.0, gex_total=1_000_000, largest_expiry_dte=27,
+            funding_8h=0.0, risk_reversal_25d=None,
+        )
+        assert "Extreme RR25" not in result
+
 
 # =============================================================================
 # TESTS: SynthesisMapper.build_market_wide
@@ -1073,12 +1247,73 @@ class TestBuildExpiryMetrics:
         assert result.flow_trend == "Mixed/Neutral Flow"
         assert result.flow_sufficient_data is False
 
-    def test_missing_vol_surface_uses_defaults(self):
+    def test_missing_vol_surface_preserves_none(self):
+        """
+        Task G2-G: a missing vol surface (vol_surface=None for this
+        expiration) must leave every vol-surface-derived ExpiryMetrics
+        field as genuine None, not collapse to a fabricated 0.0 -- the
+        same defect class Task G2-B fixed for MarketWideMetrics. A
+        fabricated 0.0 here would previously score as "RR25 +0.0%:
+        Normal" (score_skew) and "Vanna zero + Charm zero" (a real,
+        confident "no structural drift" claim, score_vanna_charm) for a
+        metric that was never measured.
+        """
         onchain_result = make_onchain_result("27MAR26", include_vol_surface=False)
         result = SynthesisMapper.build_expiry_metrics(onchain_result, "27MAR26")
         assert result is not None
-        assert result.atm_iv == 0.0
-        assert result.risk_reversal_25d == 0.0
+        assert result.atm_iv is None
+        assert result.risk_reversal_25d is None
+        assert result.put_25d_iv is None
+        assert result.call_25d_iv is None
+        assert result.net_vanna is None
+        assert result.net_charm is None
+        # pc_atm/pc_near_otm/pc_far_otm are DELIBERATELY left as the
+        # pre-existing 0.0-when-undefined convention (not touched by
+        # Task G2-G -- see ExpiryMetrics' docstring).
+        assert result.pc_atm == 0.0
+        assert result.pc_near_otm == 0.0
+        assert result.pc_far_otm == 0.0
+
+    def test_missing_gex_key_levels_preserves_none(self):
+        """
+        Task G2-G: GexDexKeyLevels.call_resistance/put_support/hvl are
+        genuinely Optional (no identified level in this expiry's strike
+        range) -- must reach ExpiryMetrics as None, not a strike/GEX of
+        0.0 (which reads as a specific, wrong price level).
+        """
+        onchain_result = make_onchain_result("27MAR26")
+        bundle = onchain_result.bundle("27MAR26")
+        no_levels_gex = GexDexResult(
+            strike_rows=(), cumulative_gex={}, cumulative_dex={},
+            key_levels=GexDexKeyLevels(
+                call_resistance=None, put_support=None, hvl=None, gamma_flip=None,
+            ),
+            spot_price=bundle.gex_dex.spot_price,
+            total_net_gex=bundle.gex_dex.total_net_gex, total_net_dex=bundle.gex_dex.total_net_dex,
+            currency="BTC",
+        )
+        no_levels_bundle = ExpirationBundle(
+            expiration=bundle.expiration, analysis=bundle.analysis, gex_dex=no_levels_gex,
+            flow=bundle.flow, vol_surface=bundle.vol_surface, oi_changes=None,
+            iv_percentile=None, trend=None, flow_chart_paths={}, enriched_instruments=(),
+        )
+        no_levels_result = OnChainAnalysisResult(
+            currency=onchain_result.currency, underlying_price=onchain_result.underlying_price,
+            generated_at=onchain_result.generated_at, market_metrics=onchain_result.market_metrics,
+            expirations=(no_levels_bundle,), market_wide=onchain_result.market_wide,
+            parsed_instruments=onchain_result.parsed_instruments,
+            atm_iv_by_expiration=onchain_result.atm_iv_by_expiration,
+            recent_trades=onchain_result.recent_trades,
+        )
+
+        result = SynthesisMapper.build_expiry_metrics(no_levels_result, "27MAR26")
+
+        assert result is not None
+        assert result.call_resistance_strike is None
+        assert result.call_resistance_gex is None
+        assert result.put_support_strike is None
+        assert result.put_support_gex is None
+        assert result.hvl_strike is None
 
     def test_underlying_price_sourced_from_own_expiration_not_global_result(self):
         """
@@ -1263,6 +1498,35 @@ class TestSynthesisEngineRun:
         # The old fabricated-zero failure mode for funding: "Neutral
         # leverage" is a real claim about a real (if unremarkable) reading.
         assert "Neutral leverage" not in result
+
+    def test_run_missing_expiry_vol_surface_and_gex_levels_no_crash_discloses(self):
+        """
+        Task G2-G, end-to-end: an expiry whose vol surface AND GEX key
+        levels never computed (every field this task made Optional is
+        None) must run through the full pipeline -- scorers, regime
+        narrative, vol narrative, risk factors, trade recommendations,
+        the per-expiry timeframe one-liner, and the final SCORING DETAIL
+        RR25 line -- without raising ``TypeError`` on a bare numeric
+        format spec or ``float(None)``, and must render "insufficient
+        data"/"N/A" disclosures rather than fabricated zeros (e.g. never
+        "RR25 +0.0%: Normal" for a metric that was never measured).
+        """
+        engine = SynthesisEngine()
+        market = make_market_wide()
+        expiry = make_expiry_metrics(
+            atm_iv=None, risk_reversal_25d=None, put_25d_iv=None, call_25d_iv=None,
+            net_vanna=None, net_charm=None,
+            call_resistance_strike=None, call_resistance_gex=None,
+            put_support_strike=None, put_support_gex=None, hvl_strike=None,
+        )
+        result = engine.run(market, [expiry])
+
+        assert isinstance(result, str)
+        assert "insufficient data" in result.lower() or "N/A" in result
+        # RR25 +0.0% is the exact fabricated-extreme text score_skew's old
+        # fall-through produced for a missing reading.
+        assert "RR25 +0.0%: Normal" not in result
+        assert "RR25 +0.0%" not in result
 
     def test_run_failed_sections_disclosed_in_data_quality(self):
         """Task G2-B Finding 3: a non-empty failed_sections must surface

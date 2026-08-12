@@ -60,7 +60,40 @@ class MarketRegime(Enum):
 
 @dataclass
 class ExpiryMetrics:
-    """Parsed metrics for a single expiry"""
+    """
+    Parsed metrics for a single expiry.
+
+    Task G2-G (Wave G fresh audit, follow-on to G2-B's MarketWideMetrics
+    fix): every field below that can genuinely be absent upstream for THIS
+    expiry (the vol surface never computed, second-order Greeks never
+    computed, no identified GEX level in this expiry's strike range) is
+    ``Optional[float]`` with no fabricated ``0.0`` default. Before this
+    fix, ``SynthesisMapper.build_expiry_metrics`` collapsed a real
+    ``None`` (e.g. ``VolSurfaceResult.atm_iv is None`` because no ATM
+    instruments were found, or ``SkewResult.risk_reversal_25d is None``)
+    into a fabricated ``0.0`` via patterns like
+    ``vol.atm_iv if vol is not None and vol.atm_iv is not None else 0.0``.
+    That fabricated zero then flowed into scorers with no ``None`` branch
+    (e.g. ``score_skew``) and was scored as the SAME thing as a
+    genuinely-measured 0 -- for ``risk_reversal_25d`` this meant "no
+    skew data" silently became "RR25 +0.0%: Normal", a confident,
+    specific reading for a metric that was never measured. Every scorer
+    and narrative formatter consuming these fields now has an explicit
+    ``None`` branch that returns a neutral score at (near-)zero weight or
+    an "insufficient data"/"N/A" disclosure string, instead of silently
+    treating absence as a measured value.
+
+    ``pc_atm``/``pc_near_otm``/``pc_far_otm`` are DELIBERATELY left as
+    plain ``float``, NOT touched by this fix: ``MoneynessBucket.ratio``
+    (the upstream source) is documented "ALWAYS present; 0.0 when
+    undefined" (an earlier, intentional "H2 fix" in
+    ``VolatilitySurfaceCalculator._calculate_pc_by_moneyness`` -- see that
+    method's own comment), so ``0.0`` there is already a deliberate,
+    documented convention owned by the layer that computes it, not a
+    fabrication introduced by this mapper -- the same category as
+    ``max_pain``'s fallback to spot price and ``pc_ratio``'s ``inf`` ->
+    ``99.0`` cap, both also deliberately left alone.
+    """
     expiry: str
     dte: int
     total_oi: int
@@ -77,26 +110,34 @@ class ExpiryMetrics:
     # fixed at the report/formatter layer.
     underlying_price: float
 
-    # GEX/DEX
+    # GEX/DEX. call_resistance_strike/call_resistance_gex/
+    # put_support_strike/put_support_gex/hvl_strike: None exactly when
+    # GexDexKeyLevels.call_resistance/put_support/hvl is None -- no
+    # identified level in this expiry's strike range -- NOT a measured
+    # strike/GEX of 0.0.
     total_gex: float
     total_dex: float
     gex_environment: str  # "Positive" or "Negative"
-    call_resistance_strike: float
-    call_resistance_gex: float
-    put_support_strike: float
-    put_support_gex: float
-    hvl_strike: float  # Zero gamma level
+    call_resistance_strike: Optional[float]
+    call_resistance_gex: Optional[float]
+    put_support_strike: Optional[float]
+    put_support_gex: Optional[float]
+    hvl_strike: Optional[float]  # Zero gamma level
 
-    # Volatility surface
-    atm_iv: float
+    # Volatility surface. atm_iv: None exactly when
+    # VolatilitySurfaceCalculator._calculate_atm_iv found no ATM
+    # instruments -- NOT a measured 0% IV.
+    atm_iv: Optional[float]
     # bugfix_spec.md Item 9: renamed from skew_25d (put IV - call IV, a
     # non-standard sign) to risk_reversal_25d (call IV - put IV -- the
     # market "25-delta risk reversal" convention). Positive = calls richer
     # (bullish/upside speculation); negative = puts richer (bearish/
     # downside hedging demand) -- the opposite sign from the old skew_25d.
-    risk_reversal_25d: float
-    put_25d_iv: float
-    call_25d_iv: float
+    # None exactly when the vol surface (or its skew_25d sub-result)
+    # never computed for this expiry -- NOT a measured 0.0% (Normal).
+    risk_reversal_25d: Optional[float]
+    put_25d_iv: Optional[float]
+    call_25d_iv: Optional[float]
 
     # Moneyness P/C
     pc_atm: float
@@ -108,9 +149,14 @@ class ExpiryMetrics:
     # dealer_vanna_exposure/dealer_charm_exposure), not the holder-side raw
     # sum -- F8.4 requires score_* functions to consume the dealer fields,
     # matching the report text's own dealer-derived vanna_signal/
-    # charm_signal.
-    net_vanna: float
-    net_charm: float
+    # charm_signal. Task G2-G: None exactly when the vol surface never
+    # computed for this expiry (dealer_vanna_exposure/dealer_charm_exposure
+    # are REQUIRED, non-Optional fields on SecondOrderGreeks whenever a
+    # vol surface DOES exist -- the only genuine-missing case is the whole
+    # surface being absent) -- NOT a measured net_vanna/net_charm of 0.0,
+    # which score_vanna_charm treats as its own distinct "zero" signal.
+    net_vanna: Optional[float]
+    net_charm: Optional[float]
 
     # Flow
     flow_bias: str  # "Heavy Buying", "Moderate Selling", etc.
@@ -472,7 +518,7 @@ class ScoringEngine:
         return (score, weight, description)
 
     @staticmethod
-    def score_vanna_charm(net_vanna: float, net_charm: float,
+    def score_vanna_charm(net_vanna: Optional[float], net_charm: Optional[float],
                           iv_pctile: Optional[float] = 50.0, gex_total: float = 0.0,
                           spot: float = 100000.0) -> Tuple[float, float, str]:
         """
@@ -492,7 +538,21 @@ class ScoringEngine:
         direction" is already the correct, honest description of "we
         don't know," and that band already produces vanna_signal=0.0
         with no fabricated direction, so no separate branch is needed.
+
+        Task G2-G: ``net_vanna``/``net_charm`` are ``None`` exactly when
+        the vol surface never computed for this expiry -- genuinely
+        missing, NOT a measured 0.0. This is a DIFFERENT case from
+        ``net_vanna == 0``/``net_charm == 0`` below (a real reading that
+        happens to net to zero, e.g. a balanced call/put book), which
+        must keep producing its own "zero" signal/direction text -- a
+        real measurement of "no structural drift" is not the same claim
+        as "we never measured it". None short-circuits to a neutral
+        score at zero weight with an explicit insufficient-data message,
+        before either the vanna or charm band logic runs.
         """
+        if net_vanna is None or net_charm is None:
+            return (0.0, 0.0, "Vanna/Charm: insufficient data (vol surface unavailable) — weight zero")
+
         if iv_pctile is None:
             iv_pctile = 50.0
 
@@ -666,7 +726,7 @@ class ScoringEngine:
             return (-2.0, 0.8, f"VRP {effective_vrp:+.1f}pts: Extreme mispricing — strong buy vol. {stale_note}")
 
     @staticmethod
-    def score_skew(risk_reversal_25d: float) -> Tuple[float, float, str]:
+    def score_skew(risk_reversal_25d: Optional[float]) -> Tuple[float, float, str]:
         """
         25-Delta Risk Reversal (bugfix_spec.md Item 9 / Decision D6).
 
@@ -691,7 +751,23 @@ class ScoringEngine:
         Feeds into: vol regime classifier, risk factors, trade recs, vol
         assessment narrative. Does NOT feed into directional scoring
         (``all_direction_scores``).
+
+        Task G2-G: ``risk_reversal_25d=None`` (vol surface/skew never
+        computed for this expiry) is now its own explicit branch -- a
+        neutral score at (near-)zero weight and an "insufficient data"
+        message, instead of falling through to the ``<= MILD_POINTS``
+        band and being reported as "RR25 +0.0%: Normal", a specific,
+        confident reading for a metric that was never measured (the same
+        BLOCKER-class defect Task G2-B fixed for
+        ``score_iv_percentile``/``iv_percentile_365d=None``). Task G2-D
+        (commit 9f14e53) unified per-expiry and market-wide RR25 onto one
+        bracket-gated computation, which makes this None case fire more
+        often than the old ungated picker did -- this was already latent
+        before G2-D, just less frequently triggered.
         """
+        if risk_reversal_25d is None:
+            return (0.0, 0.0, "RR25: insufficient data — weight zero, no signal")
+
         if risk_reversal_25d < -RISK_REVERSAL_STRONG_POINTS:
             return (-2.0, 0.6, f"RR25 {risk_reversal_25d:+.1f}%: Extreme put demand — fear elevated")
         elif risk_reversal_25d < -RISK_REVERSAL_MILD_POINTS:
@@ -986,27 +1062,36 @@ class NarrativeGenerator:
     # REGIME DESCRIPTIONS
     # -------------------------------------------------------------------------
 
+    # Task G2-G: ``{put_support}``/``{call_resistance}`` carry NO numeric
+    # format spec (were ``${put_support:,.0f}``/``${call_resistance:,.0f}``,
+    # literal "$" included). ``generate_regime_narrative`` now pre-formats
+    # both into a display string ("$65,000" or "an unidentified level
+    # (insufficient data)", "$" included) before calling ``.format()`` --
+    # same reasoning/pattern as VOL_TEMPLATES' ``{iv_pctile}`` fix below.
+    # ``{max_pain}`` keeps its numeric spec: max_pain is deliberately never
+    # None (falls back to spot price -- see ExpiryMetrics' docstring), so
+    # it never needs a display-string branch.
     REGIME_TEMPLATES = {
         MarketRegime.RANGE_BOUND_NEUTRAL: (
             "RANGE-BOUND (NEUTRAL) regime. {gex_detail} "
-            "Expect price to oscillate between put support at ${put_support:,.0f} "
-            "and call resistance at ${call_resistance:,.0f}. "
+            "Expect price to oscillate between put support at {put_support} "
+            "and call resistance at {call_resistance}. "
             "Priority: sell premium via symmetric iron condors/strangles, harvest theta decay."
         ),
         MarketRegime.RANGE_BOUND_BULLISH: (
             "RANGE-BOUND (BULLISH) regime. Vol suppressed but bullish lean. {gex_detail} "
-            "Expect grind-higher in range toward ${call_resistance:,.0f}. "
+            "Expect grind-higher in range toward {call_resistance}. "
             "Priority: sell put spreads preferred, skew short strikes higher."
         ),
         MarketRegime.RANGE_BOUND_BEARISH: (
             "RANGE-BOUND (BEARISH) regime. Vol suppressed but bearish lean. {gex_detail} "
-            "Expect grind-lower in range toward ${put_support:,.0f}. "
+            "Expect grind-lower in range toward {put_support}. "
             "Priority: sell call spreads preferred, skew short strikes lower."
         ),
         MarketRegime.RANGE_BOUND_ELEVATED: (
             "RANGE-BOUND (ELEVATED VOL) regime. No directional lean but vol is expensive. "
             "Best premium-selling environment — widest wings, most aggressive capture. "
-            "Put support at ${put_support:,.0f}, call resistance at ${call_resistance:,.0f}. "
+            "Put support at {put_support}, call resistance at {call_resistance}. "
             "Priority: wide iron condors at GEX support/resistance."
         ),
         MarketRegime.TRENDING_UP: (
@@ -1016,7 +1101,7 @@ class NarrativeGenerator:
         ),
         MarketRegime.TRENDING_DOWN: (
             "TRENDING-DOWN regime. Bearish structural positioning with normal volatility. "
-            "Put support at ${put_support:,.0f} is the key level to watch. "
+            "Put support at {put_support} is the key level to watch. "
             "Priority: long put spreads, protective puts. Sell call spreads on bounces."
         ),
         MarketRegime.VOLATILE_BULLISH: (
@@ -1044,17 +1129,27 @@ class NarrativeGenerator:
     # ``{iv_pctile:.0f}``) -- ``generate_vol_narrative`` pre-formats it
     # into a display string ("73" or "insufficient data") before calling
     # ``.format()``, since a bare ``:.0f`` spec cannot render "insufficient
-    # data" without raising. ``vrp``/``skew`` keep their numeric specs:
-    # every template that references ``vrp`` is only ever selected when
-    # ``vrp`` is not None (see ``generate_vol_narrative``'s ``vrp is None``
-    # branch, which forces the "neutral" template -- the one template with
-    # no ``vrp``/``iv_pctile`` placeholders at all).
+    # data" without raising. ``vrp`` keeps its numeric spec: every template
+    # that references ``vrp`` is only ever selected when ``vrp`` is not
+    # None (see ``generate_vol_narrative``'s ``vrp is None`` branch, which
+    # forces the "neutral" template -- the one template with no
+    # ``vrp``/``iv_pctile`` placeholders at all).
+    #
+    # Task G2-G: ``{sell_iv}``/``{skew}`` ALSO have NO numeric format spec
+    # now (were ``{sell_iv:.1f}%``/``{skew:+.1f}%``) -- both
+    # ``risk_reversal_25d`` (ExpiryMetrics field, vol surface may never
+    # have computed for this expiry) and ``sell_iv``
+    # (``best_sell_expiry.atm_iv``, same reason) are genuinely Optional
+    # independent of whether ``vrp`` selected this template, so
+    # ``generate_vol_narrative`` pre-formats both into display strings
+    # ("-8.0%"/"insufficient data") the same way it already does for
+    # ``iv_pctile``.
     VOL_TEMPLATES = {
         "sell_strong": (
             "Volatility is expensive (IV at {iv_pctile}th percentile, "
             "VRP {vrp:+.1f}pts). {vrp_adjustment} "
-            "Sell premium in {sell_expiry} where ATM IV is {sell_iv:.1f}%. "
-            "RR25 at {skew:+.1f}% makes {rich_side} puts the higher-edge side to sell."
+            "Sell premium in {sell_expiry} where ATM IV is {sell_iv}. "
+            "RR25 at {skew} makes {rich_side} puts the higher-edge side to sell."
         ),
         "sell_moderate": (
             "Volatility is moderately elevated (IV at {iv_pctile}th percentile). "
@@ -1108,14 +1203,26 @@ class NarrativeGenerator:
             cls,
             regime: MarketRegime,
             spot: float,
-            put_support: float,
-            call_resistance: float,
+            put_support: Optional[float],
+            call_resistance: Optional[float],
             max_pain: float,
             gex_total: float,
             conflict_detail: str = "",
             transition_window: str = "7-14 days"
     ) -> str:
-        """Generate regime description with filled parameters."""
+        """
+        Generate regime description with filled parameters.
+
+        Task G2-G: ``put_support``/``call_resistance`` (the largest
+        expiry's GEX-derived strike levels) are genuinely Optional -- no
+        identified level in that expiry's strike range, NOT a level at
+        strike 0.0. Pre-formatted into a display string ("$65,000" or an
+        explicit "insufficient data" phrase) before ``.format()`` runs, so
+        a missing level neither raises (a bare ``:,.0f`` spec on None)
+        nor silently renders as "put support at $0" -- a specific,
+        wrong price level. ``max_pain`` keeps its direct numeric format:
+        it's deliberately never None (falls back to spot price).
+        """
 
         gex_millions = gex_total / 1_000_000
         if gex_millions > 0:
@@ -1123,11 +1230,20 @@ class NarrativeGenerator:
         else:
             gex_detail = f"Negative gamma ({gex_millions:.1f}M GEX) is amplifying moves — dealers chase momentum both directions."
 
+        put_support_display = (
+            f"${put_support:,.0f}" if put_support is not None
+            else "an unidentified level (insufficient data)"
+        )
+        call_resistance_display = (
+            f"${call_resistance:,.0f}" if call_resistance is not None
+            else "an unidentified level (insufficient data)"
+        )
+
         template = cls.REGIME_TEMPLATES.get(regime, cls.REGIME_TEMPLATES[MarketRegime.RANGE_BOUND_NEUTRAL])
 
         return template.format(
-            put_support=put_support,
-            call_resistance=call_resistance,
+            put_support=put_support_display,
+            call_resistance=call_resistance_display,
             max_pain=max_pain,
             gex_detail=gex_detail,
             conflict_detail=conflict_detail,
@@ -1140,9 +1256,9 @@ class NarrativeGenerator:
             iv_pctile: Optional[float],
             vrp: Optional[float],
             vrp_adjustment: str,
-            risk_reversal_25d: float,
+            risk_reversal_25d: Optional[float],
             sell_expiry: str,
-            sell_iv: float,
+            sell_iv: Optional[float],
             buy_expiry: str = "",
     ) -> str:
         """
@@ -1169,8 +1285,20 @@ class NarrativeGenerator:
         placeholder carries no format spec for exactly this reason) so it
         can still render inside a "sell"/"buy" template driven by a real,
         non-None ``vrp``.
+
+        Task G2-G: ``risk_reversal_25d``/``sell_iv`` are independently
+        Optional from ``vrp`` (the largest/best-sell expiry's vol surface
+        can be missing even when market-wide VRP is real) -- both are
+        pre-formatted into display strings the same way ``iv_pctile`` is,
+        and the rich/cheap-side classification below gets its own explicit
+        None branch instead of comparing None against a numeric threshold
+        (which raises ``TypeError`` in Python 3).
         """
         iv_pctile_display = f"{iv_pctile:.0f}" if iv_pctile is not None else "insufficient data"
+        risk_reversal_display = (
+            f"{risk_reversal_25d:+.1f}%" if risk_reversal_25d is not None else "insufficient data"
+        )
+        sell_iv_display = f"{sell_iv:.1f}%" if sell_iv is not None else "insufficient data"
 
         # Determine which template — unified ±5 thresholds matching VRP scorer
         if vrp is None:
@@ -1187,13 +1315,23 @@ class NarrativeGenerator:
             template_key = "buy_strong"
 
         # Rich/cheap side based on the risk reversal (re-signed: rr = -skew).
-        if risk_reversal_25d < -8:
-            rich_side = "OTM puts are rich — selling put premium has edge"
-        elif risk_reversal_25d <= -4:
-            rich_side = "RR25 is normal — no clear rich/cheap side"
+        # Task G2-G: None is its own branch; the two existing threshold
+        # checks below (rich_side's tri-branch at -8/-4, cheap_side's
+        # independent < -4 check) are otherwise UNCHANGED -- deliberately
+        # not merged into one set of branches, since cheap_side's boundary
+        # (strict < -4) differs from rich_side's middle branch (<= -4) at
+        # exactly risk_reversal_25d == -4.0.
+        if risk_reversal_25d is None:
+            rich_side = "RR25 unavailable — insufficient data to identify rich/cheap side"
+            cheap_side = "insufficient data"
         else:
-            rich_side = "OTM puts are cheap relative to calls — tail risk underpriced"
-        cheap_side = "calls" if risk_reversal_25d < -4 else "puts"
+            if risk_reversal_25d < -8:
+                rich_side = "OTM puts are rich — selling put premium has edge"
+            elif risk_reversal_25d <= -4:
+                rich_side = "RR25 is normal — no clear rich/cheap side"
+            else:
+                rich_side = "OTM puts are cheap relative to calls — tail risk underpriced"
+            cheap_side = "calls" if risk_reversal_25d < -4 else "puts"
 
         template = cls.VOL_TEMPLATES[template_key]
 
@@ -1201,9 +1339,9 @@ class NarrativeGenerator:
             iv_pctile=iv_pctile_display,
             vrp=vrp,
             vrp_adjustment=vrp_adjustment,
-            skew=risk_reversal_25d,
+            skew=risk_reversal_display,
             sell_expiry=sell_expiry,
-            sell_iv=sell_iv,
+            sell_iv=sell_iv_display,
             buy_expiry=buy_expiry,
             rich_side=rich_side,
             cheap_side=cheap_side,
@@ -1216,7 +1354,7 @@ class NarrativeGenerator:
             gex_total: float,
             largest_expiry_dte: int,
             funding_8h: Optional[float],
-            risk_reversal_25d: float,
+            risk_reversal_25d: Optional[float],
             spot: float = 100000.0,
             fragility_multiplier: float = 1.0,
             fragility_level: str = "NONE",
@@ -1235,6 +1373,11 @@ class NarrativeGenerator:
         evaluated against a fabricated 0.0, when their input is missing.
         A missing input is not itself a "risk factor" to report here; the
         run-level DATA QUALITY section is where its absence gets disclosed.
+
+        Task G2-G: ``risk_reversal_25d`` is the same kind of genuinely-
+        Optional field (the largest expiry's vol surface may never have
+        computed) -- its threshold check below is skipped the same way,
+        for the same reason.
         """
 
         risks = []
@@ -1265,7 +1408,7 @@ class NarrativeGenerator:
                 f"— crowded {direction} at risk of squeeze"
             )
 
-        if risk_reversal_25d < -12:
+        if risk_reversal_25d is not None and risk_reversal_25d < -12:
             risks.append(f"Extreme RR25 ({risk_reversal_25d:+.1f}%) — tail hedging elevated, crash risk priced in")
 
         # Fragility flag
@@ -1285,7 +1428,7 @@ class NarrativeGenerator:
             regime: MarketRegime,
             vol_regime: VolRegime,
             iv_pctile: Optional[float],
-            risk_reversal_25d: float,
+            risk_reversal_25d: Optional[float],
             gex_total: float,
             near_term_expiry: str,
             far_term_expiry: str,
@@ -1316,6 +1459,21 @@ class NarrativeGenerator:
         None`` before comparing it, so a missing IV percentile can never
         trigger "cheap IV, buy vol" (the old ``0.0 < 30`` phantom trigger)
         or be blocked from "expensive IV, sell vol" for the wrong reason.
+
+        Task G2-G: ``risk_reversal_25d=None`` is handled per-strategy, not
+        with one blanket guard, because each strategy uses it differently:
+        Strategy 1's skew-adjustment sub-recommendation gets its own
+        explicit None branch (the IC recommendation itself is still
+        printed -- ``iv_pctile``/``regime``/``vol_regime`` already justify
+        it; only the skew-specific wing adjustment degrades to "insufficient
+        data"). Strategy 3 is triggered by ``regime`` alone, so its RR25
+        annotation is pre-formatted into a display string rather than
+        skipping the whole recommendation. Strategy 4 IS gated on
+        ``risk_reversal_25d`` itself (a specific RR25 threshold trigger,
+        same as ``iv_pctile is not None`` gating Strategies 1/2) -- a
+        missing reading cannot satisfy "RR25 < -10%", so the whole
+        recommendation is skipped, matching the existing iv_pctile pattern
+        rather than inventing a new one.
         """
         recommendations = []
 
@@ -1330,7 +1488,9 @@ class NarrativeGenerator:
                 iv_pctile is not None and iv_pctile > 70 and
                 vol_regime != VolRegime.EXPLOSIVE):
             # RR25-adjusted IC (re-signed: was skew > 8 / skew < 2)
-            if risk_reversal_25d < -8:
+            if risk_reversal_25d is None:
+                skew_adj = "RR25 unavailable — symmetric wings at GEX support/resistance levels (insufficient data to skew-adjust). "
+            elif risk_reversal_25d < -8:
                 skew_adj = "Puts are rich — keep short put at 25-delta, push long put protection further OTM (5-delta). "
             elif risk_reversal_25d > -2:
                 skew_adj = "Calls relatively expensive — keep short call at 25-delta, push long call protection further OTM. "
@@ -1360,18 +1520,24 @@ class NarrativeGenerator:
                 f"favors owning volatility. Buy ATM straddle or 25-delta strangle."
             )
 
-        # Strategy 3: Directional spreads
+        # Strategy 3: Directional spreads. Task G2-G: triggered by
+        # ``regime`` alone (not risk_reversal_25d), so a missing RR25
+        # reading pre-formats to "insufficient data" rather than skipping
+        # a recommendation the regime already justifies.
+        rr25_display = (
+            f"{risk_reversal_25d:+.1f}%" if risk_reversal_25d is not None else "insufficient data"
+        )
         if regime in (MarketRegime.TRENDING_UP, MarketRegime.VOLATILE_BULLISH):
             recommendations.append(
                 f"SECONDARY — Bull Call Spread ({far_term_expiry}): "
                 f"Bullish regime supports upside exposure. Buy near-ATM, sell at call resistance. "
-                f"RR25 {risk_reversal_25d:+.1f}% makes calls relatively cheap vs puts."
+                f"RR25 {rr25_display} makes calls relatively cheap vs puts."
             )
         elif regime in (MarketRegime.TRENDING_DOWN, MarketRegime.VOLATILE_BEARISH):
             recommendations.append(
                 f"SECONDARY — Bear Put Spread ({far_term_expiry}): "
                 f"Bearish regime supports downside positioning. "
-                f"Steep RR25 ({risk_reversal_25d:+.1f}%) makes puts expensive — use spreads to offset."
+                f"Steep RR25 ({rr25_display}) makes puts expensive — use spreads to offset."
             )
 
         # Strategy 4: Skew trade — exclude bearish regimes (re-signed: was skew > 10)
@@ -1380,7 +1546,11 @@ class NarrativeGenerator:
             MarketRegime.TRENDING_DOWN,
             MarketRegime.RANGE_BOUND_BEARISH,
         )
-        if risk_reversal_25d < -10 and regime not in bearish_exclusions:
+        # Task G2-G: this IS a risk_reversal_25d-gated trigger (like
+        # iv_pctile gating Strategies 1/2 above) -- a missing reading
+        # cannot satisfy "RR25 < -10%", so skip the whole recommendation
+        # rather than fabricate a trigger from a None comparison.
+        if risk_reversal_25d is not None and risk_reversal_25d < -10 and regime not in bearish_exclusions:
             skew_src = f" [{skew_expiry}]" if skew_expiry else ""
             recommendations.append(
                 f"OPPORTUNISTIC — Risk Reversal ({skew_expiry or near_term_expiry}): "
@@ -1717,7 +1887,17 @@ class SynthesisEngine:
         if not sellable_near:
             # Fallback: nearest meaningful expiry
             sellable_near = [e for e in expiries_sorted if e.dte >= 1 and e.total_oi > 500]
-        best_sell_expiry = max(sellable_near, key=lambda e: e.atm_iv) if sellable_near else meaningful_near
+        # Task G2-G: atm_iv is genuinely Optional (vol surface may never
+        # have computed for a given expiry) -- max() with a key returning
+        # None for some candidates and float for others raises TypeError
+        # in Python 3 (None is not orderable against float). Rank a
+        # missing reading below every real one instead of crashing, so a
+        # real ATM IV is always preferred when at least one candidate has
+        # one.
+        best_sell_expiry = (
+            max(sellable_near, key=lambda e: e.atm_iv if e.atm_iv is not None else float("-inf"))
+            if sellable_near else meaningful_near
+        )
 
         # bugfix_spec.md Item 9 fix-review (Important #6): the sub-task 3
         # commit fed these methods the NEGATED risk_reversal_25d (the old
@@ -1803,6 +1983,14 @@ class SynthesisEngine:
         effective_vrp_display = (
             f"{effective_vrp:+.1f}pts" if effective_vrp is not None else "insufficient data"
         )
+        # Task G2-G: risk_reversal_25d can be genuinely None here (largest
+        # expiry's vol surface never computed) -- a direct ``:+.1f`` format
+        # spec on None raises TypeError, same as every other Optional
+        # field already given an "insufficient data" display string above.
+        largest_rr25_display = (
+            f"{largest_expiry.risk_reversal_25d:+.1f}%"
+            if largest_expiry.risk_reversal_25d is not None else "insufficient data"
+        )
 
         synthesis = f"""{header}
 
@@ -1831,7 +2019,7 @@ SCORING DETAIL:
   Near-term: {near_direction.name} | Far-term: {far_direction.name}
   Vol Regime: {vol_regime.value}
   Market Regime: {market_regime.value}
-  Effective VRP: {effective_vrp_display} | RR25: {largest_expiry.risk_reversal_25d:+.1f}%
+  Effective VRP: {effective_vrp_display} | RR25: {largest_rr25_display}
 """
 
         return synthesis
@@ -1933,10 +2121,20 @@ Perp Funding: {funding_rate_str}  | 8h: {funding_8h_str}
             # correctly-signed risk_reversal_25d, relabelled "RR25" -- the
             # legacy-signed "Skew" label here contradicted the vol-surface
             # section's own (correct) RR25 sign for the same expiry/quantity.
+            #
+            # Task G2-G: atm_iv/risk_reversal_25d are genuinely Optional
+            # (vol surface may never have computed for this expiry) -- a
+            # direct ``:.1f``/``:+.1f`` format spec on None raises
+            # TypeError. "N/A" matches this line's own compact-summary
+            # convention (same as the header's dvol_str/iv_pctile_str
+            # etc.), distinct from the more verbose "insufficient data"
+            # phrasing used in prose narratives elsewhere.
+            atm_iv_display = f"{exp.atm_iv:.1f}%" if exp.atm_iv is not None else "N/A"
+            rr25_display = f"{exp.risk_reversal_25d:+.1f}%" if exp.risk_reversal_25d is not None else "N/A"
             lines.append(
                 f"  {exp.expiry} ({exp.dte}d): MaxPain ${exp.max_pain:,.0f} ({mp_dist:+.1f}%) | "
-                f"P/C {exp.pc_ratio:.2f} | ATM IV {exp.atm_iv:.1f}% | "
-                f"RR25 {exp.risk_reversal_25d:+.1f}% | Flow: {exp.flow_bias}"
+                f"P/C {exp.pc_ratio:.2f} | ATM IV {atm_iv_display} | "
+                f"RR25 {rr25_display} | Flow: {exp.flow_bias}"
             )
 
         return "\n".join(lines)
@@ -2087,32 +2285,44 @@ class SynthesisMapper:
         total_dex = gex.total_net_dex or 0.0
         gex_environment = "Positive" if total_gex >= 0 else "Negative"
 
+        # Task G2-G: GexDexKeyLevels.call_resistance/put_support/hvl are
+        # genuinely Optional -- "no identified level in this expiry's
+        # strike range", not a level/GEX at strike/value 0.0. Preserve
+        # None straight through instead of the old ``... else 0.0``
+        # collapse (same defect class G2-B fixed for MarketWideMetrics).
         key_levels = gex.key_levels
         call_res = key_levels.call_resistance
         put_sup = key_levels.put_support
 
-        call_resistance_strike = call_res.strike if call_res is not None else 0.0
-        call_resistance_gex = call_res.net_gex if call_res is not None else 0.0
-        put_support_strike = put_sup.strike if put_sup is not None else 0.0
-        put_support_gex = put_sup.net_gex if put_sup is not None else 0.0
-        hvl_strike = key_levels.hvl or 0.0
+        call_resistance_strike = call_res.strike if call_res is not None else None
+        call_resistance_gex = call_res.net_gex if call_res is not None else None
+        put_support_strike = put_sup.strike if put_sup is not None else None
+        put_support_gex = put_sup.net_gex if put_sup is not None else None
+        hvl_strike = key_levels.hvl
 
         # Vol surface. bugfix_spec.md Item 9: risk_reversal_25d (call -
         # put, market convention) replaces skew_25d (put - call).
-        atm_iv = (vol.atm_iv if vol is not None and vol.atm_iv is not None else 0.0)
+        # Task G2-G: ``vol.atm_iv``/``skew.risk_reversal_25d``/
+        # ``skew.put_25d_iv``/``skew.call_25d_iv`` are already
+        # Optional[float] on their source result models -- None means
+        # genuinely unavailable (no ATM instruments found / vol surface
+        # never computed for this expiry). Pass the value straight
+        # through (accessing an attribute on a None-valued field already
+        # yields None) instead of collapsing to a fabricated 0.0.
+        atm_iv = vol.atm_iv if vol is not None else None
         skew = vol.skew_25d if vol is not None else None
-        risk_reversal_25d = (
-            skew.risk_reversal_25d
-            if skew is not None and skew.risk_reversal_25d is not None
-            else 0.0
-        )
-        put_25d_iv = (
-            skew.put_25d_iv if skew is not None and skew.put_25d_iv is not None else 0.0
-        )
-        call_25d_iv = (
-            skew.call_25d_iv if skew is not None and skew.call_25d_iv is not None else 0.0
-        )
+        risk_reversal_25d = skew.risk_reversal_25d if skew is not None else None
+        put_25d_iv = skew.put_25d_iv if skew is not None else None
+        call_25d_iv = skew.call_25d_iv if skew is not None else None
 
+        # pc_atm/pc_near_otm/pc_far_otm: MoneynessBucket.ratio is
+        # DELIBERATELY "ALWAYS present; 0.0 when undefined" (an existing,
+        # documented "H2 fix" in
+        # VolatilitySurfaceCalculator._calculate_pc_by_moneyness) -- not
+        # touched by Task G2-G. ``pc_moneyness is None`` (whole vol
+        # surface missing) is the one case this mapper still maps to 0.0,
+        # consistent with that same upstream convention (0.0 = "no ratio
+        # to give you"), not a new fabrication.
         pc_moneyness = vol.pc_by_moneyness if vol is not None else None
         pc_atm = (pc_moneyness.atm.ratio if pc_moneyness is not None else 0.0)
         pc_near_otm = (pc_moneyness.near_otm.ratio if pc_moneyness is not None else 0.0)
@@ -2131,9 +2341,17 @@ class SynthesisMapper:
         # before for the same underlying market state. Covered by
         # test_synthesis.py::TestBuildExpiryMetrics (mapper wiring) and the
         # golden master (re-verified, not assumed).
+        #
+        # Task G2-G: dealer_vanna_exposure/dealer_charm_exposure are
+        # REQUIRED (non-Optional) fields on SecondOrderGreeks whenever a
+        # vol surface exists for this expiry -- the only genuinely-missing
+        # case is the whole surface being absent (``vol is None``), which
+        # now maps to None here instead of a fabricated 0.0 (a value
+        # score_vanna_charm treats as its own distinct, real "zero
+        # structural drift" signal -- see that method's None branch).
         second_order = vol.second_order_greeks if vol is not None else None
-        net_vanna = (second_order.dealer_vanna_exposure if second_order is not None else 0.0)
-        net_charm = (second_order.dealer_charm_exposure if second_order is not None else 0.0)
+        net_vanna = second_order.dealer_vanna_exposure if second_order is not None else None
+        net_charm = second_order.dealer_charm_exposure if second_order is not None else None
 
         # Flow. bugfix_spec.md Item 6 / F6.3.4 (carried from A4 review):
         # flow_sufficient_data propagates the data-sufficiency gate so the
@@ -2178,20 +2396,23 @@ class SynthesisMapper:
             total_gex=total_gex,
             total_dex=total_dex,
             gex_environment=gex_environment,
-            call_resistance_strike=float(call_resistance_strike),
-            call_resistance_gex=float(call_resistance_gex),
-            put_support_strike=float(put_support_strike),
-            put_support_gex=float(put_support_gex),
-            hvl_strike=float(hvl_strike),
-            atm_iv=float(atm_iv),
-            risk_reversal_25d=float(risk_reversal_25d),
-            put_25d_iv=float(put_25d_iv),
-            call_25d_iv=float(call_25d_iv),
+            # Task G2-G: ``float(None)`` raises TypeError -- every field
+            # that can now genuinely be None guards the cast so a missing
+            # reading propagates as None, not a crash or a fabricated 0.0.
+            call_resistance_strike=(float(call_resistance_strike) if call_resistance_strike is not None else None),
+            call_resistance_gex=(float(call_resistance_gex) if call_resistance_gex is not None else None),
+            put_support_strike=(float(put_support_strike) if put_support_strike is not None else None),
+            put_support_gex=(float(put_support_gex) if put_support_gex is not None else None),
+            hvl_strike=(float(hvl_strike) if hvl_strike is not None else None),
+            atm_iv=(float(atm_iv) if atm_iv is not None else None),
+            risk_reversal_25d=(float(risk_reversal_25d) if risk_reversal_25d is not None else None),
+            put_25d_iv=(float(put_25d_iv) if put_25d_iv is not None else None),
+            call_25d_iv=(float(call_25d_iv) if call_25d_iv is not None else None),
             pc_atm=float(pc_atm),
             pc_near_otm=float(pc_near_otm),
             pc_far_otm=float(pc_far_otm),
-            net_vanna=float(net_vanna),
-            net_charm=float(net_charm),
+            net_vanna=(float(net_vanna) if net_vanna is not None else None),
+            net_charm=(float(net_charm) if net_charm is not None else None),
             flow_bias=flow_bias,
             flow_trend=flow_trend,
             top_buy_strikes=top_buy_strikes,

@@ -15,7 +15,7 @@ TRANSITION regime. Conflicting signals: near-term BEARISH vs far-term BULLISH Ma
 
 NEAR-TERM (0-7 DTE): BEARISH bias | GEX +85.4M (dampening) | OI: 154,865 contracts
   31JUL26 (5d): MaxPain $64,000 (-0.6%) | P/C 0.29 | ATM IV 36.2% | RR25 -3.6% | Flow: Insufficient flow data
-  26JUL26 (0d): MaxPain $64,000 (-0.6%) | P/C 0.72 | ATM IV 14.8% | RR25 +0.0% | Flow: Insufficient flow data
+  26JUL26 (0d): MaxPain $64,000 (-0.6%) | P/C 0.72 | ATM IV 14.8% | RR25 N/A | Flow: Insufficient flow data
 
 MID-TERM (7-30 DTE): NEUTRAL bias | GEX +25.9M (dampening) | OI: 24,185 contracts
   7AUG26 (12d): MaxPain $64,000 (-0.7%) | P/C 0.13 | ATM IV 35.8% | RR25 -4.1% | Flow: Insufficient flow data
