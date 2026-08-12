@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Optional, Any
 from enum import Enum, IntEnum
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from coding.core.analytics.market_wide_calculator import MarketWideCalculator
 from coding.core.analytics.results.analysis_result import OnChainAnalysisResult
@@ -1873,9 +1873,13 @@ SCORING DETAIL:
         funding_rate_str = f"{market.funding_rate:.4f}%" if market.funding_rate is not None else "N/A"
         funding_8h_str = f"{market.funding_8h:.4f}%" if market.funding_8h is not None else "N/A"
 
+        # Task G2-C: naive-local datetime.now() -> explicit UTC, labeled as
+        # such in the output (this module is already in
+        # tests/conftest.py's frozen-clock list, same as every other
+        # naive-local site this task fixed).
         return f"""================================================================================
 EXECUTIVE SYNTHESIS — BTC OPTIONS MARKET
-Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC
 ================================================================================
 BTC ${market.spot_price:,.2f} | Regime: {market_regime.value.upper().replace('_', ' ')}
 Direction: {direction.name} | Vol: {vol_regime.value.upper()}

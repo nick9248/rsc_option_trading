@@ -13,7 +13,7 @@ the hypothesis cleanly. Do not flip this definition based on the small
 backtest sample. See
 docs/superpowers/specs/2026-07-20-defined-risk-scanner-design.md.
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from coding.core.database.repository import DatabaseRepository
@@ -35,7 +35,18 @@ class RegimeGateService:
             False whenever either input is None (never raises, never
             defaults to True on missing data).
         """
-        as_of = as_of or datetime.utcnow()
+        # Task G2-C: datetime.utcnow() is deprecated (Python 3.12+) and
+        # returns a naive object that misleadingly reads as if it were
+        # UTC-aware. datetime.now(timezone.utc).replace(tzinfo=None)
+        # produces the identical naive-but-UTC-valued datetime -- matching
+        # this module's DB-facing convention (onchain_analysis_snapshots.
+        # snapshot_hour is naive-UTC; _compute_net_gex below compares as_of
+        # against it directly) and the same pattern every caller of this
+        # method already uses (e.g. butterfly_scan_service.py /
+        # iron_condor_scan_service.py pass ``as_of.replace(tzinfo=None)``
+        # explicitly) -- never a tz-aware datetime, which would silently
+        # mis-compare against (or error against) that naive column.
+        as_of = as_of or datetime.now(timezone.utc).replace(tzinfo=None)
         rv_10d = realized_vol.compute_realized_vol(self.repo, currency, RV_10D_WINDOW, as_of)
         rv_30d = realized_vol.compute_realized_vol(self.repo, currency, RV_30D_WINDOW, as_of)
         rv_ratio = (rv_10d / rv_30d) if (rv_10d and rv_30d) else None

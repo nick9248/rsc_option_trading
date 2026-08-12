@@ -1197,6 +1197,25 @@ class TestSynthesisEngineRun:
         assert isinstance(result, str)
         assert "Regime:" in result
 
+    def test_run_header_generated_timestamp_is_utc_and_labeled(self, frozen_clock):
+        """
+        Task G2-C: the header's "Generated:" timestamp used to come from
+        naive-local datetime.now() -- switched to datetime.now(timezone.
+        utc), labeled "UTC" in the output. Frozen clock proves the value is
+        the correct UTC representation of the frozen instant, not a
+        local-timezone-shifted one (this module is in tests/conftest.py's
+        frozen-clock list).
+        """
+        anchor_utc = datetime(2026, 7, 25, 8, 0, 0, tzinfo=timezone.utc)
+        frozen_clock(anchor_utc.timestamp())
+
+        engine = SynthesisEngine()
+        market = make_market_wide()
+        expiry = make_expiry_metrics()
+        result = engine.run(market, [expiry])
+
+        assert "Generated: 2026-07-25 08:00:00 UTC" in result
+
     def test_run_contains_trade_recommendations(self):
         engine = SynthesisEngine()
         market = make_market_wide()

@@ -143,7 +143,7 @@ class TestOnChainAnalysisBuilder:
         clock proves both that the value is UTC-aware and that it reflects
         the exact frozen instant, not a local-timezone-shifted one.
         """
-        epoch = 1785225600.0  # 2026-07-25 08:00:00 UTC, arbitrary fixed instant
+        epoch = 1785225600.0  # arbitrary fixed instant (2026-07-28 08:00:00 UTC)
         frozen_clock(epoch)
 
         builder = OnChainAnalysisBuilder(

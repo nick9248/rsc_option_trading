@@ -1,6 +1,6 @@
 ================================================================================
 EXECUTIVE SYNTHESIS — BTC OPTIONS MARKET
-Generated: 2026-07-25 20:34:34
+Generated: 2026-07-25 18:34:34 UTC
 ================================================================================
 BTC $64,371.10 | Regime: TRANSITION
 Direction: NEUTRAL | Vol: SUPPRESSED
