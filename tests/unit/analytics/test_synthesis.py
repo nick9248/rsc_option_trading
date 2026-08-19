@@ -970,6 +970,95 @@ class TestTradeRecommendations:
         assert "insufficient data" in result.lower()
         assert "+0.0%" not in result
 
+    def test_vrp_sell_edge_demotes_cheap_iv_long_vol_from_primary(self):
+        """
+        Task Wave-H-B Fix 3 (golden-fixture reproduction): iv_pctile=20
+        (< 30, "cheap") triggers Strategy 2's long-vol recommendation on
+        its own, but vrp=+10.4 says implied vol is still rich vs.
+        realized -- the same disagreement that used to produce "Sell
+        premium..." in the vol narrative and "PRIMARY -- Long
+        Straddle/Strangle... Cheap IV favors owning volatility" in trade
+        recommendations, both with top billing, in the same report. The
+        long-vol idea must be demoted off PRIMARY and the conflict must
+        be disclosed in the text.
+        """
+        from coding.core.analytics.synthesis import NarrativeGenerator
+        result = NarrativeGenerator.generate_trade_recommendations(
+            regime=MarketRegime.TRANSITION, vol_regime=VolRegime.NORMAL,
+            iv_pctile=20, risk_reversal_25d=-3.6, gex_total=0,
+            near_term_expiry="6MAR26", far_term_expiry="25SEP26",
+            vrp=10.4,
+        )
+        assert "PRIMARY — Long Straddle/Strangle" not in result
+        assert "Long Straddle/Strangle" in result
+        assert "signals disagree" in result.lower()
+        assert "reduced confidence" in result.lower()
+
+    def test_vrp_none_cheap_iv_long_vol_stays_primary(self):
+        """A missing VRP cannot disagree with anything -- Strategy 2 must
+        fall back to its original iv_pctile-only PRIMARY behavior."""
+        from coding.core.analytics.synthesis import NarrativeGenerator
+        result = NarrativeGenerator.generate_trade_recommendations(
+            regime=MarketRegime.TRANSITION, vol_regime=VolRegime.NORMAL,
+            iv_pctile=20, risk_reversal_25d=-3.6, gex_total=0,
+            near_term_expiry="6MAR26", far_term_expiry="25SEP26",
+            vrp=None,
+        )
+        assert "PRIMARY — Long Straddle/Strangle" in result
+        assert "signals disagree" not in result.lower()
+
+    def test_vrp_agrees_with_cheap_iv_long_vol_stays_primary(self):
+        """VRP confirming the buy-vol read (vrp <= 5, no sell-edge
+        signal) must not trigger the disagreement branch."""
+        from coding.core.analytics.synthesis import NarrativeGenerator
+        result = NarrativeGenerator.generate_trade_recommendations(
+            regime=MarketRegime.TRANSITION, vol_regime=VolRegime.NORMAL,
+            iv_pctile=20, risk_reversal_25d=-3.6, gex_total=0,
+            near_term_expiry="6MAR26", far_term_expiry="25SEP26",
+            vrp=-8.0,
+        )
+        assert "PRIMARY — Long Straddle/Strangle" in result
+        assert "signals disagree" not in result.lower()
+
+    def test_explosive_regime_long_vol_not_demoted_even_if_vrp_disagrees(self):
+        """
+        Strategy 2's EXPLOSIVE-gamma-regime trigger is a completely
+        different justification from the iv_pctile<30 trigger -- it must
+        stay PRIMARY regardless of VRP (an explosive gamma regime is a
+        real reason to own vol on its own, independent of the vol
+        pricing debate the iv_pctile/VRP conflict is about).
+        """
+        from coding.core.analytics.synthesis import NarrativeGenerator
+        result = NarrativeGenerator.generate_trade_recommendations(
+            regime=MarketRegime.TRANSITION, vol_regime=VolRegime.EXPLOSIVE,
+            iv_pctile=80, risk_reversal_25d=-3.6, gex_total=0,
+            near_term_expiry="6MAR26", far_term_expiry="25SEP26",
+            vrp=15.0,
+        )
+        assert "PRIMARY — Long Straddle/Strangle" in result
+        assert "Explosive gamma regime" in result
+
+    def test_vrp_buy_edge_demotes_expensive_iv_short_ic_from_primary(self):
+        """
+        Symmetric case to the golden-fixture reproduction above: an
+        expensive iv_pctile (>70) triggers Strategy 1's short-IC
+        recommendation on its own, but a strongly negative VRP says
+        implied vol is actually cheap vs. realized -- the same defect
+        class in the opposite direction. Must be demoted off PRIMARY
+        with the conflict disclosed.
+        """
+        from coding.core.analytics.synthesis import NarrativeGenerator
+        result = NarrativeGenerator.generate_trade_recommendations(
+            regime=MarketRegime.RANGE_BOUND_NEUTRAL, vol_regime=VolRegime.NORMAL,
+            iv_pctile=80, risk_reversal_25d=-3.6, gex_total=0,
+            near_term_expiry="6MAR26", far_term_expiry="25SEP26",
+            vrp=-12.0,
+        )
+        assert "PRIMARY — Short Iron Condor" not in result
+        assert "Short Iron Condor" in result
+        assert "signals disagree" in result.lower()
+        assert "reduced confidence" in result.lower()
+
 
 # =============================================================================
 # TESTS: NarrativeGenerator None-handling (Task G2-G)
@@ -1608,6 +1697,24 @@ class TestSynthesisEngineRun:
         result = engine.run(market, [expiry])
         assert "CONTANGO (+0.0pts)" not in result
         assert "Term Structure: N/A" in result
+
+    def test_run_vrp_iv_pctile_disagreement_no_contradictory_top_billing(self):
+        """
+        Task Wave-H-B Fix 3, end-to-end (golden-fixture reproduction):
+        iv_pctile=20 (cheap) and vrp=+10.4 (sell-vol edge) disagree. The
+        old behavior produced "VOL ASSESSMENT: ... Sell premium..." AND
+        "TRADE RECOMMENDATIONS: PRIMARY -- Long Straddle/Strangle...
+        Cheap IV favors owning volatility" in the same report -- opposite
+        advice, both top-priority, no arbitration. Must no longer happen.
+        """
+        engine = SynthesisEngine()
+        market = make_market_wide(iv_percentile_365d=20.0, vrp=10.4)
+        expiry = make_expiry_metrics()
+        result = engine.run(market, [expiry])
+
+        assert "Sell premium" in result  # vol narrative still drives off VRP
+        assert "PRIMARY — Long Straddle/Strangle" not in result
+        assert "signals disagree" in result.lower()
 
     def test_run_missing_expiry_vol_surface_and_gex_levels_no_crash_discloses(self):
         """

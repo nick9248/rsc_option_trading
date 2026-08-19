@@ -35,7 +35,7 @@ SCREEN PRINTS (large single-leg trades, not blocks): 4 buys ($7.7M) | 6 sells ($
   Largest: BTC-27JUL26-66000-C BUY 30.0 BTC ($1.93M) at 24.4% IV
 
 TRADE RECOMMENDATIONS:
-PRIMARY — Long Straddle/Strangle (25SEP26): Cheap IV favors owning volatility. Buy ATM straddle or 25-delta strangle.
+OPPORTUNISTIC (signals disagree) — Long Straddle/Strangle (25SEP26): IV at 20th pctile looks cheap vs. its own history, but VRP +10.4pts says implied vol is still rich vs. currently realized vol — selling volatility has the more reliable near-term edge. Treat this long-vol idea with reduced confidence; do not size as a primary position.
 DEFENSIVE — Reduce sizing, favor defined-risk structures only. Consider long straddle on 25SEP26 to capture the regime shift.
 
 DATA QUALITY: All market-wide sections computed successfully.

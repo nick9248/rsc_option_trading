@@ -1467,6 +1467,7 @@ class NarrativeGenerator:
             near_term_expiry: str,
             far_term_expiry: str,
             skew_expiry: str = "",
+            vrp: Optional[float] = None,
     ) -> str:
         """
         Generate trade recommendations based on regime.
@@ -1508,8 +1509,41 @@ class NarrativeGenerator:
         missing reading cannot satisfy "RR25 < -10%", so the whole
         recommendation is skipped, matching the existing iv_pctile pattern
         rather than inventing a new one.
+
+        Task Wave-H-B Fix 3: Strategies 1 and 2 used to trigger purely off
+        ``iv_pctile`` thresholds (>70 / <30) with no awareness of VRP --
+        the SAME report's vol-assessment narrative (``generate_vol_narrative``,
+        ``VOL_TEMPLATES``) independently picks its sell/buy framing off
+        ``vrp`` thresholds (>10 / <-10) alone. IV percentile (relative-to-
+        365-day-history valuation) and VRP (implied vs. realized, the
+        direct priced-vol-vs-actual-vol edge measure -- see
+        ``score_vrp``'s docstring) are genuinely different, uncorrelated
+        reads and CAN legitimately disagree (e.g. IV is cheap vs. its own
+        year but still priced above a currently-quiet realized vol). Left
+        unarbitrated, this produced a report that said "sell premium" in
+        the vol-assessment narrative and "PRIMARY — Long Straddle" (buy
+        vol) in trade recommendations, both with top billing, no
+        disclosure of the conflict.
+
+        VRP is the more direct, actionable edge measure for a premium
+        trade (it's a direct comparison of priced vol to realized vol,
+        not a historical-percentile rank), so it takes precedence when
+        the two disagree: the IV-percentile-triggered strategy is
+        demoted from PRIMARY to an explicitly-flagged, reduced-confidence
+        idea rather than silently standing as equal-billing advice. A
+        missing ``vrp`` (None) cannot disagree with anything -- both
+        strategies fall back to their original iv_pctile-only behavior.
         """
         recommendations = []
+
+        # Task Wave-H-B Fix 3: VRP vs. IV-percentile disagreement,
+        # computed once and applied to whichever strategy it contradicts.
+        # "Disagreement" is scoped to the two thresholds these strategies
+        # already use (70/30), not score_vrp's finer bands, so a mild VRP
+        # reading that doesn't itself justify a strong sell/buy call
+        # doesn't manufacture a conflict that isn't really there.
+        vrp_says_sell = vrp is not None and vrp > 5   # score_vrp: sell-vol edge or stronger
+        vrp_says_buy = vrp is not None and vrp < -5   # score_vrp: buy-vol edge or stronger
 
         # Strategy 1: Premium selling conditions (all RANGE_BOUND variants)
         range_bound_regimes = (
@@ -1539,20 +1573,41 @@ class NarrativeGenerator:
             elif regime == MarketRegime.RANGE_BOUND_ELEVATED:
                 skew_adj += "Elevated vol: widest wings for maximum premium capture."
 
-            recommendations.append(
-                f"PRIMARY — Short Iron Condor ({near_term_expiry}): "
-                f"Sell premium in range-bound regime. IV at {iv_pctile:.0f}th pctile provides edge. "
-                f"{skew_adj}"
-                f"Target 50% of max profit, close before final 3 DTE."
-            )
+            if vrp_says_buy:
+                recommendations.append(
+                    f"OPPORTUNISTIC (signals disagree) — Short Iron Condor ({near_term_expiry}): "
+                    f"IV at {iv_pctile:.0f}th pctile looks expensive vs. its own history, but "
+                    f"VRP {vrp:+.1f}pts says implied vol is cheap vs. currently realized vol — "
+                    f"buying volatility has the more reliable near-term edge. Treat this "
+                    f"sell-premium idea with reduced confidence; do not size as a primary position. "
+                    f"{skew_adj}"
+                    f"Target 50% of max profit, close before final 3 DTE."
+                )
+            else:
+                recommendations.append(
+                    f"PRIMARY — Short Iron Condor ({near_term_expiry}): "
+                    f"Sell premium in range-bound regime. IV at {iv_pctile:.0f}th pctile provides edge. "
+                    f"{skew_adj}"
+                    f"Target 50% of max profit, close before final 3 DTE."
+                )
 
         # Strategy 2: Long vol conditions
-        if vol_regime == VolRegime.EXPLOSIVE or (iv_pctile is not None and iv_pctile < 30):
-            recommendations.append(
-                f"PRIMARY — Long Straddle/Strangle ({far_term_expiry}): "
-                f"{'Explosive gamma regime' if vol_regime == VolRegime.EXPLOSIVE else 'Cheap IV'} "
-                f"favors owning volatility. Buy ATM straddle or 25-delta strangle."
-            )
+        iv_pctile_cheap = iv_pctile is not None and iv_pctile < 30
+        if vol_regime == VolRegime.EXPLOSIVE or iv_pctile_cheap:
+            if vol_regime != VolRegime.EXPLOSIVE and iv_pctile_cheap and vrp_says_sell:
+                recommendations.append(
+                    f"OPPORTUNISTIC (signals disagree) — Long Straddle/Strangle ({far_term_expiry}): "
+                    f"IV at {iv_pctile:.0f}th pctile looks cheap vs. its own history, but "
+                    f"VRP {vrp:+.1f}pts says implied vol is still rich vs. currently realized "
+                    f"vol — selling volatility has the more reliable near-term edge. Treat this "
+                    f"long-vol idea with reduced confidence; do not size as a primary position."
+                )
+            else:
+                recommendations.append(
+                    f"PRIMARY — Long Straddle/Strangle ({far_term_expiry}): "
+                    f"{'Explosive gamma regime' if vol_regime == VolRegime.EXPLOSIVE else 'Cheap IV'} "
+                    f"favors owning volatility. Buy ATM straddle or 25-delta strangle."
+                )
 
         # Strategy 3: Directional spreads. Task G2-G: triggered by
         # ``regime`` alone (not risk_reversal_25d), so a missing RR25
@@ -1974,6 +2029,10 @@ class SynthesisEngine:
             near_term_expiry=best_sell_expiry.expiry,
             far_term_expiry=meaningful_far.expiry,
             skew_expiry=largest_expiry.expiry,
+            # Task Wave-H-B Fix 3: same VRP value driving vol_narrative's
+            # sell/buy framing above, so the two sections can't silently
+            # disagree -- see generate_trade_recommendations's docstring.
+            vrp=effective_vrp,
         )
 
         # Block trade summary
