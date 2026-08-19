@@ -201,10 +201,24 @@ class MarketWideMetrics:
     funding_rate: Optional[float]
     funding_8h: Optional[float]
 
-    # Term structure
-    term_structure_shape: str  # "CONTANGO" or "BACKWARDATION"
-    term_structure_spread: float  # abs pts — used for scoring
-    term_structure_spread_signed: float = 0.0  # signed pts (back - front) — used for display
+    # Term structure. Task Wave-H-B Fix 2: these three are genuinely
+    # Optional -- None exactly when MarketWideResult.term_structure is
+    # None (fewer than 2 usable per-expiry ATM IVs, the whole term-
+    # structure computation never ran) -- NOT a fabricated "CONTANGO"
+    # reading. "FLAT" is also a real, computed, non-CONTANGO/
+    # BACKWARDATION shape (calculator emits it when |back - front| <=
+    # 2pts) and must pass through as "FLAT", not get relabelled
+    # "CONTANGO" -- the old normalize-to-CONTANGO logic in
+    # SynthesisMapper.build_market_wide collapsed all three of (a) ts is
+    # None, (b) shape == "FLAT", and (c) a genuine backwardated tilt too
+    # small to cross the calculator's +/-2pt threshold into the SAME
+    # fabricated "CONTANGO" reading -- and for case (c) specifically,
+    # term_structure_spread_signed still carried the real (negative)
+    # sign, producing self-contradictory output like "CONTANGO (-1.8pts)"
+    # in the report header.
+    term_structure_shape: Optional[str]  # "CONTANGO", "BACKWARDATION", "FLAT", or None
+    term_structure_spread: Optional[float]  # abs pts — used for scoring
+    term_structure_spread_signed: Optional[float] = None  # signed pts (back - front) — used for display
     iv_by_dte: Dict[int, float] = field(default_factory=dict)
 
     # Realized vol. None exactly when MarketWideResult.realized_volatility
@@ -780,7 +794,7 @@ class ScoringEngine:
             return (2.0, 0.6, f"RR25 {risk_reversal_25d:+.1f}%: Calls much richer — unusual")
 
     @staticmethod
-    def score_term_structure(shape: str, spread: float,
+    def score_term_structure(shape: Optional[str], spread: Optional[float],
                              iv_by_dte: Dict[int, float]) -> Tuple[float, float, str]:
         """
         Term structure interpretation.
@@ -797,7 +811,24 @@ class ScoringEngine:
 
         IMPORTANT: Check for kinks — if front 3 expiries have wildly
         different IVs, the structure is kinked (near-expiry distortion).
+
+        Task Wave-H-B Fix 2: ``shape``/``spread`` are now genuinely
+        Optional (``MarketWideMetrics.term_structure_shape``/
+        ``term_structure_spread`` -- None when fewer than 2 usable
+        per-expiry ATM IVs were available upstream). This scorer used to
+        have no None branch at all -- the mapper fabricated a confident
+        "CONTANGO" for every missing-data case, which this scorer then
+        happily scored as a real reading. ``shape == "FLAT"`` is also a
+        real, computed, non-CONTANGO/BACKWARDATION reading (the
+        calculator's own third shape, emitted when |back - front| <=
+        2pts) and gets its own neutral branch instead of falling into
+        the old bare ``else`` (which treated anything not literally
+        "CONTANGO" as backwardation).
         """
+        if shape is None or spread is None:
+            return (0.0, 0.0,
+                    "Term structure: insufficient data (fewer than 2 usable expiries) — weight zero, no signal")
+
         # Check for kinks in front end
         sorted_dtes = sorted(iv_by_dte.keys())
         kink_detected = False
@@ -816,7 +847,7 @@ class ScoringEngine:
                 return (1.0, 0.4, f"Contango +{spread:.0f}pts: Normal curve{kink_note}")
             else:
                 return (0.0, 0.3, f"Contango +{spread:.0f}pts: Flat{kink_note}")
-        else:
+        elif shape == "BACKWARDATION":
             if spread > 10:
                 return (-2.0, 0.6,
                         f"Backwardation -{spread:.0f}pts: Extreme near-term fear — sell front month{kink_note}")
@@ -824,6 +855,9 @@ class ScoringEngine:
                 return (-1.0, 0.5, f"Backwardation -{spread:.0f}pts: Near-term stress{kink_note}")
             else:
                 return (0.0, 0.3, f"Backwardation -{spread:.0f}pts: Mild{kink_note}")
+        else:
+            # shape == "FLAT" (calculator: |back - front| <= 2pts)
+            return (0.0, 0.3, f"Term structure flat ({spread:.1f}pts): Neutral{kink_note}")
 
     # -------------------------------------------------------------------------
     # FRAGILITY DETECTION (post-scoring confidence adjustment)
@@ -2060,6 +2094,14 @@ SCORING DETAIL:
         vrp_str = f"{market.vrp:+.1f}pts" if market.vrp is not None else "N/A (insufficient data)"
         funding_rate_str = f"{market.funding_rate:.4f}%" if market.funding_rate is not None else "N/A"
         funding_8h_str = f"{market.funding_8h:.4f}%" if market.funding_8h is not None else "N/A"
+        # Task Wave-H-B Fix 2: term_structure_shape/spread_signed are now
+        # genuinely Optional (None when fewer than 2 usable expiries) --
+        # show "N/A" instead of the old fabricated "CONTANGO (+0.0pts)".
+        term_structure_str = (
+            f"{market.term_structure_shape} ({market.term_structure_spread_signed:+.1f}pts)"
+            if market.term_structure_shape is not None and market.term_structure_spread_signed is not None
+            else "N/A (insufficient data)"
+        )
 
         # Task G2-C: naive-local datetime.now() -> explicit UTC, labeled as
         # such in the output (this module is already in
@@ -2074,7 +2116,7 @@ Direction: {direction.name} | Vol: {vol_regime.value.upper()}
 ────────────────────────────────────────────────────────────────────────────────
 DVOL: {dvol_str}  | IV Pctile: {iv_pctile_str}  | ATM IV (front): ~{front_iv:.1f}%
 10d RV: {rv_10d_str}  | 20d RV: {rv_20d_str}  | 30d RV: {rv_30d_str} ({cone_30d_str})
-VRP: {vrp_str}  | Term Structure: {market.term_structure_shape} ({market.term_structure_spread_signed:+.1f}pts)
+VRP: {vrp_str}  | Term Structure: {term_structure_str}
 Perp Funding: {funding_rate_str}  | 8h: {funding_8h_str}
 ────────────────────────────────────────────────────────────────────────────────"""
 
@@ -2464,21 +2506,25 @@ class SynthesisMapper:
             else None
         )
 
-        # Validate term_structure_shape: must be CONTANGO or BACKWARDATION only
+        # Task Wave-H-B Fix 2: term_structure is genuinely Optional --
+        # ``ts is None`` means fewer than 2 usable per-expiry ATM IVs
+        # (the whole computation never ran), NOT a measured "CONTANGO".
+        # The calculator's own ``shape`` field (CONTANGO/BACKWARDATION/
+        # FLAT) is already authoritative when ts is not None -- pass it
+        # through unchanged instead of "normalizing" every non-CONTANGO/
+        # BACKWARDATION reading (including real FLAT readings and small
+        # genuinely-backwardated tilts) into a fabricated "CONTANGO".
+        # That old normalize-to-CONTANGO logic is exactly what produced
+        # self-contradictory output like "CONTANGO (-1.8pts)" -- the
+        # signed spread (below) carried the true sign while the shape
+        # label always said CONTANGO regardless.
         ts = mw.term_structure
-        raw_shape = ts.shape if ts is not None else ""
-        raw_spread = (ts.spread if ts is not None else 0.0) or 0.0
-        if raw_shape in ("CONTANGO", "BACKWARDATION"):
-            ts_shape = raw_shape
-            ts_spread = raw_spread
+        if ts is not None:
+            ts_shape = ts.shape
+            ts_spread = ts.spread
         else:
-            # Normalize: spread < 0.5 → CONTANGO with spread=0
-            if raw_spread >= 0.5:
-                ts_shape = "CONTANGO"
-                ts_spread = raw_spread
-            else:
-                ts_shape = "CONTANGO"
-                ts_spread = 0.0
+            ts_shape = None
+            ts_spread = None
 
         # futures_basis: trust insertion order from the source (DTE-ascending,
         # per synthesis_logic.md:112) — Optional[float] values pass through
@@ -2551,7 +2597,10 @@ class SynthesisMapper:
             funding_8h=funding_8h,
             term_structure_shape=ts_shape,
             term_structure_spread=ts_spread,
-            term_structure_spread_signed=(ts.spread_signed if ts is not None else 0.0) or 0.0,
+            # Task Wave-H-B Fix 2: preserve None (was `... or 0.0`,
+            # which fabricated a measured-looking 0.0 spread whenever
+            # ts was None OR ts.spread_signed was genuinely 0.0).
+            term_structure_spread_signed=ts.spread_signed if ts is not None else None,
             iv_by_dte=dict(ts.iv_by_dte) if ts is not None else {},
             rv_10d=rv_10d,
             rv_20d=rv_20d,

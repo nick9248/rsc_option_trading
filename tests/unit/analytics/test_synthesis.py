@@ -616,6 +616,57 @@ class TestScoreSkew:
         assert "normal" not in description.lower()
 
 
+class TestScoreTermStructure:
+    """
+    Task Wave-H-B Fix 2: score_term_structure never had a None branch --
+    the mapper used to fabricate a confident "CONTANGO" for every
+    missing-data case (ts is None, shape=="FLAT", or a genuine small
+    backwardated tilt) and this scorer scored it as a real reading.
+    """
+
+    def test_none_shape_weight_zero_insufficient_data(self):
+        score, weight, description = ScoringEngine.score_term_structure(
+            shape=None, spread=None, iv_by_dte={})
+        assert score == 0.0
+        assert weight == 0.0
+        assert "insufficient data" in description.lower()
+
+    def test_none_spread_weight_zero_insufficient_data(self):
+        """Defensive: shape and spread should be None together (both
+        come from the same Optional TermStructureResult), but the guard
+        must not crash if only one is somehow None."""
+        score, weight, description = ScoringEngine.score_term_structure(
+            shape="CONTANGO", spread=None, iv_by_dte={})
+        assert score == 0.0
+        assert weight == 0.0
+        assert "insufficient data" in description.lower()
+
+    def test_flat_shape_neutral_not_backwardation(self):
+        """
+        A real "FLAT" shape must get its own neutral reading, not fall
+        into the old bare ``else`` branch (which treated anything not
+        literally "CONTANGO" as backwardation and would have printed
+        "Backwardation -0pts: Mild" for a flat market).
+        """
+        score, weight, description = ScoringEngine.score_term_structure(
+            shape="FLAT", spread=0.3, iv_by_dte={})
+        assert score == 0.0
+        assert "backwardation" not in description.lower()
+        assert "flat" in description.lower()
+
+    def test_strong_contango_scores_bullish_for_selling_back_months(self):
+        score, _, description = ScoringEngine.score_term_structure(
+            shape="CONTANGO", spread=15.0, iv_by_dte={})
+        assert score == 2.0
+        assert "contango" in description.lower()
+
+    def test_strong_backwardation_scores_extreme_fear(self):
+        score, _, description = ScoringEngine.score_term_structure(
+            shape="BACKWARDATION", spread=15.0, iv_by_dte={})
+        assert score == -2.0
+        assert "backwardation" in description.lower()
+
+
 class TestScoreFuturesBasis:
     def test_signature_no_basis_back(self):
         import inspect
@@ -1052,9 +1103,15 @@ class TestBuildMarketWide:
         assert market.btc_eth_price_corr is None
         assert market.btc_eth_dvol_corr is None
         assert market.failed_sections == ()
-        # Empty shape normalizes to CONTANGO with spread=0 per v2.0 spec
-        assert market.term_structure_shape == "CONTANGO"
-        assert market.term_structure_spread == 0.0
+        # Task Wave-H-B Fix 2: term_structure=None (fewer than 2 usable
+        # per-expiry ATM IVs) must preserve None -- the old "empty shape
+        # normalizes to CONTANGO with spread=0" behavior asserted here
+        # WAS the bug (same defect class as every other assertion this
+        # test corrected: a fabricated confident reading standing in for
+        # missing data).
+        assert market.term_structure_shape is None
+        assert market.term_structure_spread is None
+        assert market.term_structure_spread_signed is None
         assert market.futures_basis == {}
 
     def test_present_but_null_funding_fields_stay_none_not_zero(self):
@@ -1093,8 +1150,16 @@ class TestBuildMarketWide:
         market = SynthesisMapper.build_market_wide(result)
         assert market.failed_sections == ("futures_basis", "perpetual_funding")
 
-    def test_flat_shape_normalized_to_contango(self):
-        """Non-standard shape values must be normalized."""
+    def test_flat_shape_passes_through_unchanged(self):
+        """
+        Task Wave-H-B Fix 2: "FLAT" is a real, computed, non-CONTANGO/
+        BACKWARDATION shape (the calculator's own third value, emitted
+        when |back - front| <= 2pts) -- it must pass through as "FLAT",
+        not get relabelled "CONTANGO". The old normalize-to-CONTANGO
+        logic asserted here WAS the bug: it collapsed a genuine FLAT
+        reading (and the real signed spread that goes with it) into a
+        fabricated CONTANGO label.
+        """
         mw = MarketWideResult(
             spot_price=65000.0, currency="BTC", dvol=None, iv_percentile_365d=None,
             aggregate_gex_dex=None,
@@ -1107,8 +1172,36 @@ class TestBuildMarketWide:
         )
         result = make_onchain_result(market_wide=mw)
         market = SynthesisMapper.build_market_wide(result)
-        assert market.term_structure_shape == "CONTANGO"
-        assert market.term_structure_spread == 0.0
+        assert market.term_structure_shape == "FLAT"
+        assert market.term_structure_spread == 0.3
+        assert market.term_structure_spread_signed == 0.3
+
+    def test_flat_shape_with_negative_signed_spread_not_mislabeled_contango(self):
+        """
+        Task Wave-H-B Fix 2 case (c): a genuine backwardated tilt too
+        small to cross the calculator's +/-2pt threshold (e.g. signed
+        diff -1.8) is classified "FLAT" by the calculator, spread=1.8
+        (abs), spread_signed=-1.8. The old mapper logic forced this to
+        "CONTANGO" with the real negative signed spread still attached,
+        rendering the self-contradictory "CONTANGO (-1.8pts)" in the
+        report header. Must now pass through as "FLAT" with the true
+        signed spread intact.
+        """
+        mw = MarketWideResult(
+            spot_price=65000.0, currency="BTC", dvol=None, iv_percentile_365d=None,
+            aggregate_gex_dex=None,
+            term_structure=TermStructureResult(
+                entries=(), shape="FLAT", spread=1.8, spread_signed=-1.8, iv_by_dte={},
+            ),
+            futures_basis=None, realized_volatility=None, variance_risk_premium=None,
+            volatility_cone=None, perpetual_funding=None, block_trades=None,
+            cross_asset_correlation=None, failed_sections=(),
+        )
+        result = make_onchain_result(market_wide=mw)
+        market = SynthesisMapper.build_market_wide(result)
+        assert market.term_structure_shape == "FLAT"
+        assert market.term_structure_spread == 1.8
+        assert market.term_structure_spread_signed == -1.8
 
     def test_valid_shapes_pass_through(self):
         """CONTANGO and BACKWARDATION pass through unchanged."""
@@ -1498,6 +1591,23 @@ class TestSynthesisEngineRun:
         # The old fabricated-zero failure mode for funding: "Neutral
         # leverage" is a real claim about a real (if unremarkable) reading.
         assert "Neutral leverage" not in result
+
+    def test_run_missing_term_structure_shows_na_not_fabricated_contango(self):
+        """
+        Task Wave-H-B Fix 2, end-to-end: term_structure_shape/spread=None
+        (fewer than 2 usable per-expiry ATM IVs) must render "N/A" in the
+        report header, never the old fabricated "CONTANGO (+0.0pts)" --
+        a confident, specific reading for a computation that never ran.
+        """
+        engine = SynthesisEngine()
+        market = make_market_wide(
+            term_structure_shape=None, term_structure_spread=None,
+            term_structure_spread_signed=None,
+        )
+        expiry = make_expiry_metrics()
+        result = engine.run(market, [expiry])
+        assert "CONTANGO (+0.0pts)" not in result
+        assert "Term Structure: N/A" in result
 
     def test_run_missing_expiry_vol_surface_and_gex_levels_no_crash_discloses(self):
         """
