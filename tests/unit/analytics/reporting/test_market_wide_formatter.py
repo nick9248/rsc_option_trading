@@ -434,6 +434,65 @@ def test_block_timestamp_rendered_in_utc_not_local():
     assert "03:08:45" not in text
 
 
+def test_large_print_timestamp_rendered_in_utc_not_local():
+    """Wave H fresh-audit finding (Task Wave-H-C): the large-prints table
+    sits ~38 lines below the block-trades table in the same file/section
+    and was missed by the block-trades table's own UTC fix above -- same
+    bug, same repro timestamp (ts=1785546525278 is 01:08:45 UTC; the old
+    naive datetime.fromtimestamp(ts/1000) rendered 03:08:45 on a UTC+2
+    host)."""
+    result = BlockTradesResult(
+        trades=(
+            BlockTrade(
+                timestamp=1785546525278, instrument_name="BTC-1AUG26-63000-C",
+                amount=5.0, direction="buy", notional=500_000.0, implied_volatility=70.0,
+            ),
+        ),
+        notional_threshold=100_000.0, total_detected=1,
+        blocks=(),
+        tracked_since="2026-08-02",
+    )
+    text = format_block_trades_section(result)
+
+    assert "01:08:45" in text
+    assert "03:08:45" not in text
+
+
+def test_block_and_large_print_tables_render_the_same_clock_for_same_timestamp():
+    """Regression test for the exact "one table fixed, sibling table
+    missed" bug class (Task Wave-H-C): render both tables for a block and
+    a large print sharing the SAME timestamp, and assert they render the
+    identical wall-clock string. If either table silently reverts to
+    naive-local while the other stays UTC, this fails even though each
+    table in isolation might still look plausible."""
+    shared_timestamp = 1785546525278  # 01:08:45 UTC
+    result = BlockTradesResult(
+        trades=(
+            BlockTrade(
+                timestamp=shared_timestamp, instrument_name="BTC-1AUG26-63000-C",
+                amount=5.0, direction="buy", notional=500_000.0, implied_volatility=70.0,
+            ),
+        ),
+        notional_threshold=100_000.0, total_detected=1,
+        blocks=(
+            Block(
+                block_trade_id="BLOCK-282155", leg_count=1, observed_leg_count=1,
+                combo_id=None, combined_premium_usd=100.0, total_amount=12.5,
+                instruments=("BTC-1AUG26-64000-C",), timestamp=shared_timestamp,
+            ),
+        ),
+        tracked_since="2026-08-02",
+    )
+    text = format_block_trades_section(result)
+
+    block_section = text[text.index("BLOCK TRADES"):text.index("LARGE PRINTS")]
+    large_prints_section = text[text.index("LARGE PRINTS"):]
+
+    assert "01:08:45" in block_section
+    assert "01:08:45" in large_prints_section
+    assert "03:08:45" not in text
+
+
 # ---------------------------------------------------------------------------
 # Cross-asset correlation
 # ---------------------------------------------------------------------------

@@ -463,7 +463,16 @@ def format_block_trades_section(result: Optional[BlockTradesResult]) -> str:
 
     for trade in result.trades:
         if trade.timestamp:
-            time_str = datetime.fromtimestamp(trade.timestamp / 1000).strftime("%H:%M:%S")
+            # Wave H fresh-audit finding (Task Wave-H-C): this table sits
+            # ~38 lines below the block-trades table above, which was
+            # already fixed to render explicit UTC ("independent review
+            # round 2 (Important #2): naive-local datetime is the exact
+            # banned bug class this campaign has already spent 5 fix
+            # rounds on") -- that fix simply missed this sibling table in
+            # the same rendered report section. Same fix, same reasoning.
+            time_str = datetime.fromtimestamp(
+                trade.timestamp / 1000, tz=timezone.utc
+            ).strftime("%H:%M:%S")
         else:
             time_str = "N/A"
 
