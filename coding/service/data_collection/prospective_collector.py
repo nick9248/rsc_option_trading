@@ -455,8 +455,9 @@ class ProspectiveCollector:
         hour via ``_resolve_delta_flow_target_hour`` before use -- NEVER
         used directly as the aggregation window. ``hour`` as received here
         is the collection cycle's CURRENT hour bucket by convention
-        (``collect_hour``'s default is ``datetime.now().replace(minute=0,
-        second=0, microsecond=0)``), which is correct for every OTHER
+        (``collect_hour``'s default is UTC-valued naive --
+        ``datetime.now(timezone.utc).replace(minute=0, second=0,
+        microsecond=0, tzinfo=None)``), which is correct for every OTHER
         per-currency step (point-in-time snapshots -- valid mid-hour) but
         wrong for this one: ``flow_delta_hourly`` is a TRUE aggregate over
         a complete ``[hour, hour+1)`` window, and the daemon runs every 30
@@ -550,12 +551,37 @@ class ProspectiveCollector:
           mismatch against the SAME backfill call's ``hourly_snapshots``/
           ``onchain_analysis_snapshots`` rows, which use ``hour`` directly.
 
-        Both branches compare against ``datetime.now()`` on the SAME
+        Wave H fresh-audit finding (Task Wave-H-C): this guard used to
+        compare against naive-local ``datetime.now()``, on the theory that
+        "both branches compare against ``datetime.now()`` on the SAME
         naive-local basis ``hour`` itself is built on everywhere else in
-        this collector -- self-consistent, and distinct from the
-        on_chain_analysis_service.py:842 bug (Important #2): both sides of
-        THIS comparison are naive-local, neither is a UTC-labeled DB
-        column.
+        this collector -- self-consistent." That was true when this method
+        was written, but a later fix (``collect_hour``'s default-hour fix,
+        see its docstring above) changed ``hour``'s actual convention to
+        UTC-valued naive, without updating this guard to match -- so the
+        two sides of the ``hour >= current_hour`` comparison silently
+        stopped sharing a basis. On a non-UTC host, ``current_hour``
+        (naive-local) can read LATER than ``hour`` (naive-UTC) even while
+        ``hour`` is still the in-progress current UTC hour, so the guard
+        fails to fire and a still-accumulating hour gets persisted to
+        ``flow_delta_hourly`` as if it were a complete aggregate -- a
+        silent under-report of delta flow. Dormant on the VPS only because
+        that host's OS clock happens to already be UTC (both sides
+        naturally align there); live on any local run or future non-UTC
+        deployment host.
+
+        The real, restored invariant: ``current_hour`` MUST be computed on
+        the same UTC-valued-naive basis as ``hour`` (i.e.
+        ``datetime.now(timezone.utc)`` with ``tzinfo`` dropped, matching
+        ``collect_hour``'s default-hour convention and this column's
+        ``timestamp without time zone`` storage) -- never naive-local
+        ``datetime.now()``. Both branches must keep comparing against the
+        same clock; that clock must be UTC, because ``hour`` is UTC. This
+        is distinct from the on_chain_analysis_service.py:842 bug
+        (Important #2), which was a naive-local value compared directly
+        against a UTC-labeled DB column -- there the fix was to make the
+        comparison UTC-aware; here both sides were already meant to be
+        naive-UTC and one of them regressed to naive-local.
 
         Args:
             hour: The collection cycle's hour bucket, as received by
@@ -566,7 +592,9 @@ class ProspectiveCollector:
             have fully elapsed by wall-clock "now" at the moment this is
             called.
         """
-        current_hour = datetime.now().replace(minute=0, second=0, microsecond=0)
+        current_hour = datetime.now(timezone.utc).replace(
+            minute=0, second=0, microsecond=0, tzinfo=None
+        )
         if hour >= current_hour:
             return hour - timedelta(hours=1)
         return hour
@@ -1266,12 +1294,25 @@ class ProspectiveCollector:
                     dvol_timestamp = latest_dvol[0]
                     dvol_value = latest_dvol[4]  # Close price
 
-                    # Save to database
+                    # Save to database. UTC-valued naive datetime -- this
+                    # `date` column is what HistoricalNormalizer/repository.py
+                    # (_METRIC_HISTORY_WHITELIST / _TABLE_TIME_COLUMNS) reads
+                    # for percentile/z-score trailing windows and staleness
+                    # gates (Wave H fresh-audit finding, Task Wave-H-C).
+                    # Plain datetime.fromtimestamp() without tz=timezone.utc
+                    # converts the epoch to the HOST's local wall-clock time,
+                    # so on a non-UTC host every reading captured in the last
+                    # few hours of the UTC calendar day gets filed under the
+                    # FOLLOWING calendar day. See collect_hour's default-hour
+                    # fix (line ~138) for this codebase's established
+                    # convention.
                     self.repo.save_dvol(
                         currency=currency,
                         index_name=f"{currency}DVOL",
                         timestamp=dvol_timestamp,
-                        date=datetime.fromtimestamp(dvol_timestamp / 1000),
+                        date=datetime.fromtimestamp(
+                            dvol_timestamp / 1000, tz=timezone.utc
+                        ).replace(tzinfo=None),
                         dvol=dvol_value
                     )
 
@@ -1355,12 +1396,20 @@ class ProspectiveCollector:
                 ticker_timestamp = ticker.get("timestamp", int(time.time() * 1000))
 
                 if funding_8h is not None:
-                    # Save to database (already in decimal form)
+                    # Save to database (already in decimal form). UTC-valued
+                    # naive datetime -- same rationale as `_fetch_dvol`'s
+                    # `date` column above (Wave H fresh-audit finding, Task
+                    # Wave-H-C): this `date` field feeds the same
+                    # percentile/z-score trailing-window reads, and a
+                    # naive-local conversion would misfile late-UTC-day
+                    # readings under the following calendar date.
                     self.repo.save_funding_rate(
                         currency=currency,
                         instrument_name=instrument_name,
                         timestamp=ticker_timestamp,
-                        date=datetime.fromtimestamp(ticker_timestamp / 1000),
+                        date=datetime.fromtimestamp(
+                            ticker_timestamp / 1000, tz=timezone.utc
+                        ).replace(tzinfo=None),
                         funding_rate=funding_8h / 100  # Convert from percentage
                     )
 

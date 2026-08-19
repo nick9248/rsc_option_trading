@@ -8,7 +8,7 @@ a _collect_currency wiring test) plus the isolation guarantees
 test_prospective_collector_volatility_reconstruction.py established for a
 similarly-positioned per-currency step.
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 from coding.core.analytics.results.delta_flow_results import FlowBucket
@@ -157,8 +157,12 @@ class TestJustClosedHourResolution:
         collector.repo.get_trades_for_delta_flow.return_value = []
         collector._delta_flow_calculator.compute_hourly_buckets.return_value = {}
 
-        # The exact value collect_hour's default computes every daemon cycle.
-        current_hour = datetime.now().replace(minute=0, second=0, microsecond=0)
+        # The exact value collect_hour's default computes every daemon cycle
+        # (UTC-valued naive, Wave G fix) -- the guard being tested must be
+        # compared on this same UTC basis (Wave H fix), not naive-local.
+        current_hour = datetime.now(timezone.utc).replace(
+            minute=0, second=0, microsecond=0, tzinfo=None
+        )
         collector._persist_delta_flow("BTC", current_hour)
 
         expected_target = current_hour - timedelta(hours=1)
@@ -181,7 +185,9 @@ class TestJustClosedHourResolution:
         collector.repo.get_trades_for_delta_flow.return_value = []
         collector._delta_flow_calculator.compute_hourly_buckets.return_value = {}
 
-        current_hour = datetime.now().replace(minute=0, second=0, microsecond=0)
+        current_hour = datetime.now(timezone.utc).replace(
+            minute=0, second=0, microsecond=0, tzinfo=None
+        )
         future_hour = current_hour + timedelta(hours=3)
         collector._persist_delta_flow("BTC", future_hour)
 
@@ -199,7 +205,9 @@ class TestJustClosedHourResolution:
         collector.repo.get_trades_for_delta_flow.return_value = []
         collector._delta_flow_calculator.compute_hourly_buckets.return_value = {}
 
-        past_hour = (datetime.now() - timedelta(hours=5)).replace(minute=0, second=0, microsecond=0)
+        past_hour = (datetime.now(timezone.utc) - timedelta(hours=5)).replace(
+            minute=0, second=0, microsecond=0, tzinfo=None
+        )
         collector._persist_delta_flow("BTC", past_hour)
 
         call_args = collector.repo.get_trades_for_delta_flow.call_args
@@ -212,14 +220,18 @@ class TestJustClosedHourResolution:
     def test_resolve_helper_directly_current_hour(self):
         from coding.service.data_collection.prospective_collector import ProspectiveCollector
 
-        current_hour = datetime.now().replace(minute=0, second=0, microsecond=0)
+        current_hour = datetime.now(timezone.utc).replace(
+            minute=0, second=0, microsecond=0, tzinfo=None
+        )
         resolved = ProspectiveCollector._resolve_delta_flow_target_hour(current_hour)
         assert resolved == current_hour - timedelta(hours=1)
 
     def test_resolve_helper_directly_past_hour(self):
         from coding.service.data_collection.prospective_collector import ProspectiveCollector
 
-        past_hour = (datetime.now() - timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
+        past_hour = (datetime.now(timezone.utc) - timedelta(hours=2)).replace(
+            minute=0, second=0, microsecond=0, tzinfo=None
+        )
         resolved = ProspectiveCollector._resolve_delta_flow_target_hour(past_hour)
         assert resolved == past_hour
 
