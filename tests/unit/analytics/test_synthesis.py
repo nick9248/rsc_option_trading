@@ -1605,6 +1605,27 @@ class TestSynthesisEngineRun:
         if "BTC-28FEB26-100000-C" in result:
             assert "screen print" in result.lower()
 
+    def test_run_large_print_none_iv_does_not_crash(self):
+        """Fix 1 (Wave H-B): MarketWideTrade.implied_volatility is
+        Optional -- a large print with iv=None is a present-but-None
+        dict key, so `.get('iv', 0)` never applies its default and
+        f"{None:.1f}%" raises TypeError. One thinly-traded large print
+        with no IV must not take down the entire morning note."""
+        engine = SynthesisEngine()
+        market = make_market_wide(
+            blocks=[],
+            large_prints=[
+                {
+                    "timestamp": 1700000000000, "instrument": "BTC-28FEB26-100000-C",
+                    "size": 5.0, "amount": 5.0, "direction": "buy",
+                    "notional": 500_000.0, "iv": None,
+                },
+            ],
+        )
+        expiry = make_expiry_metrics()
+        result = engine.run(market, [expiry])  # must not raise TypeError
+        assert "N/A" in result
+
     def test_run_no_blocks_states_none_detected_not_silence(self):
         engine = SynthesisEngine()
         market = make_market_wide(blocks=[], large_prints=[])

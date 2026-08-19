@@ -2203,12 +2203,14 @@ Perp Funding: {funding_rate_str}  | 8h: {funding_8h_str}
             )
 
             largest_print = max(large_prints, key=lambda t: t.get('notional', 0))
+            largest_print_iv = largest_print.get('iv')
+            iv_str = f"{largest_print_iv:.1f}% IV" if largest_print_iv is not None else "N/A IV"
             lines.append(
                 f"  Largest: {largest_print.get('instrument', 'N/A')} "
                 f"{'BUY' if largest_print.get('direction') == 'buy' else 'SELL'} "
                 f"{largest_print.get('size', 0)} BTC "
                 f"(${largest_print.get('notional', 0) / 1e6:.2f}M) at "
-                f"{largest_print.get('iv', 0):.1f}% IV"
+                f"{iv_str}"
             )
 
         return "\n".join(lines)
