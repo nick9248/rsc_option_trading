@@ -49,9 +49,27 @@ class DealerInventoryCalculator:
         greeks_by_instrument: Dict keyed ``(strike, option_type)`` ->
             per-contract ``{"gamma": ..., "delta": ...}`` (the CURRENT
             option chain -- defines which strikes are "in the chain" for the
-            zero-trade-strike and stale-strike edge cases below).
+            zero-trade-strike and stale-strike edge cases below). A leg
+            present in this dict with a ``None`` gamma/delta (greek fetch
+            succeeded but came back empty) is different from a leg ABSENT
+            from this dict entirely (not in the chain at all) -- see
+            ``calculate()``'s ``instruments_missing_gamma`` tracking.
         spot_price: Current underlying spot price (anchors the S^2 term).
+            ``None``/non-positive is treated as a data-quality failure, not
+            a real zero -- see ``calculate()``'s ``spot_price_valid``.
         currency: Underlying currency symbol, for labeling only.
+        oi_by_instrument: Optional dict keyed ``(strike, option_type)`` ->
+            open interest, reused from the SAME enriched-instruments list as
+            ``greeks_by_instrument`` (no second query). Used ONLY to
+            OI-weight the ``instruments_missing_gamma``/``oi_missing_gamma``
+            disclosure in ``calculate()`` (mirrors ``GexDexResult.
+            oi_missing_gamma``'s convention) -- NOT used anywhere in the
+            GEX/DEX formulas themselves (this calculator's exposures are not
+            OI-weighted, see the module docstring). Legs missing from this
+            dict simply contribute 0.0 to ``oi_missing_gamma`` rather than
+            crashing -- an absent OI reference is a real, separate condition
+            already tracked by ``coverage_report``'s own
+            ``legs_excluded_no_oi``.
     """
 
     def __init__(
@@ -60,11 +78,13 @@ class DealerInventoryCalculator:
         greeks_by_instrument: Dict[Tuple[float, str], Dict[str, float]],
         spot_price: float,
         currency: str = "BTC",
+        oi_by_instrument: Optional[Dict[Tuple[float, str], float]] = None,
     ):
         self.flow_rows = flow_rows
         self.greeks_by_instrument = greeks_by_instrument
         self.spot_price = spot_price
         self.currency = currency
+        self.oi_by_instrument = oi_by_instrument or {}
 
     def calculate(self) -> Dict[str, Any]:
         """
@@ -79,22 +99,59 @@ class DealerInventoryCalculator:
           from ``strike_data``, counted in ``stale_strikes`` instead (no
           Greeks means it cannot be priced -- there is nothing safe to do
           but flag it).
+        - A leg present in ``greeks_by_instrument`` but with a ``None``
+          gamma or delta (greek fetch succeeded, the value itself came back
+          empty) -> contributes 0.0 to that leg's GEX/DEX, but is counted in
+          ``instruments_missing_gamma``/``oi_missing_gamma`` rather than
+          silently reading as "this leg has zero exposure" (same bug class
+          as ``GexDexCalculator._aggregate_by_strike``'s ``instruments_
+          missing_gamma``/``oi_missing_gamma``, Task G2-A -- an explicit
+          ``is None`` check, not ``value or 0.0``, which cannot distinguish
+          "missing" from "genuinely, exactly zero").
+        - A missing/non-positive ``spot_price`` is a data-quality failure,
+          not a real zero -- ``spot_price_valid`` is False and every
+          strike's ``inferred_gex`` is forced to 0.0 (the S^2 term cannot be
+          computed at all), so the caller must NOT render the numbers as a
+          real measurement (mirrors this same file's own D9 ``render_
+          inferred``/``unavailable_reason`` convention, wired at the service
+          layer -- this calculator only raises the flag, it does not decide
+          how to react to it).
 
         Returns:
             Dict with ``strike_data`` (strike -> per-strike fields),
             ``total_inferred_gex``, ``total_inferred_dex``, ``key_levels``,
-            ``stale_strikes``, ``spot_price``, ``currency``.
+            ``stale_strikes``, ``spot_price``, ``spot_price_valid``,
+            ``instruments_missing_gamma``, ``oi_missing_gamma``,
+            ``currency``.
         """
         taker_net_by_leg, stale_strikes = self._index_flow_rows()
 
         chain_strikes = sorted({strike for (strike, _opt) in self.greeks_by_instrument.keys()})
 
-        spot_squared = (self.spot_price or 0.0) ** 2
+        # A None/non-positive spot price cannot produce a real S^2 term --
+        # `(self.spot_price or 0.0) ** 2` used to silently fabricate 0.0 for
+        # BOTH "spot is None" and "spot is genuinely 0", which then read as
+        # a confidently-measured all-zero GEX rather than "we don't know".
+        # spot_price_valid is surfaced so the caller can gate rendering on
+        # it (same D9 pattern as coverage/violation_rate) instead of this
+        # calculator silently deciding for it.
+        spot_price_valid = self.spot_price is not None and self.spot_price > 0
+        spot_squared = (self.spot_price ** 2) if spot_price_valid else 0.0
         strike_data: Dict[float, Dict[str, Any]] = {}
 
+        instruments_missing_gamma = 0
+        oi_missing_gamma = 0.0
+
         for strike in chain_strikes:
-            call_greeks = self.greeks_by_instrument.get((strike, "C"), {})
-            put_greeks = self.greeks_by_instrument.get((strike, "P"), {})
+            # `.get(key)` WITHOUT a default first, to tell "leg absent from
+            # the chain entirely" (not this loop's concern -- there is no
+            # instrument to be missing greeks for) apart from "leg present
+            # but its gamma/delta came back null" (the completeness gap
+            # tracked below). Only the latter increments the counters.
+            call_entry = self.greeks_by_instrument.get((strike, "C"))
+            put_entry = self.greeks_by_instrument.get((strike, "P"))
+            call_greeks = call_entry or {}
+            put_greeks = put_entry or {}
 
             call_row = taker_net_by_leg.get((strike, "C"))
             put_row = taker_net_by_leg.get((strike, "P"))
@@ -102,10 +159,27 @@ class DealerInventoryCalculator:
             dealer_net_c = -(call_row["taker_net"] if call_row else 0.0)
             dealer_net_p = -(put_row["taker_net"] if put_row else 0.0)
 
-            gamma_c = call_greeks.get("gamma") or 0.0
-            gamma_p = put_greeks.get("gamma") or 0.0
-            delta_c = call_greeks.get("delta") or 0.0
-            delta_p = put_greeks.get("delta") or 0.0
+            gamma_c_raw = call_greeks.get("gamma")
+            gamma_p_raw = put_greeks.get("gamma")
+            delta_c_raw = call_greeks.get("delta")
+            delta_p_raw = put_greeks.get("delta")
+
+            # Explicit None-checks (not `value or 0.0`): a truthiness check
+            # cannot distinguish "gamma is None" (unknown) from "gamma is a
+            # real, exactly-zero value" (e.g. a deep OTM leg) -- same bug
+            # class this campaign has fixed repeatedly (M1/#5/#6, Task
+            # G2-A). Genuinely zero legs must NOT be counted as missing.
+            if call_entry is not None and (gamma_c_raw is None or delta_c_raw is None):
+                instruments_missing_gamma += 1
+                oi_missing_gamma += self.oi_by_instrument.get((strike, "C")) or 0.0
+            if put_entry is not None and (gamma_p_raw is None or delta_p_raw is None):
+                instruments_missing_gamma += 1
+                oi_missing_gamma += self.oi_by_instrument.get((strike, "P")) or 0.0
+
+            gamma_c = gamma_c_raw if gamma_c_raw is not None else 0.0
+            gamma_p = gamma_p_raw if gamma_p_raw is not None else 0.0
+            delta_c = delta_c_raw if delta_c_raw is not None else 0.0
+            delta_p = delta_p_raw if delta_p_raw is not None else 0.0
 
             inferred_gex = (dealer_net_c * gamma_c + dealer_net_p * gamma_p) * spot_squared * 0.01
             inferred_dex = dealer_net_c * delta_c + dealer_net_p * delta_p
@@ -130,6 +204,9 @@ class DealerInventoryCalculator:
             "key_levels": key_levels,
             "stale_strikes": stale_strikes,
             "spot_price": self.spot_price,
+            "spot_price_valid": spot_price_valid,
+            "instruments_missing_gamma": instruments_missing_gamma,
+            "oi_missing_gamma": oi_missing_gamma,
             "currency": self.currency,
         }
 

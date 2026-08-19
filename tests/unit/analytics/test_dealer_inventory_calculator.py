@@ -264,3 +264,149 @@ class TestEdgeCases:
 
         row = result["strike_data"][70000]
         assert row["inferred_dex"] == pytest.approx(40 * 0.5)
+
+
+class TestMissingGammaDeltaDisclosure:
+    """
+    Task Wave-H-E: the identical `value or 0.0` bug G2-A fixed in
+    GexDexCalculator._aggregate_by_strike, untouched in this different
+    calculator. A missing (None) gamma/delta must be counted and its OI
+    tracked (mirroring GexDexResult.instruments_missing_gamma/
+    oi_missing_gamma) -- NOT silently folded into a 0.0 contribution with no
+    record of it happening. A genuinely-zero gamma/delta must NOT be
+    miscounted as missing.
+    """
+
+    def test_missing_gamma_on_one_leg_is_counted_and_contributes_zero(self):
+        flow_rows = [_flow_row(70000, "C", taker_net=-100)]  # dealer_net_c = +100
+        greeks = {(70000, "C"): {"gamma": None, "delta": 0.5}}
+        oi_by_instrument = {(70000, "C"): 250.0}
+        calc = DealerInventoryCalculator(
+            flow_rows, greeks, spot_price=64000, currency="BTC", oi_by_instrument=oi_by_instrument,
+        )
+        result = calc.calculate()
+
+        row = result["strike_data"][70000]
+        # gamma missing -> 0 contribution to GEX, but delta still applies to DEX.
+        assert row["inferred_gex"] == pytest.approx(0.0)
+        assert row["inferred_dex"] == pytest.approx(100 * 0.5)
+        assert result["instruments_missing_gamma"] == 1
+        assert result["oi_missing_gamma"] == pytest.approx(250.0)
+
+    def test_missing_delta_on_one_leg_is_counted(self):
+        flow_rows = [_flow_row(70000, "P", taker_net=-100)]
+        greeks = {(70000, "P"): {"gamma": 0.00002, "delta": None}}
+        oi_by_instrument = {(70000, "P"): 400.0}
+        calc = DealerInventoryCalculator(
+            flow_rows, greeks, spot_price=64000, currency="BTC", oi_by_instrument=oi_by_instrument,
+        )
+        result = calc.calculate()
+
+        row = result["strike_data"][70000]
+        assert row["inferred_dex"] == pytest.approx(0.0)
+        assert result["instruments_missing_gamma"] == 1
+        assert result["oi_missing_gamma"] == pytest.approx(400.0)
+
+    def test_missing_gamma_and_delta_on_both_legs_counts_both(self):
+        flow_rows = [
+            _flow_row(70000, "C", taker_net=-100),
+            _flow_row(70000, "P", taker_net=-50),
+        ]
+        greeks = {
+            (70000, "C"): {"gamma": None, "delta": None},
+            (70000, "P"): {"gamma": None, "delta": -0.3},
+        }
+        oi_by_instrument = {(70000, "C"): 100.0, (70000, "P"): 200.0}
+        calc = DealerInventoryCalculator(
+            flow_rows, greeks, spot_price=64000, currency="BTC", oi_by_instrument=oi_by_instrument,
+        )
+        result = calc.calculate()
+
+        assert result["instruments_missing_gamma"] == 2  # call AND put both flagged
+        assert result["oi_missing_gamma"] == pytest.approx(300.0)
+
+    def test_genuinely_zero_gamma_and_delta_not_counted_as_missing(self):
+        """The `is None` check must not misfire on a real, exact zero (e.g.
+        a deep OTM leg) -- this is the whole point of replacing `or 0.0`."""
+        flow_rows = [_flow_row(70000, "C", taker_net=-100)]
+        greeks = {(70000, "C"): {"gamma": 0.0, "delta": 0.0}}
+        calc = DealerInventoryCalculator(flow_rows, greeks, spot_price=64000, currency="BTC")
+        result = calc.calculate()
+
+        row = result["strike_data"][70000]
+        assert row["inferred_gex"] == pytest.approx(0.0)
+        assert row["inferred_dex"] == pytest.approx(0.0)
+        assert result["instruments_missing_gamma"] == 0
+        assert result["oi_missing_gamma"] == pytest.approx(0.0)
+
+    def test_leg_absent_from_chain_entirely_is_not_counted_as_missing_gamma(self):
+        """A strike that only has a call in the chain must not have its
+        (nonexistent) put leg counted as "missing gamma" -- there is no put
+        instrument to be missing greeks for."""
+        greeks = {(70000, "C"): {"gamma": 0.00002, "delta": 0.5}}
+        calc = DealerInventoryCalculator([], greeks, spot_price=64000, currency="BTC")
+        result = calc.calculate()
+
+        assert result["instruments_missing_gamma"] == 0
+        assert result["oi_missing_gamma"] == pytest.approx(0.0)
+
+    def test_missing_gamma_with_no_oi_reference_does_not_crash(self):
+        """oi_by_instrument omitted entirely (defaults to {}) -- the leg is
+        still counted as missing, just with 0.0 OI magnitude (a genuinely
+        separate condition already covered by coverage_report's own
+        legs_excluded_no_oi, not this calculator's concern to conflate)."""
+        flow_rows = [_flow_row(70000, "C", taker_net=-100)]
+        greeks = {(70000, "C"): {"gamma": None, "delta": 0.5}}
+        calc = DealerInventoryCalculator(flow_rows, greeks, spot_price=64000, currency="BTC")
+        result = calc.calculate()
+
+        assert result["instruments_missing_gamma"] == 1
+        assert result["oi_missing_gamma"] == pytest.approx(0.0)
+
+
+class TestSpotPriceValidation:
+    """
+    Task Wave-H-E: `spot_squared = (self.spot_price or 0.0) ** 2` used to
+    silently fabricate an all-zero inferred_gex for BOTH "spot is None" and
+    "spot is genuinely 0", indistinguishable from a real measurement.
+    spot_price_valid discloses the failure instead of hiding it.
+    """
+
+    def test_none_spot_price_is_flagged_invalid_and_gex_forced_to_zero(self):
+        flow_rows = [_flow_row(70000, "C", taker_net=-100)]
+        greeks = {(70000, "C"): {"gamma": 0.00002, "delta": 0.5}}
+        calc = DealerInventoryCalculator(flow_rows, greeks, spot_price=None, currency="BTC")
+        result = calc.calculate()
+
+        assert result["spot_price_valid"] is False
+        row = result["strike_data"][70000]
+        assert row["inferred_gex"] == pytest.approx(0.0)
+        # DEX has no S^2 term -- must still compute normally, unaffected.
+        assert row["inferred_dex"] == pytest.approx(100 * 0.5)
+
+    def test_zero_spot_price_is_flagged_invalid(self):
+        flow_rows = [_flow_row(70000, "C", taker_net=-100)]
+        greeks = {(70000, "C"): {"gamma": 0.00002, "delta": 0.5}}
+        calc = DealerInventoryCalculator(flow_rows, greeks, spot_price=0.0, currency="BTC")
+        result = calc.calculate()
+
+        assert result["spot_price_valid"] is False
+        assert result["strike_data"][70000]["inferred_gex"] == pytest.approx(0.0)
+
+    def test_negative_spot_price_is_flagged_invalid(self):
+        flow_rows = [_flow_row(70000, "C", taker_net=-100)]
+        greeks = {(70000, "C"): {"gamma": 0.00002, "delta": 0.5}}
+        calc = DealerInventoryCalculator(flow_rows, greeks, spot_price=-1.0, currency="BTC")
+        result = calc.calculate()
+
+        assert result["spot_price_valid"] is False
+
+    def test_valid_spot_price_is_not_flagged(self):
+        flow_rows = [_flow_row(70000, "C", taker_net=-100)]
+        greeks = {(70000, "C"): {"gamma": 0.00002, "delta": 0.5}}
+        calc = DealerInventoryCalculator(flow_rows, greeks, spot_price=64000, currency="BTC")
+        result = calc.calculate()
+
+        assert result["spot_price_valid"] is True
+        # taker_net=-100 -> dealer_net_c=+100 -> GEX = 100 * 0.00002 * 64000^2 * 0.01 = +81,920.0
+        assert result["strike_data"][70000]["inferred_gex"] == pytest.approx(81920.0)

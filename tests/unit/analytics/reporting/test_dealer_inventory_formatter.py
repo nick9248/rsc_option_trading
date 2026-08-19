@@ -160,3 +160,48 @@ class TestGatePassedRendersBothViews:
         dealer_result = _dealer_result(render_inferred=True)
         text = format_dealer_inventory_section(dealer_result, None, "BTC")
         assert "DEALER POSITIONING" in text
+
+
+class TestDataCompletenessDisclosure:
+    """
+    Task Wave-H-E: mirrors gex_dex_formatter.py's "DATA COMPLETENESS" line
+    for GexDexResult.instruments_missing_gamma (Task G2-A) -- same
+    disclosure convention, this calculator's own result.
+    """
+
+    def test_missing_gamma_renders_completeness_line(self):
+        dealer_result = _dealer_result(
+            render_inferred=True, instruments_missing_gamma=2, oi_missing_gamma=750.0,
+        )
+        gex_dex_result = _gex_dex_result()
+
+        text = format_dealer_inventory_section(dealer_result, gex_dex_result, "BTC")
+
+        assert "DATA COMPLETENESS" in text
+        assert "2 leg(s)" in text
+        assert "750.00 OI" in text
+        assert "missing gamma/delta" in text
+
+    def test_no_missing_gamma_omits_completeness_line(self):
+        dealer_result = _dealer_result(
+            render_inferred=True, instruments_missing_gamma=0, oi_missing_gamma=0.0,
+        )
+        gex_dex_result = _gex_dex_result()
+
+        text = format_dealer_inventory_section(dealer_result, gex_dex_result, "BTC")
+
+        assert "DATA COMPLETENESS" not in text
+
+    def test_gate_failed_branch_never_shows_completeness_line(self):
+        """D9: the gate-failed branch prints nothing but the UNAVAILABLE
+        marker and the fallback note -- no numeric or diagnostic content,
+        even a nonzero completeness gap, leaks into that branch's text."""
+        dealer_result = _dealer_result(
+            render_inferred=False, instruments_missing_gamma=3, oi_missing_gamma=999.0,
+        )
+        gex_dex_result = _gex_dex_result()
+
+        text = format_dealer_inventory_section(dealer_result, gex_dex_result, "BTC")
+
+        assert "DATA COMPLETENESS" not in text
+        assert "INFERRED DEALER VIEW UNAVAILABLE" in text

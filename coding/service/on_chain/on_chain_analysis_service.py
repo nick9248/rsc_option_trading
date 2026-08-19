@@ -1871,13 +1871,25 @@ class OnChainAnalysisService:
                 if strike is None or option_type not in ("C", "P"):
                     continue
                 key = (strike, option_type)
+                # Task Wave-H-E: preserve None here (not `item.get("gamma")
+                # or 0.0`) -- this dict is what DealerInventoryCalculator.
+                # calculate() checks for missing greeks (its own explicit
+                # is-None guard, mirroring GexDexCalculator._aggregate_by_
+                # strike's Task G2-A fix). Collapsing None to 0.0 at THIS
+                # site, one layer up, would make the calculator's own
+                # is-None check dead code -- it would never see a None
+                # again, silently defeating the completeness disclosure
+                # before it can even run.
                 greeks_by_instrument[key] = {
-                    "gamma": item.get("gamma") or 0.0,
-                    "delta": item.get("delta") or 0.0,
+                    "gamma": item.get("gamma"),
+                    "delta": item.get("delta"),
                 }
                 oi_by_instrument[key] = item.get("open_interest") or 0.0
 
-            calculator = DealerInventoryCalculator(flow_rows, greeks_by_instrument, spot_price, currency)
+            calculator = DealerInventoryCalculator(
+                flow_rows, greeks_by_instrument, spot_price, currency,
+                oi_by_instrument=oi_by_instrument,
+            )
             calc_dict = calculator.calculate()
             coverage_dict = calculator.coverage_report(oi_by_instrument)
             violation_rate = coverage_dict["violation_rate"]
@@ -1910,15 +1922,35 @@ class OnChainAnalysisService:
                 or exclusion_rate > _DEALER_INVENTORY_MAX_EXCLUSION_RATE
             )
 
+            # Task Wave-H-E: a missing/non-positive spot_price makes every
+            # strike's inferred_gex a fabricated 0.0 (the S^2 term cannot be
+            # computed at all -- `calculate()` already refuses to pretend
+            # otherwise, see spot_price_valid there). Folded into the SAME
+            # D9 render_inferred gate as the other disclosed failure modes
+            # rather than a silent None return: an explicit
+            # "INFERRED DEALER VIEW UNAVAILABLE (...)" line is strictly more
+            # honest than omitting the section outright, and the caller
+            # already treats "dealer_result is None" and
+            # "render_inferred=False" as equivalent degradations (see the
+            # comment at this method's call site) -- this just picks the
+            # more informative of the two equivalent outcomes.
+            spot_price_valid = calc_dict["spot_price_valid"]
+
             render_inferred = (
-                not no_trades_for_this_expiry
+                spot_price_valid
+                and not no_trades_for_this_expiry
                 and coverage >= _DEALER_INVENTORY_COVERAGE_GATE
                 and violation_rate <= _DEALER_INVENTORY_VIOLATION_GATE
                 and not insufficient_oi_reference
             )
             unavailable_reason = None
             if not render_inferred:
-                if no_trades_for_this_expiry:
+                if not spot_price_valid:
+                    unavailable_reason = (
+                        f"missing or non-positive spot price ({spot_price!r}) -- cannot "
+                        "compute inferred GEX's S^2 term"
+                    )
+                elif no_trades_for_this_expiry:
                     unavailable_reason = (
                         f"no trade history for this expiry since T0 "
                         f"(currency-wide coverage {coverage * 100:.1f}% -- collector health, not "
@@ -1977,6 +2009,8 @@ class OnChainAnalysisService:
                 render_inferred=render_inferred,
                 unavailable_reason=unavailable_reason,
                 stale_strikes=tuple(calc_dict.get("stale_strikes", [])),
+                instruments_missing_gamma=calc_dict["instruments_missing_gamma"],
+                oi_missing_gamma=calc_dict["oi_missing_gamma"],
             )
         except Exception:
             logger.error(

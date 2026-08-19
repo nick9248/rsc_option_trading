@@ -111,6 +111,22 @@ def format_dealer_inventory_section(
         f"{'':<60}coverage {dealer_result.coverage * 100:.2f}% | "
         f"viol {dealer_result.violation_rate * 100:.1f}%"
     )
+
+    # Task Wave-H-E: same "DATA COMPLETENESS" disclosure gex_dex_formatter.py
+    # renders for GexDexResult.instruments_missing_gamma (Task G2-A) -- only
+    # rendered when there is a gap (instruments_missing_gamma > 0), no
+    # threshold gate (any known gap is worth surfacing where readers look
+    # for it). Unlike GexDexResult's version, this calculator's own
+    # formulas are not OI-weighted, so there is no "% of total OI" figure
+    # to compute here -- the raw OI magnitude alone is still meaningful as
+    # a sense of how much of the book the gap represents.
+    if dealer_result.instruments_missing_gamma > 0:
+        lines.append(
+            f"DATA COMPLETENESS: {dealer_result.instruments_missing_gamma} leg(s) "
+            f"({dealer_result.oi_missing_gamma:,.2f} OI) had missing gamma/delta -- "
+            "contributed 0 exposure to the INFERRED column above"
+        )
+
     lines.append("")
 
     return "\n".join(lines)

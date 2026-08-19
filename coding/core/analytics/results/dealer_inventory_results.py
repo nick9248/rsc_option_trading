@@ -128,3 +128,25 @@ class DealerInventoryResult:
     """Strikes/legs with trade history but absent from the current chain
     (expired/delisted mid-window) -- dropped from strike_rows, diagnostic
     only. Each entry: {"strike", "option_type", "taker_net"}."""
+
+    # --- Additive fields (Task Wave-H-E) ---
+    instruments_missing_gamma: int = 0
+    """Count of legs folded into ``strike_rows`` by ``DealerInventoryCalculator.
+    calculate()`` whose gamma OR delta came back null (the leg IS in the
+    current chain -- unlike a leg entirely absent from ``greeks_by_
+    instrument``, which is not this calculator's concern at all). Their
+    GEX/DEX contribution is 0.0, not "unknown" -- this field is what makes
+    that distinguishable from a leg that genuinely has zero exposure.
+    Mirrors ``GexDexResult.instruments_missing_gamma``'s naming and
+    semantics (Task G2-A) -- same failure class, this calculator's own
+    ``_or_0.0`` bug had gone unfixed by that earlier task because it lives
+    in a different calculator entirely."""
+
+    oi_missing_gamma: float = 0.0
+    """Sum of open_interest belonging to ``instruments_missing_gamma`` --
+    the OI-weighted magnitude of the completeness gap, reused from the same
+    enriched-instruments list as ``greeks_by_instrument`` (no second
+    query). Unlike ``GexDexResult.oi_missing_gamma``, this calculator's own
+    GEX/DEX formulas are NOT OI-weighted (see the module docstring) -- this
+    field is a pure diagnostic magnitude, not an input to any formula
+    here."""

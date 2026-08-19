@@ -353,6 +353,122 @@ class TestGuardNeverCrashesPipeline:
         assert not any(record.levelno >= logging.ERROR for record in caplog.records)
 
 
+class TestMissingGreeksDisclosure:
+    """
+    Task Wave-H-E: the service builds ``greeks_by_instrument`` for
+    ``DealerInventoryCalculator`` -- it must preserve a None gamma/delta
+    rather than collapsing it to 0.0 one layer up (which would make the
+    calculator's own ``is None`` check dead code, defeating the disclosure
+    before it can run). ``DealerInventoryResult.instruments_missing_gamma``/
+    ``oi_missing_gamma`` must reflect the real gap.
+    """
+
+    def test_missing_gamma_on_an_instrument_is_disclosed_on_the_result(self):
+        instruments = [
+            {"strike": 70000.0, "option_type": "C", "gamma": None, "delta": 0.5, "open_interest": 500.0},
+            {"strike": 70000.0, "option_type": "P", "gamma": 0.00002, "delta": -0.5, "open_interest": 300.0},
+        ]
+        flow_rows = [
+            {"strike": 70000.0, "option_type": "C", "taker_net": -100.0, "gross_volume": 100.0, "trade_count": 10},
+        ]
+        repo = _make_repo(first_trade_ts=_COVERAGE_STABLE_MS, flow_rows=flow_rows, coverage=(100, 100))
+        service = _make_service(repo)
+
+        result = service._calculate_inferred_dealer_positioning("BTC", "31JUL26", instruments, 70000.0)
+
+        assert result is not None
+        assert result.instruments_missing_gamma == 1
+        assert result.oi_missing_gamma == pytest.approx(500.0)
+
+    def test_no_missing_greeks_discloses_zero(self):
+        flow_rows = [
+            {"strike": 70000.0, "option_type": "C", "taker_net": -100.0, "gross_volume": 100.0, "trade_count": 10},
+        ]
+        repo = _make_repo(first_trade_ts=_COVERAGE_STABLE_MS, flow_rows=flow_rows, coverage=(100, 100))
+        service = _make_service(repo)
+
+        result = service._calculate_inferred_dealer_positioning("BTC", "31JUL26", _instruments(), 70000.0)
+
+        assert result is not None
+        assert result.instruments_missing_gamma == 0
+        assert result.oi_missing_gamma == pytest.approx(0.0)
+
+    def test_genuinely_zero_gamma_on_an_instrument_is_not_disclosed_as_missing(self):
+        """A real, exact-zero gamma/delta (e.g. deep OTM) must survive the
+        service's own dict-building step without being miscounted."""
+        instruments = [
+            {"strike": 70000.0, "option_type": "C", "gamma": 0.0, "delta": 0.0, "open_interest": 500.0},
+            {"strike": 70000.0, "option_type": "P", "gamma": 0.00002, "delta": -0.5, "open_interest": 300.0},
+        ]
+        flow_rows = [
+            {"strike": 70000.0, "option_type": "C", "taker_net": -100.0, "gross_volume": 100.0, "trade_count": 10},
+        ]
+        repo = _make_repo(first_trade_ts=_COVERAGE_STABLE_MS, flow_rows=flow_rows, coverage=(100, 100))
+        service = _make_service(repo)
+
+        result = service._calculate_inferred_dealer_positioning("BTC", "31JUL26", instruments, 70000.0)
+
+        assert result is not None
+        assert result.instruments_missing_gamma == 0
+        assert result.oi_missing_gamma == pytest.approx(0.0)
+
+
+class TestSpotPriceValidationGate:
+    """
+    Task Wave-H-E: a missing/non-positive spot price must not silently
+    produce a confident-looking all-zero inferred GEX. Folded into the SAME
+    D9 render_inferred gate as the other disclosed failure modes (coverage,
+    violation rate, OI exclusion) -- an explicit "INFERRED DEALER VIEW
+    UNAVAILABLE (...)" outcome, not a fabricated measurement.
+    """
+
+    def test_none_spot_price_fails_the_gate_with_explicit_reason(self):
+        flow_rows = [
+            {"strike": 70000.0, "option_type": "C", "taker_net": -100.0, "gross_volume": 100.0, "trade_count": 10},
+        ]
+        repo = _make_repo(first_trade_ts=_COVERAGE_STABLE_MS, flow_rows=flow_rows, coverage=(100, 100))
+        service = _make_service(repo)
+
+        result = service._calculate_inferred_dealer_positioning("BTC", "31JUL26", _instruments(), None)
+
+        assert result is not None
+        assert result.render_inferred is False
+        assert "spot price" in result.unavailable_reason
+
+    def test_zero_spot_price_fails_the_gate(self):
+        flow_rows = [
+            {"strike": 70000.0, "option_type": "C", "taker_net": -100.0, "gross_volume": 100.0, "trade_count": 10},
+        ]
+        repo = _make_repo(first_trade_ts=_COVERAGE_STABLE_MS, flow_rows=flow_rows, coverage=(100, 100))
+        service = _make_service(repo)
+
+        result = service._calculate_inferred_dealer_positioning("BTC", "31JUL26", _instruments(), 0.0)
+
+        assert result is not None
+        assert result.render_inferred is False
+        assert "spot price" in result.unavailable_reason
+        # Every strike's inferred_gex must be exactly 0.0 -- not rendered,
+        # but computed as a real (not fabricated-looking) zero internally --
+        # AND the report must never show it as if it were measured (that is
+        # the formatter's job, verified separately).
+        assert all(row.inferred_gex == 0.0 for row in result.strike_rows)
+
+    def test_valid_spot_price_does_not_fail_on_this_condition(self):
+        """Sanity check: a healthy spot price does not spuriously trip the
+        new gate condition (gate still passes on the OTHER D9 conditions,
+        same fixture as TestD9GatePass.test_gate_passes_renders_inferred)."""
+        flow_rows = [
+            {"strike": 70000.0, "option_type": "C", "taker_net": -100.0, "gross_volume": 100.0, "trade_count": 10},
+        ]
+        repo = _make_repo(first_trade_ts=_COVERAGE_STABLE_MS, flow_rows=flow_rows, coverage=(100, 100))
+        service = _make_service(repo)
+
+        result = service._calculate_inferred_dealer_positioning("BTC", "31JUL26", _instruments(), 70000.0)
+
+        assert result.render_inferred is True
+        assert result.total_inferred_gex != 0.0
+
+
 class TestServiceWiring:
     def test_fetch_greeks_and_store_gex_dex_wires_dealer_inventory_into_builder(self):
         from coding.service.on_chain.analysis_builder import OnChainAnalysisBuilder
