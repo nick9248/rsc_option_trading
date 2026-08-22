@@ -1,7 +1,10 @@
 """Tests for the shared realized-vol utility."""
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
+import pytest
+
+from coding.core.analytics.vrp_calculator import VRPCalculator
 from coding.service.scanner.realized_vol import compute_realized_vol, dte_matched_window
 
 
@@ -50,3 +53,52 @@ class TestComputeRealizedVol:
         result = compute_realized_vol(repo, "BTC", window_days=21, as_of=datetime(2026, 7, 20))
         assert result is not None
         assert result > 0
+
+
+class TestParityWithVRPCalculator:
+    """
+    Wave H Task H-F, Fix 2: realized_vol.py's docstring claims its
+    methodology "matches VRPCalculator's existing methodology". It didn't
+    -- realized_vol.py used sample variance (ddof=1) while VRPCalculator
+    uses population variance (np.std default, ddof=0), a real ~1.5-2%
+    discrepancy on realistic sample sizes. This test feeds the SAME
+    identical close-price series through both implementations and proves
+    they now agree (after accounting for the documented unit difference:
+    compute_realized_vol returns percent, VRPCalculator returns a decimal
+    fraction).
+    """
+
+    def test_same_price_series_yields_same_annualized_rv(self):
+        import random
+        random.seed(7)
+
+        window_days = 24  # n = 24 log returns from window_days + 1 = 25 closes
+        as_of = datetime(2026, 7, 20)
+        closes_by_offset = {
+            offset: 50000.0 * (1 + random.uniform(-0.03, 0.03))
+            for offset in range(window_days + 1)
+        }
+
+        # -- scanner side (realized_vol.compute_realized_vol) --
+        repo = FakeRepo(closes_by_offset)
+        scanner_rv_pct = compute_realized_vol(repo, "BTC", window_days=window_days, as_of=as_of)
+        assert scanner_rv_pct is not None
+
+        # -- VRPCalculator side, fed the EXACT SAME closes in the EXACT
+        # SAME oldest-to-newest order, wide enough a window_days that the
+        # single-sided cutoff filter (>= cutoff_time) admits every point,
+        # so both implementations consume an identical log-return series.
+        price_history = [
+            {
+                "timestamp": (as_of - timedelta(days=offset)).replace(tzinfo=timezone.utc).timestamp(),
+                "close": closes_by_offset[offset],
+            }
+            for offset in sorted(closes_by_offset.keys(), reverse=True)  # oldest -> newest
+        ]
+        reference_time = as_of.replace(tzinfo=timezone.utc)
+        vrp_calc = VRPCalculator(currency="BTC", lookback_days=window_days)
+        vrp_rv_fraction = vrp_calc.calculate_realized_volatility(
+            price_history, window_days=window_days + 50, reference_time=reference_time,
+        )
+
+        assert vrp_rv_fraction * 100.0 == pytest.approx(scanner_rv_pct, rel=1e-9)

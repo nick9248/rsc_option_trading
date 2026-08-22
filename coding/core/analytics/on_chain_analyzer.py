@@ -262,7 +262,7 @@ class OnChainMetricsCalculator:
 
         return {expiry: select_forward_price(items) for expiry, items in grouped.items()}
 
-    def nearest_expiry_median_underlying_price(self) -> float:
+    def nearest_expiry_median_underlying_price(self) -> Optional[float]:
         """
         Fallback spot price when ``get_index_price`` fails (bugfix_spec.md
         Item 7 / 7.4 edge case): the median ``underlying_price`` across the
@@ -274,9 +274,13 @@ class OnChainMetricsCalculator:
         computes the value.
 
         Returns:
-            The nearest expiry's median underlying_price, or 0.0 if no
+            The nearest expiry's median underlying_price, or ``None`` if no
             instrument in ``raw_data`` has a parseable expiry with a priced
-            underlying_price at all.
+            underlying_price at all (Wave H Task H-F, Fix 3: was ``0.0``,
+            which is indistinguishable from a genuine $0 price once
+            persisted -- a caller with NO real price must be able to tell
+            "no price" apart from "priced at zero" and refuse to write a
+            poisoned snapshot).
         """
         prices_by_expiry: Dict[str, List[float]] = {}
         for item in self.raw_data:
@@ -289,7 +293,7 @@ class OnChainMetricsCalculator:
             prices_by_expiry.setdefault(parts[1], []).append(price)
 
         if not prices_by_expiry:
-            return 0.0
+            return None
 
         now_utc = datetime.now(timezone.utc)
 
@@ -306,7 +310,7 @@ class OnChainMetricsCalculator:
         ]
         dated_expiries = [(expiry, dt) for expiry, dt in dated_expiries if dt is not None]
         if not dated_expiries:
-            return 0.0
+            return None
 
         nearest_expiry, _ = min(
             dated_expiries, key=lambda pair: abs((pair[1] - now_utc).total_seconds())

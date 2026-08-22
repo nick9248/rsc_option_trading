@@ -9,7 +9,7 @@ MARKET METRICS
 --------------------------------------------------------------------------------
 DVOL (Volatility Index): 37.53
 IV Percentile (365d): 20.5%
-IV Rank (365d): 8.1%
+IV Rank (365d): 8.1% (n=366 obs)
 Current Funding Rate: 0.0000% (0.28% annualized)
 8h Funding Rate: 0.0003%
 

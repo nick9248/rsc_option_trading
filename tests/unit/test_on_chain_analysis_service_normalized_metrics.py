@@ -417,7 +417,13 @@ class TestHistoricalContextStaleness:
     def test_fresh_data_returns_none(self):
         repo = _make_repo_mock()
         repo.get_metric_history.return_value = [0.1 * i for i in range(1, 31)]
-        repo.get_metric_freshness.return_value = datetime.now(timezone.utc)
+        # Wave H Task H-F, Fix 1: get_metric_freshness queries a `timestamp
+        # without time zone` column, so it always returns a naive,
+        # UTC-valued datetime in production (repository.py's
+        # _TABLE_TIME_COLUMNS) -- match that here rather than a tz-aware
+        # mock, which only "worked" against the old buggy
+        # datetime.now(most_stale.tzinfo) comparison.
+        repo.get_metric_freshness.return_value = datetime.now(timezone.utc).replace(tzinfo=None)
         service = _make_service(repository=repo)
         analyzer = _FakeAnalyzer(market_metrics={"dvol": 37.69})
         result = _make_result()
@@ -428,7 +434,7 @@ class TestHistoricalContextStaleness:
     def test_stale_data_beyond_3h_returns_timestamp(self):
         repo = _make_repo_mock()
         repo.get_metric_history.return_value = [0.1 * i for i in range(1, 31)]
-        stale_ts = datetime.now(timezone.utc) - timedelta(hours=5)
+        stale_ts = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=5)
         repo.get_metric_freshness.return_value = stale_ts
         service = _make_service(repository=repo)
         analyzer = _FakeAnalyzer(market_metrics={"dvol": 37.69})

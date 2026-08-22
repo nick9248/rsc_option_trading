@@ -200,7 +200,14 @@ class OnChainReportFormatter:
             if iv_percentile is not None:
                 lines.append(f"IV Percentile (365d): {iv_percentile:.1f}%")
             if iv_rank is not None:
-                lines.append(f"IV Rank (365d): {iv_rank:.1f}%")
+                # Wave H Task H-F, Fix 4: surface the observation count the
+                # rank was computed from, so a reader can judge confidence
+                # (a rank from a handful of DVOL observations is much
+                # weaker evidence than one from a near-full 365d history)
+                # instead of every rank looking equally authoritative.
+                obs_count = market_metrics.iv_rank_observation_count
+                obs_suffix = f" (n={obs_count} obs)" if obs_count is not None else ""
+                lines.append(f"IV Rank (365d): {iv_rank:.1f}%{obs_suffix}")
             # institutional_metrics_spec.md section 9 (Task D2): "Expected
             # daily/weekly/monthly move -> one line, integer dollars".
             # The three-line $+% breakdown that used to render here is

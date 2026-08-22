@@ -250,7 +250,23 @@ class OnChainAnalysisService:
         try:
             index_price = self.api.get_index_price(currency=currency)
         except Exception as e:
+            # Wave H Task H-F, Fix 3: nearest_expiry_median_underlying_price
+            # now returns None (not a fabricated 0.0) when no instrument has
+            # a priced underlying_price either -- both the primary fetch and
+            # this fallback have failed, so there is no real price to anchor
+            # spot-scaled metrics (notional, moneyness, GEX's S^2 term,
+            # max-pain distance) on. Raise loudly instead of silently
+            # proceeding with a 0.0 that would poison every downstream
+            # calculation without any in-band marker.
             index_price = analyzer.nearest_expiry_median_underlying_price()
+            if index_price is None:
+                raise RuntimeError(
+                    f"No index price available for {currency}: primary "
+                    f"get_index_price fetch failed ({e}) and the "
+                    f"nearest-expiry median underlying_price fallback found "
+                    f"no priced instrument either -- refusing to analyze "
+                    f"with an unknown spot price"
+                ) from e
             logger.error(
                 f"get_index_price failed for {currency}: {e} -- falling back "
                 f"to nearest-expiry median underlying_price ({index_price})"
@@ -617,7 +633,17 @@ class OnChainAnalysisService:
             return None
 
         most_stale = min(timestamps)
-        threshold = datetime.now(most_stale.tzinfo) - timedelta(hours=self._STALENESS_THRESHOLD_HOURS)
+        # Don't derive the comparison clock from most_stale.tzinfo -- when the
+        # DB column backing it is `timestamp without time zone`, tzinfo is
+        # None, and datetime.now(None) silently returns naive-LOCAL time (its
+        # documented behavior), not UTC, even though this codebase's naive
+        # datetime columns are always UTC-valued (see collect_hour's default
+        # and _DELTA_FLOW_STALENESS_THRESHOLD_HOURS's now_utc_naive pattern
+        # just below in this file). On a non-UTC host that silently shifts
+        # the staleness threshold by the host's UTC offset. Use an explicit
+        # UTC-valued naive clock instead, matching that established pattern.
+        now_utc_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        threshold = now_utc_naive - timedelta(hours=self._STALENESS_THRESHOLD_HOURS)
         return most_stale if most_stale < threshold else None
 
     def _oldest_observation_age_days(
@@ -3092,6 +3118,7 @@ class OnChainAnalysisService:
         dvol = None
         iv_percentile = None
         iv_rank = None
+        iv_rank_observation_count = None
         current_funding = None
         funding_8h = None
 
@@ -3118,6 +3145,7 @@ class OnChainAnalysisService:
 
                 if close_values:
                     dvol = close_values[-1]  # Current DVOL (most recent close)
+                    iv_rank_observation_count = len(close_values)
 
                     # Calculate IV percentile (% of daily closes below current)
                     values_below = sum(1 for v in close_values if v < dvol)
@@ -3129,14 +3157,28 @@ class OnChainAnalysisService:
                     dvol_max = max(high_values)
                     if dvol_max > dvol_min:
                         iv_rank = (dvol - dvol_min) / (dvol_max - dvol_min) * 100
+                        progress_callback(
+                            f"DVOL: {dvol:.2f}, IV Percentile: {iv_percentile:.1f}%, "
+                            f"IV Rank: {iv_rank:.1f}% "
+                            f"(based on {iv_rank_observation_count} days)"
+                        )
                     else:
-                        iv_rank = 50.0
-
-                    progress_callback(
-                        f"DVOL: {dvol:.2f}, IV Percentile: {iv_percentile:.1f}%, "
-                        f"IV Rank: {iv_rank:.1f}% "
-                        f"(based on {len(close_values)} days)"
-                    )
+                        # Wave H Task H-F, Fix 4: a degenerate range (every
+                        # daily high/low identical -- e.g. exactly one
+                        # observation, or a genuinely flat series) has no
+                        # real spread to rank against. 50.0 used to be
+                        # fabricated here, rendering in the report
+                        # indistinguishable from a real, computed median
+                        # rank. None instead -- report_formatter already
+                        # gates the "IV Rank" line on `is not None`, so this
+                        # renders as "insufficient data" (line omitted)
+                        # rather than a fake number.
+                        iv_rank = None
+                        progress_callback(
+                            f"DVOL: {dvol:.2f}, IV Percentile: {iv_percentile:.1f}%, "
+                            f"IV Rank: insufficient data (degenerate 365d range, "
+                            f"{iv_rank_observation_count} days)"
+                        )
 
         except Exception as e:
             logger.warning(f"Failed to fetch DVOL data: {e}")
@@ -3168,6 +3210,7 @@ class OnChainAnalysisService:
             "current_funding": current_funding,
             "funding_8h": funding_8h,
             "iv_rank": iv_rank,
+            "iv_rank_observation_count": iv_rank_observation_count,
         }
         if builder is not None:
             builder.set_market_metrics(_to_market_metrics(analyzer.market_metrics))

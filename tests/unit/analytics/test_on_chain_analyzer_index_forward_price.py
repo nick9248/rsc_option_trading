@@ -163,9 +163,12 @@ class TestNearestExpiryMedianFallback:
         fallback = analyzer.nearest_expiry_median_underlying_price()
         assert fallback == pytest.approx(64_100.0)  # median of the NEAR expiry, not 70,000
 
-    def test_no_priced_instruments_returns_zero(self):
+    def test_no_priced_instruments_returns_none(self):
+        """Wave H Task H-F, Fix 3: was 0.0 (indistinguishable from a real
+        $0 price once persisted); now None, so callers can detect "no
+        price at all" and refuse to persist a poisoned snapshot."""
         analyzer = OnChainMetricsCalculator([], "BTC")
-        assert analyzer.nearest_expiry_median_underlying_price() == 0.0
+        assert analyzer.nearest_expiry_median_underlying_price() is None
 
 
 def test_underlying_price_property_is_deprecated_alias_for_index_price():

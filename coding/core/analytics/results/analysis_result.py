@@ -36,6 +36,15 @@ class MarketMetricsResult:
     iv_rank: Optional[float]
     current_funding: Optional[float]
     funding_8h: Optional[float]
+    # Wave H Task H-F, Fix 4: the DVOL lookback's observation count was
+    # already computed (len(close_values)) and logged to progress_callback,
+    # but never carried into the report -- a reader could not tell "IV Rank
+    # 50.0% from 200 observations" (fine) apart from "...from 1 observation"
+    # (not fine, and previously that degenerate case fabricated 50.0
+    # outright -- see iv_rank's own None-on-degenerate-range fix). Optional
+    # with a default so existing call sites that construct this dataclass
+    # without it are unaffected.
+    iv_rank_observation_count: Optional[int] = None
 
 
 @dataclass(frozen=True)
