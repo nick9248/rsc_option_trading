@@ -24,6 +24,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from coding.core.analytics.historical_normalizer import MIN_OBS as VRP_MIN_OBS
 from coding.core.analytics.vrp_calculator import VRPCalculator
 
 
@@ -156,3 +157,224 @@ class TestBarTimestampConversionIsUtcExplicit:
 
         assert rv_utc > 0.0
         assert rv_utc == rv_other_tz
+
+
+# ---------------------------------------------------------------------------
+# Wave H Task H-D: the four "fabricated default instead of None" sites.
+#
+# Before this fix, on insufficient/empty input:
+#   - calculate_realized_volatility returned 0.0
+#   - calculate_average_iv returned 0.0
+#   - calculate_iv_percentile returned 50.0 ("Default to median"), and had
+#     no MIN_OBS gate at all otherwise
+#   - calculate_vrp force-set vrp_percentage to 0.0 whenever realized_vol
+#     was <= 0 (whether that 0.0 came from the RV fabrication above, or a
+#     directly-passed non-positive value), producing a signal of NEUTRAL
+#     even when vrp_absolute (IV - RV) was large and non-zero.
+#
+# These tests reproduce the insufficient-data / self-contradiction cases
+# and assert the honest None-based contract this task establishes instead.
+# ---------------------------------------------------------------------------
+
+
+class TestCalculateRealizedVolatilityInsufficientData:
+    def test_empty_price_history_returns_none(self):
+        calc = VRPCalculator(currency="BTC")
+        assert calc.calculate_realized_volatility(
+            [], reference_time=datetime(2026, 8, 8, 8, 0, tzinfo=timezone.utc)
+        ) is None
+
+    def test_single_bar_returns_none(self):
+        calc = VRPCalculator(currency="BTC")
+        price_history = [{"timestamp": datetime(2026, 8, 8, tzinfo=timezone.utc).timestamp(), "close": 60000.0}]
+        assert calc.calculate_realized_volatility(
+            price_history, reference_time=datetime(2026, 8, 8, 8, 0, tzinfo=timezone.utc)
+        ) is None
+
+    def test_bars_outside_window_return_none(self):
+        """2+ bars exist, but none survive the window filter -- still None,
+        not a fabricated 0.0 that would read as 'zero realized volatility'."""
+        calc = VRPCalculator(currency="BTC")
+        anchor = datetime(2026, 8, 8, 8, 0, tzinfo=timezone.utc)
+        stale_bars = [
+            {"timestamp": (anchor - timedelta(days=90)).timestamp(), "close": 60000.0},
+            {"timestamp": (anchor - timedelta(days=89)).timestamp(), "close": 60500.0},
+        ]
+        assert calc.calculate_realized_volatility(
+            stale_bars, window_days=10, reference_time=anchor
+        ) is None
+
+    def test_sufficient_history_still_computes_a_real_value(self):
+        """Happy path: this isn't a None-only regression guard."""
+        calc = VRPCalculator(currency="BTC")
+        anchor = datetime(2026, 8, 8, 8, 0, tzinfo=timezone.utc)
+        bars = _daily_bars(40, anchor)
+        rv = calc.calculate_realized_volatility(bars, window_days=20, reference_time=anchor)
+        assert rv is not None
+        assert rv > 0.0
+
+
+class TestCalculateAverageIvInsufficientData:
+    def test_empty_options_data_returns_none(self):
+        calc = VRPCalculator(currency="BTC")
+        assert calc.calculate_average_iv([]) is None
+
+    def test_nothing_passes_moneyness_filter_returns_none(self):
+        """Real options exist, but none are within the ATM moneyness band --
+        still None, not a fabricated 0.0 that would read as 'options are
+        free'."""
+        calc = VRPCalculator(currency="BTC")
+        deep_otm_options = [
+            {"strike": 200000.0, "underlying_price": 60000.0, "mark_iv": 0.80},
+            {"strike": 10000.0, "underlying_price": 60000.0, "mark_iv": 0.90},
+        ]
+        assert calc.calculate_average_iv(deep_otm_options, moneyness_filter=(0.9, 1.1)) is None
+
+    def test_sufficient_options_still_computes_a_real_average(self):
+        calc = VRPCalculator(currency="BTC")
+        options = [
+            {"strike": 60000.0, "underlying_price": 60000.0, "mark_iv": 0.60},
+            {"strike": 61000.0, "underlying_price": 60000.0, "mark_iv": 0.64},
+        ]
+        avg_iv = calc.calculate_average_iv(options)
+        assert avg_iv is not None
+        assert avg_iv == pytest.approx(0.62)
+
+
+class TestCalculateIvPercentileMinObsGate:
+    def test_empty_history_returns_none(self):
+        calc = VRPCalculator(currency="BTC")
+        assert calc.calculate_iv_percentile(0.40, []) is None
+
+    def test_below_min_obs_returns_none(self):
+        """Task H-D: previously there was NO gate at all here -- even one
+        historical observation produced a confident 0th/100th percentile.
+        MIN_OBS - 1 observations must still be insufficient."""
+        calc = VRPCalculator(currency="BTC")
+        iv_history = [0.30] * (VRP_MIN_OBS - 1)
+        assert calc.calculate_iv_percentile(0.40, iv_history) is None
+
+    def test_one_observation_no_longer_yields_a_confident_percentile(self):
+        """The exact bug the task brief calls out: a single historical
+        observation used to yield a 0th or 100th percentile with full
+        confidence. It must now be None."""
+        calc = VRPCalculator(currency="BTC")
+        assert calc.calculate_iv_percentile(0.40, [0.30]) is None
+
+    def test_at_min_obs_computes_a_real_percentile(self):
+        calc = VRPCalculator(currency="BTC")
+        # 30 observations, all below current_iv -> 100th percentile.
+        iv_history = [0.30] * VRP_MIN_OBS
+        percentile = calc.calculate_iv_percentile(0.40, iv_history)
+        assert percentile == pytest.approx(100.0)
+
+    def test_above_min_obs_computes_correct_midrank_percentile(self):
+        calc = VRPCalculator(currency="BTC")
+        iv_history = [0.20] * 15 + [0.50] * 15  # 30 obs, half below/half above 0.40
+        percentile = calc.calculate_iv_percentile(0.40, iv_history)
+        assert percentile == pytest.approx(50.0)
+
+
+class TestCalculateVrpNoneHandling:
+    def test_none_implied_vol_returns_none(self):
+        calc = VRPCalculator(currency="BTC")
+        assert calc.calculate_vrp(None, 0.50) is None
+
+    def test_none_realized_vol_returns_none(self):
+        calc = VRPCalculator(currency="BTC")
+        assert calc.calculate_vrp(0.80, None) is None
+
+    def test_both_none_returns_none(self):
+        calc = VRPCalculator(currency="BTC")
+        assert calc.calculate_vrp(None, None) is None
+
+    def test_self_contradiction_case_is_closed(self):
+        """The reproducible self-contradiction this task closes: a real,
+        non-zero IV fed alongside a zero/negative RV used to compute
+        vrp_absolute = IV - RV = IV (large, non-zero) while forcing
+        vrp_percentage to 0.0 and signal to NEUTRAL for the SAME reading --
+        "fairly priced" and "a large VRP" in the same breath. It must now
+        be a single honest None, not a self-contradicting dict."""
+        calc = VRPCalculator(currency="BTC")
+        assert calc.calculate_vrp(0.80, 0.0) is None
+        assert calc.calculate_vrp(0.80, -0.05) is None
+
+    def test_valid_inputs_still_compute_a_real_result(self):
+        calc = VRPCalculator(currency="BTC")
+        result = calc.calculate_vrp(0.65, 0.50)
+        assert result is not None
+        assert result["vrp_absolute"] == pytest.approx(0.15)
+        assert result["vrp_percentage"] == pytest.approx(30.0)
+        assert result["signal"] == "EXPENSIVE"
+
+
+class TestGenerateReportSectionInsufficientData:
+    """Chains all four sites through the report generator with literally
+    empty input, proving the end-to-end "insufficient data" text -- not a
+    crash, and not a specific-looking fabricated number."""
+
+    def test_fully_empty_input_renders_insufficient_data_not_a_crash(self):
+        calc = VRPCalculator(currency="BTC")
+
+        realized_vol = calc.calculate_realized_volatility(
+            [], reference_time=datetime(2026, 8, 8, 8, 0, tzinfo=timezone.utc)
+        )
+        implied_vol = calc.calculate_average_iv([])
+        vrp_data = calc.calculate_vrp(implied_vol, realized_vol)
+        iv_percentile = calc.calculate_iv_percentile(0.40, [])
+
+        assert realized_vol is None
+        assert implied_vol is None
+        assert vrp_data is None
+        assert iv_percentile is None
+
+        report = calc.generate_report_section(vrp_data, iv_percentile=iv_percentile)
+
+        assert "Insufficient data" in report
+        # None of the old fabricated numbers/labels leak into the report.
+        assert "50.0%" not in report
+        assert "NEUTRAL" not in report
+        assert "VERY_EXPENSIVE" not in report
+        assert "VERY_CHEAP" not in report
+
+    def test_sufficient_input_renders_real_numbers_end_to_end(self):
+        """Happy path through the same chain: real data still produces a
+        real, non-'insufficient' report."""
+        calc = VRPCalculator(currency="BTC")
+        anchor = datetime(2026, 8, 8, 8, 0, tzinfo=timezone.utc)
+
+        realized_vol = calc.calculate_realized_volatility(
+            _daily_bars(40, anchor, base_price=60000.0), window_days=20, reference_time=anchor
+        )
+        options = [
+            {"strike": 60000.0, "underlying_price": 60000.0, "mark_iv": 0.60},
+            {"strike": 61000.0, "underlying_price": 60000.0, "mark_iv": 0.64},
+        ]
+        implied_vol = calc.calculate_average_iv(options)
+        vrp_data = calc.calculate_vrp(implied_vol, realized_vol)
+        iv_history = [0.30] * VRP_MIN_OBS
+        iv_percentile = calc.calculate_iv_percentile(implied_vol, iv_history)
+
+        assert realized_vol is not None
+        assert implied_vol is not None
+        assert vrp_data is not None
+        assert iv_percentile is not None
+
+        report = calc.generate_report_section(vrp_data, iv_percentile=iv_percentile)
+
+        assert "Insufficient data" not in report
+        assert "Implied Volatility (IV):" in report
+        assert "IV Percentile (30-day): 100.0%" in report
+
+    def test_partial_insufficiency_iv_percentile_only_still_renders_honestly(self):
+        """vrp_data is real, but iv_percentile alone is insufficient
+        (e.g. too little IV history collected yet) -- the VRP section must
+        still render normally, and the percentile section must say so
+        explicitly rather than silently vanishing."""
+        calc = VRPCalculator(currency="BTC")
+        vrp_data = calc.calculate_vrp(0.65, 0.50)
+        report = calc.generate_report_section(vrp_data, iv_percentile=None)
+
+        assert "Insufficient data to compute VRP" not in report
+        assert "Implied Volatility (IV):" in report
+        assert "IV Percentile (30-day): insufficient history" in report

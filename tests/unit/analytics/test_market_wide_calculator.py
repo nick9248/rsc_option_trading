@@ -113,6 +113,35 @@ class TestMarketWideCalculator:
         )
         assert "Insufficient" in report
 
+    def test_realized_volatility_partial_window_insufficiency_does_not_crash(self, calculator):
+        """
+        Wave H Task H-D: VRPCalculator.calculate_realized_volatility now
+        returns None (never a fabricated 0.0) per-window when too few bars
+        survive that window's filter. 11 bars clustered between 11 and 20
+        days ago (plus one bar at 25 days ago, to satisfy the outer >= 11
+        bars gate) leave the 10d window with ZERO qualifying bars while
+        20d/30d still have plenty -- the report must render "insufficient
+        data" for just the 10d slot, not crash on `None * 100`, and must
+        NOT store a None-valued 10 key in rv_values (downstream .get(10,
+        default) callers expect either a real float or a missing key).
+        """
+        now = time.time()
+        prices = [
+            {"timestamp": now - days * 86400, "close": 90000 * (1 + 0.01 * math.sin(days * 0.5))}
+            for days in range(11, 21)
+        ]
+        prices.append({"timestamp": now - 25 * 86400, "close": 89000.0})
+
+        report, rv_values = calculator.calculate_realized_volatility_multi_window(
+            prices, now_utc=datetime.now(timezone.utc)
+        )
+
+        assert 10 not in rv_values
+        assert 20 in rv_values
+        assert 30 in rv_values
+        assert "10d: insufficient data" in report
+        assert "20d:" in report and "insufficient data" not in report.split("20d:")[1].split("|")[0]
+
     def test_realized_volatility_multi_window_is_deterministic_across_timezone_representations(self, calculator):
         """
         Task G2-C regression guard at the MarketWideCalculator layer (the
@@ -146,6 +175,20 @@ class TestMarketWideCalculator:
         calc = MarketWideCalculator("BTC", 90000, dvol=None)
         report, structured = calc.calculate_vrp(0.50)
         assert "DVOL not available" in report
+
+    def test_vrp_non_positive_rv_30d_does_not_crash(self, calculator):
+        """
+        Wave H Task H-D defensive guard: VRPCalculator.calculate_vrp now
+        returns None for a non-positive realized_vol instead of a
+        self-contradicting NEUTRAL/0.0 dict. Every live caller
+        (market_wide_orchestrator.py) already gates rv_30d > 0 before
+        reaching this method, so this exercises the direct-call path a
+        future/non-orchestrator caller could take -- it must render an
+        honest message, not crash on `None["vrp_absolute"]`.
+        """
+        report, structured = calculator.calculate_vrp(0.0)
+        assert "Insufficient data to compute VRP" in report
+        assert structured["signal"] == "FAIR"
 
     def test_volatility_cone(self, calculator):
         prices = _make_price_history(120)

@@ -432,15 +432,32 @@ class MarketWideCalculator:
             lines.append("")
             return "\n".join(lines), rv_values
 
+        # Wave H Task H-D: VRPCalculator.calculate_realized_volatility now
+        # returns None (never a fabricated 0.0) when a specific window has
+        # too few bars after filtering -- only store the windows that
+        # actually computed, so rv_values keeps its pre-existing "key
+        # present == usable value" contract (downstream .get(window,
+        # default) callers in market_wide_orchestrator.py already treat a
+        # missing key as "insufficient", so this needs no cascading change
+        # there).
         for window in [10, 20, 30]:
             rv = self.vrp_calculator.calculate_realized_volatility(
                 price_history, window_days=window, reference_time=now_utc
             )
-            rv_values[window] = rv
+            if rv is not None:
+                rv_values[window] = rv
+
+        if not rv_values:
+            lines.append("  Insufficient price history for any window")
+            lines.append("")
+            return "\n".join(lines), rv_values
 
         rv_strs = []
-        for window, rv in rv_values.items():
-            rv_strs.append(f"{window}d: {rv * 100:.1f}%")
+        for window in [10, 20, 30]:
+            if window in rv_values:
+                rv_strs.append(f"{window}d: {rv_values[window] * 100:.1f}%")
+            else:
+                rv_strs.append(f"{window}d: insufficient data")
 
         lines.append(f"  {' | '.join(rv_strs)}")
         lines.append("")
@@ -475,6 +492,18 @@ class MarketWideCalculator:
         # DVOL is already in percentage (e.g., 65.0 for 65%)
         dvol_decimal = self.dvol / 100
         vrp_result = self.vrp_calculator.calculate_vrp(dvol_decimal, rv_30d)
+
+        # Wave H Task H-D: VRPCalculator.calculate_vrp now returns None
+        # (never a fabricated NEUTRAL/0.0) when its inputs are unusable.
+        # Every current call site gates rv_30d > 0 before reaching here
+        # (see market_wide_orchestrator.py's _calculate_vrp), so this
+        # branch is not expected to trigger in the live pipeline today --
+        # kept as a defensive guard so a future/direct caller can't crash
+        # on `None["vrp_absolute"]` instead of getting an honest message.
+        if vrp_result is None:
+            lines.append("  Insufficient data to compute VRP")
+            lines.append("")
+            return "\n".join(lines), structured
 
         vrp_pts = vrp_result["vrp_absolute"] * 100
         signal = vrp_result["signal"]

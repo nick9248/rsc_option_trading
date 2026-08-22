@@ -345,9 +345,14 @@ class VolatilityReconstructionService:
         # VRPCalculator uses numpy internally (np.std/np.mean) -> np.float64 results.
         # psycopg2 can't adapt those directly, so cast to plain Python float at the boundary.
         snapshot_hour_utc = snapshot_hour.replace(tzinfo=timezone.utc) if snapshot_hour.tzinfo is None else snapshot_hour
-        realized_vol = float(vrp_calc.calculate_realized_volatility(price_history, reference_time=snapshot_hour_utc))
-        if realized_vol <= 0:
+        # Wave H Task H-D: calculate_realized_volatility now returns None
+        # (never a fabricated 0.0) on insufficient history -- the None
+        # check MUST happen before float(), which raises TypeError on
+        # None rather than the intended "insufficient data" outcome.
+        realized_vol_raw = vrp_calc.calculate_realized_volatility(price_history, reference_time=snapshot_hour_utc)
+        if realized_vol_raw is None or realized_vol_raw <= 0:
             return {"vrp_absolute": None, "vrp_percentage": None, "realized_vol": None}
+        realized_vol = float(realized_vol_raw)
 
         options_data = [
             {
@@ -358,11 +363,17 @@ class VolatilityReconstructionService:
             for i in instruments
             if i.get("mark_iv") is not None and i.get("strike") is not None
         ]
-        implied_vol = float(vrp_calc.calculate_average_iv(options_data))
-        if implied_vol <= 0:
+        # Same None-before-float ordering as realized_vol above --
+        # calculate_average_iv now returns None when nothing passes the
+        # moneyness filter, instead of a fabricated 0.0.
+        implied_vol_raw = vrp_calc.calculate_average_iv(options_data)
+        if implied_vol_raw is None or implied_vol_raw <= 0:
             return {"vrp_absolute": None, "vrp_percentage": None, "realized_vol": realized_vol}
+        implied_vol = float(implied_vol_raw)
 
         vrp_result = vrp_calc.calculate_vrp(implied_vol, realized_vol)
+        if vrp_result is None:
+            return {"vrp_absolute": None, "vrp_percentage": None, "realized_vol": realized_vol}
         return {
             "vrp_absolute": float(vrp_result["vrp_absolute"]),
             "vrp_percentage": float(vrp_result["vrp_percentage"]),

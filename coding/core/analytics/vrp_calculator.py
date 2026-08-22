@@ -16,6 +16,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 
+from coding.core.analytics.historical_normalizer import MIN_OBS
+
 logger = logging.getLogger(__name__)
 
 
@@ -49,7 +51,7 @@ class VRPCalculator:
         window_days: Optional[int] = None,
         *,
         reference_time: datetime,
-    ) -> float:
+    ) -> Optional[float]:
         """
         Calculate realized volatility from price history.
 
@@ -73,11 +75,18 @@ class VRPCalculator:
                 closes — see institutional_metrics_spec.md Wave G Task G2-C).
 
         Returns:
-            Annualized realized volatility as percentage (e.g., 0.80 for 80%).
+            Annualized realized volatility as a decimal (e.g., 0.80 for
+            80%), or ``None`` (never a fabricated ``0.0`` — a real "could
+            not compute" case, not "zero volatility") when fewer than 2
+            price bars are available at all, or fewer than 2 survive the
+            window filter (Wave H Task H-D: ``0.0`` here previously flowed
+            straight into ``calculate_vrp`` as ``VRP = IV - 0``, a
+            maximum-conviction ``VERY_EXPENSIVE`` signal manufactured from
+            missing data, not a measured one).
         """
         if not price_history or len(price_history) < 2:
             logger.warning("Insufficient price history for RV calculation")
-            return 0.0
+            return None
 
         window_days = window_days or self.lookback_days
 
@@ -95,7 +104,7 @@ class VRPCalculator:
 
         if len(filtered_prices) < 2:
             logger.warning(f"Only {len(filtered_prices)} prices in window, need at least 2")
-            return 0.0
+            return None
 
         # Calculate log returns
         prices = [float(p["close"]) for p in filtered_prices]
@@ -105,7 +114,7 @@ class VRPCalculator:
         ]
 
         if not log_returns:
-            return 0.0
+            return None
 
         # Calculate standard deviation
         std_dev = np.std(log_returns)
@@ -120,7 +129,7 @@ class VRPCalculator:
         self,
         options_data: List[Dict[str, any]],
         moneyness_filter: Optional[Tuple[float, float]] = (0.9, 1.1)
-    ) -> float:
+    ) -> Optional[float]:
         """
         Calculate average implied volatility from options data.
 
@@ -130,11 +139,18 @@ class VRPCalculator:
                             Moneyness = strike / spot. Default: (0.9, 1.1) for ±10% ATM.
 
         Returns:
-            Average IV as decimal (e.g., 0.80 for 80%).
+            Average IV as a decimal (e.g., 0.80 for 80%), or ``None``
+            (never a fabricated ``0.0`` — a real "could not compute" case,
+            not "options are free") when no options data is supplied or
+            nothing passes the moneyness/liquidity filter (Wave H Task
+            H-D: ``0.0`` here previously flowed straight into
+            ``calculate_vrp`` as ``VRP = 0 - RV``, a maximum-conviction
+            ``VERY_CHEAP`` signal manufactured from missing data, not a
+            measured one).
         """
         if not options_data:
             logger.warning("No options data provided for IV calculation")
-            return 0.0
+            return None
 
         # Filter by moneyness if specified
         if moneyness_filter:
@@ -159,7 +175,7 @@ class VRPCalculator:
 
         if not filtered_options:
             logger.warning("No options passed moneyness filter")
-            return 0.0
+            return None
 
         # Calculate average IV
         avg_iv = np.mean(filtered_options)
@@ -168,25 +184,43 @@ class VRPCalculator:
 
     def calculate_vrp(
         self,
-        implied_vol: float,
-        realized_vol: float
-    ) -> Dict[str, float]:
+        implied_vol: Optional[float],
+        realized_vol: Optional[float]
+    ) -> Optional[Dict[str, float]]:
         """
         Calculate VRP metrics.
 
         Args:
-            implied_vol: Implied volatility as decimal (e.g., 0.80 for 80%).
-            realized_vol: Realized volatility as decimal.
+            implied_vol: Implied volatility as decimal (e.g., 0.80 for
+                80%), or ``None`` when the caller could not compute it
+                (e.g. ``calculate_average_iv`` returned ``None``).
+            realized_vol: Realized volatility as decimal, or ``None`` when
+                the caller could not compute it (e.g.
+                ``calculate_realized_volatility`` returned ``None``).
 
         Returns:
-            Dict with vrp_absolute, vrp_percentage, iv, rv.
+            Dict with vrp_absolute, vrp_percentage, implied_volatility,
+            realized_volatility, signal -- or ``None`` (Wave H Task H-D)
+            when either input is ``None``, or ``realized_vol`` is
+            non-positive. The non-positive-``realized_vol`` case is
+            deliberately folded into the SAME "insufficient" outcome as
+            the ``None`` case, not handled by falling back to a
+            ``vrp_percentage`` of ``0.0``: dividing by a non-positive RV
+            has no honest percentage answer, and the old fallback produced
+            a reproducible self-contradiction -- a real, non-zero
+            ``vrp_absolute`` (``IV - RV`` with ``RV <= 0`` is just ``IV``)
+            printed alongside a ``vrp_percentage``/``signal`` of exactly
+            ``NEUTRAL`` for the same reading, i.e. "fairly priced" and "a
+            large VRP" reported in the same breath. Returning ``None``
+            here means the whole result is "could not compute", never a
+            fabricated neutral reading with a contradicting absolute VRP
+            next to it.
         """
-        vrp_absolute = implied_vol - realized_vol
+        if implied_vol is None or realized_vol is None or realized_vol <= 0:
+            return None
 
-        if realized_vol > 0:
-            vrp_percentage = (vrp_absolute / realized_vol) * 100
-        else:
-            vrp_percentage = 0.0
+        vrp_absolute = implied_vol - realized_vol
+        vrp_percentage = (vrp_absolute / realized_vol) * 100
 
         return {
             "vrp_absolute": vrp_absolute,
@@ -223,7 +257,7 @@ class VRPCalculator:
         current_iv: float,
         iv_history: List[float],
         lookback_days: int = 30
-    ) -> float:
+    ) -> Optional[float]:
         """
         Calculate IV percentile (rank).
 
@@ -235,10 +269,21 @@ class VRPCalculator:
             lookback_days: Days to look back (not used if history provided).
 
         Returns:
-            Percentile as 0-100 (e.g., 75 means current IV is higher than 75% of historical IVs).
+            Percentile as 0-100 (e.g., 75 means current IV is higher than
+            75% of historical IVs), or ``None`` (Wave H Task H-D) when
+            ``iv_history`` has fewer than ``MIN_OBS`` observations --
+            reusing the same sufficiency threshold
+            ``HistoricalNormalizer`` (institutional_metrics_spec.md
+            section 1) requires before trusting a percentile against
+            trailing history, rather than inventing a separate number for
+            this calculator. Below that count there is no honest "where
+            does this sit" answer: this method used to return ``50.0``
+            ("Default to median") for ZERO observations, and had no gate
+            at all otherwise, so even a single historical reading yielded
+            a 0th or 100th percentile presented with full confidence.
         """
-        if not iv_history:
-            return 50.0  # Default to median
+        if len(iv_history) < MIN_OBS:
+            return None
 
         # Count how many historical IVs are below current IV
         below_count = sum(1 for iv in iv_history if iv < current_iv)
@@ -250,15 +295,23 @@ class VRPCalculator:
 
     def generate_report_section(
         self,
-        vrp_data: Dict[str, float],
+        vrp_data: Optional[Dict[str, float]],
         iv_percentile: Optional[float] = None
     ) -> str:
         """
         Generate formatted VRP report section.
 
         Args:
-            vrp_data: VRP calculation results from calculate_vrp().
-            iv_percentile: Optional IV percentile rank.
+            vrp_data: VRP calculation results from calculate_vrp(), or
+                ``None``/a dict with ``None`` numeric fields when VRP
+                could not be computed (insufficient IV or RV input --
+                Wave H Task H-D). Either shape renders an explicit
+                "insufficient data" message instead of crashing or
+                silently defaulting.
+            iv_percentile: IV percentile rank, or ``None`` when not
+                supplied or when ``calculate_iv_percentile`` had
+                insufficient history -- renders an explicit "insufficient
+                data" line rather than silently omitting the section.
 
         Returns:
             Formatted string for inclusion in analysis report.
@@ -268,6 +321,23 @@ class VRPCalculator:
 
         lines.append("VOLATILITY RISK PREMIUM (VRP) ANALYSIS")
         lines.append(separator)
+
+        # Wave H Task H-D: vrp_data itself may be None (calculate_vrp's own
+        # "insufficient" return), or a dict whose numeric fields are None
+        # (a caller's own insufficient-data placeholder, e.g.
+        # VRPService._empty_result) -- both mean the same thing here and
+        # get the same honest message, never a crash on `None * 100`.
+        if (
+            vrp_data is None
+            or vrp_data.get("implied_volatility") is None
+            or vrp_data.get("realized_volatility") is None
+        ):
+            lines.append(
+                "  Insufficient data to compute VRP (missing or unusable "
+                "implied/realized volatility input)"
+            )
+            lines.append("")
+            return "\n".join(lines)
 
         # Core metrics
         iv = vrp_data["implied_volatility"] * 100  # Convert to percentage
@@ -302,7 +372,11 @@ class VRPCalculator:
 
         lines.append("")
 
-        # IV Percentile if provided
+        # IV Percentile. Wave H Task H-D: an explicit "insufficient data"
+        # line rather than silently omitting the section -- calculate_iv_
+        # percentile now returns None below MIN_OBS history, and a reader
+        # seeing no percentile line at all cannot tell "not requested"
+        # apart from "requested but insufficient history".
         if iv_percentile is not None:
             lines.append(f"IV Percentile (30-day): {iv_percentile:.1f}%")
 
@@ -316,6 +390,11 @@ class VRPCalculator:
                 lines.append("  - IV is below average")
             else:
                 lines.append("  - IV is in the bottom 20% of recent range (very low)")
+        else:
+            lines.append(
+                f"IV Percentile (30-day): insufficient history "
+                f"(need >= {MIN_OBS} observations)"
+            )
 
         lines.append("")
         return "\n".join(lines)

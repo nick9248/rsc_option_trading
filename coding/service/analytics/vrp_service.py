@@ -65,9 +65,17 @@ class VRPService:
         # required, explicit, UTC-aware parameter on VRPCalculator (Core
         # must not read the wall clock itself) -- this Service layer is the
         # right place to resolve "now".
+        #
+        # Wave H Task H-D: calculate_realized_volatility now returns None
+        # (never a fabricated 0.0) on insufficient price history -- guard
+        # before using it, both to avoid crashing on `None * 100` below and
+        # to avoid silently passing a fabricated value into calculate_vrp.
         realized_vol = calculator.calculate_realized_volatility(
             price_history, reference_time=datetime.now(timezone.utc)
         )
+        if realized_vol is None:
+            logger.warning("Insufficient price history for realized volatility")
+            return self._empty_result()
 
         logger.info(f"Realized Volatility ({lookback_days}d): {realized_vol * 100:.2f}%")
 
@@ -78,23 +86,39 @@ class VRPService:
             logger.error(f"Failed to fetch options data for {expiration}")
             return self._empty_result()
 
-        # Calculate average IV
+        # Calculate average IV. Wave H Task H-D: None (never a fabricated
+        # 0.0) when nothing passes the moneyness filter.
         implied_vol = calculator.calculate_average_iv(
             options_data,
             moneyness_filter=moneyness_filter
         )
+        if implied_vol is None:
+            logger.warning("No options passed moneyness filter for IV calculation")
+            return self._empty_result()
 
         logger.info(f"Implied Volatility (ATM): {implied_vol * 100:.2f}%")
 
-        # Calculate VRP
+        # Calculate VRP. Wave H Task H-D: None (never a fabricated NEUTRAL
+        # reading) when either input is unusable -- both inputs are
+        # already confirmed non-None above, so this only guards the
+        # realized_vol <= 0 edge (a genuinely flat/degenerate price
+        # series), which calculate_vrp folds into the same "insufficient"
+        # outcome rather than a self-contradicting NEUTRAL signal.
         vrp_result = calculator.calculate_vrp(implied_vol, realized_vol)
+        if vrp_result is None:
+            logger.warning("Insufficient data to compute VRP")
+            return self._empty_result()
 
         logger.info(
             f"VRP: {vrp_result['vrp_absolute'] * 100:+.2f}% "
             f"({vrp_result['vrp_percentage']:+.1f}%) - Signal: {vrp_result['signal']}"
         )
 
-        # Calculate IV percentile (using recent options data)
+        # Calculate IV percentile (using recent options data). May
+        # legitimately be None (Wave H Task H-D: fewer than MIN_OBS
+        # historical IV observations) -- passed through as-is, never
+        # defaulted, so generate_report_section can render the honest
+        # "insufficient history" message.
         iv_history = self._fetch_iv_history(currency, expiration, lookback_days)
         iv_percentile = calculator.calculate_iv_percentile(implied_vol, iv_history)
 
@@ -277,14 +301,25 @@ class VRPService:
         return iv_values
 
     def _empty_result(self) -> Dict[str, any]:
-        """Return empty VRP result."""
+        """
+        Return an insufficient-data VRP result.
+
+        Wave H Task H-D: numeric fields are None, not fabricated
+        zeros/medians -- this used to return 0.0 for every metric (an
+        honest-looking "IV/RV/VRP are all exactly zero" reading) whenever
+        price history or options data could not be fetched at all, the
+        same fabrication-from-missing-data pattern already fixed inside
+        VRPCalculator itself. ``generate_report_section`` treats these
+        None fields the same as VRPCalculator.calculate_vrp() returning
+        None outright, rendering an explicit "insufficient data" message.
+        """
         return {
-            "vrp_absolute": 0.0,
-            "vrp_percentage": 0.0,
-            "implied_volatility": 0.0,
-            "realized_volatility": 0.0,
+            "vrp_absolute": None,
+            "vrp_percentage": None,
+            "implied_volatility": None,
+            "realized_volatility": None,
             "signal": "NO_DATA",
-            "iv_percentile": 0.0,
+            "iv_percentile": None,
             "currency": "",
             "expiration": "",
             "lookback_days": 0,
