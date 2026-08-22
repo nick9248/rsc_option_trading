@@ -862,7 +862,26 @@ class ProspectiveCollector:
             try:
                 index_price = self.api.get_index_price(currency=currency)
             except Exception as e:
+                # Wave H Task H-F, Fix 3: nearest_expiry_median_underlying_
+                # price now returns None (not a fabricated 0.0) when no
+                # instrument has a priced underlying_price either -- both
+                # the primary fetch and this fallback have failed, so there
+                # is no real price to anchor this hour's snapshot on.
+                # Previously a None here would reach GexDexCalculator's
+                # spot_price ** 2 and raise an uncontrolled TypeError,
+                # which happened to also skip persisting a poisoned row
+                # (via this method's per-expiration/outer except clauses)
+                # but with a confusing generic error and no clean log line.
                 index_price = analyzer.nearest_expiry_median_underlying_price()
+                if index_price is None:
+                    logger.error(
+                        f"    No index price available for {currency}: "
+                        f"primary fetch failed ({e}) and nearest-expiry "
+                        f"median underlying_price fallback found no priced "
+                        f"instrument -- skipping this hour's on-chain "
+                        f"analysis"
+                    )
+                    return
                 logger.error(
                     f"    get_index_price failed for {currency}: {e} -- "
                     f"falling back to nearest-expiry median underlying_price "
