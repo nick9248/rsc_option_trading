@@ -91,8 +91,25 @@ class ExpiryMetrics:
     method's own comment), so ``0.0`` there is already a deliberate,
     documented convention owned by the layer that computes it, not a
     fabrication introduced by this mapper -- the same category as
-    ``max_pain``'s fallback to spot price and ``pc_ratio``'s ``inf`` ->
-    ``99.0`` cap, both also deliberately left alone.
+    ``pc_ratio``'s ``inf`` -> ``99.0`` cap, also deliberately left alone.
+
+    ``max_pain``'s fallback to spot price when ``calculate_max_pain``
+    returns ``None`` was PREVIOUSLY judged (incorrectly, by this
+    campaign's own earlier pass) to belong in the same "deliberate,
+    documented, harmless" category as the two conventions above. It does
+    not: unlike ``pc_atm``/``pc_ratio``, the fallback value is fed
+    straight into ``score_max_pain_gravity`` at three call sites in
+    ``SynthesisEngine.run``, which has no way to tell "measured max pain
+    that happens to equal spot" from "no max pain was ever computed" --
+    it produces a real, non-zero-weight score and a confident-sounding
+    message (e.g. "Max pain $64,371 is near spot (+0.0%)") from a
+    computation that never ran. Task Wave-H-B Fix 4: the display fallback
+    stays (a report line has to show something), but
+    ``max_pain_sufficient_data`` (mirroring ``flow_sufficient_data``'s
+    value-plus-sufficiency-flag pattern below) travels alongside it so
+    the scorer can tell the difference and take its own explicit
+    insufficient-data branch instead of scoring the fabricated value as a
+    real measurement.
     """
     expiry: str
     dte: int
@@ -171,6 +188,14 @@ class ExpiryMetrics:
     # False, the scoring engine must contribute the flow score at weight 0,
     # not a neutral score at full weight — a neutral score is itself a claim.
     flow_sufficient_data: bool = True
+    # Task Wave-H-B Fix 4: True unless calculate_max_pain returned None
+    # (nothing to compute from) and ``max_pain`` above is therefore the
+    # spot-price display fallback, not a real measurement. When False,
+    # score_max_pain_gravity must take its explicit insufficient-data
+    # branch (weight zero) instead of scoring the fallback as if it were
+    # a genuine max-pain reading -- same value-plus-sufficiency-flag
+    # pattern as ``flow_sufficient_data`` above.
+    max_pain_sufficient_data: bool = True
 
 
 @dataclass
@@ -382,14 +407,34 @@ class ScoringEngine:
 
     @staticmethod
     def score_max_pain_gravity(max_pain: float, spot: float,
-                               dte: Optional[int] = None) -> Tuple[float, float, str]:
+                               dte: Optional[int] = None,
+                               sufficient_data: bool = True) -> Tuple[float, float, str]:
         """
         Max pain pull interpretation with DTE-scaled weight.
 
         Gravity effect is strongest near expiration and weakens with time.
         DTE-based weight: 0-7→0.5, 8-14→0.4, 15-30→0.3, >30→0.15.
         Neutral always uses weight 0.2 regardless of DTE.
+
+        Task Wave-H-B Fix 4: ``max_pain`` is deliberately still typed
+        plain ``float`` here (not ``Optional``) because ExpiryMetrics.
+        max_pain always carries a display value (the real max-pain strike,
+        or the spot-price fallback when calculate_max_pain returned
+        None) -- ``sufficient_data`` is the separate signal for whether
+        that value is a genuine measurement, mirroring
+        ``score_flow_gated``'s ``sufficient_data`` gate for
+        ``flow_sufficient_data``. When False, the caller is passing the
+        spot-price fallback (or otherwise knows this reading is
+        fabricated) -- score it as insufficient data (weight zero)
+        instead of a real "near spot" reading, which is exactly what the
+        fallback would otherwise produce (distance_pct == 0.0, a
+        confident-sounding "Max pain $X is near spot (+0.0%)" for a
+        computation that never ran).
         """
+        if not sufficient_data:
+            return (0.0, 0.0,
+                    "Max pain: insufficient data (calculation did not resolve a strike) — weight zero, no signal")
+
         distance_pct = (max_pain - spot) / spot * 100
 
         # DTE-scaled weight for non-neutral scores
@@ -1755,7 +1800,9 @@ class SynthesisEngine:
                 # CARRIED FINDING (B2 review, task C1): this expiry's own
                 # forward price, not the single global ``spot`` -- same
                 # defect class as bugfix_spec.md Item 7.
-                self.scorer.score_max_pain_gravity(exp.max_pain, exp.underlying_price, dte=exp.dte))
+                self.scorer.score_max_pain_gravity(
+                    exp.max_pain, exp.underlying_price, dte=exp.dte,
+                    sufficient_data=exp.max_pain_sufficient_data))
             all_direction_scores.append(
                 self.scorer.score_flow_gated(exp.flow_bias, exp.flow_trend, exp.flow_sufficient_data))
             all_direction_scores.append(
@@ -1775,7 +1822,9 @@ class SynthesisEngine:
                 # CARRIED FINDING (B2 review, task C1): this expiry's own
                 # forward price, not the single global ``spot`` -- same
                 # defect class as bugfix_spec.md Item 7.
-                self.scorer.score_max_pain_gravity(exp.max_pain, exp.underlying_price, dte=exp.dte))
+                self.scorer.score_max_pain_gravity(
+                    exp.max_pain, exp.underlying_price, dte=exp.dte,
+                    sufficient_data=exp.max_pain_sufficient_data))
             near_direction_scores.append(
                 self.scorer.score_flow_gated(exp.flow_bias, exp.flow_trend, exp.flow_sufficient_data))
             near_direction_scores.append(
@@ -1795,7 +1844,9 @@ class SynthesisEngine:
                 # CARRIED FINDING (B2 review, task C1): this expiry's own
                 # forward price, not the single global ``spot`` -- same
                 # defect class as bugfix_spec.md Item 7.
-                self.scorer.score_max_pain_gravity(exp.max_pain, exp.underlying_price, dte=exp.dte))
+                self.scorer.score_max_pain_gravity(
+                    exp.max_pain, exp.underlying_price, dte=exp.dte,
+                    sufficient_data=exp.max_pain_sufficient_data))
             far_direction_scores.append(
                 self.scorer.score_flow_gated(exp.flow_bias, exp.flow_trend, exp.flow_sufficient_data))
             far_direction_scores.append(
@@ -2374,8 +2425,18 @@ class SynthesisMapper:
         # Max pain and OI P/C ratio — read directly from the analysis result
         # (T7: stops calling analyzer.group_by_strike/calculate_max_pain/
         # calculate_put_call_ratio; the result already carries both).
+        #
+        # Task Wave-H-B Fix 4: calculate_max_pain returns None when it has
+        # nothing to compute from -- the spot-price fallback below stays
+        # for DISPLAY (a report line has to show something), but
+        # max_pain_sufficient_data travels alongside it so
+        # score_max_pain_gravity can tell a real measurement from this
+        # fallback and take its own explicit insufficient-data branch
+        # instead of scoring the fallback as if it were genuine (see the
+        # ExpiryMetrics/score_max_pain_gravity docstrings).
         analysis = bundle.analysis
         max_pain = analysis.max_pain.max_pain_strike
+        max_pain_sufficient_data = max_pain is not None
         if max_pain is None:
             max_pain = result.underlying_price
 
@@ -2521,6 +2582,7 @@ class SynthesisMapper:
             top_buy_strikes=top_buy_strikes,
             top_sell_strikes=top_sell_strikes,
             flow_sufficient_data=flow_sufficient_data,
+            max_pain_sufficient_data=max_pain_sufficient_data,
         )
 
     @staticmethod

@@ -2,6 +2,8 @@
 Unit tests for SynthesisMapper, ScoringEngine, and SynthesisEngine v2.0.
 """
 
+import re
+
 import pytest
 from typing import Optional
 from unittest.mock import MagicMock, patch
@@ -174,6 +176,7 @@ def make_onchain_result(
     include_vol_surface: bool = True,
     include_instruments: bool = True,
     market_wide: Optional[MarketWideResult] = None,
+    max_pain_strike: Optional[float] = 70000.0,
 ) -> OnChainAnalysisResult:
     """
     Create a minimal-but-typed OnChainAnalysisResult for testing SynthesisMapper
@@ -194,7 +197,7 @@ def make_onchain_result(
     analysis = ExpirationAnalysisResult(
         expiration=expiration, underlying_price=underlying_price,
         total_instruments=2, call_count=1, put_count=1, strike_rows=(),
-        max_pain=MaxPainResult(max_pain_strike=70000.0, pain_by_strike={}, min_pain_value=0.0),
+        max_pain=MaxPainResult(max_pain_strike=max_pain_strike, pain_by_strike={}, min_pain_value=0.0),
         put_call_ratio=PutCallRatioResult(
             total_call_oi=5000.0, total_put_oi=4000.0, ratio=0.80, bias="Neutral",
         ),
@@ -442,6 +445,32 @@ class TestScoreMaxPainGravity:
         _, weight, _ = ScoringEngine.score_max_pain_gravity(
             max_pain=65500, spot=65000, dte=3)
         assert weight == 0.2
+
+    def test_insufficient_data_weight_zero_not_scored_as_near_spot(self):
+        """
+        Task Wave-H-B Fix 4: sufficient_data=False (the caller is passing
+        the spot-price display fallback for a max_pain that never
+        resolved) must score as insufficient data at weight zero -- NOT
+        fall through to the ordinary distance-based branches, which for
+        a fallback-to-spot value would compute distance_pct == 0.0 and
+        confidently report "Max pain $X is near spot (+0.0%)" (weight
+        0.2, a real non-zero-weight score) for a computation that never
+        ran.
+        """
+        score, weight, description = ScoringEngine.score_max_pain_gravity(
+            max_pain=65000, spot=65000, dte=3, sufficient_data=False)
+        assert score == 0.0
+        assert weight == 0.0
+        assert "insufficient data" in description.lower()
+        assert "near spot" not in description.lower()
+
+    def test_sufficient_data_default_true_unchanged_behavior(self):
+        """The new sufficient_data param defaults to True -- every
+        pre-existing call site (no keyword passed) must be unaffected."""
+        score, weight, description = ScoringEngine.score_max_pain_gravity(
+            max_pain=75000, spot=65000, dte=3)
+        assert weight == 0.5
+        assert "insufficient data" not in description.lower()
 
 
 # =============================================================================
@@ -1429,6 +1458,30 @@ class TestBuildExpiryMetrics:
         assert result.flow_trend == "Mixed/Neutral Flow"
         assert result.flow_sufficient_data is False
 
+    def test_real_max_pain_flagged_sufficient(self):
+        """The ordinary case (calculate_max_pain resolved a real strike)
+        must flag max_pain_sufficient_data True."""
+        onchain_result = make_onchain_result("27MAR26", max_pain_strike=70000.0)
+        result = SynthesisMapper.build_expiry_metrics(onchain_result, "27MAR26")
+        assert result is not None
+        assert result.max_pain == 70000.0
+        assert result.max_pain_sufficient_data is True
+
+    def test_none_max_pain_falls_back_to_spot_but_flagged_insufficient(self):
+        """
+        Task Wave-H-B Fix 4: calculate_max_pain returned None (nothing to
+        compute from). The spot-price fallback stays for DISPLAY (so the
+        report's max-pain-distance line still shows a value), but
+        max_pain_sufficient_data must be False so score_max_pain_gravity
+        does not score this fallback as if it were a genuine measurement.
+        """
+        onchain_result = make_onchain_result(
+            "27MAR26", underlying_price=65000.0, max_pain_strike=None)
+        result = SynthesisMapper.build_expiry_metrics(onchain_result, "27MAR26")
+        assert result is not None
+        assert result.max_pain == 65000.0  # display fallback preserved
+        assert result.max_pain_sufficient_data is False
+
     def test_missing_vol_surface_preserves_none(self):
         """
         Task G2-G: a missing vol surface (vol_surface=None for this
@@ -1715,6 +1768,32 @@ class TestSynthesisEngineRun:
         assert "Sell premium" in result  # vol narrative still drives off VRP
         assert "PRIMARY — Long Straddle/Strangle" not in result
         assert "signals disagree" in result.lower()
+
+    def test_run_fabricated_max_pain_does_not_pull_direction_confidence(self):
+        """
+        Task Wave-H-B Fix 4, end-to-end: a max_pain value that would
+        otherwise produce a real, non-zero-weight directional score (here
+        $100,000 max pain vs. $65,000 spot -- a strong upward pull) must
+        NOT contribute to the direction confidence when
+        max_pain_sufficient_data=False (the value is the spot-price
+        display fallback for a max-pain calculation that never
+        resolved). Compares the same fabricated-looking value with the
+        flag True vs. False -- confidence must drop when the flag says
+        this reading isn't real, proving the fallback no longer reaches
+        scoring as if it were a genuine measurement.
+        """
+        engine = SynthesisEngine()
+        market = make_market_wide()
+
+        expiry_real = make_expiry_metrics(max_pain=100000, max_pain_sufficient_data=True)
+        expiry_fabricated = make_expiry_metrics(max_pain=100000, max_pain_sufficient_data=False)
+
+        result_real = engine.run(market, [expiry_real])
+        result_fabricated = engine.run(market, [expiry_fabricated])
+
+        conf_real = int(re.search(r"confidence: (\d+)%", result_real).group(1))
+        conf_fabricated = int(re.search(r"confidence: (\d+)%", result_fabricated).group(1))
+        assert conf_fabricated < conf_real
 
     def test_run_missing_expiry_vol_surface_and_gex_levels_no_crash_discloses(self):
         """
