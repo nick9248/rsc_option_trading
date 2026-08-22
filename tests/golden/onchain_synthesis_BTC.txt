@@ -2,8 +2,8 @@
 EXECUTIVE SYNTHESIS — BTC OPTIONS MARKET
 Generated: 2026-07-25 18:34:34 UTC
 ================================================================================
-BTC $64,371.10 | Regime: TRANSITION
-Direction: NEUTRAL | Vol: SUPPRESSED
+BTC $64,371.10 | Regime: RANGE BOUND BULLISH
+Direction: BULLISH | Vol: SUPPRESSED
 ────────────────────────────────────────────────────────────────────────────────
 DVOL: 37.5%  | IV Pctile: 20th  | ATM IV (front): ~36.2%
 10d RV: 28.6%  | 20d RV: 28.4%  | 30d RV: 27.1% (11th cone)
@@ -11,13 +11,13 @@ VRP: +10.4pts  | Term Structure: CONTANGO (+28.3pts)
 Perp Funding: 0.0000%  | 8h: 0.0003%
 ────────────────────────────────────────────────────────────────────────────────
 
-TRANSITION regime. Conflicting signals: near-term BEARISH vs far-term BULLISH Market structure is shifting — expect regime change within 1 days (model: GEX sign change at 27JUL26, OI 2,346). Priority: reduce position sizing, favor defined-risk structures, wait for clarity.
+RANGE-BOUND (BULLISH) regime. Vol suppressed but bullish lean. Positive gamma (+139.9M GEX) is dampening volatility — dealers buy dips and sell rallies. Expect grind-higher in range toward $70,000. Priority: sell put spreads preferred, skew short strikes higher.
 
-NEAR-TERM (0-7 DTE): BEARISH bias | GEX +85.4M (dampening) | OI: 154,865 contracts
+NEAR-TERM (0-7 DTE): NEUTRAL bias | GEX +85.4M (dampening) | OI: 154,865 contracts
   31JUL26 (5d): MaxPain $64,000 (-0.6%) | P/C 0.29 | ATM IV 36.2% | RR25 -3.6% | Flow: Insufficient flow data
   26JUL26 (0d): MaxPain $64,000 (-0.6%) | P/C 0.72 | ATM IV 14.8% | RR25 N/A | Flow: Insufficient flow data
 
-MID-TERM (7-30 DTE): NEUTRAL bias | GEX +25.9M (dampening) | OI: 24,185 contracts
+MID-TERM (7-30 DTE): BULLISH bias | GEX +25.9M (dampening) | OI: 24,185 contracts
   7AUG26 (12d): MaxPain $64,000 (-0.7%) | P/C 0.13 | ATM IV 35.8% | RR25 -4.1% | Flow: Insufficient flow data
   14AUG26 (19d): MaxPain $65,000 (+0.8%) | P/C 0.30 | ATM IV 35.1% | RR25 -4.2% | Flow: Insufficient flow data
 
@@ -36,15 +36,14 @@ SCREEN PRINTS (large single-leg trades, not blocks): 4 buys ($7.7M) | 6 sells ($
 
 TRADE RECOMMENDATIONS:
 OPPORTUNISTIC (signals disagree) — Long Straddle/Strangle (25SEP26): IV at 20th pctile looks cheap vs. its own history, but VRP +10.4pts says implied vol is still rich vs. currently realized vol — selling volatility has the more reliable near-term edge. Treat this long-vol idea with reduced confidence; do not size as a primary position.
-DEFENSIVE — Reduce sizing, favor defined-risk structures only. Consider long straddle on 25SEP26 to capture the regime shift.
 
 DATA QUALITY:
   - Order flow: insufficient data for all 12 expiries (no qualifying trades in the lookback window) — flow bias/trend not usable for any expiry this run
 
 SCORING DETAIL:
-  Direction: NEUTRAL (confidence: 13%)
+  Direction: BULLISH (confidence: 21%)
   Fragility: NONE
-  Near-term: BEARISH | Far-term: BULLISH
+  Near-term: NEUTRAL | Far-term: BULLISH
   Vol Regime: suppressed
-  Market Regime: transition
+  Market Regime: range_bound_bullish
   Effective VRP: +10.4pts | RR25: -3.6%
