@@ -143,7 +143,14 @@ class ExpiryMetrics:
     call_resistance_gex: Optional[float]
     put_support_strike: Optional[float]
     put_support_gex: Optional[float]
-    hvl_strike: Optional[float]  # Zero gamma level
+    hvl_strike: Optional[float]
+    """GexDexKeyLevels.hvl -- the STRIKE where cumulative net GEX changes
+    sign (a strike-axis OI-distribution artifact), NOT the re-priced Zero
+    Gamma Level (GexDexKeyLevels.zero_gamma_level, a different quantity
+    from GammaProfileCalculator -- not carried by this dataclass). Wave-H-A
+    Task 6: this field was previously commented "# Zero gamma level",
+    which is the wrong label for what it actually holds -- see
+    GexDexKeyLevels's own docstring for the full distinction."""
 
     # Volatility surface. atm_iv: None exactly when
     # VolatilitySurfaceCalculator._calculate_atm_iv found no ATM
@@ -304,6 +311,9 @@ class MarketWideMetrics:
     aggregate_call_resistance: Optional[Dict] = None
     aggregate_put_support: Optional[Dict] = None
     aggregate_hvl: Optional[float] = None
+    """Cross-expiration GexDexKeyLevels.hvl -- see ExpiryMetrics.hvl_strike's
+    docstring for the strike-axis-artifact-vs-Zero-Gamma-Level distinction
+    this field is also subject to (Wave-H-A Task 6)."""
 
     # Task G2-B Finding 3: names of MarketWideResult sections whose
     # calculation raised (threaded through from
@@ -1264,12 +1274,28 @@ class NarrativeGenerator:
     # KEY LEVELS TEMPLATE
     # -------------------------------------------------------------------------
 
+    # Wave-H-A (Task 6): this template has no live consumer -- confirmed
+    # never ``.format()``-ed anywhere in this codebase (an earlier audit's
+    # finding, re-confirmed here) -- but the label was still wrong for
+    # what {hvl} actually is, a landmine for whoever wires this up next.
+    # {hvl} is GexDexKeyLevels.hvl: the STRIKE where CUMULATIVE net GEX
+    # (summed strike-by-strike) changes sign -- a strike-axis artifact of
+    # how open interest is distributed, NOT the re-priced dealer-gamma
+    # flip. The actual "Zero Gamma Level" is GexDexKeyLevels.
+    # zero_gamma_level (computed separately by GammaProfileCalculator,
+    # bugfix_spec.md Item 2) and is not threaded into this template at
+    # all. See gex_dex_calculator.py's class docstring ("Key Levels"
+    # section) and GexDexKeyLevels's own docstring for the full
+    # distinction -- the live full-report formatter
+    # (gex_dex_formatter.py's KEY LEVELS block) already uses the correct
+    # "Cumulative GEX Zero Strike" label for this same value.
     LEVELS_TEMPLATE = (
         "KEY LEVELS: "
         "Resistance ${resistance:,.0f} (call wall {res_oi:,} OI). "
         "Support ${support:,.0f} (put wall {sup_oi:,} OI). "
         "Max pain ${max_pain:,.0f} ({mp_distance:+.1f}% from spot). "
-        "Zero Gamma Level ${hvl:,.0f}."
+        "Cumulative GEX Zero Strike ${hvl:,.0f} (strike-axis artifact, NOT "
+        "a re-priced gamma flip)."
     )
 
     # -------------------------------------------------------------------------

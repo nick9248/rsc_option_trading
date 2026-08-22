@@ -22,7 +22,12 @@ CREATE TABLE IF NOT EXISTS onchain_analysis_snapshots (
     total_net_dex DECIMAL(16,4),         -- Total net delta exposure
     call_resistance_strike DECIMAL(12,2), -- Strike with max positive GEX
     put_support_strike DECIMAL(12,2),     -- Strike with max negative GEX
-    hvl_level DECIMAL(12,2),              -- High Vol Level (zero gamma crossing)
+    hvl_level DECIMAL(12,2),              -- Cumulative GEX Zero Strike (strike-axis
+                                           -- sign crossing of summed net GEX -- a
+                                           -- strike-axis OI-distribution artifact,
+                                           -- NOT the re-priced Zero Gamma Level;
+                                           -- Wave-H-A Task 6, see GexDexKeyLevels's
+                                           -- docstring for the full distinction)
 
     -- Support/Resistance (OI-based)
     resistance_1_strike DECIMAL(12,2),   -- Top resistance by call OI
@@ -57,5 +62,5 @@ CREATE INDEX IF NOT EXISTS idx_onchain_snapshots_expiration
 
 COMMENT ON TABLE onchain_analysis_snapshots IS 'On-chain analysis metrics computed from option Greeks and open interest';
 COMMENT ON COLUMN onchain_analysis_snapshots.max_pain_strike IS 'Strike where option sellers minimize payout';
-COMMENT ON COLUMN onchain_analysis_snapshots.hvl_level IS 'High Volatility Level - price where gamma exposure crosses zero';
+COMMENT ON COLUMN onchain_analysis_snapshots.hvl_level IS 'Cumulative GEX Zero Strike: the strike where cumulative net GEX (summed strike-by-strike along the strike axis) changes sign -- a property of how open interest is distributed, NOT the re-priced Zero Gamma Level (a different, actual dealer-gamma-flip quantity computed separately). Wave-H-A Task 6: corrects this column''s prior label, which called it a gamma-crossing price.';
 COMMENT ON COLUMN onchain_analysis_snapshots.total_net_gex IS 'Net gamma exposure: (Call Gamma - Put Gamma) × Spot';
