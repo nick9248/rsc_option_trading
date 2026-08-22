@@ -321,10 +321,11 @@ class GexDexCalculator:
             expiration_count=expiration_count,
             instruments_missing_gamma=instruments_missing_gamma,
             oi_missing_gamma=oi_missing_gamma,
-            # Task G2-D fix 2: explicit, like total_net_gex/total_net_dex
-            # above -- summed from the SAME per-strike dealer_delta_exposure
-            # (call_delta - put_delta) computed in _calculate_gex_dex, not
-            # left to GexDexResult.__post_init__'s fallback.
+            # Wave-H-A: explicit, like total_net_gex/total_net_dex above --
+            # summed from the SAME per-strike dealer_delta_exposure
+            # (-net_dex, i.e. -(call_delta + put_delta)) computed in
+            # _calculate_gex_dex, not left to GexDexResult.__post_init__'s
+            # fallback.
             dealer_delta_exposure_total=sum(d["dealer_delta_exposure"] for d in strike_data.values()),
         )
 
@@ -421,17 +422,26 @@ class GexDexCalculator:
         their values and meaning unchanged -- ``dealer_gamma_exposure``/
         ``delta_exposure_holder`` are exact aliases of them.
 
-        Task G2-D fix 2 (confirmed live by an independent audit, verified
-        from raw Greeks): ``dealer_delta_exposure`` used to be
+        Wave-H-A (task Wave-H-A, reverting a regression introduced by Task
+        G2-D fix 2 / commit cb1770a): ``dealer_delta_exposure`` is
         ``-net_dex`` -- i.e. ``-(call_delta + put_delta)``, "dealers are
-        short EVERYTHING a holder holds". That contradicts the ASSUMED
-        DEALER VIEW report block's own stated assumption ("dealers long
-        calls / short puts"), which ``dealer_gamma_exposure`` (``net_gex``
-        = ``call_gamma - put_gamma``) already correctly follows. The two
-        conventions only coincide when ``put_delta`` is 0 -- never true
-        for a real book. ``dealer_delta_exposure`` is now
-        ``call_delta - put_delta``, the same long-calls/short-puts split
-        applied to delta instead of gamma.
+        short whatever holders hold". This is the class docstring's own
+        canonical SIGN CONVENTION (see above): the call/put-SPLIT heuristic
+        ("dealers long calls / short puts") is explicitly stated to apply to
+        GAMMA ONLY -- delta/vanna/charm are each "short whatever customers
+        (i.e. holders) hold", i.e. the negated holder-side sum. Commit
+        cb1770a changed this to ``call_delta - put_delta`` (the gamma-style
+        split applied to delta) reasoning that it should "match
+        dealer_gamma_exposure's own convention" -- but that reasoning
+        over-generalized the gamma-only split to delta, contradicting the
+        class docstring it claimed to follow. Worse, the split formula is
+        ALGEBRAICALLY GUARANTEED non-negative for any real book:
+        ``call_delta`` (holder-side call aggregate) is always >= 0 and
+        ``put_delta`` is always <= 0, so ``call_delta - put_delta`` =
+        ``call_delta + abs(put_delta)`` >= 0 always -- meaning the report's
+        "dealers net short delta" branch could never fire, for any book,
+        ever. The two conventions (split vs. negation) only coincide when
+        ``put_delta`` is 0 -- never true for a real book.
         """
         spot_squared = self.spot_price ** 2
         for strike, data in self.strike_data.items():
@@ -448,16 +458,20 @@ class GexDexCalculator:
             data["net_gamma"] = net_gamma
 
             # Item 8: holder-side raw gamma exposure and the dealer-side
-            # aliases. Task G2-D fix 2: dealer_delta_exposure is the
-            # long-calls/short-puts SPLIT (call_delta - put_delta),
-            # matching dealer_gamma_exposure's own convention -- NOT a
-            # blanket negation of the holder sum (that was the bug).
+            # aliases. Wave-H-A (reverting Task G2-D fix 2 / commit
+            # cb1770a): dealer_delta_exposure is -net_dex, i.e. dealers are
+            # short whatever holders hold for delta -- the class
+            # docstring's canonical SIGN CONVENTION (the long-calls/
+            # short-puts SPLIT is gamma-only, NOT a pattern to extend to
+            # delta). The split formula this replaces was algebraically
+            # guaranteed non-negative for any real book (call_delta >= 0,
+            # put_delta <= 0) -- see this method's docstring.
             data["gamma_exposure_holder"] = (
                 (data["call_gamma"] + data["put_gamma"]) * spot_squared * 0.01
             )
             data["delta_exposure_holder"] = data["net_dex"]
             data["dealer_gamma_exposure"] = data["net_gex"]
-            data["dealer_delta_exposure"] = data["call_delta"] - data["put_delta"]
+            data["dealer_delta_exposure"] = -data["net_dex"]
 
     def _calculate_cumulative_profiles(self) -> Dict[str, Dict[float, float]]:
         """

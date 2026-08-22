@@ -287,14 +287,18 @@ def test_gex_dex_result_to_dict_matches_legacy_shape():
             # fixture constructs GexDexStrikeRow directly, not through
             # GexDexCalculator, which is the only path that scales it by
             # S^2*0.01). dealer_gamma_exposure/delta_exposure_holder alias
-            # net_gex/net_dex. Task G2-D fix 2: dealer_delta_exposure is
-            # call_delta - put_delta = 0.6 - (-0.4) = 1.0 (long calls/short
-            # puts, matching dealer_gamma_exposure's convention) -- NOT
-            # -net_dex (-0.2, the pre-fix "short everything" bug).
+            # net_gex/net_dex. Wave-H-A (reverting Task G2-D fix 2 /
+            # commit cb1770a): dealer_delta_exposure is -net_dex =
+            # -0.2 (dealers short whatever holders hold), per
+            # GexDexCalculator's canonical SIGN CONVENTION -- NOT
+            # call_delta - put_delta (1.0, cb1770a's regression: the
+            # gamma-style split applied to delta, which cb1770a claimed
+            # matched dealer_gamma_exposure's convention but which the
+            # class docstring reserves for gamma only).
             "gamma_exposure_holder": 2.0,
             "delta_exposure_holder": 0.2,
             "dealer_gamma_exposure": 1_000_000.0,
-            "dealer_delta_exposure": 1.0,
+            "dealer_delta_exposure": -0.2,
         }
     }
     assert d["cumulative_gex"] == {95000.0: 1_000_000.0}
@@ -316,15 +320,14 @@ def test_gex_dex_result_to_dict_matches_legacy_shape():
     assert d["total_net_dex"] == 0.2
     # bugfix_spec.md Item 8 (additive): totals default from
     # total_net_gex/total_net_dex (dealer aliases) and summed strike_rows
-    # (gamma_exposure_holder_total). Task G2-D fix 2:
-    # dealer_delta_exposure_total also sums from strike_rows now
-    # (call_delta - put_delta per strike = 1.0 for this single row) --
-    # it cannot validly alias total_net_dex (0.2), which has already
-    # discarded the call/put split this field needs.
+    # (gamma_exposure_holder_total). Wave-H-A: dealer_delta_exposure_total
+    # sums from strike_rows (each row's dealer_delta_exposure = -net_dex
+    # at that strike = -0.2 for this single row) -- matches -total_net_dex
+    # exactly now that the canonical negation convention is restored.
     assert d["gamma_exposure_holder_total"] == 2.0
     assert d["delta_exposure_holder_total"] == 0.2
     assert d["dealer_gamma_exposure_total"] == 1_000_000.0
-    assert d["dealer_delta_exposure_total"] == 1.0
+    assert d["dealer_delta_exposure_total"] == -0.2
     assert "expiration_count" not in d
 
 
@@ -440,11 +443,13 @@ def _make_vol_surface_result() -> VolSurfaceResult:
         ),
         second_order_greeks=SecondOrderGreeks(
             vanna_exposure_holder=0.001234, charm_exposure_holder=-0.005678,
-            # Task C5 review fix round 2: dealer_vanna_exposure/
-            # dealer_charm_exposure are now REQUIRED (no default) --
-            # explicit values here, deliberately NOT the negation of the
-            # holder sum above, so this fixture cannot be mistaken for
-            # (or silently drift back to) the retired negation convention.
+            # dealer_vanna_exposure/dealer_charm_exposure are REQUIRED (no
+            # default on this dataclass) -- explicit values here, this
+            # test only checks to_dict() pass-through fidelity, not that
+            # these equal any particular derivation of the holder sum
+            # above (that arithmetic is VolatilitySurfaceCalculator's
+            # responsibility, exercised separately in
+            # test_volatility_surface_calculator.py).
             dealer_vanna_exposure=0.002468, dealer_charm_exposure=-0.003456,
             vanna_signal="IV drop → dealers buy underlying (bullish)",
             charm_signal="Time decay pushing delta negative (bearish drift)",

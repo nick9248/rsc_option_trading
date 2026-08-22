@@ -74,16 +74,21 @@ class GexDexStrikeRow:
     """Alias of ``net_gex`` (same value, correctly-labelled name)."""
 
     dealer_delta_exposure: Optional[float] = None
-    """call_delta - put_delta -- the assumed-dealer view: dealers long
-    calls / short puts, the SAME long-calls/short-puts SPLIT convention
-    ``dealer_gamma_exposure`` (``net_gex`` = call_gamma - put_gamma)
-    already uses. Task G2-D fix 2 (confirmed live by an independent
-    audit): this was previously ``-net_dex`` (``-(call_delta +
-    put_delta)``, i.e. "dealers are short EVERYTHING a holder holds") --
-    a DIFFERENT, contradictory convention from the one
-    ``dealer_gamma_exposure`` uses and the one the ASSUMED DEALER VIEW
-    report block's own parenthetical states. The two formulas only
-    coincide when ``put_delta`` is 0, never true for a real book."""
+    """-net_dex, i.e. -(call_delta + put_delta) -- the assumed-dealer view:
+    dealers short whatever holders hold, per GexDexCalculator's own
+    canonical SIGN CONVENTION (its class docstring: the long-calls/
+    short-puts SPLIT applies to GAMMA ONLY; delta/vanna/charm are each
+    "short whatever customers hold", i.e. the negated holder sum).
+
+    Wave-H-A (reverting a regression, Task G2-D fix 2 / commit cb1770a):
+    that commit changed this field to ``call_delta - put_delta`` (the
+    gamma-style SPLIT applied to delta), reasoning it should match
+    ``dealer_gamma_exposure``'s own convention -- but the class docstring
+    it cited explicitly reserves the split for gamma. The split formula is
+    also algebraically guaranteed non-negative for any real book
+    (call_delta >= 0, put_delta <= 0), so it could never represent a
+    dealer net-short-delta book. Reverted to the negated-holder-sum
+    formula, which is genuinely two-sided."""
 
     def __post_init__(self) -> None:
         if self.gamma_exposure_holder is None:
@@ -93,7 +98,7 @@ class GexDexStrikeRow:
         if self.dealer_gamma_exposure is None:
             object.__setattr__(self, "dealer_gamma_exposure", self.net_gex)
         if self.dealer_delta_exposure is None:
-            object.__setattr__(self, "dealer_delta_exposure", self.call_delta - self.put_delta)
+            object.__setattr__(self, "dealer_delta_exposure", -self.net_dex)
 
 
 @dataclass(frozen=True)
@@ -206,14 +211,17 @@ class GexDexResult:
     """Alias of ``total_net_gex`` (same value, correctly-labelled name)."""
 
     dealer_delta_exposure_total: Optional[float] = None
-    """Sigma over strike_rows.dealer_delta_exposure (call_delta -
-    put_delta per strike) -- the long-calls/short-puts assumed-dealer
-    view, matching dealer_gamma_exposure_total's own convention (Task
-    G2-D fix 2). Cannot be derived from total_net_dex (call_delta +
-    put_delta) the way the pre-fix ``-total_net_dex`` default was --
-    that quantity has already discarded exactly the call/put split this
-    field needs, which is why that default was a genuine convention
-    mismatch, not just a sign quirk."""
+    """-total_net_dex -- the negated-holder-sum assumed-dealer view (dealers
+    short whatever holders hold for delta), per GexDexCalculator's
+    canonical SIGN CONVENTION. Sigma over strike_rows.dealer_delta_exposure,
+    each of which is -net_dex at that strike.
+
+    Wave-H-A (reverting Task G2-D fix 2 / commit cb1770a): that commit
+    replaced this with the call/put-SPLIT (call_delta - put_delta per
+    strike), reasoning it should match dealer_gamma_exposure_total's own
+    convention -- but the split is documented as gamma-only, and is
+    algebraically guaranteed non-negative for any real book (unlike this
+    negated-sum formula, which is genuinely two-sided)."""
 
     # --- Additive fields (Task G2-A, Wave G fresh audit / bug 2) ---
     instruments_missing_gamma: int = 0
@@ -244,13 +252,15 @@ class GexDexResult:
         if self.delta_exposure_holder_total is None:
             object.__setattr__(self, "delta_exposure_holder_total", self.total_net_dex)
         if self.dealer_delta_exposure_total is None:
-            # Task G2-D fix 2: summed from strike_rows, matching
-            # gamma_exposure_holder_total's own fallback pattern just
-            # below -- there is no top-level "total" field this can
-            # validly alias (total_net_dex is call_delta + put_delta,
-            # which has already discarded the call/put split this field
-            # needs), unlike dealer_gamma_exposure_total's alias of
-            # total_net_gex above.
+            # Wave-H-A: -total_net_dex, the negated-holder-sum convention.
+            # Unlike the retired call/put-SPLIT formula, this CAN be
+            # derived directly from total_net_dex (call_delta + put_delta)
+            # -- no per-strike call/put split needed -- but summing
+            # strike_rows.dealer_delta_exposure (each already -net_dex at
+            # that strike) keeps this fallback consistent with
+            # gamma_exposure_holder_total's own summed-from-rows pattern
+            # just below, and matches exactly regardless of which path is
+            # used.
             dealer_delta_total = (
                 sum(row.dealer_delta_exposure for row in self.strike_rows) if self.strike_rows else 0.0
             )

@@ -83,28 +83,32 @@ class ExpiryMetrics:
     an "insufficient data"/"N/A" disclosure string, instead of silently
     treating absence as a measured value.
 
-    ``pc_atm``/``pc_near_otm``/``pc_far_otm`` are DELIBERATELY left as
-    plain ``float``, NOT touched by this fix: ``MoneynessBucket.ratio``
-    (the upstream source) is documented "ALWAYS present; 0.0 when
-    undefined" (an earlier, intentional "H2 fix" in
-    ``VolatilitySurfaceCalculator._calculate_pc_by_moneyness`` -- see that
-    method's own comment), so ``0.0`` there is already a deliberate,
-    documented convention owned by the layer that computes it, not a
-    fabrication introduced by this mapper -- the same category as
-    ``pc_ratio``'s ``inf`` -> ``99.0`` cap, also deliberately left alone.
+    Wave-H-A (Task 5, correcting this docstring's own prior claim):
+    ``pc_atm``/``pc_near_otm``/``pc_far_otm`` are ``Optional[float]``.
+    They used to be documented here as "DELIBERATELY left as plain float,
+    NOT touched" because ``MoneynessBucket.ratio`` was believed to be an
+    intentional "H2 fix" convention ("ALWAYS present; 0.0 when
+    undefined"). That belief was wrong: the 0.0-for-undefined convention
+    was itself the bug (an empty moneyness bucket -- zero instruments --
+    was indistinguishable from a genuinely-measured ratio of 0.0, and fed
+    a "Strong Bullish" bias label off the fabricated zero). ``
+    MoneynessBucket.ratio`` is now ``Optional[float]`` (``None`` for a
+    truly empty bucket), and these three fields propagate that ``None``
+    the same way every other genuinely-absent field on this dataclass
+    does. ``pc_ratio``'s ``inf`` -> ``99.0`` cap is a separate, still
+    deliberately-left-alone convention, unaffected by this fix.
 
     ``max_pain``'s fallback to spot price when ``calculate_max_pain``
     returns ``None`` was PREVIOUSLY judged (incorrectly, by this
-    campaign's own earlier pass) to belong in the same "deliberate,
-    documented, harmless" category as the two conventions above. It does
-    not: unlike ``pc_atm``/``pc_ratio``, the fallback value is fed
-    straight into ``score_max_pain_gravity`` at three call sites in
-    ``SynthesisEngine.run``, which has no way to tell "measured max pain
-    that happens to equal spot" from "no max pain was ever computed" --
-    it produces a real, non-zero-weight score and a confident-sounding
-    message (e.g. "Max pain $64,371 is near spot (+0.0%)") from a
-    computation that never ran. Task Wave-H-B Fix 4: the display fallback
-    stays (a report line has to show something), but
+    campaign's own earlier pass) to belong in that same "deliberate,
+    documented, harmless" category. It does not: unlike ``pc_ratio``, the
+    fallback value is fed straight into ``score_max_pain_gravity`` at
+    three call sites in ``SynthesisEngine.run``, which has no way to tell
+    "measured max pain that happens to equal spot" from "no max pain was
+    ever computed" -- it produces a real, non-zero-weight score and a
+    confident-sounding message (e.g. "Max pain $64,371 is near spot
+    (+0.0%)") from a computation that never ran. Task Wave-H-B Fix 4: the
+    display fallback stays (a report line has to show something), but
     ``max_pain_sufficient_data`` (mirroring ``flow_sufficient_data``'s
     value-plus-sufficiency-flag pattern below) travels alongside it so
     the scorer can tell the difference and take its own explicit
@@ -156,22 +160,26 @@ class ExpiryMetrics:
     put_25d_iv: Optional[float]
     call_25d_iv: Optional[float]
 
-    # Moneyness P/C
-    pc_atm: float
-    pc_near_otm: float
-    pc_far_otm: float
+    # Moneyness P/C. None exactly when MoneynessBucket.ratio is None (zero
+    # instruments in this bucket) -- NOT a measured 0.0 ratio (Wave-H-A
+    # Task 5; see this dataclass's own docstring above).
+    pc_atm: Optional[float]
+    pc_near_otm: Optional[float]
+    pc_far_otm: Optional[float]
 
     # Second-order Greeks. bugfix_spec.md Item 8 fix-review (Important #3):
     # these are the ASSUMED-DEALER exposures (SecondOrderGreeks.
     # dealer_vanna_exposure/dealer_charm_exposure), not the holder-side raw
     # sum -- F8.4 requires score_* functions to consume the dealer fields,
     # matching the report text's own dealer-derived vanna_signal/
-    # charm_signal. Task G2-G: None exactly when the vol surface never
-    # computed for this expiry (dealer_vanna_exposure/dealer_charm_exposure
-    # are REQUIRED, non-Optional fields on SecondOrderGreeks whenever a
-    # vol surface DOES exist -- the only genuine-missing case is the whole
-    # surface being absent) -- NOT a measured net_vanna/net_charm of 0.0,
-    # which score_vanna_charm treats as its own distinct "zero" signal.
+    # charm_signal. None exactly when the vol surface never computed for
+    # this expiry (``vol is None``), OR (Wave-H-A Task 4) when the vol
+    # surface DID compute but nothing could be measured for vanna/charm
+    # specifically (every instrument's greeks were unavailable --
+    # SecondOrderGreeks.dealer_vanna_exposure/dealer_charm_exposure are
+    # themselves Optional now, for exactly this reason) -- NOT a measured
+    # net_vanna/net_charm of 0.0, which score_vanna_charm treats as its
+    # own distinct "zero" signal.
     net_vanna: Optional[float]
     net_charm: Optional[float]
 
@@ -2509,18 +2517,15 @@ class SynthesisMapper:
         put_25d_iv = skew.put_25d_iv if skew is not None else None
         call_25d_iv = skew.call_25d_iv if skew is not None else None
 
-        # pc_atm/pc_near_otm/pc_far_otm: MoneynessBucket.ratio is
-        # DELIBERATELY "ALWAYS present; 0.0 when undefined" (an existing,
-        # documented "H2 fix" in
-        # VolatilitySurfaceCalculator._calculate_pc_by_moneyness) -- not
-        # touched by Task G2-G. ``pc_moneyness is None`` (whole vol
-        # surface missing) is the one case this mapper still maps to 0.0,
-        # consistent with that same upstream convention (0.0 = "no ratio
-        # to give you"), not a new fabrication.
+        # Wave-H-A (Task 5): pc_atm/pc_near_otm/pc_far_otm propagate
+        # MoneynessBucket.ratio's own None (zero instruments in that
+        # bucket, or the whole vol surface missing) -- NOT a fabricated
+        # 0.0. See this mapper's ExpiryMetrics docstring for why the prior
+        # "0.0 when undefined" belief was itself the bug.
         pc_moneyness = vol.pc_by_moneyness if vol is not None else None
-        pc_atm = (pc_moneyness.atm.ratio if pc_moneyness is not None else 0.0)
-        pc_near_otm = (pc_moneyness.near_otm.ratio if pc_moneyness is not None else 0.0)
-        pc_far_otm = (pc_moneyness.far_otm.ratio if pc_moneyness is not None else 0.0)
+        pc_atm = (pc_moneyness.atm.ratio if pc_moneyness is not None else None)
+        pc_near_otm = (pc_moneyness.near_otm.ratio if pc_moneyness is not None else None)
+        pc_far_otm = (pc_moneyness.far_otm.ratio if pc_moneyness is not None else None)
 
         # bugfix_spec.md Item 8 fix-review (Important #3, overrules the
         # original B2 sub-task 2 commit): F8.4 states plainly "score_*
@@ -2602,9 +2607,9 @@ class SynthesisMapper:
             risk_reversal_25d=(float(risk_reversal_25d) if risk_reversal_25d is not None else None),
             put_25d_iv=(float(put_25d_iv) if put_25d_iv is not None else None),
             call_25d_iv=(float(call_25d_iv) if call_25d_iv is not None else None),
-            pc_atm=float(pc_atm),
-            pc_near_otm=float(pc_near_otm),
-            pc_far_otm=float(pc_far_otm),
+            pc_atm=(float(pc_atm) if pc_atm is not None else None),
+            pc_near_otm=(float(pc_near_otm) if pc_near_otm is not None else None),
+            pc_far_otm=(float(pc_far_otm) if pc_far_otm is not None else None),
             net_vanna=(float(net_vanna) if net_vanna is not None else None),
             net_charm=(float(net_charm) if net_charm is not None else None),
             flow_bias=flow_bias,

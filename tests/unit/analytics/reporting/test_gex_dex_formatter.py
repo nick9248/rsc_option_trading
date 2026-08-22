@@ -73,38 +73,37 @@ def test_gex_dex_section_key_levels_and_totals():
     assert "Delta Exposure: -0.2000 BTC" in text  # = total_net_dex (holder), unchanged
     assert "Option holders are net short delta" in text
 
-    # Assumed dealer view: total_net_gex unchanged; dealer delta now
-    # follows dealer_delta_exposure_total's own fallback (Task G2-D fix
-    # 2): summed call_delta - put_delta per strike_row -- row1
-    # (0.6-(-0.4)=1.0) + row2 (0.3-(-0.7)=1.0) = 2.0. NOT -total_net_dex
-    # (+0.2, the pre-fix "short everything" bug this fixture used to
-    # assert).
+    # Assumed dealer view: total_net_gex unchanged; dealer delta follows
+    # dealer_delta_exposure_total's own fallback (Wave-H-A): summed
+    # -net_dex per strike_row -- row1 (-0.2) + row2 (-(-0.4)=+0.4) = +0.2.
+    # Matches -total_net_dex (-(-0.2) = +0.2) exactly, per
+    # GexDexCalculator's canonical negated-holder-sum convention. NOT
+    # call_delta - put_delta (+2.0, cb1770a's regression -- reverted).
     assert "ASSUMED DEALER VIEW  (assumption: dealers long calls / short puts for" in text
     assert "Dealer Gamma:   +500,000.00 USD per 1% move" in text
     assert "POSITIVE: dealers long gamma, stabilizing (buy dips/sell rallies)" in text
-    assert "Dealer Delta:   +2.0000 BTC" in text
+    assert "Dealer Delta:   +0.2000 BTC" in text
     # bugfix_spec.md Item 8 fix-review (Critical #2, then round-2 Important
     # finding): mechanics only, present tense, no directional bull/bear call
     # and no spot-direction claim (that's gamma's story, told two lines up).
-    # This sentence's sign matches the corrected +2.0000 value (still
-    # positive/"net long" here -- the pre-fix +0.2000 also happened to be
-    # positive for this particular fixture, so the SIGN didn't flip in
-    # this example even though the MAGNITUDE and underlying convention did;
-    # test_gex_dex_calculator.py::TestDealerDeltaMatchesGammaConvention
-    # covers a fixture where the fix does flip the sign).
+    # This sentence's sign matches the +0.2000 value (net long delta ->
+    # hedge by selling) -- test_gex_dex_calculator.py::
+    # TestDealerDeltaIsNegatedHolderSum covers fixtures where the sign
+    # differs from the holder-side reading.
     assert "Dealers net long delta; hedging back to neutral means selling the underlying" in text
 
 
-def test_gex_dex_section_dealer_delta_flips_sign_and_narrative_with_audit_numbers():
+def test_gex_dex_section_dealer_delta_uses_negated_holder_sum_with_audit_numbers():
     """
-    Task G2-D fix 2: reproduces the audit's own worked numbers exactly --
-    call_delta*OI = +137.53, put_delta*OI = -78.53. The PRE-FIX formula
-    (-(call_delta + put_delta) = -59.0006) printed "Dealers net short
-    delta; hedging back to neutral means buying the underlying". The
-    CORRECT long-calls/short-puts convention (call_delta - put_delta =
-    +216.06) flips both the number AND the narrative sentence to "Dealers
-    net long delta; hedging back to neutral means selling the underlying"
-    -- this is the exact scenario the independent audit found broken.
+    Wave-H-A (reverting Task G2-D fix 2 / commit cb1770a): reproduces the
+    original audit's own worked numbers exactly -- call_delta*OI =
+    +137.53, put_delta*OI = -78.53 (net_dex = holder delta = +59.0). The
+    CORRECT negated-holder-sum convention (-net_dex = -59.0) prints
+    "Dealers net short delta; hedging back to neutral means buying the
+    underlying". cb1770a's regression (call_delta - put_delta = +216.06,
+    algebraically guaranteed non-negative for any real book) printed the
+    opposite, unconditionally -- this is the exact scenario the original
+    audit found broken, now confirmed fixed by reverting to negation.
     """
     result = _make_result(
         strike_rows=(
@@ -122,9 +121,9 @@ def test_gex_dex_section_dealer_delta_flips_sign_and_narrative_with_audit_number
     )
     text = format_gex_dex_section(result, "BTC")
 
-    assert "Dealer Delta:   +216.0600 BTC" in text
-    assert "Dealers net long delta; hedging back to neutral means selling the underlying" in text
-    assert "Dealers net short delta; hedging back to neutral means buying the underlying" not in text
+    assert "Dealer Delta:   -59.0000 BTC" in text
+    assert "Dealers net short delta; hedging back to neutral means buying the underlying" in text
+    assert "Dealers net long delta; hedging back to neutral means selling the underlying" not in text
 
 
 def test_gex_dex_section_holder_block_names_no_actor():

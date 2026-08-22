@@ -729,22 +729,23 @@ class TestHolderDealerSignConvention:
           dealer_gamma_exposure = (0.0024-0.0029)*1e8 = -50,000.00
           delta_exposure_holder = (50-25)+(12-56) = -19.0
 
-        Task G2-D fix 2: dealer_delta_exposure is call_delta - put_delta
-          (long calls/short puts, matching dealer_gamma_exposure's own
-          convention), summed per strike:
-            K=100,000: (50) - (-25) = 75
-            K=110,000: (12) - (-56) = 68
-            dealer_delta_exposure_total = 75 + 68 = 143.0
-          NOT -delta_exposure_holder (= +19.0) -- that was the pre-fix bug
-          (short EVERYTHING a holder holds, contradicting the gamma line's
-          own long-calls/short-puts assumption printed right above it).
+        Wave-H-A (reverting Task G2-D fix 2 / commit cb1770a):
+          dealer_delta_exposure is -delta_exposure_holder (dealers short
+          whatever holders hold), per GexDexCalculator's canonical SIGN
+          CONVENTION -- the long-calls/short-puts SPLIT is gamma-only, NOT
+          a pattern to extend to delta:
+            dealer_delta_exposure_total = -(-19.0) = 19.0
+          NOT call_delta - put_delta (= 143.0) -- that was cb1770a's
+          regression, which is algebraically guaranteed non-negative for
+          any real book (call_delta >= 0, put_delta <= 0) and so could
+          never represent a dealer net-short-delta book.
         """
         r = GexDexCalculator(self.FIXTURE, 100_000.0, "BTC").calculate()
 
         assert r.gamma_exposure_holder_total == pytest.approx(530_000.0)
         assert r.dealer_gamma_exposure_total == pytest.approx(-50_000.0)
         assert r.delta_exposure_holder_total == pytest.approx(-19.0)
-        assert r.dealer_delta_exposure_total == pytest.approx(143.0)
+        assert r.dealer_delta_exposure_total == pytest.approx(19.0)
         # legacy aliases unchanged
         assert r.total_net_gex == pytest.approx(r.dealer_gamma_exposure_total)
         assert r.total_net_dex == pytest.approx(r.delta_exposure_holder_total)
@@ -761,19 +762,27 @@ class TestHolderDealerSignConvention:
         assert r.dealer_gamma_exposure_total == 0.0
 
 
-class TestDealerDeltaMatchesGammaConvention:
+class TestDealerDeltaIsNegatedHolderSum:
     """
-    Task G2-D fix 2 (confirmed live by an independent audit, verified from
-    raw Greeks): the ASSUMED DEALER VIEW report block states ONE
-    convention ("dealers long calls / short puts") but, before this fix,
-    computed Dealer Gamma and Dealer Delta with TWO DIFFERENT conventions:
-      Dealer Gamma = call_gamma - put_gamma        (long calls/short puts)
-      Dealer Delta = -(call_delta + put_delta)     (short EVERYTHING)
-    Applying the gamma line's own stated assumption to delta means
-    call_delta - put_delta, not -(call_delta + put_delta) -- the two only
-    coincide when put_delta is 0, which is never true for a real book.
+    Wave-H-A: reverts Task G2-D fix 2 (commit cb1770a), which changed
+    ``dealer_delta_exposure`` from ``-net_dex`` to ``call_delta -
+    put_delta`` (the gamma-style call/put SPLIT), reasoning it should
+    match ``dealer_gamma_exposure``'s own convention. That reasoning
+    contradicts ``GexDexCalculator``'s own class docstring (the ONE place
+    the SIGN CONVENTION is stated): the long-calls/short-puts SPLIT applies
+    to GAMMA ONLY -- delta/vanna/charm are each "short whatever customers
+    (i.e. holders) hold", i.e. the negated holder-side sum.
 
-    Fixture reproduces the audit's own worked numbers exactly: a single
+    The split formula is also PROVABLY WRONG, not merely inconsistent:
+    ``call_delta`` (holder-side call aggregate) is always >= 0 and
+    ``put_delta`` is always <= 0, so ``call_delta - put_delta`` =
+    ``call_delta + abs(put_delta)`` is ALGEBRAICALLY GUARANTEED
+    non-negative for any real book -- the report's "dealers net short
+    delta" branch could never fire, for any book, ever. This class proves
+    that with an all-puts book (negative dealer delta) and an all-calls
+    book (positive dealer delta) -- genuinely two-sided, unlike the split.
+
+    Fixture reproduces the original audit's own worked numbers: a single
     strike with call_delta*OI = +137.53, put_delta*OI = -78.53 (OI folded
     into a delta of exactly +-1.0 for a clean product).
     """
@@ -783,7 +792,7 @@ class TestDealerDeltaMatchesGammaConvention:
         {"strike": 65_000.0, "option_type": "P", "gamma": 0.0, "delta": -1.0, "open_interest": 78.53},
     ]
 
-    def test_dealer_delta_is_call_minus_put_not_negated_holder_sum(self):
+    def test_dealer_delta_is_negated_holder_sum_not_call_minus_put(self):
         r = GexDexCalculator(self.FIXTURE, 65_000.0, "BTC").calculate()
 
         row = r.strike_rows[0]
@@ -794,17 +803,69 @@ class TestDealerDeltaMatchesGammaConvention:
         assert row.delta_exposure_holder == pytest.approx(59.0, abs=1e-6)
         assert r.delta_exposure_holder_total == pytest.approx(59.0, abs=1e-6)
 
-        # The OLD (buggy) convention: -(call_delta + put_delta) = -59.0006
-        # -- "dealers net short delta, hedge by buying". Must NOT be this.
-        wrong_short_everything = -(row.call_delta + row.put_delta)
-        assert row.dealer_delta_exposure != pytest.approx(wrong_short_everything)
-        assert r.dealer_delta_exposure_total != pytest.approx(wrong_short_everything)
+        # cb1770a's regression: call_delta - put_delta = +216.06 -- "dealers
+        # net long delta, hedge by selling". Must NOT be this.
+        wrong_split = row.call_delta - row.put_delta
+        assert row.dealer_delta_exposure != pytest.approx(wrong_split)
+        assert r.dealer_delta_exposure_total != pytest.approx(wrong_split)
 
-        # The CORRECT convention, matching dealer_gamma_exposure's own
-        # long-calls/short-puts split: call_delta - put_delta = +216.06 --
-        # "dealers net long delta, hedge by selling".
-        assert row.dealer_delta_exposure == pytest.approx(216.06, abs=1e-6)
-        assert r.dealer_delta_exposure_total == pytest.approx(216.06, abs=1e-6)
+        # The CORRECT convention: -(call_delta + put_delta) = -59.0 --
+        # "dealers net short delta, hedge by buying".
+        assert row.dealer_delta_exposure == pytest.approx(-59.0, abs=1e-6)
+        assert r.dealer_delta_exposure_total == pytest.approx(-59.0, abs=1e-6)
+
+    def test_all_puts_book_produces_negative_dealer_delta(self):
+        """
+        Genuinely two-sided proof (task Wave-H-A verification requirement):
+        an all-puts book must be able to produce a NEGATIVE dealer delta.
+        Under the retired call/put-SPLIT formula (call_delta - put_delta),
+        an all-puts book gives call_delta=0, so the result is
+        -put_delta >= 0 -- ALWAYS non-negative, even for a maximally
+        bearish, 100%-put book. The reverted negation formula does not
+        have this defect.
+        """
+        all_puts = [
+            {"strike": 65_000.0, "option_type": "P", "gamma": 0.001, "delta": -0.5, "open_interest": 100.0},
+        ]
+        r = GexDexCalculator(all_puts, 65_000.0, "BTC").calculate()
+
+        row = r.strike_rows[0]
+        assert row.call_delta == pytest.approx(0.0)
+        assert row.put_delta == pytest.approx(-50.0)  # -0.5 * 100
+
+        # Negation formula: -(0 + -50) = +50 -- dealers short the puts
+        # holders hold, i.e. net LONG delta (correct: writing puts to a
+        # bearish holder base means the dealer is short puts, which is a
+        # long-delta position).
+        assert row.dealer_delta_exposure == pytest.approx(50.0, abs=1e-6)
+        assert r.dealer_delta_exposure_total == pytest.approx(50.0, abs=1e-6)
+
+        # The retired split formula (call_delta - put_delta = 0 - (-50) =
+        # +50) happens to agree here only because there are zero calls --
+        # confirm the split would have been NON-NEGATIVE regardless of how
+        # bearish the put book gets, by construction (call_delta is always
+        # 0 in an all-puts book, so split = -put_delta >= 0 always).
+        wrong_split = row.call_delta - row.put_delta
+        assert wrong_split >= 0.0
+
+    def test_all_calls_book_produces_positive_dealer_delta(self):
+        """Mirror of the all-puts case: an all-calls (holder-side net long
+        delta) book must produce a NEGATIVE dealer delta under the correct
+        negation convention -- dealers short whatever the (bullish) holder
+        base holds."""
+        all_calls = [
+            {"strike": 65_000.0, "option_type": "C", "gamma": 0.001, "delta": 0.5, "open_interest": 100.0},
+        ]
+        r = GexDexCalculator(all_calls, 65_000.0, "BTC").calculate()
+
+        row = r.strike_rows[0]
+        assert row.call_delta == pytest.approx(50.0)
+        assert row.put_delta == pytest.approx(0.0)
+
+        # Negation formula: -(50 + 0) = -50 -- dealers short the calls
+        # holders hold, i.e. net SHORT delta.
+        assert row.dealer_delta_exposure == pytest.approx(-50.0, abs=1e-6)
+        assert r.dealer_delta_exposure_total == pytest.approx(-50.0, abs=1e-6)
 
 
 class TestCalculateRolloffProfile:
