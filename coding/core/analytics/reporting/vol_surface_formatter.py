@@ -113,7 +113,11 @@ def format_vol_surface_section(result: VolSurfaceResult, expiration: str) -> str
         # Minimum viable fix until per-bucket history exists: raw ratio
         # only, no directional tag. bucket.bias is still computed/stored
         # (to_dict() unaffected) -- only this report line stops rendering it.
-        if ratio == float("inf"):
+        if ratio is None:
+            # Wave-H-A (Task 5): ZERO instruments in this bucket -- distinct
+            # from the inf case below (some puts, no calls).
+            ratio_str = "N/A (No Instruments)"
+        elif ratio == float("inf"):
             ratio_str = "N/A (No Call OI)"
         else:
             ratio_str = f"P/C = {ratio:.2f}"

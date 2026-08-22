@@ -561,8 +561,27 @@ class VolatilitySurfaceCalculator:
         - Near-OTM: 5-15% from spot
         - Far-OTM: >15% from spot
 
+        Wave-H-A (Task 5): a bucket's ``ratio`` is ``None`` when the bucket
+        has ZERO instruments in it (``call_oi == 0 and put_oi == 0``) --
+        distinct from a genuinely-measured ratio of 0.0 (``call_oi > 0``,
+        ``put_oi == 0`` -- some calls, no puts, a real reading). Before
+        this fix, an empty bucket silently fell into the ``call_oi <= 0``
+        branch and got ``ratio = 0.0`` (this dataclass's field docstring
+        used to describe that as an intentional "H2 fix" convention --
+        it was not; see ``MoneynessBucket.ratio``'s corrected docstring).
+        That fabricated 0.0 was then indistinguishable from a real zero
+        AND fed ``interpret_put_call_ratio(0.0)`` (0 < the "Strong
+        Bullish" threshold), producing a "Strong Bullish" ``bias`` label
+        for a bucket that measured nothing at all -- not rendered in the
+        text report today (vol_surface_formatter only prints raw ratio),
+        but reachable via ``to_dict()``/structured output.
+        ``interpret_put_call_ratio`` already treats ``None`` the same as
+        ``float('inf')`` (both "undefined" -> "N/A"), so no change to that
+        function was needed -- only to what this method feeds it.
+
         Returns:
-            Dict with per-bucket call_oi, put_oi, ratio, bias.
+            Dict with per-bucket call_oi, put_oi, ratio (Optional[float]),
+            bias.
         """
         buckets = {
             "atm": {"call_oi": 0, "put_oi": 0, "range": "±5%"},
@@ -578,8 +597,12 @@ class VolatilitySurfaceCalculator:
             # would KeyError otherwise (task A7 review: this comment previously
             # named the deleted generate_report_section as the reason -- the
             # real reason is calculate()'s typed-model construction).
+            #
+            # Wave-H-A (Task 5): ratio is None here, not a fabricated 0.0 --
+            # None is "no data", not "a measured ratio of exactly zero". See
+            # this method's docstring below for the full distinction.
             for bucket_data in buckets.values():
-                bucket_data["ratio"] = 0.0
+                bucket_data["ratio"] = None
                 bucket_data["bias"] = "N/A"
             return buckets
 
@@ -609,8 +632,14 @@ class VolatilitySurfaceCalculator:
 
             if call_oi > 0:
                 ratio = put_oi / call_oi
+            elif put_oi > 0:
+                ratio = float("inf")
             else:
-                ratio = float("inf") if put_oi > 0 else 0
+                # Wave-H-A (Task 5): ZERO instruments in this bucket at
+                # all -- not a measured ratio. Distinct from call_oi > 0,
+                # put_oi == 0 above (a real reading of 0.0, no puts but
+                # some calls).
+                ratio = None
 
             bucket_data["ratio"] = ratio
             # M4 (code_quality_review.md): shared interpreter, unifying
@@ -640,18 +669,26 @@ class VolatilitySurfaceCalculator:
 
         Results are aggregated across all instruments, weighted by OI.
 
-        Task C5 review (orchestrator ruling, Important #1): the
-        ASSUMED-DEALER view is the call/put-SPLIT convention (+1 call, -1
-        put -- SqueezeMetrics, the same convention GexDexCalculator already
-        uses for gamma/delta and ExposureProfileCalculator now uses for
-        per-strike VEX/CEX) -- NOT a blanket negation of the holder-side
-        sum. Negation and the call/put split are only equal when every
-        instrument in the aggregate is a call (or every one is a put);
-        they diverge on any mixed call/put aggregate, which is the normal
-        case. This aggregate scalar and ExposureProfileCalculator's
-        per-strike total must agree on what "dealer vanna/charm" means --
-        this was a real defect the review caught, not just a style
-        preference.
+        Wave-H-A (reverting a regression, Task C5 review fix round 1 /
+        commit b6d483e): the ASSUMED-DEALER view for vanna/charm is
+        ``-(holder-side sum)`` -- dealers short whatever holders hold --
+        per GexDexCalculator's own canonical SIGN CONVENTION (its class
+        docstring, gex_dex_calculator.py lines 50-66: the long-calls/
+        short-puts call/put-SPLIT convention applies to GAMMA ONLY;
+        delta/vanna/charm are each "short whatever customers (i.e.
+        holders) hold"). Commit b6d483e changed this to the call/put SPLIT
+        (+1 call, -1 put), reasoning it should match
+        ``GexDexCalculator``'s own convention -- but that convention is
+        gamma-only, so the fix over-generalized it. Unlike delta, the
+        split is mathematically well-formed here too (Vanna_call =
+        Vanna_put and Charm_call = Charm_put always, by put-call parity --
+        Delta_call - Delta_put = 1 is a spot/vol/time-independent constant,
+        so every higher derivative of that difference is exactly zero),
+        so this was not a smoking-gun always-one-sign bug like delta's --
+        but it is still a confirmed deviation from the documented
+        convention: the split and the negated sum diverge numerically
+        whenever call OI != put OI at a given vanna/charm value, which is
+        the generic case for a real book.
 
         Returns:
             Dict with net_vanna, net_charm, vanna_signal, charm_signal,
@@ -662,12 +699,14 @@ class VolatilitySurfaceCalculator:
         """
         net_vanna = 0.0
         net_charm = 0.0
-        # Task C5 review fix: call/put-split assumed-dealer accumulators,
-        # computed in the SAME pass as the holder-side sum above (no second
-        # loop, no second Greeks derivation).
-        dealer_vanna = 0.0
-        dealer_charm = 0.0
         skipped_instruments = 0
+        # Wave-H-A (Task 4, None-vs-zero): counts instruments that actually
+        # contributed a vanna/charm value. When this stays 0 -- either no
+        # instrument had positive OI at all, or every one that did was
+        # skipped -- net_vanna/net_charm/dealer_vanna/dealer_charm below
+        # must come out as None (nothing measured), not a fabricated 0.0
+        # that reads identically to a genuinely-balanced book.
+        computed_instruments = 0
 
         for inst in self.instruments:
             delta = inst.get("delta")
@@ -706,14 +745,7 @@ class VolatilitySurfaceCalculator:
 
                 net_vanna += vanna_i * float(oi)
                 net_charm += charm_i * float(oi)
-
-                # Task C5 review fix (Important #1): call/put-split
-                # dealer-side sign, matching GexDexCalculator's own
-                # SqueezeMetrics convention (+1 call / -1 put) instead of
-                # negating the holder sum -- see this method's docstring.
-                dealer_side = 1.0 if option_type.upper() in ("C", "CALL") else -1.0
-                dealer_vanna += dealer_side * vanna_i * float(oi)
-                dealer_charm += dealer_side * charm_i * float(oi)
+                computed_instruments += 1
 
             except Exception as e:
                 # M5 (code_quality_review.md): this used to be a bare
@@ -729,29 +761,52 @@ class VolatilitySurfaceCalculator:
                 )
                 continue
 
-        # bugfix_spec.md Item 8: net_vanna/net_charm above are the HOLDER-side
-        # raw sums (Sigma over ALL instruments, no call/put positioning
-        # split) -- pure arithmetic, no assumption. dealer_vanna/dealer_charm
-        # (accumulated above, call/put-split) are the assumed-dealer view --
-        # the narrative below describes the DEALER's action, so it is
-        # derived from the dealer-side value, matching Item 8's original
-        # intent (using the holder sum directly for the narrative was the
-        # pre-Item-8 defect). Task C5 review fix: this dealer-side value is
-        # now the call/put SPLIT, not blanket negation -- see this method's
-        # docstring for why the two conventions diverge on mixed books.
-        if dealer_vanna > 0:
-            vanna_signal = "IV drop → dealers buy underlying (bullish)"
+        # Wave-H-A (Task 4, None-vs-zero): computed_instruments == 0 means
+        # nothing contributed to net_vanna/net_charm -- either no
+        # instrument had positive OI at all, or every one that did was
+        # skipped (missing greeks, invalid derived tau, or an exception).
+        # That is NOT the same as a genuinely-measured zero (e.g. a
+        # balanced call/put book with computed_instruments > 0 and
+        # net_vanna == 0.0 exactly) -- see synthesis.py's score_vanna_charm
+        # None branch, which already distinguishes the two and was unable
+        # to be exercised for this failure path before this fix (the
+        # calculator always returned a measured-looking 0.0 here).
+        if computed_instruments == 0:
+            vanna_exposure_holder: Optional[float] = None
+            charm_exposure_holder: Optional[float] = None
+            dealer_vanna: Optional[float] = None
+            dealer_charm: Optional[float] = None
+            vanna_signal = "Insufficient data (no instrument contributed a vanna/charm reading)"
+            charm_signal = "Insufficient data (no instrument contributed a vanna/charm reading)"
         else:
-            vanna_signal = "IV drop → dealers sell underlying (bearish)"
+            vanna_exposure_holder = net_vanna
+            charm_exposure_holder = net_charm
+            # bugfix_spec.md Item 8: net_vanna/net_charm are the HOLDER-side
+            # raw sums (Sigma over ALL instruments, no call/put positioning
+            # split) -- pure arithmetic, no assumption. Wave-H-A (reverting
+            # Task C5 review fix round 1 / commit b6d483e): dealer_vanna/
+            # dealer_charm are -(holder sum), per GexDexCalculator's
+            # canonical SIGN CONVENTION (dealers short whatever holders
+            # hold for vanna/charm, same as delta -- the call/put SPLIT is
+            # gamma-only) -- see this method's docstring. The narrative
+            # below describes the DEALER's action, so it is derived from
+            # the dealer-side value, matching Item 8's original intent.
+            dealer_vanna = -net_vanna
+            dealer_charm = -net_charm
 
-        if dealer_charm > 0:
-            charm_signal = "Time decay pushing delta positive (bullish drift)"
-        else:
-            charm_signal = "Time decay pushing delta negative (bearish drift)"
+            if dealer_vanna > 0:
+                vanna_signal = "IV drop → dealers buy underlying (bullish)"
+            else:
+                vanna_signal = "IV drop → dealers sell underlying (bearish)"
+
+            if dealer_charm > 0:
+                charm_signal = "Time decay pushing delta positive (bullish drift)"
+            else:
+                charm_signal = "Time decay pushing delta negative (bearish drift)"
 
         return {
-            "vanna_exposure_holder": net_vanna,
-            "charm_exposure_holder": net_charm,
+            "vanna_exposure_holder": vanna_exposure_holder,
+            "charm_exposure_holder": charm_exposure_holder,
             "dealer_vanna_exposure": dealer_vanna,
             "dealer_charm_exposure": dealer_charm,
             "vanna_signal": vanna_signal,

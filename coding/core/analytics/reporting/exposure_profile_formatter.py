@@ -23,13 +23,27 @@ the assumption explicitly, matching ``gex_dex_formatter``'s bar ("ASSUMED
 DEALER VIEW  (assumption: dealers long calls / short puts for gamma, short
 customer delta)") rather than just borrowing the word "dealer" -- Task C5
 review (Important #1) caught an earlier draft of this label that dropped
-the stated assumption. The assumption itself -- dealers long calls / short
-puts (the call/put-SPLIT convention, SqueezeMetrics) -- is now also what
-``VolatilitySurfaceCalculator._calculate_second_order_greeks``'s aggregate
-``dealer_vanna_exposure``/``dealer_charm_exposure`` compute (same review,
-same fix): the old (removed) vol-surface text block used blanket negation
-instead, which silently disagreed with this section's per-strike numbers
-on any mixed call/put book.
+the stated assumption. ``ExposureProfileCalculator``'s own
+``vex_assumed_dealer``/``cex_assumed_dealer`` (rendered here) use the
+call/put-SPLIT convention (+1 call, -1 put), per Decision D7/Task C5 --
+this module's own scope, unchanged by Wave-H-A.
+
+Wave-H-A (flagging, NOT fixing -- out of this task's scope): this
+docstring previously claimed ``VolatilitySurfaceCalculator.
+_calculate_second_order_greeks``'s ``dealer_vanna_exposure``/
+``dealer_charm_exposure`` compute "the same" call/put-SPLIT convention as
+this module. That claim is no longer true -- Wave-H-A reverted those two
+fields to ``-(holder-side sum)`` (the negated sum), per
+``GexDexCalculator``'s own canonical SIGN CONVENTION (its class
+docstring: the call/put-SPLIT is gamma-only). The two components
+(``VolatilitySurfaceCalculator``'s aggregate scalar, rendered nowhere
+today, vs. this module's per-strike VEX/CEX table, Decision D7-BINDING)
+now compute assumed-dealer vanna/charm with genuinely DIFFERENT
+conventions. Wave-H-A's task brief scoped the revert to
+``VolatilitySurfaceCalculator`` only and did not ask for
+``ExposureProfileCalculator`` to change -- left as-is here pending an
+explicit decision on which of the two (if not both) should follow the
+canonical convention.
 """
 
 from typing import Optional

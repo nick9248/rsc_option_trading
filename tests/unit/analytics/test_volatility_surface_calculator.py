@@ -175,19 +175,21 @@ class TestVolatilitySurfaceCalculator:
         assert greeks.vanna_exposure_holder != 0
         assert greeks.charm_exposure_holder != 0
 
-        # Task C5 review fix (Important #1, orchestrator ruling): dealer_*
-        # is the call/put-SPLIT convention (+1 call, -1 put -- SqueezeMetrics,
-        # matching GexDexCalculator and ExposureProfileCalculator), NOT a
-        # blanket negation of the holder-side sum -- the two only coincide
-        # when every instrument is the same option_type, which this mixed
-        # call/put fixture deliberately is not. Independently re-derived
-        # here via the SAME public BlackScholesCalculator methods and the
-        # SAME documented tau-derivation formula
+        # Wave-H-A (reverting Task C5 review fix round 1 / commit
+        # b6d483e): dealer_* is -(holder-side sum) -- dealers short
+        # whatever holders hold -- per GexDexCalculator's own canonical
+        # SIGN CONVENTION (its class docstring: the call/put-SPLIT applies
+        # to GAMMA ONLY; delta/vanna/charm are each "short whatever
+        # customers hold"). Independently re-derived here via the SAME
+        # public BlackScholesCalculator methods and the SAME documented
+        # tau-derivation formula
         # (VolatilitySurfaceCalculator._calculate_second_order_greeks's own
-        # docstring), in a separate accumulation loop from production code.
+        # docstring), in a separate accumulation loop from production code
+        # -- NOT by simply asserting dealer == -holder (that would be
+        # circular against the very formula under test).
         bs = BlackScholesCalculator()
-        expected_dealer_vanna = 0.0
-        expected_dealer_charm = 0.0
+        expected_holder_vanna = 0.0
+        expected_holder_charm = 0.0
         for inst in sample_instruments:
             oi = inst["open_interest"]
             sigma = inst["mark_iv"] / 100.0
@@ -199,17 +201,19 @@ class TestVolatilitySurfaceCalculator:
             d2 = d1 - sigma * math.sqrt(tau)
             vanna_i = bs.calculate_vanna(d1, d2, sigma)
             charm_i = bs.calculate_charm(d1, d2, tau)
-            side = 1.0 if inst["option_type"].upper() in ("C", "CALL") else -1.0
-            expected_dealer_vanna += side * vanna_i * oi
-            expected_dealer_charm += side * charm_i * oi
+            expected_holder_vanna += vanna_i * oi
+            expected_holder_charm += charm_i * oi
 
-        assert greeks.dealer_vanna_exposure == pytest.approx(expected_dealer_vanna)
-        assert greeks.dealer_charm_exposure == pytest.approx(expected_dealer_charm)
-        # Regression guard: the two conventions must genuinely diverge on
-        # this mixed call/put book -- proves the fix isn't a no-op / didn't
-        # silently fall back to negation.
-        assert greeks.dealer_vanna_exposure != pytest.approx(-greeks.vanna_exposure_holder)
-        assert greeks.dealer_charm_exposure != pytest.approx(-greeks.charm_exposure_holder)
+        assert greeks.vanna_exposure_holder == pytest.approx(expected_holder_vanna)
+        assert greeks.charm_exposure_holder == pytest.approx(expected_holder_charm)
+        assert greeks.dealer_vanna_exposure == pytest.approx(-expected_holder_vanna)
+        assert greeks.dealer_charm_exposure == pytest.approx(-expected_holder_charm)
+        # dealer_* must be exactly -(holder sum), matching the production
+        # field's own values -- confirms the negation convention, not the
+        # retired call/put SPLIT (which would diverge here since this
+        # fixture mixes calls and puts with unequal OI).
+        assert greeks.dealer_vanna_exposure == pytest.approx(-greeks.vanna_exposure_holder)
+        assert greeks.dealer_charm_exposure == pytest.approx(-greeks.charm_exposure_holder)
         assert greeks.skipped_instruments >= 0
 
         # bugfix_spec.md Item 8 fix-review (Important #7 -- T8.3's other
@@ -255,6 +259,64 @@ class TestVolatilitySurfaceCalculator:
         # rendered as "<unknown>", since the log format string contains the
         # word "instrument" unconditionally. Require the actual identifier.
         assert any("BTC-28MAR26-90000-C" in record.message for record in caplog.records)
+        # Wave-H-A (Task 4, None-vs-zero): the ONLY instrument in this
+        # fixture was skipped -- nothing was measured, so every vanna/charm
+        # field must be None, not a fabricated 0.0 indistinguishable from a
+        # genuinely-balanced book.
+        assert greeks["vanna_exposure_holder"] is None
+        assert greeks["charm_exposure_holder"] is None
+        assert greeks["dealer_vanna_exposure"] is None
+        assert greeks["dealer_charm_exposure"] is None
+
+    def test_second_order_greeks_no_oi_anywhere_yields_none(self):
+        """
+        Wave-H-A (Task 4, None-vs-zero): zero OI everywhere is a DIFFERENT
+        code path than "every OI>0 instrument was skipped" (the oi<=0
+        branch ``continue``s before skipped_instruments is ever
+        incremented) -- must independently confirm this path also yields
+        None, not a fabricated 0.0.
+        """
+        instruments = [
+            _make_instrument(90000, "C", mark_iv=65.0, delta=0.5, gamma=0.00003, vega=130, open_interest=0),
+        ]
+        calc = VolatilitySurfaceCalculator(instruments, 90000, "28MAR26")
+        greeks = calc._calculate_second_order_greeks()
+
+        assert greeks["skipped_instruments"] == 0
+        assert greeks["vanna_exposure_holder"] is None
+        assert greeks["charm_exposure_holder"] is None
+        assert greeks["dealer_vanna_exposure"] is None
+        assert greeks["dealer_charm_exposure"] is None
+
+    def test_second_order_greeks_measured_zero_stays_zero_not_none(self, monkeypatch, sample_instruments):
+        """
+        Wave-H-A (Task 4, None-vs-zero): a genuinely-measured zero (every
+        per-instrument vanna/charm contribution nets to exactly 0.0 for a
+        real, balanced book with data actually available) must stay a
+        plain 0.0 -- NOT collapse into None, which is reserved
+        exclusively for "nothing could be computed". Forces every
+        per-instrument vanna/charm to 0.0 via the module-level BS
+        singleton so the net is deterministically exactly zero while still
+        going through the full computed-instruments code path (skipped_
+        instruments stays 0 -- every instrument genuinely contributed).
+        """
+        import coding.core.analytics.volatility_surface_calculator as vsc_module
+
+        monkeypatch.setattr(vsc_module._bs, "calculate_vanna", lambda d1, d2, sigma: 0.0)
+        monkeypatch.setattr(vsc_module._bs, "calculate_charm", lambda d1, d2, tau: 0.0)
+
+        calc = VolatilitySurfaceCalculator(sample_instruments, 90000, "28MAR26")
+        greeks = calc._calculate_second_order_greeks()
+
+        assert greeks["skipped_instruments"] == 0
+        assert greeks["vanna_exposure_holder"] == 0.0
+        assert greeks["vanna_exposure_holder"] is not None
+        assert greeks["charm_exposure_holder"] == 0.0
+        assert greeks["charm_exposure_holder"] is not None
+        assert greeks["dealer_vanna_exposure"] == 0.0
+        assert greeks["dealer_vanna_exposure"] is not None
+        assert greeks["dealer_charm_exposure"] == 0.0
+        assert greeks["dealer_charm_exposure"] is not None
 
     def test_atm_iv(self, sample_instruments):
         calc = VolatilitySurfaceCalculator(sample_instruments, 90000, "28MAR26")
@@ -299,13 +361,18 @@ class TestVolatilitySurfaceCalculator:
         _calculate_pc_by_moneyness() stays a dict-returning internal helper
         (not part of the T4 public typed API) — calculate() wraps its output
         into PutCallByMoneyness/MoneynessBucket.
+
+        Wave-H-A (Task 5): ratio is None here (no data -- spot price
+        undefined means nothing can be bucketed), not the fabricated 0.0
+        the "H2 fix" used to produce -- see MoneynessBucket's docstring.
+        bias stays "N/A" either way.
         """
         calc = VolatilitySurfaceCalculator(sample_instruments, 0, "28MAR26")
         buckets = calc._calculate_pc_by_moneyness()
 
         for bucket_name in ("atm", "near_otm", "far_otm"):
             bucket = buckets[bucket_name]
-            assert bucket["ratio"] == 0.0
+            assert bucket["ratio"] is None
             assert bucket["bias"] == "N/A"
 
     # NOTE (task A7, carried finding #1): test_zero_spot_report_generation_

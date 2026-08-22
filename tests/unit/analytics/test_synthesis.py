@@ -1502,12 +1502,14 @@ class TestBuildExpiryMetrics:
         assert result.call_25d_iv is None
         assert result.net_vanna is None
         assert result.net_charm is None
-        # pc_atm/pc_near_otm/pc_far_otm are DELIBERATELY left as the
-        # pre-existing 0.0-when-undefined convention (not touched by
-        # Task G2-G -- see ExpiryMetrics' docstring).
-        assert result.pc_atm == 0.0
-        assert result.pc_near_otm == 0.0
-        assert result.pc_far_otm == 0.0
+        # Wave-H-A (Task 5): pc_atm/pc_near_otm/pc_far_otm are now genuine
+        # None too when the vol surface is missing -- corrects the prior
+        # "DELIBERATELY left as 0.0-when-undefined" belief, which was
+        # itself the moneyness-bucket fabrication bug (see ExpiryMetrics'
+        # docstring).
+        assert result.pc_atm is None
+        assert result.pc_near_otm is None
+        assert result.pc_far_otm is None
 
     def test_missing_gex_key_levels_preserves_none(self):
         """

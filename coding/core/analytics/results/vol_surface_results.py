@@ -84,13 +84,30 @@ class SkewResult:
 
 @dataclass(frozen=True)
 class MoneynessBucket:
-    """P/C open interest for one moneyness bucket (ATM, near-OTM, far-OTM)."""
+    """
+    P/C open interest for one moneyness bucket (ATM, near-OTM, far-OTM).
+
+    Wave-H-A (Task 5, correcting a prior "H2 fix" convention): ``ratio``
+    is ``Optional`` -- ``None`` when the bucket has ZERO instruments in it
+    (``call_oi == 0 and put_oi == 0``), NOT a fabricated ``0.0``. A prior
+    convention documented here as "ALWAYS present; 0.0 when undefined" was
+    itself the bug this fix corrects: it made an empty bucket
+    indistinguishable from a genuinely-measured ratio of 0.0 (``call_oi >
+    0``, ``put_oi == 0``), and fed that fabricated 0.0 into
+    ``interpret_put_call_ratio``, which classified it "Strong Bullish" for
+    a bucket that measured nothing at all.
+    """
 
     call_oi: float
     put_oi: float
     range_label: str  # "±5%" | "5-15%" | "15%+"
-    ratio: float  # ALWAYS present (H2 fix); 0.0 when undefined
-    bias: str  # ALWAYS present; "N/A" when undefined
+    ratio: Optional[float]
+    """``put_oi / call_oi`` when ``call_oi > 0``; ``float('inf')`` when
+    ``call_oi == 0`` and ``put_oi > 0``; ``None`` when the bucket has no
+    instruments at all (both zero) -- NOT a measured 0.0."""
+    bias: str
+    """"N/A" when ``ratio`` is ``None`` or ``inf`` (undefined); otherwise
+    a directional label from ``interpret_put_call_ratio``."""
 
 
 @dataclass(frozen=True)
@@ -117,39 +134,43 @@ class SecondOrderGreeks:
     holder sum (the pre-Item-8 defect: the printed dealer narrative was
     keyed off the holder-side number, backwards).
 
-    Task C5 review fix round 1 (Important #1) + round 2 (Important, the
-    round-1 fix's own regression): ``dealer_vanna_exposure``/
-    ``dealer_charm_exposure`` are the call/put-SPLIT assumed-dealer
-    convention (+1 call, -1 put -- SqueezeMetrics, matching
-    ``GexDexCalculator`` and ``ExposureProfileCalculator``'s per-strike
-    VEX/CEX), NOT a blanket negation of the holder-side sum -- negation was
-    the pre-round-1-fix convention and only coincides with the split on a
-    100%-call or 100%-put book. These two fields are REQUIRED (no default)
-    precisely so nothing can silently fall back to the retired negation
-    convention the way ``__post_init__``'s old default did -- round 1's fix
-    corrected the one real production call site
-    (``VolatilitySurfaceCalculator._calculate_second_order_greeks``) but
-    left a negation-based default on this shared model, which several test
-    fixtures were (silently, incorrectly) relying on. Every construction
-    site must now compute and pass its own explicit dealer values.
+    Wave-H-A (reverting a regression -- Task C5 review fix round 1
+    (commit b6d483e) + round 2 (commit 1bf1300)): ``dealer_vanna_exposure``/
+    ``dealer_charm_exposure`` are ``-vanna_exposure_holder``/
+    ``-charm_exposure_holder`` -- the negated-holder-sum assumed-dealer
+    convention (dealers short whatever holders hold), per
+    ``GexDexCalculator``'s canonical SIGN CONVENTION (its class docstring:
+    the call/put-SPLIT applies to GAMMA ONLY -- delta/vanna/charm are each
+    "short whatever customers hold"). Round 1's fix changed these to the
+    call/put SPLIT (+1 call, -1 put), reasoning it should match
+    ``GexDexCalculator``'s own convention -- but that convention is
+    gamma-only, so the fix over-generalized it; round 2 then made the
+    split-based fields REQUIRED (no default) specifically to stop any
+    construction site from silently falling back to the (correct)
+    negation. Both are reverted here. These two fields are ``Optional``
+    (Wave-H-A Task 4): ``None`` when the source computation could not
+    measure anything for this expiry (e.g. every instrument's greeks were
+    unavailable) -- NOT a fabricated ``0.0`` indistinguishable from a
+    genuinely-measured, balanced book. Every construction site must
+    explicitly pass ``None`` in that case rather than defaulting.
     """
 
-    vanna_exposure_holder: float
-    charm_exposure_holder: float
+    vanna_exposure_holder: Optional[float]
+    charm_exposure_holder: Optional[float]
     vanna_signal: str
     charm_signal: str
     skipped_instruments: int  # M5: replaces the silent `except: continue`
 
     # --- Additive fields (bugfix_spec.md Item 8) ---
-    dealer_vanna_exposure: float
-    """Call/put-split assumed-dealer vanna (+1 call, -1 put) -- NOT
-    -vanna_exposure_holder (that was the retired convention; see class
-    docstring). Required: no default, so a caller must explicitly decide
-    what "dealer" means here rather than inherit a hidden fallback."""
+    dealer_vanna_exposure: Optional[float]
+    """-vanna_exposure_holder -- the negated-holder-sum assumed-dealer
+    view, per GexDexCalculator's canonical SIGN CONVENTION (see class
+    docstring). ``None`` exactly when ``vanna_exposure_holder`` is
+    ``None`` (nothing could be measured for this expiry) -- NOT a measured
+    0.0."""
 
-    dealer_charm_exposure: float
-    """Call/put-split assumed-dealer charm (+1 call, -1 put) -- NOT
-    -charm_exposure_holder. See ``dealer_vanna_exposure``'s docstring."""
+    dealer_charm_exposure: Optional[float]
+    """-charm_exposure_holder. See ``dealer_vanna_exposure``'s docstring."""
 
 
 @dataclass(frozen=True)
