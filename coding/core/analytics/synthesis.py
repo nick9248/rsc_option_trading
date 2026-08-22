@@ -2111,6 +2111,36 @@ class SynthesisEngine:
         )
         if funding_note is not None:
             data_quality_notes.append(funding_note)
+        # Wave H follow-up (institutional-benchmark audit P0-4): this block
+        # previously inspected ONLY iv_pctile/vrp/funding plus explicitly-
+        # thrown exceptions -- it printed "All market-wide sections
+        # computed successfully" over a run where every expiry had zero
+        # flow trades and max pain never resolved anywhere, because
+        # neither of those failure modes touches the three fields checked
+        # above. Scoped to signals already computed and available here
+        # (per-expiry sufficiency flags, market-wide term structure) --
+        # NOT dealer-positioning coverage or the historical-percentile
+        # context table, which live in the separate full-report pipeline
+        # (report_formatter.py/historical_context_formatter.py) and are
+        # not currently plumbed into this synthesis path at all; wiring
+        # those in is a larger, separate change, not done here.
+        if expiries and all(not e.flow_sufficient_data for e in expiries):
+            data_quality_notes.append(
+                f"Order flow: insufficient data for all {len(expiries)} expiries "
+                "(no qualifying trades in the lookback window) — flow bias/trend "
+                "not usable for any expiry this run"
+            )
+        if expiries and all(not e.max_pain_sufficient_data for e in expiries):
+            data_quality_notes.append(
+                f"Max pain: did not resolve for any of {len(expiries)} expiries "
+                "(displayed max-pain figures are the spot-price fallback, not a "
+                "computed strike, and were not scored)"
+            )
+        if market.term_structure_shape is None:
+            data_quality_notes.append(
+                "Term structure: insufficient data (fewer than 2 usable expiries) "
+                "— not scored"
+            )
         if market.failed_sections:
             data_quality_notes.append(
                 "Sections that raised an error during calculation (not simply "

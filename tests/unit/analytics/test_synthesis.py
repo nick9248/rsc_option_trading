@@ -1836,6 +1836,58 @@ class TestSynthesisEngineRun:
         assert "futures_basis" in result
         assert "perpetual_funding" in result
 
+    def test_run_all_expiries_flow_insufficient_disclosed_in_data_quality(self):
+        """
+        Wave H follow-up (institutional-benchmark audit P0-4): the old
+        DATA QUALITY block only inspected iv_pctile/vrp/funding plus
+        failed_sections -- it would print "All market-wide sections
+        computed successfully" even when every single expiry had zero
+        qualifying flow trades. Must now disclose this.
+        """
+        engine = SynthesisEngine()
+        market = make_market_wide()
+        expiries = [
+            make_expiry_metrics(expiry="26JUL26", flow_sufficient_data=False),
+            make_expiry_metrics(expiry="31JUL26", flow_sufficient_data=False),
+        ]
+        result = engine.run(market, expiries)
+        assert "All market-wide sections computed successfully" not in result
+        assert "Order flow: insufficient data for all 2 expiries" in result
+
+    def test_run_all_expiries_max_pain_insufficient_disclosed_in_data_quality(self):
+        """Wave H follow-up (P0-4): same broadening for max_pain."""
+        engine = SynthesisEngine()
+        market = make_market_wide()
+        expiries = [
+            make_expiry_metrics(expiry="26JUL26", max_pain_sufficient_data=False),
+        ]
+        result = engine.run(market, expiries)
+        assert "All market-wide sections computed successfully" not in result
+        assert "Max pain: did not resolve for any of 1 expiries" in result
+
+    def test_run_missing_term_structure_disclosed_in_data_quality(self):
+        """Wave H follow-up (P0-4): a None term structure must be listed
+        in DATA QUALITY, not just silently rendered as N/A in the header."""
+        engine = SynthesisEngine()
+        market = make_market_wide(
+            term_structure_shape=None, term_structure_spread=None,
+            term_structure_spread_signed=None,
+        )
+        expiry = make_expiry_metrics()
+        result = engine.run(market, [expiry])
+        assert "All market-wide sections computed successfully" not in result
+        assert "Term structure: insufficient data" in result
+
+    def test_run_all_data_present_still_shows_all_clear(self):
+        """Sanity check: when flow/max_pain/term-structure are all genuinely
+        sufficient, the DATA QUALITY block must still show the all-clear
+        message -- the broadening must not manufacture false negatives."""
+        engine = SynthesisEngine()
+        market = make_market_wide()
+        expiry = make_expiry_metrics(flow_sufficient_data=True, max_pain_sufficient_data=True)
+        result = engine.run(market, [expiry])
+        assert "All market-wide sections computed successfully" in result
+
     def test_run_regime_narrative_gex_matches_scorer_gex_not_largest_expiry(self):
         """
         Task G2-B Finding 2: the regime narrative's "+X.XM GEX" figure
