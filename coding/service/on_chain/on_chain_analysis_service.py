@@ -1384,6 +1384,76 @@ class OnChainAnalysisService:
             that this method used to return unchecked -- a fabricated
             0.0 masquerading as "computed successfully", exactly what
             this method's contract promises never happens.
+
+            Task Wave-I-E (institutional-benchmark audit, UNVERIFIED
+            finding investigated and closed as NOT MATERIAL): an audit
+            flagged that ``BlackScholesCalculator.calculate_greeks``
+            recomputes gamma with the STANDARD linear-payoff BS formula,
+            while Deribit's BTC/ETH options are coin-margined/coin-settled
+            ("inverse") contracts whose true payoff is ``max(S-K,0)/S``
+            (in BTC), not ``max(S-K,0)`` (in USD) -- raising the question
+            of whether a genuine inverse/quanto convention adjustment is
+            missing here. Investigated with three independent, converging
+            lines of evidence, all pointing the same way:
+
+            1. Math (Alexander, Chen & Imeraj, "Inverse and Quanto Inverse
+               Options in a Black-Scholes World", arXiv:2107.12041v5,
+               eq. 3-4 and Table A.1's "Inverse" column): converting the
+               true BTC payoff to USD at the SAME instant -- S_T * (S_T -
+               K)^+/S_T -- collapses EXACTLY to (S_T-K)^+, the standard
+               payoff, for every path (footnote 15 in that paper: this
+               holds exactly prior to expiry; only the terminal
+               settlement-averaging mechanics introduce a tiny
+               approximation, and only at expiry itself). Consequently
+               Table A.1's own closed-form "Inverse" delta/gamma
+               (``omega*Phi(omega*d1)`` / ``phi(d1)/(S*sigma*sqrt(tau))``)
+               ARE the standard BS formulas -- identical to what
+               ``_calculate_delta``/``_calculate_gamma`` compute here. The
+               paper's genuinely different, non-monotonic-delta /
+               possibly-negative-gamma formulas (its "Quanto inverse"
+               column) are for a DIFFERENT, not-yet-exchange-traded
+               product with a pre-fixed conversion factor -- explicitly
+               NOT what Deribit lists (paper section 2.4: "these are not
+               exchange-traded products at the time of writing").
+
+            2. Deribit's own documentation (support.deribit.com's
+               "Inverse Options" article -- 403s to a direct fetch, but
+               readable via a text-proxy) states their own pricing model
+               literally as ``C = X*N(d1) - K*N(d2)*e^(-R*T)``, i.e. the
+               plain vanilla BS formula, not divided by S or otherwise
+               inverse-adjusted (the one documented wrinkle is R =
+               ln(F/X)/T, an implied rate from the futures basis, rather
+               than an assumed r=0 -- this codebase's ``BlackScholes
+               Calculator`` defaults to r=0, a separate, minor, and
+               untouched-by-this-task discrepancy).
+
+            3. Empirical (this repo's own fixture,
+               tests/fixtures/onchain/BTC_20260725_203434/tickers.json.gz,
+               883 tickers): comparing raw ticker gamma against this
+               method's BS-recomputed gamma for the 628 non-quantized-
+               floor tickers gives a ratio clustered tightly around 1.0
+               (median ~0.93-1.0) with NO systematic trend across 8
+               moneyness buckets (0.51x-1.67x, medians 0.985-1.16) or 8
+               tenor buckets (medians 0.80-1.16) -- exactly what pure
+               rounding noise around a matching convention looks like,
+               and NOT the systematic S- or K-dependent multiplicative
+               bias a genuine convention mismatch would produce.
+
+            Conclusion: this method's plain-BS gamma is the mathematically
+            correct convention for Deribit's actual (non-quanto) inverse
+            contracts when interpreted as USD-denominated sensitivity --
+            which is exactly how ``GexDexCalculator`` consumes it
+            (``net_gex = net_gamma * spot_squared * 0.01``, the
+            industry-standard dollar-gamma-per-1%-move convention). G2-A's
+            original quantization rationale for BS-recomputing gamma
+            therefore stands untouched by the inverse-settlement question
+            -- there was no second bug layered underneath it. Deribit's
+            "Smile Greek" delta (Delta = Delta_BS + vega * dSigma/dS,
+            mentioned in Deribit Insights educational content) remains a
+            separate, unconfirmed question -- no Deribit source found
+            here states whether the LIVE ticker delta uses it -- but it is
+            orthogonal to this method (which never recomputes delta) and
+            is not a re-open of this finding.
         """
         if underlying_price is None or underlying_price <= 0:
             return None
