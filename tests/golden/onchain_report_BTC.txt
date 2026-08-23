@@ -2869,6 +2869,7 @@ FORWARD VOL
 VOLATILITY RISK PREMIUM (VRP)
 --------------------------------------------------------------------------------
   DVOL: 37.5%  |  30d RV: 27.1%  |  VRP: +10.4 pts (EXPENSIVE - Sell vol)
+  Note: DVOL is a variance-swap-style measure, structurally above ATM IV by a convexity premium; RV here is close-to-close. This comparison basis typically overstates VRP by ~1-3 points.
 
 
 VOLATILITY CONE

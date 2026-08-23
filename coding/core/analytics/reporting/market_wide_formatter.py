@@ -278,7 +278,22 @@ def format_realized_volatility_section(result: Optional[RealizedVolatilityResult
 
 
 def format_vrp_section(result: Optional[VarianceRiskPremiumResult]) -> str:
-    """Render the VOLATILITY RISK PREMIUM (VRP) section."""
+    """
+    Render the VOLATILITY RISK PREMIUM (VRP) section.
+
+    Wave-I-C Fix 6: VRP here is DVOL (a variance-swap-style measure,
+    structurally above ATM implied vol by a convexity premium) minus
+    close-to-close realized vol (vrp_calculator.py's
+    calculate_realized_volatility: log returns of daily closes,
+    annualized std dev -- confirmed close-to-close, not a Parkinson/
+    Garman-Klass or other range-based estimator). Comparing a
+    variance-swap-style measure against a plain close-to-close RV is a
+    real, systematic ~1-3 point overstatement of VRP that isn't
+    otherwise disclosed anywhere in the report. Not "corrected" here
+    (that would be a much larger methodological change, out of scope) --
+    just disclosed, so a reader knows the VRP figure is somewhat
+    upward-biased by construction.
+    """
     lines = ["VOLATILITY RISK PREMIUM (VRP)", _SUB_SEPARATOR]
 
     if result is None or result.dvol is None:
@@ -296,6 +311,11 @@ def format_vrp_section(result: Optional[VarianceRiskPremiumResult]) -> str:
     lines.append(
         f"  DVOL: {result.dvol:.1f}%  |  30d RV: {result.rv_30d * 100:.1f}%  |  "
         f"VRP: {result.vrp:+.1f} pts ({result.signal} - {advice})"
+    )
+    lines.append(
+        "  Note: DVOL is a variance-swap-style measure, structurally above "
+        "ATM IV by a convexity premium; RV here is close-to-close. This "
+        "comparison basis typically overstates VRP by ~1-3 points."
     )
     lines.append("")
     return "\n".join(lines)

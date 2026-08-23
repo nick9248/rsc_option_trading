@@ -273,6 +273,20 @@ def test_vrp_fair_signal_neutral():
     assert "FAIR - Neutral" in text
 
 
+def test_vrp_discloses_dvol_vs_close_to_close_rv_comparison_basis():
+    """
+    Wave-I-C Fix 6: VRP compares DVOL (variance-swap-style, structurally
+    above ATM IV by a convexity premium) against close-to-close realized
+    vol -- a real, systematic overstatement that must be disclosed next
+    to the VRP figure, not silently left unexplained.
+    """
+    result = VarianceRiskPremiumResult(vrp=15.0, signal="EXPENSIVE", dvol=65.0, rv_30d=0.5)
+    text = format_vrp_section(result)
+    assert "variance-swap-style" in text
+    assert "close-to-close" in text
+    assert "convexity premium" in text
+
+
 # ---------------------------------------------------------------------------
 # Volatility cone
 # ---------------------------------------------------------------------------
