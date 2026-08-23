@@ -443,6 +443,58 @@ def test_block_trades_rendered():
         assert instrument not in large_prints_text
 
 
+def test_tracked_since_annotated_with_note_for_pre_migration_report():
+    """
+    Wave-I-C Fix 2: a report whose own generated_at predates tracked_since
+    (a historical reproduction against pre-migration data, or a frozen
+    fixture) must not present "Tracked since <a date after this report's
+    own timestamp>" without qualification -- that reads as an impossible
+    provenance claim on its own. The line itself is kept (it's still
+    true -- the migration really did land on that date) and a NOTE is
+    appended flagging the apparent inconsistency, rather than retracting
+    the claim (which would be false whenever real blocks are present).
+    """
+    result = BlockTradesResult(
+        trades=(), notional_threshold=100_000.0, total_detected=0,
+        blocks=(), tracked_since="2026-08-02",
+    )
+    pre_migration_generated_at = datetime(2026, 7, 25, 18, 34, 34)
+
+    text = format_block_trades_section(result, generated_at=pre_migration_generated_at)
+
+    assert "Tracked since 2026-08-02" in text
+    assert "NOTE:" in text
+    assert "predates" in text
+
+
+def test_tracked_since_not_annotated_for_post_migration_report():
+    """Sanity check the opposite direction: a report generated AFTER
+    tracked_since (the normal, real-world case for every live report
+    going forward) gets no annotation."""
+    result = BlockTradesResult(
+        trades=(), notional_threshold=100_000.0, total_detected=0,
+        blocks=(), tracked_since="2026-08-02",
+    )
+    post_migration_generated_at = datetime(2026, 8, 23, 10, 0, 0)
+
+    text = format_block_trades_section(result, generated_at=post_migration_generated_at)
+
+    assert "Tracked since 2026-08-02" in text
+    assert "NOTE:" not in text
+
+
+def test_tracked_since_not_annotated_when_generated_at_omitted():
+    """Existing callers that don't pass generated_at keep the prior,
+    unannotated behavior (backward compatible default)."""
+    result = BlockTradesResult(
+        trades=(), notional_threshold=100_000.0, total_detected=0,
+        blocks=(), tracked_since="2026-08-02",
+    )
+    text = format_block_trades_section(result)
+    assert "Tracked since 2026-08-02" in text
+    assert "NOTE:" not in text
+
+
 def test_large_prints_discloses_notional_is_not_delta_weighted():
     """
     Wave-I-C Fix 3: LARGE PRINTS' "Notional" column is contracts x spot

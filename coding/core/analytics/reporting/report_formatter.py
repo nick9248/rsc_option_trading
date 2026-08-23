@@ -626,7 +626,13 @@ class OnChainReportFormatter:
         if mw.futures_basis is not None:
             sections["futures_basis"] = format_futures_basis_section(mw.futures_basis)
         if mw.block_trades is not None:
-            sections["block_trades"] = format_block_trades_section(mw.block_trades)
+            # Wave-I-C Fix 2: generated_at lets the section detect a report
+            # dated before BLOCK_TRADE_ID_TRACKED_SINCE (historical
+            # reproduction against pre-migration data) and avoid claiming
+            # "Tracked since <a date after this report's own timestamp>".
+            sections["block_trades"] = format_block_trades_section(
+                mw.block_trades, generated_at=result.generated_at,
+            )
         # institutional_metrics_spec.md section 9(b) market-wide order item
         # 10 (CONTEXT): rendered whenever any constituent fact has data
         # (matches the legacy "no data -> no section" gate applied to the

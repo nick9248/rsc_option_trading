@@ -413,7 +413,10 @@ def format_perpetual_funding_section(result: Optional[PerpetualFundingResult]) -
     return "\n".join(lines)
 
 
-def format_block_trades_section(result: Optional[BlockTradesResult]) -> str:
+def format_block_trades_section(
+    result: Optional[BlockTradesResult],
+    generated_at: Optional[datetime] = None,
+) -> str:
     """
     Render the BLOCK TRADES section (institutional_metrics_spec.md section
     9 / Migration M2, Task D1): one row per block (grouped by
@@ -429,6 +432,28 @@ def format_block_trades_section(result: Optional[BlockTradesResult]) -> str:
     before migration 022, so the block section states ``tracked_since``
     as its effective start date rather than implying "no data" when the
     window happens to contain zero blocks.
+
+    Wave-I-C Fix 2: ``tracked_since`` (``BLOCK_TRADE_ID_TRACKED_SINCE``,
+    the migration's real application date) is a fixed constant, printed
+    unconditionally regardless of what the report itself is dated. For a
+    report whose own ``generated_at`` predates that date (a historical
+    reproduction/backtest run against pre-migration data, or a frozen
+    fixture -- never a live daemon report going forward, since real "now"
+    is always after a past migration date), "Tracked since 2026-08-02" on
+    a report generated 2026-07-25 reads as an impossible claim on its own.
+    ``generated_at`` is optional (existing callers that don't pass it keep
+    the unconditional message, unannotated) -- when given and it predates
+    ``tracked_since``, a NOTE is appended flagging the apparent
+    inconsistency. This annotates rather than retracts the "Tracked
+    since" line: retracting it (e.g. claiming tracking "had not yet
+    begun") would itself be false whenever this result's ``blocks`` is
+    non-empty -- real block_trade_id data being present is direct
+    evidence tracking WAS active, regardless of what the date comparison
+    alone suggests (the exact situation this fix's own golden-master
+    fixture surfaced: a frozen ``generated_at`` predating the real
+    migration date while the underlying trade data still carries real
+    blocks, since the fixture's trades come from whatever the API
+    currently returns, independent of the frozen report timestamp).
     """
     if result is None:
         lines = ["BLOCK TRADES", _SUB_SEPARATOR, "  No recent trade data available", ""]
@@ -440,6 +465,29 @@ def format_block_trades_section(result: Optional[BlockTradesResult]) -> str:
             f"  Tracked since {result.tracked_since} "
             "(block_trade_id was not captured before this date; history is not backfillable)"
         )
+        # Wave-I-C Fix 2, continued: ANNOTATE rather than replace the line
+        # above when this report's own generated_at predates tracked_since
+        # -- retracting the claim entirely (e.g. "tracking had not yet
+        # begun") would itself be false whenever `blocks` below is
+        # non-empty (real block_trade_id data IS present in that case,
+        # which is direct evidence tracking was active, regardless of
+        # what date arithmetic alone would suggest -- e.g. a frozen test
+        # fixture's generated_at predating the real migration date while
+        # its underlying data still carries real blocks). A caveat next
+        # to the still-true "Tracked since" fact, rather than a
+        # potentially-false replacement, is correct either way.
+        if generated_at is not None:
+            try:
+                tracked_since_date = datetime.strptime(result.tracked_since, "%Y-%m-%d").date()
+                if generated_at.date() < tracked_since_date:
+                    lines.append(
+                        f"  NOTE: this report's own Generated timestamp "
+                        f"({generated_at.date().isoformat()}) predates the date above -- "
+                        "likely a historical/backtest reproduction against pre-migration "
+                        "data; treat block-trade coverage for this period with caution"
+                    )
+            except ValueError:
+                pass  # unparseable tracked_since -- no annotation to add
 
     if not result.blocks:
         lines.append("  No blocks detected in recent activity")

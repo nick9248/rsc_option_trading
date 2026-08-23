@@ -619,6 +619,36 @@ def test_render_market_wide_from_result_includes_present_sections_only():
     assert "IV TERM STRUCTURE" not in text
 
 
+def test_render_market_wide_from_result_passes_generated_at_to_block_trades_section():
+    """
+    Wave-I-C Fix 2: render_market_wide_from_result must thread the
+    report's own generated_at into format_block_trades_section, so a
+    report generated before BLOCK_TRADE_ID_TRACKED_SINCE (GENERATED_AT
+    here is 2026-07-25, tracked_since below is 2026-08-02 -- the exact
+    scenario the golden fixture surfaced) gets a NOTE flagging the
+    apparent inconsistency next to "Tracked since <a date after this
+    report's own timestamp>", rather than presenting that claim bare.
+    """
+    formatter = OnChainReportFormatter()
+    block_trades = BlockTradesResult(
+        trades=(), notional_threshold=100_000.0, total_detected=0,
+        blocks=(), tracked_since="2026-08-02",
+    )
+    mw = MarketWideResult(
+        spot_price=95000.0, currency="BTC", dvol=None, iv_percentile_365d=None,
+        aggregate_gex_dex=None, term_structure=None, futures_basis=None,
+        realized_volatility=None, variance_risk_premium=None, volatility_cone=None,
+        perpetual_funding=None, block_trades=block_trades, cross_asset_correlation=None,
+        failed_sections=(),
+    )
+    result = _make_result(market_wide=mw)  # GENERATED_AT = 2026-07-25
+    text = formatter.render_market_wide_from_result(result)
+
+    assert "Tracked since 2026-08-02" in text
+    assert "NOTE:" in text
+    assert "predates" in text
+
+
 def test_render_market_wide_from_result_includes_skew_term_structure_before_iv_term_structure():
     """institutional_metrics_spec.md section 9(b): SKEW TERM STRUCTURE
     (section 3) renders before IV TERM STRUCTURE in the market-wide order

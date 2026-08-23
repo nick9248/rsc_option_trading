@@ -2914,6 +2914,7 @@ FUTURES BASIS (annualized simple, ACT/365, to 08:00 UTC settlement)
 BLOCK TRADES
 --------------------------------------------------------------------------------
   Tracked since 2026-08-02 (block_trade_id was not captured before this date; history is not backfillable)
+  NOTE: this report's own Generated timestamp (2026-07-25) predates the date above -- likely a historical/backtest reproduction against pre-migration data; treat block-trade coverage for this period with caution
           Block ID  Legs                 Structure     Premium (USD)          Time
           --------  ----                 ---------     -------------          ----
       BLOCK-281702     2                       N/A  $         90,476      15:24:55
