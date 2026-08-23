@@ -1160,10 +1160,88 @@ class TestGenerateRiskFactorsNoneRiskReversal:
         """
         from coding.core.analytics.synthesis import NarrativeGenerator
         result = NarrativeGenerator.generate_risk_factors(
-            cone_30d_pctile=50.0, gex_total=1_000_000, largest_expiry_dte=27,
+            cone_30d_pctile=50.0, gex_total=1_000_000, gamma_rolloff=None,
             funding_8h=0.0, risk_reversal_25d=None,
         )
         assert "Extreme RR25" not in result
+
+
+# =============================================================================
+# TESTS: generate_risk_factors -- GAMMA CLIFF trigger (Task Wave-I-A Fix 1)
+# =============================================================================
+
+class TestGenerateRiskFactorsGammaCliff:
+    """
+    Task Wave-I-A Fix 1: the old trigger was ``largest_expiry_dte <= 3``,
+    where ``largest_expiry`` = ``max(expiries, key=lambda e: e.total_oi)``.
+    For BTC the largest-OI expiry is essentially always a far-dated
+    quarterly, so that trigger could never fire even when a genuinely
+    near-dated expiry carried a large share of the book's gamma (real pin
+    risk). The fix reuses GexDexCalculator.calculate_rolloff_profile's own
+    "GAMMA CLIFF" flag (``gamma_cliff_7d``, >30% of gamma mass within 7
+    DTE) via the new ``gamma_rolloff`` parameter instead.
+    """
+
+    @staticmethod
+    def _rolloff(cliff: bool, cum_share_7d: float = 40.0, rows=None):
+        from coding.core.analytics.results.market_wide_results import (
+            GammaRolloffResult, GammaRolloffRow,
+        )
+        if rows is None:
+            rows = (
+                GammaRolloffRow(
+                    expiration="26JUL26", dte_days=1.0, net_gex=50_000_000.0,
+                    share_pct=cum_share_7d, cum_share_pct=cum_share_7d, cum_net_gex=50_000_000.0,
+                ),
+            )
+        return GammaRolloffResult(
+            rows=tuple(rows), gamma_cliff_7d=cliff, cum_share_7d=cum_share_7d,
+            cum_share_30d=cum_share_7d, gross_total=100_000_000.0,
+        )
+
+    def test_no_gamma_rolloff_data_no_cliff_risk(self):
+        """gamma_rolloff=None (roll-off computation never ran) must not
+        raise and must not report a GAMMA CLIFF -- matches the existing
+        cone_30d_pctile/funding_8h "missing input is not a risk factor"
+        convention in this same function."""
+        from coding.core.analytics.synthesis import NarrativeGenerator
+        result = NarrativeGenerator.generate_risk_factors(
+            cone_30d_pctile=50.0, gex_total=1_000_000, gamma_rolloff=None,
+            funding_8h=0.0, risk_reversal_25d=0.0,
+        )
+        assert "GAMMA CLIFF" not in result
+        assert "No elevated risk factors detected" in result
+
+    def test_gamma_rolloff_present_but_not_cliff_no_risk(self):
+        """gamma_cliff_7d=False (real data, just below the 30% threshold)
+        must not report a GAMMA CLIFF either."""
+        from coding.core.analytics.synthesis import NarrativeGenerator
+        result = NarrativeGenerator.generate_risk_factors(
+            cone_30d_pctile=50.0, gex_total=1_000_000,
+            gamma_rolloff=self._rolloff(cliff=False, cum_share_7d=12.0),
+            funding_8h=0.0, risk_reversal_25d=0.0,
+        )
+        assert "GAMMA CLIFF" not in result
+
+    def test_gamma_cliff_fires_regardless_of_largest_oi_expiry_dte(self):
+        """
+        The core reproduction: gamma_cliff_7d=True must fire the risk
+        factor -- this is decoupled from ``largest_expiry_dte`` entirely
+        now (the parameter doesn't even exist anymore), so it fires
+        exactly when there IS genuine near-term gamma concentration,
+        independent of which expiry happens to hold the most open
+        interest.
+        """
+        from coding.core.analytics.synthesis import NarrativeGenerator
+        result = NarrativeGenerator.generate_risk_factors(
+            cone_30d_pctile=50.0, gex_total=1_000_000,
+            gamma_rolloff=self._rolloff(cliff=True, cum_share_7d=63.0),
+            funding_8h=0.0, risk_reversal_25d=0.0,
+        )
+        assert "GAMMA CLIFF" in result
+        assert "63%" in result
+        assert "26JUL26" in result
+        assert "pin risk" in result
 
 
 # =============================================================================

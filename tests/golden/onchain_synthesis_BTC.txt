@@ -27,7 +27,7 @@ FAR-TERM (30+ DTE): BULLISH bias | GEX +28.6M (dampening) | OI: 257,391 contract
 
 VOL ASSESSMENT: Volatility is expensive (IV at 20th percentile, VRP +10.4pts). NOTE: 30d RV at 11th pctile — unusually calm period. VRP may compress further if realized vol reverts to mean. Sell premium in 31JUL26 where ATM IV is 36.2%. RR25 at -3.6% makes OTM puts are cheap relative to calls — tail risk underpriced puts the higher-edge side to sell.
 
-RISK FACTORS: No elevated risk factors detected
+RISK FACTORS: GAMMA CLIFF: 63% of gamma mass expires within 7 DTE (26JUL26, 27JUL26, 28JUL26, 29JUL26, 31JUL26) — pin risk and gamma spike around max pain
 
 INSTITUTIONAL FLOW (Block Trades): 3 block(s), combined premium $0.15M
   Largest: BLOCK-281702 (2 legs, structure: N/A) $0.09M

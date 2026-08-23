@@ -19,7 +19,10 @@ from datetime import datetime, timedelta, timezone
 
 from coding.core.analytics.market_wide_calculator import MarketWideCalculator
 from coding.core.analytics.results.analysis_result import OnChainAnalysisResult
-from coding.core.analytics.thresholds import RISK_REVERSAL_MILD_POINTS, RISK_REVERSAL_STRONG_POINTS
+from coding.core.analytics.results.market_wide_results import GammaRolloffResult
+from coding.core.analytics.thresholds import (
+    GEX_NORMALIZED_REGIME_THRESHOLD, RISK_REVERSAL_MILD_POINTS, RISK_REVERSAL_STRONG_POINTS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -314,6 +317,16 @@ class MarketWideMetrics:
     """Cross-expiration GexDexKeyLevels.hvl -- see ExpiryMetrics.hvl_strike's
     docstring for the strike-axis-artifact-vs-Zero-Gamma-Level distinction
     this field is also subject to (Wave-H-A Task 6)."""
+
+    # Task Wave-I-A Fix 1: threaded through unchanged from
+    # MarketWideResult.gamma_rolloff so generate_risk_factors can reuse
+    # GexDexCalculator.calculate_rolloff_profile's own "GAMMA CLIFF"
+    # near-term concentration flag (>30% of gamma mass within 7 DTE)
+    # instead of the largest-OI expiry's DTE, which for BTC is almost
+    # always a far-dated quarterly and can never trip a near-term pin-risk
+    # check. None exactly when the whole roll-off computation never ran
+    # (e.g. no per-expiry GEX at all) -- NOT "no gamma cliff".
+    gamma_rolloff: Optional[GammaRolloffResult] = None
 
     # Task G2-B Finding 3: names of MarketWideResult sections whose
     # calculation raised (threaded through from
@@ -1465,7 +1478,7 @@ class NarrativeGenerator:
             cls,
             cone_30d_pctile: Optional[float],
             gex_total: float,
-            largest_expiry_dte: int,
+            gamma_rolloff: Optional[GammaRolloffResult],
             funding_8h: Optional[float],
             risk_reversal_25d: Optional[float],
             spot: float = 100000.0,
@@ -1491,6 +1504,21 @@ class NarrativeGenerator:
         Optional field (the largest expiry's vol surface may never have
         computed) -- its threshold check below is skipped the same way,
         for the same reason.
+
+        Task Wave-I-A Fix 1: ``gamma_rolloff`` replaces the old
+        ``largest_expiry_dte`` parameter. The old "Major expiry in N DTE"
+        trigger used ``largest_expiry`` = ``max(expiries, key=lambda e:
+        e.total_oi)`` -- for BTC the largest-OI expiry is essentially
+        always a far-dated quarterly, so ``largest_expiry_dte <= 3`` could
+        never fire even when a genuinely near-dated expiry carried a large
+        share of the book's gamma mass (real pin risk). This reuses
+        ``GexDexCalculator.calculate_rolloff_profile``'s own "GAMMA CLIFF"
+        flag (``gamma_cliff_7d``, threshold >30% of gamma mass within 7
+        DTE -- see ``format_gamma_rolloff_section``) instead of inventing
+        a second, parallel near-term-concentration metric. ``None`` when
+        the roll-off computation never ran (no per-expiry GEX at all) --
+        the check is skipped, same "missing input is not itself a risk
+        factor" convention as ``cone_30d_pctile``/``funding_8h`` above.
         """
 
         risks = []
@@ -1508,8 +1536,13 @@ class NarrativeGenerator:
             risks.append(
                 f"Deeply negative GEX ({gex_m:.1f}M, norm {gex_norm:.0f}) — cascading stop-outs possible")
 
-        if largest_expiry_dte <= 3:
-            risks.append(f"Major expiry in {largest_expiry_dte} DTE — pin risk and gamma spike around max pain")
+        if gamma_rolloff is not None and gamma_rolloff.gamma_cliff_7d:
+            near_expiries = [r.expiration for r in gamma_rolloff.rows if r.dte_days <= 7.0]
+            expiry_note = ", ".join(near_expiries) if near_expiries else "near-dated expiries"
+            risks.append(
+                f"GAMMA CLIFF: {gamma_rolloff.cum_share_7d:.0f}% of gamma mass expires "
+                f"within 7 DTE ({expiry_note}) — pin risk and gamma spike around max pain"
+            )
 
         # Funding threshold: |funding_8h| > 0.03% per 8h (~32.85% ann)
         if funding_8h is not None and abs(funding_8h) > 0.03:
@@ -2096,7 +2129,7 @@ class SynthesisEngine:
         risk_narrative = self.narrator.generate_risk_factors(
             cone_30d_pctile=market.cone_30d_pctile,
             gex_total=gex_for_regime,
-            largest_expiry_dte=largest_expiry.dte,
+            gamma_rolloff=market.gamma_rolloff,
             funding_8h=market.funding_8h,
             risk_reversal_25d=largest_expiry.risk_reversal_25d,
             spot=spot,
@@ -2827,6 +2860,11 @@ class SynthesisMapper:
             aggregate_call_resistance=aggregate_call_resistance,
             aggregate_put_support=aggregate_put_support,
             aggregate_hvl=aggregate_hvl,
+            # Task Wave-I-A Fix 1: same "already computed elsewhere,
+            # thread it through unchanged" pattern as failed_sections
+            # below -- MarketWideResult.gamma_rolloff already carries the
+            # GAMMA CLIFF flag/rows; no re-computation here.
+            gamma_rolloff=mw.gamma_rolloff,
             # Task G2-B Finding 3: thread the orchestrator's real
             # failed-sections list through instead of dropping it on the
             # floor -- MarketWideResult already carries it correctly.
