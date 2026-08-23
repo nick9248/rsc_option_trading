@@ -1842,6 +1842,95 @@ class TestBuildExpiryMetrics:
         assert result.flow_bias == "Insufficient flow data"
         assert result.flow_sufficient_data is False
 
+    def test_unparseable_expiration_skips_instead_of_fabricating_dte_zero(self):
+        """
+        Task Wave-I-A Fix 5: the old code was
+        ``MarketWideCalculator.calculate_dte(expiration, result.generated_at)
+        or 0`` -- collapsing a real ``None`` (calculate_dte's own signal
+        that ``expiration`` didn't parse as "DDMONYY") into the exact same
+        ``0`` a genuine same-day expiry produces. Downstream logic (e.g.
+        score_pc_ratio's DTE<=2 settlement-day clamp) cannot tell "expires
+        today" from "we don't know when this expires" once collapsed.
+
+        "NOTADATE" is a valid dict key (instruments/bundle resolve fine,
+        the same way any expiration string would) but fails
+        ``datetime.strptime(..., "%d%b%y")`` -- reproducing the exact
+        "every other per-expiry computation already worked off this key,
+        only calculate_dte rejects it" scenario the fix's docstring
+        describes. Must now return None (skip this expiration) instead of
+        fabricating ExpiryMetrics(dte=0, ...).
+        """
+        onchain_result = make_onchain_result("NOTADATE")
+        result = SynthesisMapper.build_expiry_metrics(onchain_result, "NOTADATE")
+        assert result is None
+
+    def test_real_same_day_expiry_still_gets_dte_zero(self):
+        """
+        Regression guard for Fix 5: a GENUINE same-day expiry (a real,
+        parseable "DDMONYY" label whose settlement has already passed
+        today) must still produce ``dte == 0`` -- Fix 5 must not turn a
+        real 0-DTE reading into a skip too. Uses an expiration far enough
+        in the past that calculate_dte's clamp-to-0-for-past-expirations
+        branch fires (a real DTE=0, not a parse failure).
+        """
+        past_expiration = "01JAN20"  # long past its 08:00 UTC settlement
+        onchain_result = make_onchain_result(past_expiration)
+        result = SynthesisMapper.build_expiry_metrics(onchain_result, past_expiration)
+        assert result is not None
+        assert result.dte == 0
+
+
+# =============================================================================
+# TESTS: _estimate_transition_window -- must not depend on input order
+# (Task Wave-I-A Fix 4)
+# =============================================================================
+
+class TestEstimateTransitionWindowSortsByDte:
+    """
+    ``SynthesisEngine.run`` already passes its own DTE-sorted
+    ``expiries_sorted`` to ``_estimate_transition_window`` -- no live call
+    site was reachable with unsorted input -- but the function itself had
+    no such precondition documented or enforced, so walking a
+    differently-ordered list of the SAME expiries silently reported a
+    sign flip at a FARTHER expiry as if it were the nearest one.
+    """
+
+    def _expiries(self):
+        return [
+            make_expiry_metrics(expiry="05SEP26", dte=5, total_oi=1000, total_gex=5_000_000),
+            make_expiry_metrics(expiry="10SEP26", dte=10, total_oi=1000, total_gex=-3_000_000),
+            make_expiry_metrics(expiry="20SEP26", dte=20, total_oi=1000, total_gex=-2_000_000),
+            make_expiry_metrics(expiry="30SEP26", dte=30, total_oi=1000, total_gex=4_000_000),
+        ]
+
+    def test_dte_sorted_input_finds_nearest_flip(self):
+        engine = SynthesisEngine()
+        result = engine._estimate_transition_window(self._expiries())
+        assert "10 days" in result
+        assert "10SEP26" in result
+
+    def test_out_of_order_input_still_finds_nearest_flip(self):
+        """
+        The core reproduction: the identical 4 expiries, handed in in a
+        DIFFERENT order (e.g. OI order, or any upstream ordering other
+        than DTE-ascending), must report the SAME nearest transition
+        (10 days at 10SEP26) -- not whichever sign flip happens to
+        iterate first in the given order (which, unsorted, was 20 days at
+        20SEP26 before this fix).
+        """
+        engine = SynthesisEngine()
+        expiries = self._expiries()
+        out_of_order = [expiries[3], expiries[0], expiries[2], expiries[1]]
+        result = engine._estimate_transition_window(out_of_order)
+        assert "10 days" in result
+        assert "10SEP26" in result
+
+    def test_insufficient_oi_still_returns_unclear(self):
+        engine = SynthesisEngine()
+        expiries = [make_expiry_metrics(expiry="05SEP26", dte=5, total_oi=10, total_gex=1.0)]
+        result = engine._estimate_transition_window(expiries)
+        assert "insufficient OI data" in result
+
 
 # =============================================================================
 # TESTS: SynthesisMapper.build_all

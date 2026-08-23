@@ -2444,7 +2444,31 @@ Perp Funding: {funding_rate_str}  | 8h: {funding_8h_str}
         return "\n".join(lines)
 
     def _estimate_transition_window(self, expiries: List[ExpiryMetrics]) -> str:
-        """Estimate when the regime transition will complete."""
+        """
+        Estimate when the regime transition will complete.
+
+        Walks the expiries looking for the FIRST GEX sign flip and reports
+        it as "the nearest transition point" — only correct if the input
+        is ordered ascending by DTE. ``SynthesisEngine.run`` already
+        passes its own DTE-sorted ``expiries_sorted`` here (confirmed: no
+        live call site was reachable with unsorted input), but this
+        function had no such precondition documented or enforced, so any
+        future caller — or a refactor of that one call site — could
+        silently report a sign flip at a FARTHER expiry as the nearest
+        one, with no error. Reproduced directly: expiries
+        [(5d, +GEX), (10d, -GEX), (20d, -GEX), (30d, +GEX)] handed in
+        DTE order correctly find "10 days" (5d->10d flip); the identical
+        4 expiries handed in a different order (e.g. OI order) found
+        "20 days" instead — same data, wrong answer, entirely order-
+        dependent (Task Wave-I-A Fix 4).
+
+        Fix: sort by DTE ascending here — idempotent, negligible cost on
+        the ~handful of expiries this ever sees — so correctness is a
+        property of this function, not an unstated contract with its one
+        caller.
+        """
+        expiries = sorted(expiries, key=lambda e: e.dte)
+
         # Only consider expiries with meaningful OI — low-OI expiries produce
         # near-zero GEX values whose sign is effectively noise, not a regime signal.
         MIN_OI = 500
