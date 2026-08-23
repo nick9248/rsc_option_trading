@@ -54,7 +54,7 @@ KEY LEVELS:
   Put Support: $60,000 (Net GEX: -479,149.66 USD)
   Cumulative GEX Zero Strike: $68,000 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
 
-EXPOSURES -- HOLDER SIDE (raw, no positioning assumption)
+EXPOSURES -- HOLDER SIDE (assumes every open contract is held long)
 --------------------------------------------------------------------------------
   Gamma Exposure: +3,862,123.85 USD per 1% move
   Delta Exposure: +156.1756 BTC
@@ -250,7 +250,7 @@ KEY LEVELS:
   Put Support: $60,000 (Net GEX: -4,711,572.08 USD)
   Cumulative GEX Zero Strike: $92,000 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
 
-EXPOSURES -- HOLDER SIDE (raw, no positioning assumption)
+EXPOSURES -- HOLDER SIDE (assumes every open contract is held long)
 --------------------------------------------------------------------------------
   Gamma Exposure: +41,899,943.63 USD per 1% move
   Delta Exposure: -873.5490 BTC
@@ -519,7 +519,7 @@ KEY LEVELS:
   Put Support: $40,000 (Net GEX: -104,003.67 USD)
   Cumulative GEX Zero Strike: $60,000 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
 
-EXPOSURES -- HOLDER SIDE (raw, no positioning assumption)
+EXPOSURES -- HOLDER SIDE (assumes every open contract is held long)
 --------------------------------------------------------------------------------
   Gamma Exposure: +1,485,598.38 USD per 1% move
   Delta Exposure: +733.4117 BTC
@@ -768,7 +768,7 @@ KEY LEVELS:
   Put Support: $60,000 (Net GEX: -4,653,460.20 USD)
   Cumulative GEX Zero Strike: $82,000 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
 
-EXPOSURES -- HOLDER SIDE (raw, no positioning assumption)
+EXPOSURES -- HOLDER SIDE (assumes every open contract is held long)
 --------------------------------------------------------------------------------
   Gamma Exposure: +61,280,776.04 USD per 1% move
   Delta Exposure: -4,954.5167 BTC
@@ -1026,7 +1026,7 @@ KEY LEVELS:
   Put Support: $64,000 (Net GEX: -2,849,079.91 USD)
   Cumulative GEX Zero Strike: $64,500 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
 
-EXPOSURES -- HOLDER SIDE (raw, no positioning assumption)
+EXPOSURES -- HOLDER SIDE (assumes every open contract is held long)
 --------------------------------------------------------------------------------
   Gamma Exposure: +24,154,998.12 USD per 1% move
   Delta Exposure: +63.4573 BTC
@@ -1250,7 +1250,7 @@ KEY LEVELS:
   Put Support: $50,000 (Net GEX: -850,121.56 USD)
   Cumulative GEX Zero Strike: $100,000 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
 
-EXPOSURES -- HOLDER SIDE (raw, no positioning assumption)
+EXPOSURES -- HOLDER SIDE (assumes every open contract is held long)
 --------------------------------------------------------------------------------
   Gamma Exposure: +9,327,097.86 USD per 1% move
   Delta Exposure: +640.7776 BTC
@@ -1489,7 +1489,7 @@ KEY LEVELS:
   Put Support: $65,000 (Net GEX: -2,629,273.22 USD)
   Cumulative GEX Zero Strike: $64,500 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
 
-EXPOSURES -- HOLDER SIDE (raw, no positioning assumption)
+EXPOSURES -- HOLDER SIDE (assumes every open contract is held long)
 --------------------------------------------------------------------------------
   Gamma Exposure: +12,899,795.41 USD per 1% move
   Delta Exposure: -201.3906 BTC
@@ -1705,7 +1705,7 @@ KEY LEVELS:
   Put Support: $60,000 (Net GEX: -2,224,269.09 USD)
   Cumulative GEX Zero Strike: $69,000 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
 
-EXPOSURES -- HOLDER SIDE (raw, no positioning assumption)
+EXPOSURES -- HOLDER SIDE (assumes every open contract is held long)
 --------------------------------------------------------------------------------
   Gamma Exposure: +54,560,133.30 USD per 1% move
   Delta Exposure: +3,446.7027 BTC
@@ -1957,7 +1957,7 @@ KEY LEVELS:
   Put Support: $61,000 (Net GEX: -281,665.93 USD)
   Cumulative GEX Zero Strike: $66,500 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
 
-EXPOSURES -- HOLDER SIDE (raw, no positioning assumption)
+EXPOSURES -- HOLDER SIDE (assumes every open contract is held long)
 --------------------------------------------------------------------------------
   Gamma Exposure: +4,947,644.13 USD per 1% move
   Delta Exposure: -39.8493 BTC
@@ -2147,7 +2147,7 @@ KEY LEVELS:
   Put Support: $61,000 (Net GEX: -84,381.51 USD)
   Cumulative GEX Zero Strike: $57,000 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
 
-EXPOSURES -- HOLDER SIDE (raw, no positioning assumption)
+EXPOSURES -- HOLDER SIDE (assumes every open contract is held long)
 --------------------------------------------------------------------------------
   Gamma Exposure: +330,321.91 USD per 1% move
   Delta Exposure: -3.4892 BTC
@@ -2354,7 +2354,7 @@ KEY LEVELS:
   Put Support: $60,000 (Net GEX: -3,105,873.15 USD)
   Cumulative GEX Zero Strike: $66,000 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
 
-EXPOSURES -- HOLDER SIDE (raw, no positioning assumption)
+EXPOSURES -- HOLDER SIDE (assumes every open contract is held long)
 --------------------------------------------------------------------------------
   Gamma Exposure: +167,820,345.78 USD per 1% move
   Delta Exposure: +2,084.6151 BTC
@@ -2623,7 +2623,7 @@ KEY LEVELS:
   Put Support: $60,000 (Net GEX: -2,465,429.47 USD)
   Cumulative GEX Zero Strike: $68,000 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
 
-EXPOSURES -- HOLDER SIDE (raw, no positioning assumption)
+EXPOSURES -- HOLDER SIDE (assumes every open contract is held long)
 --------------------------------------------------------------------------------
   Gamma Exposure: +35,765,608.22 USD per 1% move
   Delta Exposure: +1,426.5991 BTC
@@ -2774,7 +2774,7 @@ KEY LEVELS:
   Put Support: $60,000 (Net GEX: -17,331,021.43 USD)
   Cumulative GEX Zero Strike: $68,000 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
 
-EXPOSURES -- HOLDER SIDE (raw, no positioning assumption)
+EXPOSURES -- HOLDER SIDE (assumes every open contract is held long)
 --------------------------------------------------------------------------------
   Gamma Exposure: +418,334,386.65 USD per 1% move
   Delta Exposure: +2,478.9444 BTC

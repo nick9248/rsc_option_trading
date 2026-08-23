@@ -67,7 +67,12 @@ def test_gex_dex_section_key_levels_and_totals():
     assert "NOT a re-priced gamma flip" in text
 
     # bugfix_spec.md Item 8: holder-side raw exposures, no actor named.
-    assert "EXPOSURES -- HOLDER SIDE (raw, no positioning assumption)" in text
+    # Wave-I-C Fix 4: the label states the ACTUAL assumption (every open
+    # contract is held long) rather than claiming there is none -- summing
+    # call-side and put-side exposure that way is itself a positioning
+    # assumption, just a different one from the dealer-view heuristic below.
+    assert "EXPOSURES -- HOLDER SIDE (assumes every open contract is held long)" in text
+    assert "no positioning assumption" not in text
     # gamma_exposure_holder_total = row1(1.0+0.5) + row2(0.2+1.5) = 1.5 + 1.7 = 3.2
     assert "Gamma Exposure: +3.20 USD per 1% move" in text
     assert "Delta Exposure: -0.2000 BTC" in text  # = total_net_dex (holder), unchanged

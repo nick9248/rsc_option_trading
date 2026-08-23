@@ -105,8 +105,18 @@ def _key_levels_and_totals_lines(result: GexDexResult, dex_unit: str) -> list:
         lines.append("")
 
     # bugfix_spec.md Item 8: holder-side raw exposures -- pure arithmetic on
-    # observable OI/Greeks, no positioning assumption. No actor is named here.
-    lines.append("EXPOSURES -- HOLDER SIDE (raw, no positioning assumption)")
+    # observable OI/Greeks (call_gamma + put_gamma etc.), no ASSUMED-DEALER
+    # heuristic layered on top. No actor other than "the holder" is named
+    # here.
+    #
+    # Wave-I-C Fix 4: the old label claimed "no positioning assumption",
+    # which overclaims -- summing call-side and put-side exposure as if
+    # every single open contract is held LONG (never short) IS itself a
+    # positioning assumption, just a different one from the dealer-side
+    # heuristic below (and a defensible convention, since OI alone can't
+    # distinguish a long holder from a short one). State it plainly
+    # instead of claiming there is none.
+    lines.append("EXPOSURES -- HOLDER SIDE (assumes every open contract is held long)")
     lines.append(_SEPARATOR)
     holder_gamma = result.gamma_exposure_holder_total
     holder_dex = result.delta_exposure_holder_total
