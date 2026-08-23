@@ -429,6 +429,31 @@ def test_block_trades_rendered():
         assert instrument not in large_prints_text
 
 
+def test_large_prints_discloses_notional_is_not_delta_weighted():
+    """
+    Wave-I-C Fix 3: LARGE PRINTS' "Notional" column is contracts x spot
+    (undiscounted contract notional) -- it doesn't account for how far
+    OTM/ITM the option is, so it isn't a risk-adjusted/delta-weighted
+    flow read even though it's presented as a dollar figure right next
+    to buy/sell direction. The section must disclose this explicitly.
+    """
+    result = BlockTradesResult(
+        trades=(
+            BlockTrade(
+                timestamp=1700000000000, instrument_name="BTC-28FEB26-100000-C",
+                amount=5.0, direction="buy", notional=500_000.0, implied_volatility=70.0,
+            ),
+        ),
+        notional_threshold=100_000.0, total_detected=1,
+        blocks=(), tracked_since="2026-08-02",
+    )
+    text = format_block_trades_section(result)
+
+    large_prints_text = text[text.index("LARGE PRINTS"):]
+    assert "not delta-weighted" in large_prints_text.lower()
+    assert "contracts x spot" in large_prints_text
+
+
 def test_block_timestamp_rendered_in_utc_not_local():
     """Independent review round 2 (Important #2): same banned bug class as
     the calculator's own detect_block_trades -- ts=1785546525278 is

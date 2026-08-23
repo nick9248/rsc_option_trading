@@ -457,6 +457,15 @@ def format_block_trades_section(result: Optional[BlockTradesResult]) -> str:
     lines.append(
         f"LARGE PRINTS (screen prints, not blocks; >${result.notional_threshold:,.0f} notional)"
     )
+    # Wave-I-C Fix 3: "Notional" here is contracts x spot (undiscounted
+    # contract notional) -- it does NOT account for how far OTM/ITM the
+    # option is (i.e. it is not delta-weighted), so it must not be read
+    # as a risk-adjusted dollar-flow signal. Disclosed explicitly rather
+    # than retrofitting real delta-weighting, which is out of scope here.
+    lines.append(
+        "  Notional = contracts x spot (undiscounted contract notional, "
+        "NOT delta-weighted flow)"
+    )
     lines.append(_SUB_SEPARATOR)
 
     if not result.trades:

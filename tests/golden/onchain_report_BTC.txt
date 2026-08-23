@@ -2920,6 +2920,7 @@ BLOCK TRADES
       BLOCK-281700     2    BTC-STRD-31JUL26-64000  $         28,887      13:49:41
 
 LARGE PRINTS (screen prints, not blocks; >$100,000 notional)
+  Notional = contracts x spot (undiscounted contract notional, NOT delta-weighted flow)
 --------------------------------------------------------------------------------
           Time                 Instrument      Size    Dir        Notional      IV
           ----                 ----------      ----    ---        --------      --
