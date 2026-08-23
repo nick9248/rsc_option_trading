@@ -80,12 +80,56 @@ class TestHolderVsAssumedDealerSignsDiverge:
         assert result["total_cex"] == pytest.approx(-19488.738769282332, rel=1e-6)
 
     def test_assumed_dealer_vex(self):
+        """
+        Wave-I-D: assumed-dealer is the NEGATED holder-side sum (-1 for
+        every leg, call or put alike), matching GexDexCalculator's
+        canonical convention and VolatilitySurfaceCalculator's Wave-H-A
+        precedent revert -- not the old call/put-SPLIT convention
+        (+1 call, -1 put) that this superseded. Under the old SPLIT,
+        this mixed book (call OI=1000, put OI=400, both nonzero) would
+        have produced +38107.44 -- diverging from -holder because the
+        two OI legs are unequal (the generic case for a real book).
+        """
         valuation_time, instruments = self._instruments()
         calc = ExposureProfileCalculator(instruments, spot_price=64000,
                                           valuation_time_utc=valuation_time, currency="BTC")
+        holder = calc.calculate(side_convention="holder")
         result = calc.calculate(side_convention="assumed_dealer")
 
-        assert result["total_vex"] == pytest.approx(38107.44455779313, rel=1e-6)
+        assert result["total_vex"] == pytest.approx(-88917.37063485062, rel=1e-6)
+        assert result["total_vex"] == pytest.approx(-holder["total_vex"])
+
+    def test_assumed_dealer_cex_is_negated_holder_sum(self):
+        """Wave-I-D: same negated-sum convention applies to CEX."""
+        valuation_time, instruments = self._instruments()
+        calc = ExposureProfileCalculator(instruments, spot_price=64000,
+                                          valuation_time_utc=valuation_time, currency="BTC")
+        holder = calc.calculate(side_convention="holder")
+        result = calc.calculate(side_convention="assumed_dealer")
+
+        assert result["total_cex"] == pytest.approx(-holder["total_cex"])
+        assert result["total_cex"] == pytest.approx(19488.738769282332, rel=1e-6)
+
+    def test_assumed_dealer_equals_negated_holder_per_strike_on_mixed_oi_book(self):
+        """
+        Regression guard for the reverted call/put-SPLIT convention: on a
+        book where BOTH call OI and put OI are nonzero at a strike (the
+        case where SPLIT and negated-sum numerically diverge -- they agree
+        whenever one leg's OI is zero, since vanna/charm are identical
+        across legs by put-call parity), assumed_dealer must equal exactly
+        -holder at that strike, per-leg-sign notwithstanding.
+        """
+        valuation_time, instruments = self._instruments()
+        calc = ExposureProfileCalculator(instruments, spot_price=64000,
+                                          valuation_time_utc=valuation_time, currency="BTC")
+        holder = calc.calculate(side_convention="holder")
+        dealer = calc.calculate(side_convention="assumed_dealer")
+
+        holder_row = holder["strike_data"][64000]
+        dealer_row = dealer["strike_data"][64000]
+        assert holder_row["call_oi"] > 0 and holder_row["put_oi"] > 0  # mixed-OI precondition
+        assert dealer_row["vex"] == pytest.approx(-holder_row["vex"])
+        assert dealer_row["cex"] == pytest.approx(-holder_row["cex"])
 
     def test_vanna_identical_for_call_and_put_leg(self):
         """No per-type sign injected into the greek itself -- all sign

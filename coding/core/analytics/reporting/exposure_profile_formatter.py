@@ -17,33 +17,32 @@ separator rules, one row per strike, followed by peak/total summary lines.
 No interpretive sentence -- per spec 4(c), "the numbers and their peaks are
 the output."
 
-Decision D7 (BINDING, established Wave B/task B2): holder-side raw is the
-primary number, assumed-dealer view alongside in brackets. The label states
-the assumption explicitly, matching ``gex_dex_formatter``'s bar ("ASSUMED
-DEALER VIEW  (assumption: dealers long calls / short puts for gamma, short
-customer delta)") rather than just borrowing the word "dealer" -- Task C5
-review (Important #1) caught an earlier draft of this label that dropped
-the stated assumption. ``ExposureProfileCalculator``'s own
-``vex_assumed_dealer``/``cex_assumed_dealer`` (rendered here) use the
-call/put-SPLIT convention (+1 call, -1 put), per Decision D7/Task C5 --
-this module's own scope, unchanged by Wave-H-A.
+Decision D7 (BINDING, established Wave B/task B2; REVISED Wave-I-D):
+holder-side raw is the primary number, assumed-dealer view alongside in
+brackets. The label states the assumption explicitly, matching
+``gex_dex_formatter``'s bar ("ASSUMED DEALER VIEW  (assumption: dealers
+long calls / short puts for gamma, short customer delta)") rather than just
+borrowing the word "dealer" -- Task C5 review (Important #1) caught an
+earlier draft of this label that dropped the stated assumption.
+``ExposureProfileCalculator``'s own ``vex_assumed_dealer``/
+``cex_assumed_dealer`` (rendered here) now use the NEGATED-HOLDER-SUM
+convention (-1 for every leg, call or put alike -- dealers short whatever
+customers hold), matching ``GexDexCalculator``'s canonical SIGN CONVENTION
+(gex_dex_calculator.py lines 50-66: the long-calls/short-puts call/put
+SPLIT is GAMMA ONLY) and ``VolatilitySurfaceCalculator.dealer_vanna_
+exposure``/``dealer_charm_exposure``'s Wave-H-A precedent revert
+(commit e0eb59d) to the same convention.
 
-Wave-H-A (flagging, NOT fixing -- out of this task's scope): this
-docstring previously claimed ``VolatilitySurfaceCalculator.
-_calculate_second_order_greeks``'s ``dealer_vanna_exposure``/
-``dealer_charm_exposure`` compute "the same" call/put-SPLIT convention as
-this module. That claim is no longer true -- Wave-H-A reverted those two
-fields to ``-(holder-side sum)`` (the negated sum), per
-``GexDexCalculator``'s own canonical SIGN CONVENTION (its class
-docstring: the call/put-SPLIT is gamma-only). The two components
-(``VolatilitySurfaceCalculator``'s aggregate scalar, rendered nowhere
-today, vs. this module's per-strike VEX/CEX table, Decision D7-BINDING)
-now compute assumed-dealer vanna/charm with genuinely DIFFERENT
-conventions. Wave-H-A's task brief scoped the revert to
-``VolatilitySurfaceCalculator`` only and did not ask for
-``ExposureProfileCalculator`` to change -- left as-is here pending an
-explicit decision on which of the two (if not both) should follow the
-canonical convention.
+Wave-I-D (resolving the divergence Wave-H-A flagged, not fixed, in this
+docstring's prior text): D7's original call/put-SPLIT convention
+(+1 call, -1 put) for this module's assumed-dealer vanna/charm was the
+same over-generalization of the gamma-only canonical convention that
+Wave-H-A already found and reverted in ``VolatilitySurfaceCalculator``.
+Reverted here too, for consistency -- ``ExposureProfileCalculator``'s
+per-strike VEX/CEX table and ``VolatilitySurfaceCalculator``'s aggregate
+scalar now AGREE on what "assumed-dealer vanna/charm" means (both equal
+the negated holder-side sum), closing the genuine divergence between the
+two components that Wave-H-A's docstring update here previously flagged.
 """
 
 from typing import Optional
@@ -80,7 +79,7 @@ def format_exposure_profile_section(result: ExposureProfileResult, currency: str
 
     lines = []
     lines.append("VANNA / CHARM PROFILE (holder-side raw; assumed-dealer view in brackets --")
-    lines.append("                       assumption: dealers long calls / short puts)")
+    lines.append("                       assumption: dealers short customer vanna/charm)")
     lines.append(_SEPARATOR)
     lines.append(
         f"{'Strike':>10}  {'Call OI':>10}  {'Put OI':>10}  "

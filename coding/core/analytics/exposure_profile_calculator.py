@@ -7,16 +7,35 @@ vanna/charm -- delegates to ``BlackScholesCalculator.calculate_vanna``/
 ``calculate_charm`` (the same closed forms Wave B's aggregate scalar in
 ``VolatilitySurfaceCalculator._calculate_second_order_greeks`` already uses).
 
-Decision D7 (BINDING, established Wave B / task B2): two sign conventions
-are computed from the SAME underlying vanna/charm value --
+Decision D7 (BINDING, established Wave B / task B2; REVISED Wave-I-D): two
+sign conventions are computed from the SAME underlying vanna/charm value --
 HOLDER-SIDE (every open contract counted +1, pure arithmetic, no positioning
-assumption) and ASSUMED-DEALER VIEW (long calls / short puts, the
-SqueezeMetrics heuristic). This module adds no third convention; a caller
-may also supply externally-computed ``side_weights`` for an INFERRED view
-(institutional_metrics_spec.md section 2's taker-flow-inferred dealer
-positioning, when that section's gate passes) -- this calculator only
+assumption) and ASSUMED-DEALER VIEW. This module adds no third convention;
+a caller may also supply externally-computed ``side_weights`` for an
+INFERRED view (institutional_metrics_spec.md section 2's taker-flow-inferred
+dealer positioning, when that section's gate passes) -- this calculator only
 consumes whatever weights it is given for that convention, it does not
 compute the gate itself (that lives in ``DealerInventoryCalculator``).
+
+Wave-I-D (superseding D7's original ASSUMED-DEALER definition): D7 was
+established in Wave B, BEFORE ``gex_dex_calculator.py``'s class docstring
+(lines 50-66) later became this codebase's documented canonical SIGN
+CONVENTION -- dealers long calls / short puts is a GAMMA-ONLY assumption;
+delta/vanna/charm are each "short whatever customers (holders) hold" (the
+negated holder-side sum). D7's original text applied the gamma-only
+call/put SPLIT (+1 call, -1 put) to vanna/charm too, the same
+over-generalization Wave-H-A already found and reverted in
+``VolatilitySurfaceCalculator.dealer_vanna_exposure``/
+``dealer_charm_exposure`` (commit e0eb59d). This module's ASSUMED-DEALER
+VIEW is revised to match: -1 for every leg (call or put alike), i.e.
+assumed_dealer == -holder at both the per-strike and total level -- see
+``_side_weight``'s docstring for the mechanism. Unlike delta, vanna and
+charm are sign-invariant between calls and puts at a given strike (put-call
+parity: Delta_call - Delta_put = 1 is a spot/vol/time-independent constant,
+so every higher derivative of that difference is exactly zero), so the old
+SPLIT was not an always-wrong-sign bug the way delta's was -- but it still
+diverged numerically from the canonical negated-sum whenever call OI != put
+OI at a strike, which is the generic case for a real book.
 
 tau recovery (spec section 4(b)): uses the INSTRUMENT NAME
 (``BlackScholesCalculator.parse_instrument_name`` -> 08:00 UTC expiry), not
@@ -122,9 +141,11 @@ class ExposureProfileCalculator:
 
         Args:
             side_convention: "holder" (every open contract +1), "assumed_dealer"
-                (long calls / short puts, SqueezeMetrics), or "inferred"
-                (caller-supplied ``side_weights``, e.g. from section 2's
-                taker-flow-inferred dealer positioning when its gate passes).
+                (-1 for every open contract -- dealers short whatever
+                customers hold, Wave-I-D; see this module's docstring), or
+                "inferred" (caller-supplied ``side_weights``, e.g. from
+                section 2's taker-flow-inferred dealer positioning when its
+                gate passes).
             side_weights: Required when ``side_convention == "inferred"``.
                 Maps ``(strike, option_type)`` -> per-leg side weight. A leg
                 not present in the mapping contributes 0 (excluded from the
@@ -307,8 +328,20 @@ class ExposureProfileCalculator:
         option_type: str,
     ) -> float:
         """
-        Decision D7 (BINDING): side_holder = +1 for every open contract;
-        side_assumed_dealer = +1 for calls, -1 for puts (SqueezeMetrics).
+        Decision D7, REVISED (Wave-I-D, superseding the call/put-SPLIT
+        convention established Wave B/task B2): side_holder = +1 for every
+        open contract; side_assumed_dealer = -1 for every open contract
+        (dealers short whatever customers/holders hold), matching
+        GexDexCalculator's canonical SIGN CONVENTION (gex_dex_calculator.py
+        lines 50-66: the long-calls/short-puts call/put-SPLIT applies to
+        GAMMA ONLY -- delta/vanna/charm are each "short whatever customers
+        hold") and Wave-H-A's precedent revert of
+        VolatilitySurfaceCalculator.dealer_vanna_exposure/
+        dealer_charm_exposure to the same negated-holder-sum convention.
+        Per-leg, "negate every leg" and "negate the summed total" are
+        identical by linearity, so this stays a per-leg weight (no second
+        pass, no change to the accumulation loop above) while producing
+        assumed_dealer == -holder at both the per-strike and total level.
         side_inferred is whatever the caller supplied for this leg (missing
         key -> 0, i.e. excluded from the inferred view rather than silently
         defaulted to another convention).
@@ -316,6 +349,6 @@ class ExposureProfileCalculator:
         if side_convention == "holder":
             return 1.0
         if side_convention == "assumed_dealer":
-            return 1.0 if option_type == "C" else -1.0
+            return -1.0
         # inferred
         return float(side_weights.get((strike, option_type), 0.0))
