@@ -2437,7 +2437,26 @@ class OnChainAnalysisService:
                 # calculate() + generate_report_section() pair — closes
                 # bugfix_spec.md Item 6a (double DB query, two independently
                 # computed "now" instants).
-                window_end = datetime.now()
+                # Wave-I-C Fix 1: naive datetime.now() is host-local and
+                # ambiguous during the DST fall-back hour (the repeated
+                # local hour maps to two different UTC instants), which
+                # silently produces the wrong 24h window twice a year.
+                # Unlike prospective_collector.py's collect_hour (which
+                # stores its UTC-valued naive result directly into a
+                # `timestamp without time zone` column with no further
+                # conversion), window_start/window_end here are ONLY ever
+                # used to derive window_start_ms/window_end_ms via
+                # .timestamp() below -- and .timestamp() on a NAIVE
+                # datetime assumes host-LOCAL time. Stripping tzinfo after
+                # attaching UTC (the collect_hour pattern) would make that
+                # .timestamp() call reinterpret an already-UTC wall clock
+                # as local, shifting the window by the host's UTC offset
+                # on every single call, not just the rare DST-ambiguous
+                # hour. Keeping the datetime timezone-AWARE through
+                # .timestamp() is what makes the conversion unambiguous
+                # and host-tz-independent (aware .timestamp() uses the
+                # attached UTC offset directly, never local tz rules).
+                window_end = datetime.now(timezone.utc)
                 window_start = window_end - timedelta(hours=24)
                 window_start_ms = int(window_start.timestamp() * 1000)
                 window_end_ms = int(window_end.timestamp() * 1000)
@@ -2683,7 +2702,11 @@ class OnChainAnalysisService:
         # T5: this service method now owns the fetch (compatibility-map
         # consumer row #16) — trades + window are injected into the
         # analyzer instead of it querying the repository itself.
-        window_end = datetime.now()
+        # Wave-I-C Fix 1: naive datetime.now() is host-local and ambiguous
+        # during the DST fall-back hour -- see the twin site in
+        # _calculate_buy_sell_flow above for the full explanation of why
+        # this stays timezone-AWARE (not naive-UTC) through .timestamp().
+        window_end = datetime.now(timezone.utc)
         window_start = window_end - timedelta(hours=24)
         window_start_ms = int(window_start.timestamp() * 1000)
         window_end_ms = int(window_end.timestamp() * 1000)
