@@ -1129,16 +1129,28 @@ class RegimeClassifier:
         sensitivity increase, not a relabeling. Not remediated here (out of
         this fix round's scope per the coordinator's ruling) -- flagged for
         awareness only.
+
+        Task Wave-I-A Fix 3: the SUPPRESSED/EXPLOSIVE branches used to
+        compare ``gex_normalized`` against a bare +-20. At a real BTC spot
+        (~$64k+) and real GEX magnitudes (six-to-nine-figure USD), that
+        ratio comes out in the tens to low thousands, not single/double
+        digits -- +-20 fired for almost any expiry/aggregate with
+        meaningful open interest, degenerating into a pure sign check. See
+        ``GEX_NORMALIZED_REGIME_THRESHOLD``'s own docstring in
+        thresholds.py for the fixture evidence behind the replacement
+        value and why a full HistoricalNormalizer percentile (the
+        architecturally correct fix) is a separate, larger change flagged
+        as a follow-up rather than done here.
         """
         if spot <= 0:
             spot = 100000.0
         gex_normalized = gex_total / spot
         reasons = []
 
-        if gex_normalized > 20 and iv_pctile_score <= 0:
+        if gex_normalized > GEX_NORMALIZED_REGIME_THRESHOLD and iv_pctile_score <= 0:
             regime = VolRegime.SUPPRESSED
             reasons.append(f"Positive GEX (norm {gex_normalized:+.1f}) + low IV → Volatility suppressed")
-        elif gex_normalized < -20 and iv_pctile_score >= 1 and skew_score <= -1:
+        elif gex_normalized < -GEX_NORMALIZED_REGIME_THRESHOLD and iv_pctile_score >= 1 and skew_score <= -1:
             regime = VolRegime.EXPLOSIVE
             reasons.append(f"Negative GEX (norm {gex_normalized:+.1f}) + high IV + steep put-side skew → Explosive regime")
         elif iv_pctile_score >= 1 and (vrp_score >= 1 or term_structure_score <= -1):

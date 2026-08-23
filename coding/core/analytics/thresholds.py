@@ -209,3 +209,48 @@ MAX_PAIN_EXPIRY_WEEK_THRESHOLD_DAYS = 7.0
 DTE (to its own 08:00 UTC settlement) is <= this many days -- matches the
 existing (unnamed) 7-day gamma-cliff boundary used elsewhere for the same
 "near expiry" concept, for consistency."""
+
+
+# --- Vol-regime GEX-normalized threshold (Task Wave-I-A Fix 3) -------------
+#
+# synthesis.RegimeClassifier.classify_vol_regime computes
+# ``gex_normalized = gex_total / spot`` and used to compare it against a
+# bare +-20. At a real BTC spot (~$64k+) and real aggregate/per-expiry net
+# GEX magnitudes (six to nine figures USD), that ratio comes out in the
+# tens to low thousands -- so +-20 fired for almost any expiry/aggregate
+# with meaningful open interest, degenerating into a pure sign check
+# dressed as a normalized band.
+#
+# Evidence (tests/golden/onchain_result_BTC.json, the one real fixture
+# available -- a single point-in-time snapshot, not a validated historical
+# distribution): spot $64,371.10; per-expiry gex_total/spot ranged from
+# -64.84 (27JUL26, thin OI) up to 1264.26 (31JUL26, the most liquid
+# near-dated expiry); the market-wide aggregate (``aggregate_total_gex /
+# spot_price``, what classify_vol_regime is actually called with in
+# SynthesisEngine.run) was 2173.35. Most expiries with any real OI already
+# clear the old +-20 band by 1-2 orders of magnitude (e.g. 26JUL26 at
+# 124.65, 28AUG26 at 286.53) -- confirming the "almost always fires"
+# finding. 1000.0 sits above every individual-expiry reading in this
+# fixture except the two genuine tail cases (31JUL26's 1264.26, the
+# 2173.35 aggregate) -- i.e. it separates "typical" per-expiry GEX
+# concentration from clear outliers in the one real sample available,
+# instead of firing on everything with a nonzero sign.
+#
+# This is a evidence-informed STATIC threshold, not a validated
+# percentile -- HistoricalNormalizer (this codebase's own trailing-window
+# percentile/z-score machinery, institutional_metrics_spec.md section
+# 1(b)) is the architecturally correct fix ("is this GEX large relative to
+# its own recent history"), and a whitelisted history column already
+# exists for it (``onchain_analysis_snapshots.total_net_gex`` via
+# ``Repository.get_metric_history`` / ``_METRIC_HISTORY_WHITELIST``) --
+# but that series is per-expiry (front-month only) and DB-backed, while
+# classify_vol_regime is a pure function fed the market-WIDE aggregate GEX
+# with no history or repository access. Wiring an aggregate historical
+# series and threading a live percentile into this classifier is a larger,
+# separate change (same "not currently plumbed into this synthesis path
+# at all" scope boundary SynthesisEngine.run's own DATA QUALITY block
+# comment already draws for the historical-percentile context table) --
+# flagged as a follow-up, not done here.
+GEX_NORMALIZED_REGIME_THRESHOLD = 1000.0
+"""classify_vol_regime's SUPPRESSED/EXPLOSIVE branches compare
+``gex_total / spot`` against +-this value (was a bare +-20)."""

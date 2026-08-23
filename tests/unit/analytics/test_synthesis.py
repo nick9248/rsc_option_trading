@@ -915,12 +915,35 @@ class TestClassifyDirectionConfidence:
 
 class TestClassifyVolRegime:
     def test_suppressed_with_normalized_gex(self):
-        """GEX/spot > 20 + low IV → SUPPRESSED."""
+        """
+        GEX/spot > GEX_NORMALIZED_REGIME_THRESHOLD + low IV → SUPPRESSED.
+
+        Task Wave-I-A Fix 3: the threshold moved from a bare 20 to
+        GEX_NORMALIZED_REGIME_THRESHOLD (1000.0, see thresholds.py for
+        the fixture evidence) -- at real BTC spot/GEX magnitudes, +-20
+        was effectively a pure sign check. 150M / 100k = 1500, comfortably
+        above the new threshold (was already far above the old one too).
+        """
+        regime, _ = RegimeClassifier.classify_vol_regime(
+            gex_total=150_000_000, iv_pctile_score=0, vrp_score=0,
+            skew_score=0, spot=100000)
+        assert regime == VolRegime.SUPPRESSED
+
+    def test_not_suppressed_when_gex_below_regime_threshold(self):
+        """
+        Task Wave-I-A Fix 3 regression test: GEX/spot that would have
+        fired the old bare-20 threshold (2.5M / 100k = 25 > 20) must NOT
+        classify SUPPRESSED now that the threshold reflects real GEX
+        magnitudes -- 25 is far below GEX_NORMALIZED_REGIME_THRESHOLD
+        (1000.0). This is the exact "almost always fires" failure mode
+        the fix closes: a small, not-actually-large GEX reading no
+        longer masquerades as a genuine "dampening" signal.
+        """
         regime, _ = RegimeClassifier.classify_vol_regime(
             gex_total=2_500_000, iv_pctile_score=0, vrp_score=0,
             skew_score=0, spot=100000)
-        # 2.5M / 100k = 25 > 20
-        assert regime == VolRegime.SUPPRESSED
+        assert regime != VolRegime.SUPPRESSED
+        assert regime == VolRegime.NORMAL
 
     def test_elevated_with_vrp_confirmation(self):
         """High IV + VRP confirms → ELEVATED."""
@@ -951,9 +974,11 @@ class TestClassifyVolRegime:
         puts richer, which is the empirically crash-correlated side).
         """
         regime, reasons = RegimeClassifier.classify_vol_regime(
-            gex_total=-3_000_000, iv_pctile_score=1, vrp_score=0,
+            gex_total=-150_000_000, iv_pctile_score=1, vrp_score=0,
             skew_score=-1, spot=100000)
-        # -3M / 100k = -30 < -20
+        # Task Wave-I-A Fix 3: -150M / 100k = -1500, below
+        # -GEX_NORMALIZED_REGIME_THRESHOLD (was a bare -20 -- see
+        # thresholds.py for the fixture evidence behind the new value).
         assert regime == VolRegime.EXPLOSIVE
         assert "Explosive regime" in reasons[0]
 
