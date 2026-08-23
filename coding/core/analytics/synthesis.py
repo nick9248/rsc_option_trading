@@ -1010,7 +1010,44 @@ class RegimeClassifier:
         Weighted average of directional scores → Signal enum.
 
         Returns: (signal, confidence, reasoning_list)
-        Confidence = weighted score magnitude / max possible magnitude
+        Confidence = weighted score magnitude / max possible magnitude,
+        scaled by how much of the input actually carried weight (Task
+        Wave-I-A Fix 2 — see below).
+
+        Task Wave-I-A Fix 2: ``confidence`` used to be
+        ``abs(avg_score) / 2.0`` alone — the magnitude of the *tilt*
+        among whichever scores happened to carry weight, with no
+        reference to how many of the scores handed in actually
+        contributed one. Every weight-zero "insufficient data" entry
+        (``score_flow_gated``, ``score_max_pain_gravity``'s
+        ``sufficient_data=False`` branch, etc.) contributes exactly 0 to
+        both ``weighted_sum`` and ``total_weight`` — a complete no-op in
+        the weighted average — so a run where only 2 of 10 attempted
+        scorers actually resolved reported the IDENTICAL "confidence" as
+        a run where all 10 resolved and happened to average to the same
+        tilt. Worse: turning a real, weakly-disagreeing measurement into
+        a weight-zero "insufficient data" entry (same score, weight
+        1.0 -> 0.0) used to *raise* the reported number, because the
+        diluting entry was dropped from the average entirely instead of
+        correctly signaling "we know less than before". Reproduced
+        directly: three real signals (1.0, 1.0, -0.4) all at weight 1.0
+        gave confidence 0.267; downgrading only the third to weight 0.0
+        (same score, now "insufficient data") raised it to 0.5 — with
+        strictly less real information feeding the number, not more.
+
+        Fix: multiply the tilt magnitude by a data-coverage factor — the
+        fraction of the scores handed in that actually carried weight
+        (were not themselves an insufficient-data placeholder). When
+        every input resolves (coverage == 1.0, the common case), this is
+        numerically identical to the old formula; it only pulls the
+        number down when some of the scores that were attempted came
+        back weight-zero, which is exactly the case the old formula was
+        blind to. (Relabeling the output text alone was considered and
+        rejected — the fix is in scope here since coverage is fully
+        computable from ``scores`` itself, no new plumbing needed, and
+        this metric gates nothing downstream — it is display-only in the
+        rendered report — so widening its meaning carries no behavioral
+        risk beyond the displayed percentage.)
         """
         if not scores:
             return (Signal.NEUTRAL, 0.0, ["No directional data"])
@@ -1022,7 +1059,13 @@ class RegimeClassifier:
             return (Signal.NEUTRAL, 0.0, ["No weighted data"])
 
         avg_score = weighted_sum / total_weight
-        confidence = abs(avg_score) / 2.0  # Normalize to 0-1
+        # Data-coverage factor: what fraction of the scores handed in
+        # actually carried weight (i.e. were not an insufficient-data
+        # placeholder at weight 0). Bounded [0, 1]; total_weight > 0 here
+        # (guarded above) guarantees at least one entry has weight > 0,
+        # so this is never 0.
+        coverage = sum(1 for s in scores if s[1] > 0) / len(scores)
+        confidence = (abs(avg_score) / 2.0) * coverage  # tilt magnitude x data coverage
 
         reasons = [s[2] for s in scores if abs(s[0]) > 0]
 

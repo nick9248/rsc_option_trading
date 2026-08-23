@@ -793,6 +793,123 @@ class TestFragilityDetection:
 
 
 # =============================================================================
+# TESTS: classify_direction confidence -- data-coverage factor
+# (Task Wave-I-A Fix 2)
+# =============================================================================
+
+class TestClassifyDirectionConfidence:
+    """
+    Before the fix, ``confidence = abs(avg_score) / 2.0`` alone --
+    zero-weight "insufficient data" entries contribute exactly 0 to both
+    ``weighted_sum`` and ``total_weight``, a complete no-op in the
+    weighted average. That meant turning a real, weakly-disagreeing
+    measurement into a weight-zero "insufficient data" entry (same score,
+    weight 1.0 -> 0.0) RAISED the reported confidence, because the
+    diluting entry was dropped from the average instead of correctly
+    signaling "we know less than before". The fix multiplies the tilt
+    magnitude by a data-coverage factor (fraction of scores that actually
+    carried weight).
+    """
+
+    def test_confidence_unaffected_when_all_inputs_carry_weight(self):
+        """Coverage == 1.0 (the common case) must be numerically
+        identical to the old formula: abs(avg_score) / 2.0."""
+        scores = [
+            (1.0, 1.0, "signal 1"),
+            (1.0, 1.0, "signal 2"),
+        ]
+        _, confidence, _ = RegimeClassifier.classify_direction(scores)
+        assert confidence == pytest.approx(0.5)
+
+    def test_more_insufficient_data_entries_lowers_confidence(self):
+        """
+        The clean, deterministic reproduction: under the OLD formula,
+        appending more zero-weight "insufficient data" placeholders to an
+        otherwise-unchanged score list could never move ``confidence`` at
+        all -- ``s * 0`` and ``+ 0`` are no-ops in both the numerator and
+        denominator of the weighted average, so a run where only 2 of 5
+        attempted signals resolved reported the IDENTICAL confidence as a
+        run where those same 2 were the only signals ever attempted. That
+        is the core defect: the number carries zero information about how
+        much of the attempted data actually came back. The fix's coverage
+        factor (fraction of scores that carried weight) must now respond
+        to this directly.
+        """
+        base = [(1.0, 1.0, "signal 1"), (1.0, 1.0, "signal 2")]
+        _, confidence_full_coverage, _ = RegimeClassifier.classify_direction(base)
+        assert confidence_full_coverage == pytest.approx(0.5)
+
+        with_gaps = base + [
+            (0.0, 0.0, "insufficient A - weight zero"),
+            (0.0, 0.0, "insufficient B - weight zero"),
+            (0.0, 0.0, "insufficient C - weight zero"),
+        ]
+        _, confidence_with_gaps, _ = RegimeClassifier.classify_direction(with_gaps)
+        # Old (buggy) formula: identical 0.5 regardless -- zero-weight
+        # entries are a complete no-op in classify_direction's weighted
+        # average, so it could not distinguish "2 of 2 attempted signals
+        # resolved" from "2 of 5 attempted signals resolved". The fix
+        # must make these differ: coverage = 2/5 = 0.4 -> 0.5 * 0.4 = 0.2.
+        assert confidence_with_gaps < confidence_full_coverage
+        assert confidence_with_gaps == pytest.approx(0.2)
+
+    def test_downgrading_a_real_signal_to_insufficient_data_reduces_confidence_vs_old_formula(self):
+        """
+        The audit finding's literal reproduction: three real (weight=1.0)
+        signals -- two strongly agreeing, one weak/disagreeing -- give
+        confidence 0.267 under both the old and new formula (coverage ==
+        1.0 here, so they agree). Turning ONLY the third into a
+        weight-zero "insufficient data" entry (same score, weight
+        1.0 -> 0.0) used to RAISE confidence to 0.5 under the OLD formula
+        (``abs(avg_score) / 2.0`` alone) -- strictly less real information
+        producing a HIGHER number. The new coverage-weighted formula must
+        report a lower number for that same "data went missing" case than
+        the old formula did (0.333 < 0.5): the diluting entry's removal
+        still concentrates the surviving average (avg_score rises from
+        0.533 to 1.0, an intrinsic property of a weighted mean this fix
+        does not try to suppress), but the coverage penalty (2 of 3
+        inputs) now visibly pulls the number back down from what an
+        uncorrected removal would report.
+        """
+        run_with_real_weak_signal = [
+            (1.0, 1.0, "signal 1: strong bullish"),
+            (1.0, 1.0, "signal 2: strong bullish"),
+            (-0.4, 1.0, "signal 3: mild bearish (a real, if weak, measurement)"),
+        ]
+        _, confidence_full_data, _ = RegimeClassifier.classify_direction(run_with_real_weak_signal)
+        # avg_score = (1.0 + 1.0 - 0.4) / 3 = 0.5333.., confidence = /2 = 0.2667
+        assert confidence_full_data == pytest.approx(1.6 / 3.0 / 2.0)
+
+        run_with_signal_downgraded_to_insufficient = [
+            (1.0, 1.0, "signal 1: strong bullish"),
+            (1.0, 1.0, "signal 2: strong bullish"),
+            (-0.4, 0.0, "signal 3: insufficient data - weight zero"),
+        ]
+        _, confidence_less_data, _ = RegimeClassifier.classify_direction(
+            run_with_signal_downgraded_to_insufficient)
+
+        OLD_FORMULA_VALUE_FOR_THIS_CASE = 0.5  # abs(avg_score) / 2.0 alone, avg_score = 1.0
+        assert confidence_less_data < OLD_FORMULA_VALUE_FOR_THIS_CASE
+        # Coverage-adjusted: avg_score is 1.0 (weighted over the 2
+        # weight-bearing entries), tilt magnitude 0.5, times coverage
+        # 2/3 (2 of 3 scores handed in carried weight) = 1/3.
+        assert confidence_less_data == pytest.approx(1.0 / 3.0)
+
+    def test_confidence_zero_when_no_scores(self):
+        _, confidence, reasons = RegimeClassifier.classify_direction([])
+        assert confidence == 0.0
+        assert reasons == ["No directional data"]
+
+    def test_confidence_zero_when_total_weight_zero(self):
+        """All-insufficient-data input (every score weight-zero) must
+        still short-circuit to confidence 0.0, not divide by zero."""
+        scores = [(1.0, 0.0, "insufficient"), (-1.0, 0.0, "insufficient")]
+        _, confidence, reasons = RegimeClassifier.classify_direction(scores)
+        assert confidence == 0.0
+        assert reasons == ["No weighted data"]
+
+
+# =============================================================================
 # TESTS: classify_vol_regime — spot-normalized GEX + term structure
 # =============================================================================
 

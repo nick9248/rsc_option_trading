@@ -41,7 +41,7 @@ DATA QUALITY:
   - Order flow: insufficient data for all 12 expiries (no qualifying trades in the lookback window) — flow bias/trend not usable for any expiry this run
 
 SCORING DETAIL:
-  Direction: BULLISH (confidence: 21%)
+  Direction: BULLISH (confidence: 17%)
   Fragility: NONE
   Near-term: NEUTRAL | Far-term: BULLISH
   Vol Regime: suppressed
