@@ -2585,13 +2585,55 @@ class SynthesisMapper:
         # fabricated 0 -- not None -- on parse failure). Now delegates to
         # the canonical MarketWideCalculator.calculate_dte (08:00 UTC
         # settlement anchor, exact-fractional-days floor, None on parse
-        # failure -- clamped to 0 here to match this dataclass's `dte: int`
-        # field and this method's own pre-existing None-on-critical-data-
-        # missing contract, not because the canonical method fabricates 0
-        # itself). result.generated_at is this pipeline run's own already-
+        # failure). result.generated_at is this pipeline run's own already-
         # resolved UTC "now" (OnChainAnalysisBuilder.build() stamps it) --
         # reused here rather than reading a second, independent clock.
-        dte = MarketWideCalculator.calculate_dte(expiration, result.generated_at) or 0
+        #
+        # Task Wave-I-A Fix 5: this used to be
+        # ``calculate_dte(...) or 0`` -- collapsing calculate_dte's real
+        # ``None`` ("this expiration label didn't parse -- a genuinely
+        # unparseable key") into the same ``0`` that a REAL same-day
+        # expiry legitimately produces ("this expires today"). Downstream
+        # logic (score_pc_ratio's DTE<=2 settlement-day clamp,
+        # near_term/mid_term/far_term bucketing, the "expiry (Nd)" report
+        # line) cannot tell "expires today" from "we don't know when this
+        # expires" once collapsed to 0 -- the settlement-day clamp in
+        # particular treats DTE=0 as meaningfully different scoring
+        # behavior from every other DTE, so a parse failure silently
+        # picked up that specific behavior for a metric that was never a
+        # real measurement.
+        #
+        # Fix: skip this expiration entirely (return None, same as this
+        # method's pre-existing "critical data missing" gates above for
+        # missing instruments/bundle/gex_dex) instead of threading
+        # Optional[int] through ExpiryMetrics.dte and every one of its
+        # ~15 consumers (sorting, near/mid/far bucketing, half a dozen
+        # inequality comparisons, three scorer call sites, the report's
+        # "{dte}d" display line) -- virtually every one of those becomes
+        # meaningless anyway once the calendar date itself is unknown, so
+        # threading None through all of them would only defer the same
+        # "what does this mean" question to every consumer individually.
+        # This mirrors GexDexCalculator.calculate_rolloff_profile's own
+        # handling of the identical scenario ("An unparseable label is
+        # skipped (logged), never raised") rather than inventing a
+        # second convention for the same failure mode. In practice this
+        # is effectively unreachable -- ``expiration`` is the same string
+        # that already keyed a successful ``parsed_instruments`` lookup
+        # and ``result.bundle(expiration)`` above, so calculate_dte
+        # failing on it would mean every other per-expiry computation
+        # for this same key already worked off a label calculate_dte
+        # itself rejects -- but the gate exists so this can never
+        # silently masquerade as a real "expires today" reading.
+        dte = MarketWideCalculator.calculate_dte(expiration, result.generated_at)
+        if dte is None:
+            logger.warning(
+                "build_expiry_metrics: skipping expiration %r -- "
+                "calculate_dte returned None (unparseable expiration "
+                "label) even though instruments/bundle resolved for the "
+                "same key; refusing to fabricate DTE=0 for it",
+                expiration,
+            )
+            return None
 
         # Total OI and volume from parsed instruments
         total_oi = sum(i.get("open_interest", 0) for i in instruments)
