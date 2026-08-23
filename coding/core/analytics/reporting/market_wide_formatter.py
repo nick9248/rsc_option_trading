@@ -350,13 +350,25 @@ def format_perpetual_funding_section(result: Optional[PerpetualFundingResult]) -
     """
     Render the PERPETUAL FUNDING & OI section.
 
-    Mirrors MarketWideCalculator.calculate_perpetual_funding_trend exactly
-    (must stay in lockstep — bugfix_spec.md Item 4): annualization uses
-    funding_8h (the realised 8h rate), never funding_rate/current_funding
-    (the instantaneous accruing rate) — a 61x divergence was observed live
-    between the two. Gates on funding_8h OR funding_rate being present, not
-    funding_rate alone, so a missing instantaneous reading doesn't suppress
-    a present 8h reading (or vice versa).
+    Mirrors MarketWideCalculator.calculate_perpetual_funding_trend's
+    annualization LOGIC (must stay in lockstep — bugfix_spec.md Item 4):
+    annualization uses funding_8h (the realised 8h rate), never
+    funding_rate/current_funding (the instantaneous accruing rate) — a
+    61x divergence was observed live between the two. Gates on funding_8h
+    OR funding_rate being present, not funding_rate alone, so a missing
+    instantaneous reading doesn't suppress a present 8h reading (or vice
+    versa).
+
+    Wave-I-C Fix 7: the instantaneous-funding decimal precision below
+    (8 places, not the calculator's 4) is a deliberate, formatter-only
+    divergence from the calculator's own text -- market_wide_calculator.py
+    is out of scope for this task, and its ``calculate_perpetual_funding_
+    trend`` text return value is discarded by ``MarketWideOrchestrator.
+    _calculate_perpetual_funding`` (only the structured dict is kept), so
+    this function -- not the calculator's -- is what actually reaches the
+    rendered report. See its docstring for why 4 decimal places of a
+    percentage silently rounds a real, non-zero instantaneous rate to
+    "0.0000%".
     """
     lines = ["PERPETUAL FUNDING & OI", _SUB_SEPARATOR]
 
@@ -375,7 +387,7 @@ def format_perpetual_funding_section(result: Optional[PerpetualFundingResult]) -
     else:
         lines.append("  Funding (8h): not available")
     if result.funding_rate is not None:
-        lines.append(f"  Instantaneous funding: {result.funding_rate * 100:.4f}%")
+        lines.append(f"  Instantaneous funding: {result.funding_rate * 100:.8f}%")
 
     lines.append("")
     return "\n".join(lines)

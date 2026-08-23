@@ -231,14 +231,26 @@ class OnChainReportFormatter:
                 # there is no correct annualization basis -- show the
                 # instantaneous rate alone rather than a fabricated figure.
                 funding_pct = current_funding * 100
+                # Wave-I-C Fix 7: current_funding (the instantaneous
+                # accruing rate) can be genuinely non-zero but far smaller
+                # in magnitude than funding_8h (the realised 8h rate) --
+                # market_wide_calculator.py's render_market_wide_from_result
+                # docstring notes "a 61x divergence was observed live
+                # between the two". At :.4f (4 decimal places of a
+                # percentage), a real rate that small rounds to 0.0000%,
+                # which reads as "no funding" even while the annualized
+                # figure right next to it (derived from funding_8h) is
+                # clearly non-zero. 8 decimal places keeps a real small
+                # rate visible without switching to a different notation.
+                funding_pct_str = f"{funding_pct:.8f}%"
                 if funding_8h is not None:
                     funding_annualized = funding_8h * FUNDING_PERIODS_PER_YEAR * 100
                     lines.append(
-                        f"Current Funding Rate: {funding_pct:.4f}% "
+                        f"Current Funding Rate: {funding_pct_str} "
                         f"({funding_annualized:.2f}% annualized)"
                     )
                 else:
-                    lines.append(f"Current Funding Rate: {funding_pct:.4f}%")
+                    lines.append(f"Current Funding Rate: {funding_pct_str}")
             if funding_8h is not None:
                 funding_8h_pct = funding_8h * 100
                 lines.append(f"8h Funding Rate: {funding_8h_pct:.4f}%")

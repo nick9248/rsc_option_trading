@@ -10,7 +10,7 @@ MARKET METRICS
 DVOL (Volatility Index): 37.53
 IV Percentile (365d): 20.5%
 IV Rank (365d): 8.1% (n=366 obs)
-Current Funding Rate: 0.0000% (0.28% annualized)
+Current Funding Rate: 0.00000000% (0.28% annualized)
 8h Funding Rate: 0.0003%
 
 ================================================================================
@@ -2889,7 +2889,7 @@ PERPETUAL FUNDING & OI
 --------------------------------------------------------------------------------
   Perp OI: 736,492,670 USD
   Funding (8h): 0.0003%  |  Annualized: 0.28%  |  Trend: Falling
-  Instantaneous funding: 0.0000%
+  Instantaneous funding: 0.00000000%
 
 
 FUTURES BASIS (annualized simple, ACT/365, to 08:00 UTC settlement)

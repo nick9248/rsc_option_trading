@@ -189,8 +189,28 @@ def test_render_header_current_funding_without_funding_8h_omits_annualized():
     )
     text = formatter.render_header("BTC", 95000.0, GENERATED_AT, metrics)
 
-    assert "Current Funding Rate: 0.0100%" in text
+    assert "Current Funding Rate: 0.01000000%" in text
     assert "annualized" not in text
+
+
+def test_render_header_small_nonzero_current_funding_does_not_round_to_zero():
+    """
+    Wave-I-C Fix 7: a real, non-zero instantaneous funding rate this small
+    (9.1e-07, cited live in the finding above alongside a 0.28%-scale
+    annualized figure derived from funding_8h) used to round to
+    "0.0000%" at 4 decimal places -- reading as "no funding" next to a
+    clearly non-zero annualized number. 8 decimal places keeps it visibly
+    non-zero.
+    """
+    formatter = OnChainReportFormatter()
+    metrics = MarketMetricsResult(
+        dvol=None, iv_percentile=None, iv_rank=None,
+        current_funding=9.1e-07, funding_8h=1.02e-05,
+    )
+    text = formatter.render_header("BTC", 95000.0, GENERATED_AT, metrics)
+
+    assert "Current Funding Rate: 0.00009100%" in text
+    assert "Current Funding Rate: 0.0000%" not in text
 
 
 # ---------------------------------------------------------------------------

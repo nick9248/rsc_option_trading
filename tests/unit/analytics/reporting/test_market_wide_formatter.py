@@ -330,7 +330,7 @@ def test_perpetual_funding_rendered_with_8h():
     assert "Perp OI: 1,000,000 USD" in text
     assert "Funding (8h): 0.0001%" in text
     assert "Trend: Rising" in text
-    assert "Instantaneous funding: 0.0100%" in text
+    assert "Instantaneous funding: 0.01000000%" in text
     # 1.41e-06 * 3 * 365 * 100 = 0.154395%
     assert "Annualized: 0.15%" in text
 
@@ -342,7 +342,24 @@ def test_perpetual_funding_omits_8h_line_when_none():
     )
     text = format_perpetual_funding_section(result)
     assert "Funding (8h): not available" in text
-    assert "Instantaneous funding: 0.0100%" in text
+    assert "Instantaneous funding: 0.01000000%" in text
+
+
+def test_perpetual_funding_small_nonzero_rate_does_not_round_to_zero():
+    """
+    Wave-I-C Fix 7: a real, non-zero instantaneous funding rate (funding_
+    rate=9.1e-07, cited live in bugfix_spec.md Item 4's finding) used to
+    round to "0.0000%" at 4 decimal places, reading as "no funding" next
+    to a clearly non-zero annualized figure (derived from funding_8h).
+    8 decimal places keeps it visibly non-zero.
+    """
+    result = PerpetualFundingResult(
+        perp_open_interest=1_000_000.0, funding_rate=9.1e-07, funding_8h=1.02e-05,
+        funding_trend="Falling", history_points=10,
+    )
+    text = format_perpetual_funding_section(result)
+    assert "Instantaneous funding: 0.00009100%" in text
+    assert "Instantaneous funding: 0.0000%" not in text
 
 
 # ---------------------------------------------------------------------------
