@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+from coding.core.analytics.market_wide_calculator import DERIBIT_SETTLEMENT_HOUR_UTC
 from coding.core.analytics.results.delta_flow_results import FlowBucket
 from coding.core.analytics.results.expiry_results import ExpirationAnalysisResult
 from coding.core.analytics.results.gex_dex_results import GexDexResult
@@ -1222,7 +1223,7 @@ class DatabaseRepository:
         instruments: List[Dict[str, Any]],
         underlying_price: float,
         snapshot_date: Optional[datetime] = None,
-        snapshot_hour_utc: int = 8,
+        snapshot_hour_utc: int = DERIBIT_SETTLEMENT_HOUR_UTC,
     ) -> int:
         """
         Save daily OI snapshot for all instruments in an expiration.
@@ -1235,12 +1236,14 @@ class DatabaseRepository:
         never be silently overwritten by a later GUI run
         (``on_chain_analysis_service.py``, still calling this method with
         no explicit hour, per its "harmless, upserts the same day" design)
-        at a DIFFERENT hour of the same day. The literal default of ``8``
-        here matches the column's own DB default and Deribit's settlement
-        hour (``MarketWideCalculator.DERIBIT_SETTLEMENT_HOUR_UTC`` /
-        ``GexDexCalculator._DERIBIT_SETTLEMENT_HOUR_UTC`` / this class's
-        own ``_FIXED_STRIKE_VOL_ANCHOR_HOUR_UTC``) -- a caller that omits
-        it (the GUI) still lands on the same anchor hour the daemon uses.
+        at a DIFFERENT hour of the same day. The default here matches the
+        column's own DB default and Deribit's settlement hour, and is now
+        the single canonical constant
+        (``MarketWideCalculator.DERIBIT_SETTLEMENT_HOUR_UTC``, Wave-I-B) --
+        every other settlement-hour site in this module (including this
+        class's own ``_FIXED_STRIKE_VOL_ANCHOR_HOUR_UTC``) reuses the same
+        constant, so a caller that omits it (the GUI) still lands on the
+        same anchor hour the daemon uses.
 
         Args:
             currency: Currency symbol.
@@ -1249,8 +1252,9 @@ class DatabaseRepository:
                         open_interest, mark_iv.
             underlying_price: Current underlying price.
             snapshot_date: Date for snapshot. Uses today (UTC) if not provided.
-            snapshot_hour_utc: UTC hour this row anchors to. Defaults to 8
-                (Deribit settlement), matching the column's DB default.
+            snapshot_hour_utc: UTC hour this row anchors to. Defaults to
+                ``DERIBIT_SETTLEMENT_HOUR_UTC`` (Deribit settlement),
+                matching the column's DB default.
 
         Returns:
             Number of rows upserted.
@@ -1386,8 +1390,12 @@ class DatabaseRepository:
     # anchors to this UTC hour, matching Deribit's daily settlement
     # convention -- the same anchor migration M8 would eventually pin
     # daily_oi_snapshots to (not yet implemented; see get_chain_iv_at's
-    # docstring).
-    _FIXED_STRIKE_VOL_ANCHOR_HOUR_UTC = 8
+    # docstring). Wave-I-B: bound to the single canonical constant
+    # (MarketWideCalculator.DERIBIT_SETTLEMENT_HOUR_UTC) instead of its own
+    # independent literal -- kept as a named class attribute since
+    # "anchor hour" reads more clearly than the raw constant at the three
+    # call sites below.
+    _FIXED_STRIKE_VOL_ANCHOR_HOUR_UTC = DERIBIT_SETTLEMENT_HOUR_UTC
 
     # Independent review (Task C8 fix round, Minor #2): the nearest tick
     # to 08:00 UTC on the requested date must be a genuine local read of

@@ -10,6 +10,8 @@ import math
 from typing import Dict, Optional
 from datetime import datetime
 
+from coding.core.analytics.market_wide_calculator import DERIBIT_SETTLEMENT_HOUR_UTC
+
 logger = logging.getLogger(__name__)
 
 
@@ -349,7 +351,7 @@ class BlackScholesCalculator:
                 return None
 
             # Deribit options expire at 08:00 UTC
-            expiry_time = datetime(year, month, day, 8, 0, 0)
+            expiry_time = datetime(year, month, day, DERIBIT_SETTLEMENT_HOUR_UTC, 0, 0)
 
             return {
                 "currency": currency,

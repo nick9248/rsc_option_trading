@@ -9,6 +9,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from coding.core.analytics.forward_price_utils import select_forward_price
+from coding.core.analytics.market_wide_calculator import DERIBIT_SETTLEMENT_HOUR_UTC
 from coding.core.api.connection import ApiConnection
 from coding.core.api.response_parser import ResponseParser
 from coding.core.api.schema_validator import SchemaValidator
@@ -696,7 +697,7 @@ class DeribitApiService:
                 expiry_str = parts[1]  # e.g. "25SEP26"
                 # Deribit options settle at 08:00 UTC.
                 expiry_datetime = datetime.strptime(expiry_str, "%d%b%y").replace(
-                    hour=8, minute=0, second=0, tzinfo=timezone.utc
+                    hour=DERIBIT_SETTLEMENT_HOUR_UTC, minute=0, second=0, tzinfo=timezone.utc
                 )
             except (ValueError, IndexError) as error:
                 logger.warning(f"Skipping unparseable instrument {name}: {error}")

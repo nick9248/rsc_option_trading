@@ -31,6 +31,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from coding.core.analytics.forward_price_utils import select_forward_price
+from coding.core.analytics.market_wide_calculator import DERIBIT_SETTLEMENT_HOUR_UTC
 from coding.core.analytics.results.analysis_result import MarketMetricsResult
 from coding.core.analytics.thresholds import (
     OI_SKEW_ITM_HEAVY_THRESHOLD_PCT,
@@ -300,7 +301,8 @@ class OnChainMetricsCalculator:
         def _parse_expiry(expiry: str) -> Optional[datetime]:
             try:
                 return datetime.strptime(expiry, "%d%b%y").replace(
-                    hour=8, minute=0, second=0, microsecond=0, tzinfo=timezone.utc
+                    hour=DERIBIT_SETTLEMENT_HOUR_UTC, minute=0, second=0,
+                    microsecond=0, tzinfo=timezone.utc,
                 )
             except ValueError:
                 return None

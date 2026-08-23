@@ -19,6 +19,7 @@ from coding.core.analytics.gamma_profile_calculator import (
     GammaLeg,
     GammaProfileCalculator,
 )
+from coding.core.analytics.market_wide_calculator import DERIBIT_SETTLEMENT_HOUR_UTC
 from coding.core.analytics.results.gex_dex_results import (
     GexDexKeyLevels,
     GexDexLevel,
@@ -30,8 +31,9 @@ logger = logging.getLogger(__name__)
 
 # Deribit options settle at 08:00 UTC on the expiry date, never local midnight
 # (bugfix_spec.md Item 2, reusing the same convention already fixed for Item
-# 5 -- see MarketWideCalculator._parse_expiry_datetime).
-_DERIBIT_SETTLEMENT_HOUR_UTC = 8
+# 5 -- see MarketWideCalculator._parse_expiry_datetime). Wave-I-B: reuse the
+# single canonical constant (MarketWideCalculator.DERIBIT_SETTLEMENT_HOUR_UTC)
+# instead of keeping a private duplicate here.
 _MIN_LEG_OPEN_INTEREST = 0.0
 _MIN_LEG_IMPLIED_VOLATILITY = 0.0
 
@@ -178,7 +180,7 @@ class GexDexCalculator:
                 continue
             try:
                 expiry_dt = datetime.strptime(expiration, "%d%b%y").replace(
-                    hour=_DERIBIT_SETTLEMENT_HOUR_UTC, minute=0, second=0,
+                    hour=DERIBIT_SETTLEMENT_HOUR_UTC, minute=0, second=0,
                     microsecond=0, tzinfo=timezone.utc,
                 )
             except ValueError:
@@ -741,7 +743,7 @@ class GexDexCalculator:
         """
         try:
             expiry_dt = datetime.strptime(expiration, "%d%b%y").replace(
-                hour=_DERIBIT_SETTLEMENT_HOUR_UTC, minute=0, second=0,
+                hour=DERIBIT_SETTLEMENT_HOUR_UTC, minute=0, second=0,
                 microsecond=0, tzinfo=timezone.utc,
             )
         except ValueError:
