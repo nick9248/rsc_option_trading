@@ -66,6 +66,28 @@ def test_skew_and_atm_iv_rendered():
     assert "ATM IV: 81.0%" in text
 
 
+def test_skew_renders_delta_value_as_given_not_hardcoded():
+    """
+    Wave-I-C Fix 8: the formatter must render whatever delta value the
+    result carries -- it must NOT hardcode/imply exactly ±0.250. Uses an
+    asymmetric-bracket delta (the value calculate_risk_reversal_butterfly
+    now actually produces per InterpPoint.delta) to confirm the formatter
+    doesn't clamp or round it back to the target.
+    """
+    result = _make_result(
+        skew_25d=SkewResult(
+            put_25d_iv=85.0, call_25d_iv=78.0, put_25d_strike=1800.0, call_25d_strike=2000.0,
+            put_25d_delta=-0.279, call_25d_delta=0.213,
+            risk_reversal_25d=-7.0, interpretation="Puts Richer - Downside Hedging Demand",
+        ),
+    )
+    text = format_vol_surface_section(result, expiration="10MAR26")
+    assert "25d Put: 85.0% (K=1,800, Δ=-0.279)" in text
+    assert "25d Call: 78.0% (K=2,000, Δ=+0.213)" in text
+    assert "Δ=-0.250" not in text
+    assert "Δ=+0.250" not in text
+
+
 def test_skew_insufficient_data_when_skew_none():
     result = _make_result(
         skew_25d=SkewResult(

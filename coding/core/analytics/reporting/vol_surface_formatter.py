@@ -42,6 +42,13 @@ def format_vol_surface_section(result: VolSurfaceResult, expiration: str) -> str
     # "skew" (put - call, opposite sign). Prints the actual selected deltas
     # too (9.4 edge case: a thin book's "closest to +-0.25" pick may not be
     # close at all).
+    #
+    # Wave-I-C Fix 8: put_25d_delta/call_25d_delta are the |delta| actually
+    # implied AT put_25d_strike/call_25d_strike (VolatilitySurfaceCalculator.
+    # InterpPoint.delta) -- not the ±0.25 target. *_25d_strike is a bracket
+    # midpoint, not delta-solved, so it is not in general exactly the
+    # target-delta strike; printing the target here would overclaim
+    # precision the interpolation doesn't have.
     skew = result.skew_25d
     if skew.risk_reversal_25d is not None:
         lines.append(

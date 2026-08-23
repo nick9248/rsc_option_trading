@@ -101,10 +101,21 @@ class InterpPoint:
     (per the volatility_skew_history schema comment: "strike implied by the
     interpolation bracket midpoint") -- it is NOT itself delta-interpolated,
     only the IV is.
+
+    Wave-I-C Fix 8: ``delta`` is the |delta| actually implied AT ``strike``
+    -- linearly interpolated the same way ``strike`` itself is (the same
+    0.5 bracket weight, since ``strike`` is a plain midpoint), NOT the
+    ``target_abs_delta`` the caller asked for. Reports must print THIS
+    value alongside ``strike``, never the target -- ``strike`` is only an
+    approximation of where ``target_abs_delta`` truly sits (bracket
+    midpoint, not delta-solved), so the two are not, in general, exactly
+    the same point on the smile. Equal to ``target_abs_delta`` only when
+    the bracket happens to be symmetric around it.
     """
 
     iv: float
     strike: float
+    delta: float
     bracket: Tuple[float, float]  # (|delta_a|, |delta_b|), ascending
 
 
@@ -245,10 +256,13 @@ class VolatilitySurfaceCalculator:
 
         Returns:
             Dict with put_25d_iv, call_25d_iv, put_25d_strike,
-            call_25d_strike, put_25d_delta, call_25d_delta (exactly
-            ±TARGET_ABS_DELTA_25D by construction of the interpolation --
-            None together with the corresponding IV when that side isn't
-            bracketed), risk_reversal_25d (PRIMARY, market convention),
+            call_25d_strike, put_25d_delta, call_25d_delta (Wave-I-C
+            Fix 8: the |delta| actually implied at *_25d_strike, NOT
+            necessarily exactly ±TARGET_ABS_DELTA_25D -- *_25d_strike is
+            a bracket midpoint, not delta-solved, so the two are not, in
+            general, the same point on the smile; None together with the
+            corresponding IV when that side isn't bracketed),
+            risk_reversal_25d (PRIMARY, market convention),
             put_over_call_skew_25d (legacy sign, explicitly named), and
             interpretation ("insufficient chain" -- the same fallback
             string market_wide_formatter.py's _format_rr25_cell/
@@ -332,12 +346,16 @@ class VolatilitySurfaceCalculator:
             "call_25d_iv": call_iv,
             "put_25d_strike": rr_bf["put_25d_strike"],
             "call_25d_strike": rr_bf["call_25d_strike"],
-            # Exactly the target delta by construction of the delta-space
-            # interpolation used to compute call_iv/put_iv above -- unlike
-            # the deleted nearest-delta picker, this is never an
-            # approximation of ±0.25, it IS ±0.25 whenever not None.
-            "put_25d_delta": -TARGET_ABS_DELTA_25D,
-            "call_25d_delta": TARGET_ABS_DELTA_25D,
+            # Wave-I-C Fix 8: the |delta| actually implied at *_25d_strike
+            # (InterpPoint.delta, via calculate_risk_reversal_butterfly) --
+            # NOT the hardcoded ±TARGET_ABS_DELTA_25D this used to be. The
+            # strike printed alongside this is a bracket midpoint, not
+            # delta-solved, so it is not in general exactly the target-
+            # delta strike -- printing the target here as if it were
+            # precisely measured AT that strike overclaimed precision the
+            # interpolation doesn't have. This is the honest value.
+            "put_25d_delta": rr_bf["put_25d_delta"],
+            "call_25d_delta": rr_bf["call_25d_delta"],
             "risk_reversal_25d": risk_reversal,
             "put_over_call_skew_25d": -risk_reversal,
             "interpretation": interpretation,
@@ -464,16 +482,23 @@ class VolatilitySurfaceCalculator:
             # Exact match (or a single point straddling both lists) --
             # return it directly, avoiding a division by zero below.
             return InterpPoint(
-                iv=a["iv"], strike=a["strike"],
+                iv=a["iv"], strike=a["strike"], delta=a["abs_delta"],
                 bracket=(a["abs_delta"], b["abs_delta"]),
             )
 
         weight = (target_abs_delta - a["abs_delta"]) / (b["abs_delta"] - a["abs_delta"])
         iv = a["iv"] + weight * (b["iv"] - a["iv"])
         strike = (a["strike"] + b["strike"]) / 2.0  # bracket midpoint, not delta-weighted
+        # Wave-I-C Fix 8: the |delta| actually implied AT `strike` -- since
+        # `strike` is a plain 0.5-weight midpoint (not `weight`-weighted
+        # like `iv` above), the delta consistent with it is the matching
+        # 0.5-weight average of the bracket |delta|s, NOT target_abs_delta.
+        # Cheap to compute (reuses a/b already fetched above) and honest:
+        # `strike` generally is NOT exactly where target_abs_delta sits.
+        delta_at_strike = (a["abs_delta"] + b["abs_delta"]) / 2.0
 
         return InterpPoint(
-            iv=iv, strike=strike,
+            iv=iv, strike=strike, delta=delta_at_strike,
             bracket=(a["abs_delta"], b["abs_delta"]),
         )
 
@@ -545,6 +570,15 @@ class VolatilitySurfaceCalculator:
             "put_25d_iv": put_25d_iv,
             "call_25d_strike": call_pt.strike if call_pt is not None else None,
             "put_25d_strike": put_pt.strike if put_pt is not None else None,
+            # Wave-I-C Fix 8: the |delta| actually implied at *_25d_strike
+            # (InterpPoint.delta) -- NOT TARGET_ABS_DELTA_25D. *_25d_strike
+            # is a bracket midpoint, not delta-solved, so it is not in
+            # general exactly the target-delta strike; this is the delta
+            # value honestly consistent with the strike printed alongside
+            # it. Signed here (put negative, call positive) to match this
+            # module's |delta| convention everywhere else.
+            "call_25d_delta": call_pt.delta if call_pt is not None else None,
+            "put_25d_delta": -put_pt.delta if put_pt is not None else None,
             "atm_iv_interp": atm_iv_interp,
             "call_bracket": call_pt.bracket if call_pt is not None else None,
             "put_bracket": put_pt.bracket if put_pt is not None else None,

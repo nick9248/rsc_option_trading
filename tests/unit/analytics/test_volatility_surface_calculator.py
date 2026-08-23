@@ -706,6 +706,54 @@ class TestInterpolateIvAtDelta:
 
         point = calc.interpolate_iv_at_delta("C", 0.25)
         assert point.iv == pytest.approx(33.5)
+        # Wave-I-C Fix 8: exact match -- delta at strike is exactly the
+        # matched quote's own |delta|.
+        assert point.delta == pytest.approx(0.25)
+
+    def test_interp_point_delta_is_bracket_midpoint_not_target_when_asymmetric(self):
+        """
+        Wave-I-C Fix 8: InterpPoint.delta is the |delta| actually implied
+        AT the bracket-midpoint strike -- computed the same 0.5-weight way
+        as the strike itself -- NOT target_abs_delta. Before this fix,
+        put_25d_delta/call_25d_delta were hardcoded to exactly
+        -TARGET_ABS_DELTA_25D/+TARGET_ABS_DELTA_25D (-0.25/+0.25)
+        regardless of the bracket, so the report printed "Δ=-0.250" next
+        to a strike that was, in general, NOT precisely the 25-delta
+        strike. An asymmetric bracket (0.15/0.30, not straddling 0.25
+        symmetrically) makes the distinction visible: midpoint delta is
+        (0.15+0.30)/2 = 0.225, not 0.25.
+        """
+        instruments = [
+            _quoted_instrument(90_000 * 1.15, "C", 0.15, 40.0),
+            _quoted_instrument(90_000 * 1.30, "C", 0.30, 20.0),
+        ]
+        calc = VolatilitySurfaceCalculator(instruments, 90_000.0, "28MAR26")
+
+        point = calc.interpolate_iv_at_delta("C", 0.25)
+        assert point.bracket == (0.15, 0.30)
+        assert point.delta == pytest.approx(0.225)
+        assert point.delta != pytest.approx(0.25)
+
+    def test_calculate_risk_reversal_butterfly_reports_actual_delta_not_target(self):
+        """
+        Wave-I-C Fix 8, at the level actually consumed by the report:
+        calculate_risk_reversal_butterfly()'s call_25d_delta/put_25d_delta
+        must be the honest interpolated values (signed: put negative,
+        call positive), not the old hardcoded ±TARGET_ABS_DELTA_25D.
+        """
+        instruments = [
+            _quoted_instrument(90_000 * 1.15, "C", 0.15, 40.0),
+            _quoted_instrument(90_000 * 1.30, "C", 0.30, 20.0),
+            _quoted_instrument(90_000 * 0.80, "P", -0.20, 45.0),
+            _quoted_instrument(90_000 * 0.71, "P", -0.28, 55.0),
+        ]
+        calc = VolatilitySurfaceCalculator(instruments, 90_000.0, "28MAR26")
+
+        result = calc.calculate_risk_reversal_butterfly()
+        assert result["call_25d_delta"] == pytest.approx(0.225)
+        assert result["put_25d_delta"] == pytest.approx(-0.24)
+        assert result["call_25d_delta"] != pytest.approx(0.25)
+        assert result["put_25d_delta"] != pytest.approx(-0.25)
 
     def test_bracket_too_wide_returns_none_even_though_bracketed(self):
         """

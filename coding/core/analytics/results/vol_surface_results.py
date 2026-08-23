@@ -53,17 +53,24 @@ class SkewResult:
     unqualified ``skew`` field)."""
 
     put_25d_delta: Optional[float] = None
-    """Task G2-D fix 1: exactly -TARGET_ABS_DELTA_25D (-0.25) by
-    construction of the delta-space interpolation
-    (VolatilitySurfaceCalculator.calculate_risk_reversal_butterfly) that
-    now produces this value -- None (together with put_25d_iv) when the
-    chain does not bracket 0.25 tightly enough on the put side. Previously
-    the ACTUAL delta of a nearest-delta "closest, however far" pick
-    (bugfix_spec.md 9.4); that ungated picker is deleted."""
+    """Task G2-D fix 1 / Wave-I-C Fix 8: the |delta| actually implied AT
+    put_25d_strike (VolatilitySurfaceCalculator.InterpPoint.delta via
+    calculate_risk_reversal_butterfly), signed negative -- NOT exactly
+    -TARGET_ABS_DELTA_25D (-0.25). put_25d_strike is a bracket midpoint,
+    not delta-solved, so it is not in general exactly the target-delta
+    strike; this field is the value honestly consistent with the strike
+    reported alongside it (equal to -0.25 only when the bracket happens
+    to be symmetric around it). None (together with put_25d_iv) when the
+    chain does not bracket 0.25 tightly enough on the put side. Prior to
+    Task G2-D fix 1 this was the ACTUAL delta of a nearest-delta "closest,
+    however far" pick (bugfix_spec.md 9.4); that ungated picker is
+    deleted -- Fix 8 corrects the brief 2026-08 window (Task G2-D fix 1
+    through Wave-I-C) where this was hardcoded to the target instead."""
 
     call_25d_delta: Optional[float] = None
-    """Task G2-D fix 1: exactly +TARGET_ABS_DELTA_25D (+0.25) by
-    construction -- see put_25d_delta."""
+    """Task G2-D fix 1 / Wave-I-C Fix 8: the |delta| actually implied AT
+    call_25d_strike, signed positive -- NOT exactly +TARGET_ABS_DELTA_25D
+    (+0.25). See put_25d_delta."""
 
     def __post_init__(self) -> None:
         # Both None (insufficient data, bugfix_spec.md 9.4) stays as-is --
