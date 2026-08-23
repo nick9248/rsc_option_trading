@@ -561,7 +561,8 @@ def test_cross_asset_correlation_line_rendered():
 def test_expected_move_line_integer_dollars():
     """institutional_metrics_spec.md section 9: one line, integer dollars."""
     line = format_expected_move_line(dvol=75.0, underlying_price=95000.0)
-    assert line.startswith("Expected Move: 1d $")
+    assert line.startswith("Expected Move (")
+    assert ": 1d $" in line
     assert "." not in line.split("$")[1].split(" ")[0]  # integer, no decimals
     assert "7d $" in line and "30d $" in line
 
@@ -572,6 +573,19 @@ def test_expected_move_line_na_when_no_dvol():
     )
 
 
+def test_expected_move_line_discloses_30d_dvol_proxy_basis():
+    """
+    Wave-I-C Fix 5: the 1d/7d figures are scaled from DVOL, Deribit's
+    30-day constant-maturity vol index -- not a horizon-matched IV. The
+    line must disclose this rather than implying the numbers are
+    term-structure-matched to their stated horizon.
+    """
+    line = format_expected_move_line(dvol=75.0, underlying_price=95000.0)
+    assert "1-sigma" in line
+    assert "30d DVOL" in line
+    assert "proxy" in line
+
+
 def test_market_wide_context_section_combines_both_lines():
     result = CrossAssetCorrelationResult(
         other_currency="ETH", price_correlation=0.85, dvol_correlation=0.6, sample_size=30,
@@ -580,7 +594,7 @@ def test_market_wide_context_section_combines_both_lines():
     text = format_market_wide_context_section(result, "BTC", 75.0, 95000.0)
     assert text.startswith("CONTEXT\n" + "-" * 80 + "\n")
     assert "change-correlation" in text
-    assert "Expected Move:" in text
+    assert "Expected Move (" in text
 
 
 def test_market_wide_context_section_omits_delta_flow_coverage_by_default():

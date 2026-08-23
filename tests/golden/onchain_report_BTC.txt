@@ -2939,7 +2939,7 @@ LARGE PRINTS (screen prints, not blocks; >$100,000 notional)
 CONTEXT
 --------------------------------------------------------------------------------
 BTC/ETH change-correlation (30d): price 0.86  |  DVOL 0.89 (log changes, 30d)
-Expected Move: 1d $1,265  |  7d $3,350  |  30d $6,974
+Expected Move (1-sigma, 30d DVOL as proxy for all horizons -- not term-structure-matched): 1d $1,265  |  7d $3,350  |  30d $6,974
 
 
 ================================================================================

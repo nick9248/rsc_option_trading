@@ -554,6 +554,21 @@ def format_expected_move_line(dvol: Optional[float], underlying_price: float) ->
     monthly move -> one line, integer dollars"). Replaces the header's old
     three-line $+% breakdown (report_formatter.OnChainReportFormatter.
     render_header).
+
+    Wave-I-C Fix 5: all three horizons are scaled from ``dvol`` -- DVOL is
+    Deribit's 30-day constant-maturity vol index by definition, so the 1d
+    and 7d figures here implicitly assume volatility is constant out to
+    30 days (no term structure), not measured at those shorter horizons.
+    A genuinely horizon-matched IV would need a 1d- and 7d-specific
+    reading; OnChainAnalysisResult.atm_iv_by_expiration has per-expiration
+    ATM IV, but nothing there is reliably ~1d or ~7d DTE on any given run
+    (front-month is whatever the nearest listed expiration happens to be),
+    and this line is a currency-wide one-liner, not tied to one
+    expiration -- swapping in a per-expiry IV for one horizon only would
+    make the three figures use inconsistent, silently-different vol
+    bases. Disclosed explicitly instead, per the task's stated fallback:
+    every figure states its basis, so a reader can judge how much to
+    trust the 1d/7d numbers specifically.
     """
     if dvol is None:
         return "Expected Move: N/A (no DVOL)"
@@ -562,7 +577,9 @@ def format_expected_move_line(dvol: Optional[float], underlying_price: float) ->
     weekly_move = dvol / 100 / math.sqrt(52) * underlying_price
     monthly_move = dvol / 100 / math.sqrt(12) * underlying_price
     return (
-        f"Expected Move: 1d ${daily_move:,.0f}  |  7d ${weekly_move:,.0f}  |  "
+        f"Expected Move (1-sigma, 30d DVOL as proxy for all horizons -- "
+        f"not term-structure-matched): "
+        f"1d ${daily_move:,.0f}  |  7d ${weekly_move:,.0f}  |  "
         f"30d ${monthly_move:,.0f}"
     )
 
