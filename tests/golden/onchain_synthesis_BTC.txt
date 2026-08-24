@@ -6,8 +6,8 @@ BTC $64,371.10 | Regime: RANGE BOUND BULLISH
 Direction: BULLISH | Vol: SUPPRESSED
 ────────────────────────────────────────────────────────────────────────────────
 DVOL: 37.5%  | IV Pctile: 20th  | ATM IV (front): ~36.2%
-10d RV: 28.6%  | 20d RV: 28.4%  | 30d RV: 27.1% (11th cone)
-VRP: +10.4pts  | Term Structure: CONTANGO (+28.3pts)
+10d RV: 30.8%  | 20d RV: 27.7%  | 30d RV: 26.7% (11th cone)
+VRP: +10.8pts  | Term Structure: CONTANGO (+28.3pts)
 Perp Funding: 0.0000%  | 8h: 0.0003%
 ────────────────────────────────────────────────────────────────────────────────
 
@@ -25,7 +25,7 @@ FAR-TERM (30+ DTE): BULLISH bias | GEX +28.6M (dampening) | OI: 257,391 contract
   25SEP26 (61d): MaxPain $70,000 (+8.0%) | P/C 0.58 | ATM IV 36.7% | RR25 -4.5% | Flow: Insufficient flow data
   25DEC26 (152d): MaxPain $70,000 (+6.9%) | P/C 0.56 | ATM IV 40.8% | RR25 -4.6% | Flow: Insufficient flow data
 
-VOL ASSESSMENT: Volatility is expensive (IV at 20th percentile, VRP +10.4pts). NOTE: 30d RV at 11th pctile — unusually calm period. VRP may compress further if realized vol reverts to mean. Sell premium in 31JUL26 where ATM IV is 36.2%. RR25 at -3.6% makes OTM puts are cheap relative to calls — tail risk underpriced puts the higher-edge side to sell.
+VOL ASSESSMENT: Volatility is expensive (IV at 20th percentile, VRP +10.8pts). NOTE: 30d RV at 11th pctile — unusually calm period. VRP may compress further if realized vol reverts to mean. Sell premium in 31JUL26 where ATM IV is 36.2%. RR25 at -3.6% makes OTM puts are cheap relative to calls — tail risk underpriced puts the higher-edge side to sell.
 
 RISK FACTORS: GAMMA CLIFF: 63% of gamma mass expires within 7 DTE (26JUL26, 27JUL26, 28JUL26, 29JUL26, 31JUL26) — pin risk and gamma spike around max pain
 
@@ -35,7 +35,7 @@ SCREEN PRINTS (large single-leg trades, not blocks): 4 buys ($7.7M) | 6 sells ($
   Largest: BTC-27JUL26-66000-C BUY 30.0 BTC ($1.93M) at 24.4% IV
 
 TRADE RECOMMENDATIONS:
-OPPORTUNISTIC (signals disagree) — Long Straddle/Strangle (25SEP26): IV at 20th pctile looks cheap vs. its own history, but VRP +10.4pts says implied vol is still rich vs. currently realized vol — selling volatility has the more reliable near-term edge. Treat this long-vol idea with reduced confidence; do not size as a primary position.
+OPPORTUNISTIC (signals disagree) — Long Straddle/Strangle (25SEP26): IV at 20th pctile looks cheap vs. its own history, but VRP +10.8pts says implied vol is still rich vs. currently realized vol — selling volatility has the more reliable near-term edge. Treat this long-vol idea with reduced confidence; do not size as a primary position.
 
 DATA QUALITY:
   - Order flow: insufficient data for all 12 expiries (no qualifying trades in the lookback window) — flow bias/trend not usable for any expiry this run
@@ -46,4 +46,4 @@ SCORING DETAIL:
   Near-term: NEUTRAL | Far-term: BULLISH
   Vol Regime: suppressed
   Market Regime: range_bound_bullish
-  Effective VRP: +10.4pts | RR25: -3.6%
+  Effective VRP: +10.8pts | RR25: -3.6%

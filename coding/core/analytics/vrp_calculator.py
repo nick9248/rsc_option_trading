@@ -55,7 +55,14 @@ class VRPCalculator:
         """
         Calculate realized volatility from price history.
 
-        Uses log returns and annualized standard deviation.
+        Uses log returns and annualized standard deviation. Task Wave-J-D
+        Fix 3: the window filter admits one bar before the nominal cutoff
+        (the "anchor" -- see the inline comment at the filter itself) so
+        this always produces the same "window_days log returns" definition
+        as ``MarketWideCalculator.calculate_volatility_cone``'s index-based
+        ``prices[-(window+1):]`` for the normal daily-bar case, rather than
+        the two silently disagreeing by up to ~1 return's worth of vol
+        points on the exact same nominal window.
 
         Args:
             price_history: List of dicts with 'timestamp' and 'close' keys
@@ -96,11 +103,44 @@ class VRPCalculator:
         # comparison against reference_time is always apples-to-apples UTC,
         # regardless of what timezone the calling machine is configured
         # with or what hour-of-day reference_time happens to carry.
+        #
+        # Task Wave-J-D Fix 3: this used to be a single-sided `>= cutoff_time`
+        # filter, which gives `window_days` log RETURNS only when a bar
+        # happens to land exactly on the cutoff. With daily bars and a
+        # reference_time whose time-of-day falls AFTER the oldest in-window
+        # bar's clock time (the common case for a live "now", as opposed to
+        # a settlement-aligned anchor) that bar falls just short of the
+        # cutoff and gets excluded, silently leaving `window_days` BARS but
+        # only `window_days - 1` RETURNS -- one fewer than
+        # calculate_volatility_cone's (market_wide_calculator.py)
+        # `prices[-(window+1):]` index-based convention, which always uses
+        # exactly `window_days + 1` bars for `window_days` returns. The two
+        # methods consume the same price_history for the same nominal
+        # window and are presented side by side in the same report (the
+        # cone's "Current" column vs. the REALIZED VOLATILITY line; VRP is
+        # computed from THIS method's RV while the cone percentile
+        # contextualizing VRP is computed from the other) -- they must
+        # agree on what "Nd RV" means. Fix: also admit the single
+        # most-recent bar strictly BEFORE the cutoff (the "anchor") when
+        # one exists, so the return that spans the cutoff boundary is never
+        # silently dropped -- for the normal daily-bar case this yields
+        # exactly `window_days` returns, matching the cone's definition.
+        # Bars further in the past than that anchor stay excluded, so
+        # history that is genuinely all older than the window still
+        # correctly yields too few points / None, exactly as before.
         cutoff_time = reference_time - timedelta(days=window_days)
-        filtered_prices = [
-            p for p in price_history
-            if datetime.fromtimestamp(p.get("timestamp", 0), tz=timezone.utc) >= cutoff_time
+        bars_with_time = [
+            (p, datetime.fromtimestamp(p.get("timestamp", 0), tz=timezone.utc))
+            for p in price_history
         ]
+        in_window = [p for p, t in bars_with_time if t >= cutoff_time]
+        before_window = [(p, t) for p, t in bars_with_time if t < cutoff_time]
+
+        if before_window:
+            anchor_price, _ = max(before_window, key=lambda pt: pt[1])
+            filtered_prices = [anchor_price] + in_window
+        else:
+            filtered_prices = in_window
 
         if len(filtered_prices) < 2:
             logger.warning(f"Only {len(filtered_prices)} prices in window, need at least 2")

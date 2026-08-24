@@ -159,6 +159,107 @@ class TestBarTimestampConversionIsUtcExplicit:
         assert rv_utc == rv_other_tz
 
 
+class TestWindowDefinitionMatchesCone:
+    """
+    Task Wave-J-D Fix 3: calculate_realized_volatility used to filter
+    strictly on ``ts >= reference_time - window_days`` with no anchor bar.
+    With daily bars and a reference_time whose time-of-day falls AFTER the
+    oldest in-window bar's clock time (the normal case for a live "now" --
+    as opposed to the settlement-hour-aligned anchors ``_daily_bars`` above
+    uses, which is exactly why this never showed up in the tests above),
+    that oldest bar falls just short of the cutoff and gets dropped,
+    silently leaving ``window_days`` BARS but only ``window_days - 1``
+    RETURNS -- one fewer than ``MarketWideCalculator.
+    calculate_volatility_cone``'s index-based ``prices[-(window+1):]``
+    convention for the SAME nominal window over the SAME data. The two
+    numbers are presented side by side in the live report (this method
+    feeds VRP and the "REALIZED VOLATILITY" line; the cone feeds the
+    "Current" column that is supposed to contextualize it) and previously
+    disagreed by up to ~2.2 vol points on the 10d window (the fixture
+    regression this fix closes -- see the golden-master delta in the Task
+    Wave-J-D report).
+    """
+
+    def test_misaligned_bars_yield_full_window_days_returns(self):
+        """A naive cutoff filter on this fixture would admit only
+        `window_days` bars (`window_days - 1` returns) -- the anchor-bar
+        fix must admit one more, matching the cone's convention."""
+        calc = VRPCalculator(currency="BTC")
+        window_days = 10
+        midnight = datetime(2026, 8, 8, 0, 0, tzinfo=timezone.utc)
+        # 16 daily bars stamped at MIDNIGHT UTC, days -15..0.
+        bars = [
+            {
+                "timestamp": (midnight - timedelta(days=i)).timestamp(),
+                "close": 60000.0 * (1 + 0.01 * math.sin(i * 0.7)),
+            }
+            for i in range(15, -1, -1)
+        ]
+        # reference_time is on the SAME calendar day as the newest bar but
+        # well after midnight -- a faithful stand-in for a live "now".
+        reference_time = midnight + timedelta(hours=14, minutes=37)
+
+        # Sanity: prove the bug this fix closes -- a bare `ts >= cutoff`
+        # filter admits exactly `window_days` bars (`window_days - 1`
+        # returns), one short of the cone's definition.
+        cutoff = reference_time - timedelta(days=window_days)
+        naive_filtered = [
+            b for b in bars
+            if datetime.fromtimestamp(b["timestamp"], tz=timezone.utc) >= cutoff
+        ]
+        assert len(naive_filtered) == window_days
+
+        rv = calc.calculate_realized_volatility(
+            bars, window_days=window_days, reference_time=reference_time
+        )
+        assert rv is not None
+
+        # Cross-check directly against the cone's own index-based
+        # definition: the last window_days + 1 closes by ARRAY POSITION.
+        closes = [b["close"] for b in bars]
+        last_n_plus_1 = closes[-(window_days + 1):]
+        log_returns = [
+            math.log(last_n_plus_1[i] / last_n_plus_1[i - 1])
+            for i in range(1, len(last_n_plus_1))
+        ]
+        assert len(log_returns) == window_days
+        import numpy as np
+        expected_rv = np.std(log_returns) * math.sqrt(365)
+        assert rv == pytest.approx(expected_rv)
+
+    def test_cone_and_vrp_calculator_agree_on_current_rv(self):
+        """
+        End-to-end parity proof: feed the SAME price_history through both
+        MarketWideCalculator.calculate_volatility_cone (index-based) and
+        VRPCalculator.calculate_realized_volatility (timestamp-based, via
+        MarketWideCalculator.vrp_calculator), with reference_time
+        deliberately misaligned from the bars' midnight clock time -- the
+        two current-RV figures must now agree exactly.
+        """
+        from coding.core.analytics.market_wide_calculator import MarketWideCalculator
+
+        calc = MarketWideCalculator(currency="BTC", spot_price=90000.0, dvol=65.0)
+        midnight = datetime(2026, 8, 8, 0, 0, tzinfo=timezone.utc)
+        prices = [
+            {
+                "timestamp": (midnight - timedelta(days=i)).timestamp(),
+                "close": 90000.0 * (1 + 0.01 * math.sin(i * 0.5)),
+            }
+            for i in range(59, -1, -1)
+        ]
+
+        _, cone_structured = calc.calculate_volatility_cone(prices)
+        cone_current_rv_10d = cone_structured["cone_10d_current_rv"]
+
+        reference_time = midnight + timedelta(hours=14, minutes=37)
+        vrp_rv_10d = calc.vrp_calculator.calculate_realized_volatility(
+            prices, window_days=10, reference_time=reference_time
+        )
+
+        assert vrp_rv_10d is not None
+        assert vrp_rv_10d * 100 == pytest.approx(cone_current_rv_10d, rel=1e-9)
+
+
 # ---------------------------------------------------------------------------
 # Wave H Task H-D: the four "fabricated default instead of None" sites.
 #
