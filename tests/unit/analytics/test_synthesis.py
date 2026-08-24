@@ -1840,11 +1840,20 @@ class TestBuildExpiryMetrics:
         assert result is None
 
     def test_missing_flow_data_uses_defaults(self):
+        """
+        Task Wave-J-C Fix 4: the flow analyzer never having run for this
+        expiry used to fall back to the literal "Mixed/Neutral" -- a
+        RECOGNIZED key in score_flow's bias_map, indistinguishable from a
+        genuinely-measured balanced book. Must use the SAME honest
+        "Insufficient flow data" sentinel buy_sell_flow_analyzer already
+        uses for its own insufficiency cases.
+        """
         onchain_result = make_onchain_result("27MAR26", include_flow=False)
         result = SynthesisMapper.build_expiry_metrics(onchain_result, "27MAR26")
         assert result is not None
-        assert result.flow_bias == "Mixed/Neutral"
-        assert result.flow_trend == "Mixed/Neutral Flow"
+        assert result.flow_bias == "Insufficient flow data"
+        assert result.flow_trend == "Insufficient flow data"
+        assert result.flow_bias != "Mixed/Neutral"
         assert result.flow_sufficient_data is False
 
     def test_real_max_pain_flagged_sufficient(self):
@@ -2344,6 +2353,39 @@ class TestSynthesisEngineRun:
         result = engine.run(market, expiries)
         assert "All market-wide sections computed successfully" not in result
         assert "Max pain: did not resolve for any of 1 expiries" in result
+
+    def test_run_partial_flow_insufficient_disclosed_in_data_quality(self):
+        """
+        Task Wave-J-C Fix 4: the previous fix only handled the case where
+        EVERY expiry failed (``all(...)``) -- a single failing expiry
+        among several passing ones was completely silent. 1 of 3 expiries
+        insufficient must now be disclosed too, distinctly worded from the
+        "all N" case.
+        """
+        engine = SynthesisEngine()
+        market = make_market_wide()
+        expiries = [
+            make_expiry_metrics(expiry="26JUL26", flow_sufficient_data=False),
+            make_expiry_metrics(expiry="31JUL26", flow_sufficient_data=True),
+            make_expiry_metrics(expiry="7AUG26", flow_sufficient_data=True),
+        ]
+        result = engine.run(market, expiries)
+        assert "All market-wide sections computed successfully" not in result
+        assert "Order flow: insufficient data for 1 of 3 expiries" in result
+        assert "insufficient data for all 3 expiries" not in result
+
+    def test_run_partial_max_pain_insufficient_disclosed_in_data_quality(self):
+        """Same partial-failure broadening for max_pain."""
+        engine = SynthesisEngine()
+        market = make_market_wide()
+        expiries = [
+            make_expiry_metrics(expiry="26JUL26", max_pain_sufficient_data=False),
+            make_expiry_metrics(expiry="31JUL26", max_pain_sufficient_data=True),
+        ]
+        result = engine.run(market, expiries)
+        assert "All market-wide sections computed successfully" not in result
+        assert "Max pain: did not resolve for 1 of 2 expiries" in result
+        assert "did not resolve for any of 2 expiries" not in result
 
     def test_run_missing_term_structure_disclosed_in_data_quality(self):
         """Wave H follow-up (P0-4): a None term structure must be listed

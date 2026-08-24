@@ -17,6 +17,7 @@ from enum import Enum, IntEnum
 import logging
 from datetime import datetime, timedelta, timezone
 
+from coding.core.analytics.buy_sell_flow_analyzer import INSUFFICIENT_DATA_LABEL
 from coding.core.analytics.market_wide_calculator import MarketWideCalculator
 from coding.core.analytics.max_pain_utils import calculate_max_pain_distance_pct
 from coding.core.analytics.results.analysis_result import OnChainAnalysisResult
@@ -2261,17 +2262,38 @@ class SynthesisEngine:
         # (report_formatter.py/historical_context_formatter.py) and are
         # not currently plumbed into this synthesis path at all; wiring
         # those in is a larger, separate change, not done here.
-        if expiries and all(not e.flow_sufficient_data for e in expiries):
+        # Task Wave-J-C Fix 4: the checks below used to require ALL
+        # expiries to fail before saying anything (``all(...)``) -- a
+        # single expiry's max-pain-fallback-to-spot or flow-never-ran
+        # passed through completely silently whenever at least one other
+        # expiry had real data. Broadened to flag PARTIAL failures too:
+        # "N of M expiries" whenever N > 0, not just N == M.
+        flow_insufficient_count = sum(1 for e in expiries if not e.flow_sufficient_data)
+        if flow_insufficient_count == len(expiries) and expiries:
             data_quality_notes.append(
                 f"Order flow: insufficient data for all {len(expiries)} expiries "
                 "(no qualifying trades in the lookback window) — flow bias/trend "
                 "not usable for any expiry this run"
             )
-        if expiries and all(not e.max_pain_sufficient_data for e in expiries):
+        elif flow_insufficient_count > 0:
+            data_quality_notes.append(
+                f"Order flow: insufficient data for {flow_insufficient_count} of "
+                f"{len(expiries)} expiries (no qualifying trades in the lookback "
+                "window) — flow bias/trend not usable for those expiries this run"
+            )
+        max_pain_insufficient_count = sum(1 for e in expiries if not e.max_pain_sufficient_data)
+        if max_pain_insufficient_count == len(expiries) and expiries:
             data_quality_notes.append(
                 f"Max pain: did not resolve for any of {len(expiries)} expiries "
                 "(displayed max-pain figures are the spot-price fallback, not a "
                 "computed strike, and were not scored)"
+            )
+        elif max_pain_insufficient_count > 0:
+            data_quality_notes.append(
+                f"Max pain: did not resolve for {max_pain_insufficient_count} of "
+                f"{len(expiries)} expiries (those expiries' displayed max-pain "
+                "figures are the spot-price fallback, not a computed strike, "
+                "and were not scored)"
             )
         if market.term_structure_shape is None:
             data_quality_notes.append(
@@ -2758,8 +2780,21 @@ class SynthesisMapper:
         # Flow. bugfix_spec.md Item 6 / F6.3.4 (carried from A4 review):
         # flow_sufficient_data propagates the data-sufficiency gate so the
         # scoring engine can force weight 0 instead of a neutral score.
-        flow_bias = flow.bias_interpretation if flow is not None else "Mixed/Neutral"
-        flow_trend = flow.flow_trend if flow is not None else "Mixed/Neutral Flow"
+        #
+        # Task Wave-J-C Fix 4: when the flow analyzer never ran at all for
+        # this expiry (``flow is None``), flow_bias used to fall back to
+        # the literal string "Mixed/Neutral" -- a RECOGNIZED key in
+        # score_flow's bias_map, so it read exactly like a genuinely-
+        # measured balanced book (e.g. the per-expiry summary line's
+        # "Flow: Mixed/Neutral"), indistinguishable from a real reading.
+        # buy_sell_flow_analyzer already has an honest sentinel for
+        # exactly this "insufficient data" case
+        # (INSUFFICIENT_DATA_LABEL = "Insufficient flow data", used both
+        # when trade_count is too low AND when the 1h trend can't be
+        # detected) -- reuse it here instead of inventing a second,
+        # dishonest-looking one.
+        flow_bias = flow.bias_interpretation if flow is not None else INSUFFICIENT_DATA_LABEL
+        flow_trend = flow.flow_trend if flow is not None else INSUFFICIENT_DATA_LABEL
         flow_sufficient_data = flow.sufficient_data if flow is not None else False
         top_buy_strikes = (
             [
