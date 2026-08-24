@@ -2392,11 +2392,28 @@ class TestSynthesisEngineRun:
         assert isinstance(result, str)
 
     def test_run_empty_iv_by_dte_no_crash(self):
+        """
+        Task Wave-J-C Fix 3: an empty iv_by_dte (market-wide term-structure
+        phase failed entirely) used to silently fall back to 0.0, which
+        rendered as a real, confident-looking "~0.0%" measurement --
+        directly violating _generate_header's own stated contract ("never
+        ... silently substituting 0.0"). Must render "N/A" instead, matching
+        every sibling field on the same line (dvol_str, iv_pctile_str, etc).
+        """
         engine = SynthesisEngine()
         market = make_market_wide(iv_by_dte={})
         expiry = make_expiry_metrics()
         result = engine.run(market, [expiry])
-        assert "ATM IV (front): ~0.0%" in result
+        assert "ATM IV (front): ~0.0%" not in result
+        assert "ATM IV (front): N/A" in result
+
+    def test_run_nonempty_iv_by_dte_still_renders_numeric_front_iv(self):
+        """Real iv_by_dte data must still render the actual front IV, not N/A."""
+        engine = SynthesisEngine()
+        market = make_market_wide(iv_by_dte={6: 49.0, 13: 49.5})
+        expiry = make_expiry_metrics()
+        result = engine.run(market, [expiry])
+        assert "ATM IV (front): ~49.0%" in result
 
     def test_run_narrates_real_blocks_not_large_prints(self):
         """Independent review round 2 (Important #3): real blocks

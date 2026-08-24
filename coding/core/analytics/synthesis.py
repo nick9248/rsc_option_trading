@@ -2356,11 +2356,19 @@ SCORING DETAIL:
         TypeError) or silently substituting 0.0 (which would render as a
         real, confident-looking measurement).
         """
-        # Bug fix: safe IV access — find first DTE >= 5 instead of fragile index access
+        # Safe IV access — find first DTE >= 5 instead of fragile index access.
+        # Task Wave-J-C Fix 3: this docstring's own contract (above) says
+        # never silently substitute 0.0, which would render as a real,
+        # confident-looking measurement -- this line violated that
+        # directly. Reachable whenever market.iv_by_dte is empty (the
+        # market-wide term-structure phase failed entirely). Preserve
+        # None and render "N/A" below, matching every sibling field on
+        # the same output line (dvol_str, iv_pctile_str, rv_*_str, vrp_str).
         front_iv = next(
             (v for k, v in sorted(market.iv_by_dte.items()) if k >= 5),
-            0.0
+            None
         )
+        front_iv_str = f"~{front_iv:.1f}%" if front_iv is not None else "N/A"
 
         dvol_str = f"{market.dvol:.1f}%" if market.dvol is not None else "N/A"
         iv_pctile_str = f"{market.iv_percentile_365d:.0f}th" if market.iv_percentile_365d is not None else "N/A"
@@ -2391,7 +2399,7 @@ Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC
 BTC ${market.spot_price:,.2f} | Regime: {market_regime.value.upper().replace('_', ' ')}
 Direction: {direction.name} | Vol: {vol_regime.value.upper()}
 ────────────────────────────────────────────────────────────────────────────────
-DVOL: {dvol_str}  | IV Pctile: {iv_pctile_str}  | ATM IV (front): ~{front_iv:.1f}%
+DVOL: {dvol_str}  | IV Pctile: {iv_pctile_str}  | ATM IV (front): {front_iv_str}
 10d RV: {rv_10d_str}  | 20d RV: {rv_20d_str}  | 30d RV: {rv_30d_str} ({cone_30d_str})
 VRP: {vrp_str}  | Term Structure: {term_structure_str}
 Perp Funding: {funding_rate_str}  | 8h: {funding_8h_str}
