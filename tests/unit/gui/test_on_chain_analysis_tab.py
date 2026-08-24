@@ -430,6 +430,40 @@ class TestLevelsTablePopulation:
 
         tab.close()
 
+    def test_holder_convention_row_marker_discloses_it_shows_assumed_levels(self, qapp):
+        """
+        Task Wave-J-F Fix 2: ``_set_row_marker`` renders the ASSUMED-DEALER
+        -VIEW call-wall/put-support/HVL levels regardless of whether the
+        active convention is ASSUMED or HOLDER -- there is no holder-side
+        key-levels source (holder-side gamma exposure is >= 0 by
+        construction, so a "call wall"/"put support" sign flip has no
+        holder-side meaning). The tooltip must disclose this when HOLDER is
+        the active convention, so a user who selected Holder isn't misled
+        into thinking these markers are holder-derived.
+        """
+        tab = OnChainAnalysisTab()
+        tab._current_levels_table = LevelsTable(
+            expiration="27MAR26",
+            rows=(_row(100000.0, is_call_wall_assumed=True),),
+            gex_dex_available=True, exposure_available=True,
+            inferred_available=False, net_taker_flow_available=False, delta_1d_iv_available=False,
+        )
+        tab._populate_levels_table()
+
+        # Under "assumed" (default), the plain label -- no disclosure needed.
+        item = tab.levels_table.item(0, tab_module._COL_STRIKE)
+        assert item.toolTip() == "Call Wall"
+
+        # Switching to "holder" must still show the marker (same assumed-view
+        # data) but append a disclosure that these aren't holder-side levels.
+        tab.holder_radio.setChecked(True)
+        item = tab.levels_table.item(0, tab_module._COL_STRIKE)
+        assert item.toolTip() == (
+            "Call Wall (assumed-dealer view -- no holder-side key levels exist)"
+        )
+
+        tab.close()
+
     def test_marker_and_coloring_survive_a_user_sort(self, qapp):
         """
         Reproduces the bug this design had to avoid: sorting the table

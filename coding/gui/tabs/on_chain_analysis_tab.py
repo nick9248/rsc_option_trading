@@ -909,8 +909,24 @@ class OnChainAnalysisTab(QWidget):
         """
         Set the left-edge marker for one row directly on its Strike cell
         (background highlight + tooltip listing which structural level(s)
-        it is) -- call wall / put support / HVL (from the active
-        convention's key levels) and max pain (convention-independent).
+        it is) -- call wall / put support / HVL and max pain
+        (max pain is convention-independent).
+
+        Call wall / put support / HVL come from the INFERRED key levels
+        only when the active convention is INFERRED; every other
+        convention -- including HOLDER -- shows the ASSUMED-DEALER-VIEW
+        levels. This is NOT "the active convention's key levels" for
+        HOLDER (Task Wave-J-F Fix 2: an earlier version of this docstring
+        claimed exactly that, which was false). There is no holder-side
+        key-levels source to show instead: ``LevelsTableRow`` only carries
+        ``*_assumed``/``*_inferred`` call-wall/put-support/HVL fields, and
+        holder-side gamma exposure is always >= 0 by construction (see
+        ``GexDexRowResult.gamma_exposure_holder``'s docstring) -- there is
+        no sign flip across strikes for a "call wall"/"put support" to
+        anchor on under that convention, so no meaningful holder-side
+        version of these markers exists to compute. The tooltip flags this
+        explicitly when HOLDER is active, so a user selecting Holder isn't
+        told these markers are holder-derived.
 
         Deliberately NOT a vertical-header item: QTableWidget.sortItems()
         does not move header items along with a sorted row (see
@@ -943,9 +959,15 @@ class OnChainAnalysisTab(QWidget):
             labels.append("Max Pain")
 
         if labels:
+            tooltip = " / ".join(labels)
+            if convention == _CONVENTION_HOLDER:
+                # No holder-side key-levels concept exists (see this
+                # method's docstring) -- disclose that these are the
+                # assumed-dealer-view levels, not holder-side ones.
+                tooltip += " (assumed-dealer view -- no holder-side key levels exist)"
             strike_item.setBackground(QBrush(QColor(Colors.ACCENT)))
             strike_item.setForeground(QBrush(QColor(Colors.BACKGROUND_PRIMARY)))
-            strike_item.setToolTip(" / ".join(labels))
+            strike_item.setToolTip(tooltip)
         else:
             strike_item.setBackground(QBrush(QColor(Colors.SURFACE)))
             strike_item.setForeground(QBrush(QColor(Colors.TEXT_PRIMARY)))
