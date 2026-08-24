@@ -87,8 +87,13 @@ class TestApplyBsFallback:
         assert result[0]["delta"] == 0.55
         assert result[0]["gamma"] == 0.00002
 
-    def test_no_mark_iv_defaults_to_zero(self, bs_calculator):
-        """Instrument with no mark_iv and no existing greeks defaults to 0, not None."""
+    def test_no_mark_iv_yields_none_not_zero(self, bs_calculator):
+        """
+        Task Wave-J-A Fix 1 (same bug class as ProspectiveCollector.
+        _enrich_with_greeks): an instrument with no mark_iv and no existing
+        greeks is genuinely unknown, not a confirmed zero -- must come back
+        as None, never a fabricated 0.
+        """
         reference_time = datetime(2026, 6, 1, 0, 0, 0)
         instruments = [{
             "instrument_name": "BTC-1JUN26-70000-C",
@@ -103,13 +108,15 @@ class TestApplyBsFallback:
         result = _apply_bs_fallback(instruments, underlying_price=70000.0,
                                      reference_time=reference_time, bs_calculator=bs_calculator)
 
-        assert result[0]["delta"] == 0
-        assert result[0]["gamma"] == 0
+        assert result[0]["delta"] is None
+        assert result[0]["gamma"] is None
 
-    def test_expired_option_at_reference_time_defaults_to_zero(self, bs_calculator):
-        """Option already past expiry at the historical reference time stays at 0/0
-        (time_to_expiry <= 0 guard), matching the aggregation-time behavior that
-        produced the NULL greeks in the first place."""
+    def test_expired_option_at_reference_time_yields_none_not_zero(self, bs_calculator):
+        """
+        Task Wave-J-A Fix 1: an option already past expiry at the historical
+        reference time (time_to_expiry <= 0 guard) is genuinely unknown, not
+        a confirmed zero -- must come back as None.
+        """
         reference_time = datetime(2026, 6, 5, 0, 0, 0)  # after expiry
         instruments = [{
             "instrument_name": "BTC-1JUN26-70000-C",
@@ -124,11 +131,12 @@ class TestApplyBsFallback:
         result = _apply_bs_fallback(instruments, underlying_price=70000.0,
                                      reference_time=reference_time, bs_calculator=bs_calculator)
 
-        assert result[0]["delta"] == 0
-        assert result[0]["gamma"] == 0
+        assert result[0]["delta"] is None
+        assert result[0]["gamma"] is None
 
-    def test_zero_underlying_price_skips_fallback(self, bs_calculator):
-        """Guards against division-by-zero-style errors in BS math."""
+    def test_zero_underlying_price_yields_none_not_zero(self, bs_calculator):
+        """Guards against division-by-zero-style errors in BS math -- the
+        resulting greek is unknown (None), not a fabricated 0."""
         reference_time = datetime(2026, 6, 1, 0, 0, 0)
         instruments = [{
             "instrument_name": "BTC-1JUN26-70000-C",
@@ -143,8 +151,8 @@ class TestApplyBsFallback:
         result = _apply_bs_fallback(instruments, underlying_price=0.0,
                                      reference_time=reference_time, bs_calculator=bs_calculator)
 
-        assert result[0]["delta"] == 0
-        assert result[0]["gamma"] == 0
+        assert result[0]["delta"] is None
+        assert result[0]["gamma"] is None
 
     def test_output_feeds_gex_dex_calculator_without_error(self, bs_calculator):
         """End-to-end sanity: fallback output is directly consumable by GexDexCalculator."""
@@ -179,6 +187,44 @@ class TestApplyBsFallback:
         assert isinstance(result, GexDexResult)
         assert isinstance(result.total_net_gex, float)
         assert isinstance(result.total_net_dex, float)
+
+    def test_missing_gamma_counted_by_gex_dex_calculator_completeness_tracking(self, bs_calculator):
+        """
+        Task Wave-J-A Fix 1, end to end: a genuinely-missing greek (no
+        mark_iv) must reach GexDexCalculator as None, incrementing its
+        instruments_missing_gamma/oi_missing_gamma completeness tracking --
+        structurally impossible when the old code fed it a literal 0.
+        """
+        reference_time = datetime(2026, 6, 1, 0, 0, 0)
+        instruments = [
+            {
+                "instrument_name": "BTC-1JUN26-70000-C",
+                "strike": 70000.0,
+                "option_type": "C",
+                "mark_iv": None,
+                "delta": None,
+                "gamma": None,
+                "open_interest": 300.0,
+            },
+            {
+                "instrument_name": "BTC-1JUN26-75000-C",
+                "strike": 75000.0,
+                "option_type": "C",
+                "mark_iv": 60.0,
+                "delta": None,
+                "gamma": None,
+                "open_interest": 200.0,
+            },
+        ]
+
+        enriched = _apply_bs_fallback(instruments, underlying_price=70000.0,
+                                       reference_time=reference_time, bs_calculator=bs_calculator)
+
+        calc = GexDexCalculator(instruments=enriched, spot_price=70000.0, currency="BTC")
+        result = calc.calculate()
+
+        assert result.instruments_missing_gamma == 1
+        assert result.oi_missing_gamma == pytest.approx(300.0)
 
 
 def _make_result(total_net_gex, total_net_dex, call_resistance, put_support, hvl) -> GexDexResult:
