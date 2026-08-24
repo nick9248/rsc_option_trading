@@ -18,6 +18,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from coding.core.analytics.market_wide_calculator import MarketWideCalculator
+from coding.core.analytics.max_pain_utils import calculate_max_pain_distance_pct
 from coding.core.analytics.results.analysis_result import OnChainAnalysisResult
 from coding.core.analytics.results.market_wide_results import GammaRolloffResult
 from coding.core.analytics.thresholds import (
@@ -469,7 +470,7 @@ class ScoringEngine:
             return (0.0, 0.0,
                     "Max pain: insufficient data (calculation did not resolve a strike) — weight zero, no signal")
 
-        distance_pct = (max_pain - spot) / spot * 100
+        distance_pct = calculate_max_pain_distance_pct(max_pain, spot)
 
         # DTE-scaled weight for non-neutral scores
         if dte is not None:
@@ -2423,7 +2424,7 @@ Perp Funding: {funding_rate_str}  | 8h: {funding_8h_str}
             # forward price, not the single global ``spot`` shared across
             # every expiry -- the same defect class bugfix_spec.md Item 7
             # already fixed at the report/formatter layer.
-            mp_dist = (exp.max_pain - exp.underlying_price) / exp.underlying_price * 100
+            mp_dist = calculate_max_pain_distance_pct(exp.max_pain, exp.underlying_price)
             # bugfix_spec.md Item 9 fix-review (Important #6): print the
             # correctly-signed risk_reversal_25d, relabelled "RR25" -- the
             # legacy-signed "Skew" label here contradicted the vol-surface

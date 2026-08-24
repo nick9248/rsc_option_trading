@@ -42,6 +42,7 @@ from datetime import datetime
 from typing import Optional
 
 from coding.core.analytics.gex_dex_calculator import GexDexCalculator
+from coding.core.analytics.max_pain_utils import calculate_max_pain_distance_pct
 from coding.core.analytics.results.expiry_results import ExpirationAnalysisResult
 from coding.core.analytics.results.vol_surface_results import VolSurfaceResult
 from coding.core.analytics.thresholds import MAX_PAIN_EXPIRY_WEEK_THRESHOLD_DAYS
@@ -220,7 +221,12 @@ def format_context_section(
     if _is_expiry_week(analysis.expiration, now_utc):
         max_pain_strike = analysis.max_pain.max_pain_strike
         if max_pain_strike is not None:
-            diff_pct = (spot_price - max_pain_strike) / max_pain_strike * 100 if max_pain_strike else 0.0
+            # Task Wave-J-C Fix 1: was (spot - max_pain) / max_pain * 100 --
+            # opposite sign AND max_pain as the percentage base, silently
+            # disagreeing with synthesis.py's (max_pain - spot) / spot * 100
+            # for the same expiry/strike/spot. Standardized on the shared
+            # helper's convention: positive = max pain above spot.
+            diff_pct = calculate_max_pain_distance_pct(max_pain_strike, spot_price) if spot_price else 0.0
             lines.append(f"Max Pain: ${max_pain_strike:,.0f}  ({diff_pct:+.2f}% from spot)")
         else:
             lines.append("Max Pain: N/A")

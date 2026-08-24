@@ -1166,7 +1166,7 @@ LARGE OI CHANGES (Day-over-Day)
 
 CONTEXT
 --------------------------------------------------------------------------------
-Max Pain: $64,000  (+0.58% from spot)
+Max Pain: $64,000  (-0.58% from spot)
 P/C Ratio: 0.72  (n=0 - insufficient history for a percentile)
 Moneyness: ITM calls 4.5%  |  ITM puts 5.7%
 Volume P/C: 0.89
@@ -1623,7 +1623,7 @@ LARGE OI CHANGES (Day-over-Day)
 
 CONTEXT
 --------------------------------------------------------------------------------
-Max Pain: $65,000  (-0.97% from spot)
+Max Pain: $65,000  (+0.97% from spot)
 P/C Ratio: 1.05  (n=0 - insufficient history for a percentile)
 Moneyness: ITM calls 1.6%  |  ITM puts 21.7%
 Volume P/C: 0.38
@@ -2093,7 +2093,7 @@ LARGE OI CHANGES (Day-over-Day)
 
 CONTEXT
 --------------------------------------------------------------------------------
-Max Pain: $65,000  (-0.97% from spot)
+Max Pain: $65,000  (+0.97% from spot)
 P/C Ratio: 1.03  (n=0 - insufficient history for a percentile)
 Moneyness: ITM calls 0.8%  |  ITM puts 38.7%
 Volume P/C: 1.84
@@ -2263,7 +2263,7 @@ HIRO/premium/gross: no data for this expiry
 
 CONTEXT
 --------------------------------------------------------------------------------
-Max Pain: $63,500  (+1.37% from spot)
+Max Pain: $63,500  (-1.36% from spot)
 P/C Ratio: 0.99  (n=0 - insufficient history for a percentile)
 Moneyness: ITM calls 0.0%  |  ITM puts 0.0%
 Volume P/C: 1.28
@@ -2571,7 +2571,7 @@ ATM Strike: $64,000  |  Current IV: 36.2%  |  Percentile: 15.2%
 
 CONTEXT
 --------------------------------------------------------------------------------
-Max Pain: $64,000  (+0.63% from spot)
+Max Pain: $64,000  (-0.63% from spot)
 P/C Ratio: 0.29  (n=0 - insufficient history for a percentile)
 Moneyness: ITM calls 5.3%  |  ITM puts 18.3%
 Volume P/C: 0.53

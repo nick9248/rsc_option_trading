@@ -242,6 +242,32 @@ def test_context_max_pain_rendered_well_within_the_threshold():
     assert "Max Pain: $65,000" in text
 
 
+def test_context_max_pain_distance_matches_synthesis_convention_above_spot():
+    """
+    Task Wave-J-C Fix 1: this line used to compute
+    (spot - max_pain) / max_pain * 100 -- opposite sign AND max_pain as the
+    percentage base -- silently disagreeing with synthesis.py's
+    (max_pain - spot) / spot * 100 for the same expiry/strike/spot. Pin the
+    now-shared convention: max pain ABOVE spot is a POSITIVE percentage.
+    max_pain_strike=65000 > SPOT_PRICE=64405.02 -> (65000-64405.02)/64405.02*100.
+    """
+    text = format_context_section(_make_analysis(), SPOT_PRICE, _make_vol_surface(), NOW_UTC)
+    expected_pct = (65000.0 - SPOT_PRICE) / SPOT_PRICE * 100
+    assert expected_pct > 0
+    assert f"Max Pain: $65,000  ({expected_pct:+.2f}% from spot)" in text
+
+
+def test_context_max_pain_distance_negative_when_below_spot():
+    """Max pain BELOW spot must render a NEGATIVE percentage."""
+    analysis = _make_analysis(
+        max_pain=MaxPainResult(max_pain_strike=60000.0, pain_by_strike={}, min_pain_value=0.0)
+    )
+    text = format_context_section(analysis, SPOT_PRICE, _make_vol_surface(), NOW_UTC)
+    expected_pct = (60000.0 - SPOT_PRICE) / SPOT_PRICE * 100
+    assert expected_pct < 0
+    assert f"Max Pain: $60,000  ({expected_pct:+.2f}% from spot)" in text
+
+
 def test_context_other_lines_still_render_when_max_pain_suppressed():
     """Suppressing Max Pain must not suppress the rest of CONTEXT."""
     analysis = _make_analysis(expiration=_expiry_string(60))
