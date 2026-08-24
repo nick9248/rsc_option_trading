@@ -9344,10 +9344,10 @@
             "net_gex": 1270527.1791574091,
             "strike": 65500.0
           },
-          "cumulative_gex_zero_strike": 64500.0,
+          "cumulative_gex_zero_strike": null,
           "gamma_flip": null,
           "gamma_regime": "NEGATIVE",
-          "hvl": 64500.0,
+          "hvl": null,
           "legs_skipped": 0,
           "net_gex_at_spot": -4181376.1038928702,
           "put_support": {
@@ -12280,10 +12280,10 @@
             "net_gex": 67275.27284168961,
             "strike": 69000.0
           },
-          "cumulative_gex_zero_strike": 57000.0,
+          "cumulative_gex_zero_strike": null,
           "gamma_flip": null,
           "gamma_regime": "NEGATIVE",
-          "hvl": 57000.0,
+          "hvl": null,
           "legs_skipped": 0,
           "net_gex_at_spot": -67758.10946818016,
           "put_support": {

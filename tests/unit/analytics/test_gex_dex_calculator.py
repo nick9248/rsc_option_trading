@@ -187,6 +187,44 @@ class TestGexDexCalculator:
         # HVL should be detected where cumulative flips sign
         # In this case, 70k or 75k depending on cumulative sum
         assert result.key_levels.hvl in [70000, 75000]
+        # Task Wave-J-B Fix 1: a genuine crossing means hvl and gamma_flip
+        # (the field never touched by the deleted fabrication fallbacks)
+        # must agree exactly -- restoring the historical invariant broken
+        # by those fallbacks (gamma_flip stayed clean; hvl didn't).
+        assert result.key_levels.hvl == result.key_levels.gamma_flip
+
+    def test_hvl_is_none_when_cumulative_gex_never_crosses_zero(self):
+        """
+        Task Wave-J-B Fix 1 (BLOCKER repro): a book where cumulative net GEX
+        is negative at EVERY strike -- one deep-ITM put with large gamma at
+        a low strike, one small OTM call at a high strike, chosen so the
+        running cumulative sum starts deeply negative and the small
+        positive contribution from the call never pulls it back to zero.
+        Before this fix, ``hvl`` (rendered as "Cumulative GEX Zero Strike",
+        persisted into the live ``hvl_level`` DB column) was fabricated
+        anyway -- first via a "nearest net-GEX flip to spot" fallback, then
+        via a "smallest |cumulative GEX|" fallback that always finds SOME
+        strike. Both are now deleted: hvl (and gamma_flip, which was never
+        touched by the buggy fallbacks) must both be None.
+        """
+        instruments = [
+            # Deep ITM put, large gamma, low strike -> large negative net GEX.
+            {"strike": 50000, "option_type": "P", "gamma": 0.00050, "delta": -0.95, "open_interest": 1000},
+            # Small OTM call, high strike -> small positive net GEX, nowhere
+            # near enough to offset the put's contribution.
+            {"strike": 90000, "option_type": "C", "gamma": 0.00001, "delta": 0.05, "open_interest": 100},
+        ]
+        calculator = GexDexCalculator(instruments, spot_price=70000)
+        result = calculator.calculate()
+
+        # Confirm the premise: cumulative net GEX is negative at every
+        # strike -- never actually zero, never changes sign.
+        assert result.cumulative_gex[50000] < 0
+        assert result.cumulative_gex[90000] < 0
+
+        assert result.key_levels.hvl is None
+        assert result.key_levels.gamma_flip is None
+        assert result.key_levels.cumulative_gex_zero_strike is None
 
     def test_cumulative_gex_calculation(self):
         """Test cumulative GEX is correctly computed as running sum."""

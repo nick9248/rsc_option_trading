@@ -547,74 +547,52 @@ class GexDexCalculator:
                 max_negative_gex = abs(gex)
                 put_support = strike
 
-        # HVL / Gamma Flip: Where cumulative GEX crosses zero
-        # Find the strike where sign changes from positive to negative or vice versa
+        # HVL / Gamma Flip: Where CUMULATIVE net GEX (summed strike-by-strike
+        # from the bottom) genuinely changes sign. This must stay None when
+        # no such crossing exists anywhere in the chain (e.g. cumulative GEX
+        # is one-signed at every strike) -- Task Wave-J-B Fix 1.
+        #
+        # This method previously fell back, when no genuine crossing existed
+        # (or the only "crossing" was at the very first/last strike -- an
+        # artifact of the cumulative sum starting at 0, not a real sign
+        # change), first to the nearest single-strike net-GEX sign flip to
+        # spot, then -- if that also came up empty -- to whichever strike had
+        # the smallest |cumulative GEX|, which is never actually zero and
+        # will always find SOME strike. Together those fallbacks meant `hvl`
+        # (persisted into the live `hvl_level` DB column, documented as read
+        # by the straddle regime gate and IC/BF scanners) was essentially
+        # ALWAYS populated with a strike, even when cumulative GEX never
+        # crossed zero anywhere in the book -- a fabricated level presented
+        # as if it answered the same question as a real cumulative
+        # zero-crossing. Both fallbacks are deleted outright rather than kept
+        # as a separately-named diagnostic: the "nearest single-strike
+        # net-GEX flip" concept has no independent consumer today, and a
+        # correctly re-priced dealer-gamma flip already exists as
+        # ``GexDexKeyLevels.zero_gamma_level`` (computed by
+        # ``GammaProfileCalculator``) for whoever needs that different
+        # quantity.
         gamma_flip = None
         hvl = None
         prev_cumulative = None
-        
-        # Also track Net GEX flips (local zero gamma) as fallback
-        net_gex_flips = []
-        prev_net_gex = None
-        prev_strike = None
 
         for strike in sorted_strikes:
-            # 1. Check Cumulative Flip
             curr_cumulative = self.strike_data[strike]["cumulative_gex"]
 
-            if prev_cumulative is not None:
-                # Check for sign change in cumulative GEX
-                if prev_cumulative * curr_cumulative < 0:
-                    # Sign changed - this is the global gamma flip point
-                    gamma_flip = strike
-                    hvl = strike
-                    
+            if curr_cumulative == 0:
+                # Cumulative net GEX lands exactly on zero at this strike --
+                # a genuine crossing (not a fabrication: the actual sum IS
+                # zero here), just not caught by the sign-product check
+                # below (0 * anything == 0, never < 0).
+                gamma_flip = strike
+                hvl = strike
+            elif prev_cumulative is not None and prev_cumulative * curr_cumulative < 0:
+                # Sign changed between two nonzero cumulative values - this
+                # is the global gamma flip point.
+                gamma_flip = strike
+                hvl = strike
+
             prev_cumulative = curr_cumulative
-            
-            # 2. Check Net GEX Flip (Local Zero Gamma)
-            curr_net_gex = self.strike_data[strike]["net_gex"]
-            
-            if prev_net_gex is not None:
-                 if (prev_net_gex > 0 and curr_net_gex < 0) or (prev_net_gex < 0 and curr_net_gex > 0):
-                     # Found a local flip
-                     # Store strike, and the magnitude of the flip (sum of abs values)
-                     magnitude = abs(prev_net_gex) + abs(curr_net_gex)
-                     net_gex_flips.append({
-                         "strike": strike,
-                         "prev_strike": prev_strike,
-                         "magnitude": magnitude,
-                         "distance_to_spot": abs(strike - self.spot_price) if self.spot_price else float('inf')
-                     })
-            
-            prev_net_gex = curr_net_gex
-            prev_strike = strike
 
-        # If no global flip found, or if it's at the very edge (trivial), use major Net GEX flip
-        # Trivial check: if hvl is the first or last strike, it's likely just an artifact of starting at 0
-        is_trivial_hvl = hvl == sorted_strikes[0] or hvl == sorted_strikes[-1]
-        
-        if (hvl is None or is_trivial_hvl) and net_gex_flips:
-            # Find the "major" flip. 
-            # We prioritize flips closest to spot price to find the relevant trading level.
-            # Alternatively, we could prioritize magnitude. 
-            # Let's sort by distance to spot first, then magnitude.
-            
-            # Filter for flips within reasonable range if possible, or just take closest
-            best_flip = min(net_gex_flips, key=lambda x: x["distance_to_spot"])
-            
-            hvl = best_flip["strike"]
-            # If we didn't have a gamma flip, we can use this as a proxy or leave it None
-            # Keeping gamma_flip strictly for cumulative zero crossing is more accurate to definition.
-
-        # If still no HVL (very rare), find strike closest to zero cumulative GEX (absolute minimum)
-        if hvl is None and sorted_strikes:
-            min_abs_cumulative = float("inf")
-            for strike in sorted_strikes:
-                abs_cumulative = abs(self.strike_data[strike]["cumulative_gex"])
-                if abs_cumulative < min_abs_cumulative:
-                    min_abs_cumulative = abs_cumulative
-                    hvl = strike
-                    
         return {
             "call_resistance": {
                 "strike": call_resistance,

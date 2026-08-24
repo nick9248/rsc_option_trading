@@ -1487,7 +1487,7 @@ Spot Price: $64,371.10
 KEY LEVELS:
   Call Resistance: $65,500 (Net GEX: +1,270,527.18 USD)
   Put Support: $65,000 (Net GEX: -2,629,273.22 USD)
-  Cumulative GEX Zero Strike: $64,500 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
+  Cumulative GEX Zero Strike: Not detected
 
 EXPOSURES -- HOLDER SIDE (assumes every open contract is held long)
 --------------------------------------------------------------------------------
@@ -1522,7 +1522,7 @@ Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
     63,000  -2,135,254.83      -40.7524  -3,820,358.86      -71.7648  
     63,500   -136,862.55       -2.7622  -3,957,221.41      -74.5270  
     64,000   -651,886.39      -11.5160  -4,609,107.80      -86.0430  
-    64,500    +78,146.04       -1.7043  -4,530,961.76      -87.7473  Cumulative GEX Zero Strike
+    64,500    +78,146.04       -1.7043  -4,530,961.76      -87.7473  
     65,000  -2,629,273.22     -151.9756  -7,160,234.98     -239.7229  Put Support
     65,500  +1,270,527.18      +17.5683  -5,889,707.80     -222.1546  Call Resistance
     66,000  +1,253,406.02      +15.1846  -4,636,301.79     -206.9700  
@@ -2145,7 +2145,7 @@ Spot Price: $64,371.10
 KEY LEVELS:
   Call Resistance: $69,000 (Net GEX: +67,275.27 USD)
   Put Support: $61,000 (Net GEX: -84,381.51 USD)
-  Cumulative GEX Zero Strike: $57,000 (strike-axis cumulative-GEX sign change -- NOT a re-priced gamma flip; see GAMMA PROFILE below)
+  Cumulative GEX Zero Strike: Not detected
 
 EXPOSURES -- HOLDER SIDE (assumes every open contract is held long)
 --------------------------------------------------------------------------------
@@ -2171,7 +2171,7 @@ GEX/DEX BY STRIKE:
 Net GEX = assumed-dealer gamma exposure, USD per 1% spot move.
     Strike   Net GEX(USD)  Net DEX(BTC)   Cum GEX(USD)  Cum DEX(BTC)  Notes
     ------        -------       -------        -------       -------  -----
-    57,000     -3,273.32       -0.1118     -3,273.32       -0.1118  Cumulative GEX Zero Strike
+    57,000     -3,273.32       -0.1118     -3,273.32       -0.1118  
     58,000         +0.00       +0.0000     -3,273.32       -0.1118  
     59,000    -15,721.65       -0.5128    -18,994.97       -0.6246  
     60,000    -59,732.71       -1.9496    -78,727.68       -2.5742  
