@@ -371,6 +371,20 @@ class VolatilitySurfaceCalculator:
            ``delta``, that are QUOTED (``bid_price > 0 or ask_price > 0``
            -- missing/None treated as 0), and with
            ``0.02 <= |delta| <= 0.98``.
+
+           Task Wave-J-E Fix 2: a side counts as quoted only when it is
+           ALSO not flagged estimated (``bid_is_estimated``/
+           ``ask_is_estimated`` -- see migration 025 and
+           HourlyAggregationService._aggregate_instrument). Historical
+           instruments sourced from hourly_snapshots (DatabaseRepository.
+           get_hourly_snapshots_for_hour) never carry a real order-book
+           quote -- bid_price/ask_price there are always trade-derived,
+           and the estimated flag is True specifically when there was NO
+           trade on that side at all that hour (a pure vwap+/-0.5% guess,
+           not a genuine market reading). Missing flag keys (the live
+           on-chain path, which always carries real ticker-sourced bid/ask
+           and never sets these keys) default to "not estimated" so live
+           behavior is unchanged.
         2. Sort by |delta| ascending; average IV (and strike) at equal
            |delta| rather than keeping duplicates as separate points.
 
@@ -396,7 +410,15 @@ class VolatilitySurfaceCalculator:
 
             bid_price = inst.get("bid_price") or 0
             ask_price = inst.get("ask_price") or 0
-            if not (bid_price > 0 or ask_price > 0):
+            # Task Wave-J-E Fix 2: a fallback (no-trade-evidence) value on
+            # a side must not count as "quoted" for that side -- only a
+            # positive price that is NOT flagged estimated does. Missing
+            # keys (live path) default to False (not estimated), matching
+            # the live path's always-real bid/ask and preserving prior
+            # behavior there exactly.
+            bid_quoted = bid_price > 0 and not inst.get("bid_is_estimated", False)
+            ask_quoted = ask_price > 0 and not inst.get("ask_is_estimated", False)
+            if not (bid_quoted or ask_quoted):
                 continue
 
             abs_delta = abs(delta)

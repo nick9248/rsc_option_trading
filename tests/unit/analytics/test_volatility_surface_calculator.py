@@ -541,12 +541,18 @@ class TestRiskReversalSignConvention:
         assert skew.risk_reversal_25d == pytest.approx(-5.0)  # 30.0 - 35.0
 
 
-def _quoted_instrument(strike, option_type, delta, mark_iv, bid_price=1.0, ask_price=1.0):
+def _quoted_instrument(strike, option_type, delta, mark_iv, bid_price=1.0, ask_price=1.0,
+                        bid_is_estimated=False, ask_is_estimated=False):
     """
     Instrument dict for the delta-interpolation (RR25/BF25) tests
     (institutional_metrics_spec.md section 3(b)). Unlike ``_make_instrument``,
     includes bid_price/ask_price -- the "quoted" filter step 1 requires
     ``bid_price > 0 or ask_price > 0``.
+
+    Task Wave-J-E Fix 2: bid_is_estimated/ask_is_estimated default to False
+    (i.e. genuinely quoted), matching the live on-chain path's real
+    ticker-sourced bid/ask -- every pre-existing test using this helper
+    keeps its original "quoted" outcome unchanged.
     """
     return {
         "instrument_name": f"BTC-28MAR26-{int(strike)}-{option_type}",
@@ -560,6 +566,8 @@ def _quoted_instrument(strike, option_type, delta, mark_iv, bid_price=1.0, ask_p
         "delta": delta,
         "bid_price": bid_price,
         "ask_price": ask_price,
+        "bid_is_estimated": bid_is_estimated,
+        "ask_is_estimated": ask_is_estimated,
     }
 
 
@@ -666,6 +674,70 @@ class TestInterpolateIvAtDelta:
         # interpolation between the two quoted brackets (0.20/0.30) must
         # still land on 34.0, same as T3.1.
         assert point.iv == pytest.approx(34.0)
+
+
+class TestEstimatedQuoteExcludedFromQuotedFilter:
+    """
+    Task Wave-J-E: Fix 1 makes DatabaseRepository.get_hourly_snapshots_for_hour
+    return bid_price/ask_price for the first time. Fix 2 makes sure a
+    hourly_snapshots-sourced instrument whose bid/ask is a pure vwap+/-0.5%
+    fallback (bid_is_estimated/ask_is_estimated True -- migration 025) does
+    not silently pass the "quoted" filter as if it were a real, observed
+    quote.
+    """
+
+    def test_both_sides_estimated_excluded_even_though_prices_are_positive(self):
+        """A row where neither side has real trade evidence (both flags
+        True) must be excluded -- positive fallback prices alone are not
+        enough. Regression guard for the exact risk Fix 1 would otherwise
+        have unmasked: vwap+/-0.5% is always > 0, so the OLD bid_price > 0
+        or ask_price > 0 check alone would pass this instrument through."""
+        instruments = [
+            _quoted_instrument(90_000 * 1.25, "C", 0.25, 999.0,
+                                bid_price=0.049, ask_price=0.051,
+                                bid_is_estimated=True, ask_is_estimated=True),
+            _quoted_instrument(90_000 * 1.30, "C", 0.30, 32.0),
+            _quoted_instrument(90_000 * 1.20, "C", 0.20, 36.0),
+        ]
+        calc = VolatilitySurfaceCalculator(instruments, 90_000.0, "28MAR26")
+
+        point = calc.interpolate_iv_at_delta("C", 0.25)
+        # Same expectation as test_unquoted_instrument_excluded: the
+        # fully-estimated 999.0 IV point must not be picked directly.
+        assert point.iv == pytest.approx(34.0)
+
+    def test_one_side_genuinely_traded_still_counts_as_quoted(self):
+        """Only one side needs real trade evidence -- matches
+        HourlyAggregationService's guarantee that at least one of
+        bid_price/ask_price is trade-derived whenever the instrument
+        traded at all that hour (a row only exists in hourly_snapshots
+        because SOME trade occurred)."""
+        instruments = [
+            _quoted_instrument(90_000 * 1.25, "C", 0.25, 33.0,
+                                bid_price=0.049, ask_price=0.051,
+                                bid_is_estimated=False, ask_is_estimated=True),
+        ]
+        calc = VolatilitySurfaceCalculator(instruments, 90_000.0, "28MAR26")
+
+        points = calc._build_delta_points("C")
+        assert len(points) == 1
+        assert points[0]["iv"] == pytest.approx(33.0)
+
+    def test_missing_estimated_keys_default_to_quoted_matching_live_path(self):
+        """The live on-chain path never sets bid_is_estimated/ask_is_estimated
+        (its bid/ask always come from a real ticker) -- a missing key must
+        default to "not estimated", not exclude the instrument. This is
+        exactly what every pre-existing test in this file already relies on
+        via _quoted_instrument's own explicit False defaults; this test
+        additionally proves the calculator itself defaults correctly when
+        the keys are absent entirely from the dict (not merely False)."""
+        instrument = _quoted_instrument(90_000 * 1.25, "C", 0.25, 33.0)
+        del instrument["bid_is_estimated"]
+        del instrument["ask_is_estimated"]
+
+        calc = VolatilitySurfaceCalculator([instrument], 90_000.0, "28MAR26")
+        points = calc._build_delta_points("C")
+        assert len(points) == 1
 
     def test_delta_outside_valid_range_excluded(self):
         """Step 1: 0.02 <= |delta| <= 0.98 only. A |delta|=0.99 point is

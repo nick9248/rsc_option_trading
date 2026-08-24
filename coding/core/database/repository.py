@@ -2041,6 +2041,34 @@ class DatabaseRepository:
         Field renames: avg_delta->delta, avg_gamma->gamma, avg_theta->theta,
         avg_vega->vega (matching the live on-chain analysis input contract).
 
+        Task Wave-J-E Fix 1: bid_price/ask_price are now selected too.
+        VolatilitySurfaceCalculator._build_delta_points requires an instrument
+        to be "quoted" (bid_price > 0 or ask_price > 0) before it will trust
+        its delta for RR25/BF25 interpolation. Without these two columns in
+        this SELECT, every instrument dict this method returned was missing
+        both keys, so ``inst.get("bid_price") or 0`` / ``inst.get("ask_price")
+        or 0`` always evaluated to 0 -- the quoted filter failed for every
+        row unconditionally, and VolatilityReconstructionService silently
+        persisted skew_25d/put_25d_iv/call_25d_iv as None ("insufficient
+        chain") for every historical hour it ever processed, regardless of
+        the real market data underneath. hourly_snapshots.bid_price/
+        ask_price are populated (as trade-derived estimates -- see Task
+        Wave-J-E Fix 2 / bid_is_estimated, ask_is_estimated below) by
+        HourlyAggregationService._aggregate_instrument; they were simply
+        never read back out by this method.
+
+        Fix 2 (same task): bid_is_estimated/ask_is_estimated are also
+        selected. hourly_snapshots.bid_price/ask_price are ALWAYS derived
+        from trade prices (HourlyAggregationService), never a real
+        order-book quote -- these two flags disclose, per side, whether
+        that side's value is backed by an actual observed trade that hour
+        (False) or is the vwap+/-0.5% fallback used when no trade occurred
+        on that side (True). VolatilitySurfaceCalculator._build_delta_points
+        uses them to keep the "quoted" filter meaningful now that this
+        method actually returns bid/ask: a row where BOTH sides are pure
+        fallback (no real trade evidence at all) must not silently pass as
+        if it were a genuine quote.
+
         Args:
             currency: Currency symbol (e.g., "BTC", "ETH").
             hour: Snapshot hour (timezone-naive UTC).
@@ -2048,14 +2076,16 @@ class DatabaseRepository:
 
         Returns:
             List of instrument dicts with strike, option_type, mark_iv, delta,
-            gamma, theta, vega, open_interest, index_price.
+            gamma, theta, vega, open_interest, index_price, bid_price,
+            ask_price, bid_is_estimated, ask_is_estimated.
         """
         with self._db_cursor() as cursor:
             cursor.execute("""
                 SELECT
                     instrument_name, strike, option_type, mark_iv,
                     avg_delta, avg_gamma, avg_theta, avg_vega,
-                    open_interest, index_price
+                    open_interest, index_price,
+                    bid_price, ask_price, bid_is_estimated, ask_is_estimated
                 FROM hourly_snapshots
                 WHERE currency = %s
                   AND snapshot_hour = %s
@@ -2068,10 +2098,11 @@ class DatabaseRepository:
                 "instrument_name", "strike", "option_type", "mark_iv",
                 "delta", "gamma", "theta", "vega",
                 "open_interest", "index_price",
+                "bid_price", "ask_price", "bid_is_estimated", "ask_is_estimated",
             ]
             numeric_fields = {
                 "strike", "mark_iv", "delta", "gamma", "theta", "vega",
-                "open_interest", "index_price",
+                "open_interest", "index_price", "bid_price", "ask_price",
             }
             instruments = []
             for row in cursor.fetchall():
@@ -2084,6 +2115,12 @@ class DatabaseRepository:
                 # not None, or VolatilitySurfaceCalculator._calculate_pc_by_moneyness
                 # crashes on `buckets[bucket]["call_oi"] += oi`.
                 inst["open_interest"] = inst["open_interest"] or 0
+                # bid_is_estimated/ask_is_estimated are NULL for any row
+                # written before Task Wave-J-E's migration 025 (backfilled
+                # DEFAULT TRUE) -- coerce None to True (conservative: treat
+                # unknown provenance as estimated, matching the DEFAULT).
+                inst["bid_is_estimated"] = True if inst["bid_is_estimated"] is None else bool(inst["bid_is_estimated"])
+                inst["ask_is_estimated"] = True if inst["ask_is_estimated"] is None else bool(inst["ask_is_estimated"])
                 instruments.append(inst)
             return instruments
 
