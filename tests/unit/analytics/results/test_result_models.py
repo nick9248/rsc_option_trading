@@ -622,10 +622,21 @@ def test_realized_volatility_result_properties():
     assert rv.rv_30d == 0.50
 
 
-def test_realized_volatility_result_missing_window_defaults_zero():
-    rv = RealizedVolatilityResult(rv_by_window={10: 0.40})
-    assert rv.rv_20d == 0.0
-    assert rv.rv_30d == 0.0
+def test_realized_volatility_result_missing_window_is_none_not_zero():
+    """
+    Task Wave-J-D Fix 1: calculate_realized_volatility_multi_window
+    (market_wide_calculator.py, Wave-H-D) deliberately OMITS a window key
+    from rv_by_window when that window's RV couldn't be computed --
+    "missing means missing", never a fabricated 0.0. These properties used
+    to convert that omission right back into a fabricated 0.0 via
+    `.get(window, 0.0)`, silently undoing the Wave-H-D fix one layer up.
+    A missing window must read as None (insufficient data), never as a
+    measured "zero realized volatility".
+    """
+    rv = RealizedVolatilityResult(rv_by_window={30: 0.271})
+    assert rv.rv_10d is None
+    assert rv.rv_20d is None
+    assert rv.rv_30d == pytest.approx(0.271)
 
 
 def test_volatility_cone_result_properties():
@@ -633,6 +644,16 @@ def test_volatility_cone_result_properties():
     assert cone.cone_10d_pctile == 25.0
     assert cone.cone_20d_pctile == 50.0
     assert cone.cone_30d_pctile == 75.0
+
+
+def test_volatility_cone_result_missing_window_is_none_not_zero():
+    """Same fabrication bug class as RealizedVolatilityResult above, for
+    the volatility cone's per-window percentile properties (Task
+    Wave-J-D Fix 1)."""
+    cone = VolatilityConeResult(percentile_by_window={30: 92.0})
+    assert cone.cone_10d_pctile is None
+    assert cone.cone_20d_pctile is None
+    assert cone.cone_30d_pctile == pytest.approx(92.0)
 
 
 def _make_market_wide_result(**overrides) -> MarketWideResult:
@@ -762,6 +783,28 @@ def test_market_wide_result_to_flat_dict_omits_keys_for_none_sections():
     assert flat["spot_price"] == 95000.0
     assert flat["dvol"] == 65.0
     assert flat["iv_percentile_365d"] == 50.0
+
+
+def test_market_wide_result_to_flat_dict_preserves_none_for_missing_window():
+    """
+    Task Wave-J-D Fix 1: a sub-result can be present (not None) while one
+    of its per-window values is genuinely missing -- to_flat_dict() must
+    not re-fabricate a 0.0 for that window on the way out. `None` is still
+    consistent with this method's own "downstream readers already use
+    mw.get(key) or default" contract (None is falsy).
+    """
+    mw = _make_market_wide_result(
+        realized_volatility=RealizedVolatilityResult(rv_by_window={30: 0.271}),
+        volatility_cone=VolatilityConeResult(percentile_by_window={30: 92.0}),
+    )
+    flat = mw.to_flat_dict()
+
+    assert flat["rv_10d"] is None
+    assert flat["rv_20d"] is None
+    assert flat["rv_30d"] == pytest.approx(0.271)
+    assert flat["cone_10d_pctile"] is None
+    assert flat["cone_20d_pctile"] is None
+    assert flat["cone_30d_pctile"] == pytest.approx(92.0)
 
 
 # ---------------------------------------------------------------------------

@@ -224,17 +224,27 @@ class RealizedVolatilityResult:
 
     rv_by_window: Dict[int, float]  # {10: .., 20: .., 30: ..}, decimals (0.585 = 58.5%)
 
+    # Task Wave-J-D Fix 1: ``calculate_realized_volatility_multi_window``
+    # (market_wide_calculator.py, Wave-H-D) deliberately OMITS a window key
+    # from ``rv_by_window`` when that window's RV couldn't be computed --
+    # "missing means missing", never a fabricated 0.0. These properties
+    # used to convert that deliberate omission right back into a fabricated
+    # ``0.0`` via ``.get(window, 0.0)``, silently defeating the Wave-H-D
+    # fix one layer up (a ``0.0`` here reads as "measured zero realized
+    # vol", not "not computed", and feeds straight into score_vrp's
+    # forward-RV-correction formula as a real number). ``.get(window)``
+    # (no default) preserves the None instead.
     @property
-    def rv_10d(self) -> float:
-        return self.rv_by_window.get(10, 0.0)
+    def rv_10d(self) -> Optional[float]:
+        return self.rv_by_window.get(10)
 
     @property
-    def rv_20d(self) -> float:
-        return self.rv_by_window.get(20, 0.0)
+    def rv_20d(self) -> Optional[float]:
+        return self.rv_by_window.get(20)
 
     @property
-    def rv_30d(self) -> float:
-        return self.rv_by_window.get(30, 0.0)
+    def rv_30d(self) -> Optional[float]:
+        return self.rv_by_window.get(30)
 
 
 @dataclass(frozen=True)
@@ -276,17 +286,21 @@ class VolatilityConeResult:
     # (SynthesisMapper, existing tests) are unaffected by its absence.
     stats_by_window: Dict[int, VolatilityConeWindowStats] = field(default_factory=dict)
 
+    # Task Wave-J-D Fix 1: same fabrication as RealizedVolatilityResult's
+    # rv_Xd properties above -- a window absent from ``percentile_by_window``
+    # means that window's cone percentile was never computed, not measured
+    # as the 0th percentile. ``.get(window)`` (no default) preserves None.
     @property
-    def cone_10d_pctile(self) -> float:
-        return self.percentile_by_window.get(10, 0.0)
+    def cone_10d_pctile(self) -> Optional[float]:
+        return self.percentile_by_window.get(10)
 
     @property
-    def cone_20d_pctile(self) -> float:
-        return self.percentile_by_window.get(20, 0.0)
+    def cone_20d_pctile(self) -> Optional[float]:
+        return self.percentile_by_window.get(20)
 
     @property
-    def cone_30d_pctile(self) -> float:
-        return self.percentile_by_window.get(30, 0.0)
+    def cone_30d_pctile(self) -> Optional[float]:
+        return self.percentile_by_window.get(30)
 
 
 @dataclass(frozen=True)
@@ -454,6 +468,14 @@ class MarketWideResult:
 
         rv = self.realized_volatility
         if rv is not None:
+            # Task Wave-J-D Fix 1: rv_Xd is now Optional[float] -- None when
+            # that specific window wasn't computed (not the whole section
+            # missing, which is the `rv is not None` check above). A
+            # present-but-None value is still consistent with this method's
+            # own "omission is equivalent to an absent key" contract, since
+            # every documented consumer already reads via `mw.get(key) or
+            # default` (None is falsy) rather than assuming presence means
+            # non-None.
             flat["rv_10d"] = rv.rv_10d
             flat["rv_20d"] = rv.rv_20d
             flat["rv_30d"] = rv.rv_30d
@@ -465,6 +487,7 @@ class MarketWideResult:
 
         cone = self.volatility_cone
         if cone is not None:
+            # Same Optional[float]-per-window note as rv_Xd above.
             flat["cone_10d_pctile"] = cone.cone_10d_pctile
             flat["cone_20d_pctile"] = cone.cone_20d_pctile
             flat["cone_30d_pctile"] = cone.cone_30d_pctile

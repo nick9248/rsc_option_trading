@@ -264,8 +264,11 @@ class MarketWideMetrics:
     term_structure_spread_signed: Optional[float] = None  # signed pts (back - front) — used for display
     iv_by_dte: Dict[int, float] = field(default_factory=dict)
 
-    # Realized vol. None exactly when MarketWideResult.realized_volatility
-    # is None (the whole RV calculation never ran) -- NOT a measured 0.0.
+    # Realized vol. None when MarketWideResult.realized_volatility is None
+    # (the whole RV calculation never ran), OR when that specific window
+    # was never computed (Task Wave-J-D Fix 1 -- RealizedVolatilityResult's
+    # rv_10d/rv_20d/rv_30d properties are themselves Optional[float] now,
+    # per-window) -- NEITHER case is a measured 0.0.
     rv_10d: Optional[float] = None
     rv_20d: Optional[float] = None
     rv_30d: Optional[float] = None
@@ -2814,10 +2817,22 @@ class SynthesisMapper:
         # returned None) -- genuinely missing, not a measured 0.0. Preserve
         # None so score_vrp's None branch (not a fabricated-zero branch)
         # fires downstream.
+        #
+        # Task Wave-J-D Fix 1: `rv is not None` alone used to be sufficient
+        # here because RealizedVolatilityResult.rv_10d/rv_20d/rv_30d always
+        # returned a float (fabricating 0.0 via `.get(window, 0.0)` when
+        # that specific window was never computed) -- silently undoing
+        # Wave-H-D's deliberate per-window omission one layer up, and
+        # making score_vrp's "stale-data correction skipped, RV window
+        # unavailable" branch unreachable in practice (it only ever saw a
+        # real float or the coarser all-sections-None case). The properties
+        # are now Optional[float]; guard each window independently so a
+        # per-window None survives to score_vrp instead of being multiplied
+        # into a fabricated `0.0 * 100`.
         rv = mw.realized_volatility
-        rv_10d = (rv.rv_10d * 100) if rv is not None else None
-        rv_20d = (rv.rv_20d * 100) if rv is not None else None
-        rv_30d = (rv.rv_30d * 100) if rv is not None else None
+        rv_10d = (rv.rv_10d * 100) if (rv is not None and rv.rv_10d is not None) else None
+        rv_20d = (rv.rv_20d * 100) if (rv is not None and rv.rv_20d is not None) else None
+        rv_30d = (rv.rv_30d * 100) if (rv is not None and rv.rv_30d is not None) else None
 
         # API funding values are also decimals (e.g. -0.000201 = -0.0201%).
         # Multiply by 100 so score_funding thresholds (5/10/20%) work correctly.

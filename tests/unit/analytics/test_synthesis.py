@@ -48,6 +48,7 @@ from coding.core.analytics.results.market_wide_results import (
     RealizedVolatilityResult,
     TermStructureResult,
     VarianceRiskPremiumResult,
+    VolatilityConeResult,
 )
 from coding.core.analytics.results.vol_surface_results import (
     MoneynessBucket,
@@ -728,6 +729,50 @@ class TestScoreVRP:
         assert "abnormally quiet" in reason
         # Score should be based on raw VRP (8.0) → between 5 and 10 → score 1.0
         assert score == 1.0
+
+    def test_cone_high_with_missing_rv_windows_skips_correction(self):
+        """cone > 85 but rv_10d/rv_20d unavailable: the forward-VRP
+        correction must be skipped (disclosed), not computed from a
+        fabricated 0.0."""
+        score, _, reason = ScoringEngine.score_vrp(
+            vrp=8.0, rv_10d=None, rv_20d=None, rv_30d=50.0, cone_30d_pctile=90,
+        )
+        assert "forward-VRP correction skipped" in reason
+        assert "Forward VRP" not in reason
+        assert score == 1.0
+
+    def test_missing_rv_windows_produce_a_materially_different_score_than_fabricated_zero_would(self):
+        """
+        Task Wave-J-D Fix 1 verification: this proves the audit's claim
+        that a fabricated ``0.0`` RV (the pre-fix
+        RealizedVolatilityResult.rv_10d/rv_20d behavior when a window was
+        never computed) actually changes the resulting score here, not
+        just the narrative text.
+
+        Pre-fix (fabricated 0.0): rv_10d=rv_20d=0.0 -> forward_rv =
+        (0.0+0.0)/2 = 0.0 -> forward_vrp = (vrp + rv_30d) - forward_rv =
+        58.0 -> effective_vrp=58.0 -> score 2.0 ("extremely rich").
+
+        Post-fix (genuine None -- what the mapper now actually produces
+        for an omitted window): the "correction skipped" branch fires,
+        effective_vrp stays the raw vrp=8.0 -> score 1.0 ("moderate
+        sell-vol edge"). A materially different score (2.0 vs 1.0), not a
+        cosmetic difference in wording alone -- this is exactly why
+        Wave-H-D's per-window None needed to survive the property/mapper
+        layer intact.
+        """
+        score_none, _, reason_none = ScoringEngine.score_vrp(
+            vrp=8.0, rv_10d=None, rv_20d=None, rv_30d=50.0, cone_30d_pctile=90,
+        )
+        score_fabricated, _, reason_fabricated = ScoringEngine.score_vrp(
+            vrp=8.0, rv_10d=0.0, rv_20d=0.0, rv_30d=50.0, cone_30d_pctile=90,
+        )
+
+        assert score_none == 1.0
+        assert "forward-VRP correction skipped" in reason_none
+        assert score_fabricated == 2.0
+        assert "Forward VRP" in reason_fabricated
+        assert score_none != score_fabricated
 
 
 # =============================================================================
@@ -1451,6 +1496,37 @@ class TestBuildMarketWide:
         assert market.term_structure_spread is None
         assert market.term_structure_spread_signed is None
         assert market.futures_basis == {}
+
+    def test_partial_rv_and_cone_windows_stay_none_not_fabricated_zero(self):
+        """
+        Task Wave-J-D Fix 1: RealizedVolatilityResult/VolatilityConeResult
+        can be PRESENT (not None) while one specific window is missing
+        (Wave-H-D's deliberate per-window omission from rv_by_window /
+        percentile_by_window when that window's RV/percentile couldn't be
+        computed). The old rv_Xd/cone_Xd_pctile properties fabricated a
+        0.0 for the missing window via `.get(window, 0.0)`, and the
+        mapper's `rv is not None` guard alone couldn't catch that -- only
+        the coarser "whole section missing" case. Only the 30d window is
+        present here; 10d/20d must reach MarketWideMetrics as None.
+        """
+        mw = MarketWideResult(
+            spot_price=65000.0, currency="BTC", dvol=None, iv_percentile_365d=None,
+            aggregate_gex_dex=None, term_structure=None, futures_basis=None,
+            realized_volatility=RealizedVolatilityResult(rv_by_window={30: 0.271}),
+            variance_risk_premium=None,
+            volatility_cone=VolatilityConeResult(percentile_by_window={30: 92.0}),
+            perpetual_funding=None, block_trades=None, cross_asset_correlation=None,
+            failed_sections=(),
+        )
+        result = make_onchain_result(market_wide=mw)
+        market = SynthesisMapper.build_market_wide(result)
+
+        assert market.rv_10d is None
+        assert market.rv_20d is None
+        assert market.rv_30d == pytest.approx(27.1)
+        assert market.cone_10d_pctile is None
+        assert market.cone_20d_pctile is None
+        assert market.cone_30d_pctile == pytest.approx(92.0)
 
     def test_present_but_null_funding_fields_stay_none_not_zero(self):
         """
