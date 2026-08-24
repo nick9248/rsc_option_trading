@@ -423,6 +423,24 @@ class TestScoreDEX:
         assert score == 1.0
         assert "DTE≤2" in reason
 
+    def test_invalid_spot_is_insufficient_data_not_fabricated_btc_price(self):
+        """
+        Task Wave-J-C Fix 5: spot<=0 used to silently substitute a
+        BTC-shaped 100000.0 and score a fabricated dex_norm as if it were
+        real -- badly wrong for ETH or any other asset. Must weight-zero
+        with an explicit disclosure instead, like every other
+        insufficient-data input in this scorer set.
+        """
+        score, weight, reason = ScoringEngine.score_dex(600, spot=0.0)
+        assert weight == 0.0
+        assert score == 0.0
+        assert "insufficient data" in reason.lower()
+
+    def test_negative_spot_is_also_insufficient_data(self):
+        score, weight, reason = ScoringEngine.score_dex(600, spot=-5.0)
+        assert weight == 0.0
+        assert "insufficient data" in reason.lower()
+
 
 # =============================================================================
 # TESTS: score_max_pain_gravity — DTE-scaled weight
@@ -592,6 +610,23 @@ class TestScoreVannaCharm:
         _, _, none_reason = ScoringEngine.score_vanna_charm(net_vanna=None, net_charm=None)
         assert zero_reason != none_reason
         assert "insufficient data" not in zero_reason.lower()
+
+    def test_invalid_spot_keeps_real_signal_but_defaults_weight(self):
+        """
+        Task Wave-J-C Fix 5: spot<=0 used to silently substitute a
+        BTC-shaped 100000.0 to force a gamma-adjusted weight band out of
+        an invalid price. Unlike net_vanna/net_charm=None, an invalid
+        spot doesn't invalidate the vanna/charm SIGNAL itself (that's
+        independent of spot) -- only the GEX-based weight adjustment, so
+        the real signal is preserved and the weight falls back to this
+        function's own default/neutral band (0.3) rather than a
+        fabricated-price-derived band.
+        """
+        score, weight, _ = ScoringEngine.score_vanna_charm(
+            net_vanna=0.001, net_charm=50, iv_pctile=70,
+            gex_total=-6_000_000, spot=0.0)
+        assert score > 0  # real signal preserved
+        assert weight == 0.3  # neutral/default band, not gex-derived 0.4/0.15
 
 
 # =============================================================================
@@ -1048,6 +1083,32 @@ class TestClassifyVolRegime:
             skew_score=0, spot=100000)
         assert regime != VolRegime.EXPLOSIVE
 
+    def test_invalid_spot_skips_gex_checks_falls_through_to_iv_based(self):
+        """
+        Task Wave-J-C Fix 5: spot<=0 used to silently substitute a
+        BTC-shaped 100000.0 and keep classifying SUPPRESSED/EXPLOSIVE off
+        a fabricated gex_normalized -- badly wrong for ETH or any other
+        asset. GEX-based checks must be skipped (never fire SUPPRESSED/
+        EXPLOSIVE off an invalid spot), classification falls through to
+        the IV-only checks, and the skip is disclosed in reasons.
+        """
+        # Would classify SUPPRESSED at a real spot (same GEX as
+        # test_suppressed_with_normalized_gex above).
+        regime, reasons = RegimeClassifier.classify_vol_regime(
+            gex_total=150_000_000, iv_pctile_score=0, vrp_score=0,
+            skew_score=0, spot=0.0)
+        assert regime != VolRegime.SUPPRESSED
+        assert regime == VolRegime.NORMAL
+        assert any("spot" in r.lower() for r in reasons)
+
+    def test_invalid_spot_does_not_fire_explosive_either(self):
+        # Would classify EXPLOSIVE at a real spot (same inputs as
+        # test_explosive_with_negative_gex_high_iv_and_put_side_skew).
+        regime, _ = RegimeClassifier.classify_vol_regime(
+            gex_total=-150_000_000, iv_pctile_score=1, vrp_score=0,
+            skew_score=-1, spot=-1.0)
+        assert regime != VolRegime.EXPLOSIVE
+
 
 # =============================================================================
 # TESTS: classify_market_regime — RANGE_BOUND sub-types + TRANSITION magnitude
@@ -1444,6 +1505,39 @@ class TestGenerateRiskFactorsNoneRiskReversal:
             funding_8h=0.0, risk_reversal_25d=None,
         )
         assert "Extreme RR25" not in result
+
+
+# =============================================================================
+# TESTS: generate_risk_factors -- invalid spot (Task Wave-J-C Fix 5)
+# =============================================================================
+
+class TestGenerateRiskFactorsInvalidSpot:
+    """
+    spot<=0 used to silently substitute a BTC-shaped 100000.0 and keep
+    computing gex_norm as if that were a real price -- badly wrong for
+    ETH or any other asset. An invalid spot means GEX cannot be honestly
+    normalized -- matches the pre-existing cone_30d_pctile/funding_8h
+    "missing input is not a risk factor" convention in this same function.
+    """
+
+    def test_invalid_spot_skips_gex_risk_factor_not_fabricated(self):
+        from coding.core.analytics.synthesis import NarrativeGenerator
+        # Would report "Deeply negative GEX" at a real spot (-150M / 100k
+        # = -1500, well past the -50 threshold).
+        result = NarrativeGenerator.generate_risk_factors(
+            cone_30d_pctile=50.0, gex_total=-150_000_000, gamma_rolloff=None,
+            funding_8h=0.0, risk_reversal_25d=0.0, spot=0.0,
+        )
+        assert "Deeply negative GEX" not in result
+
+    def test_valid_spot_still_reports_deeply_negative_gex(self):
+        """Sanity check: the check itself still fires for a real spot."""
+        from coding.core.analytics.synthesis import NarrativeGenerator
+        result = NarrativeGenerator.generate_risk_factors(
+            cone_30d_pctile=50.0, gex_total=-150_000_000, gamma_rolloff=None,
+            funding_8h=0.0, risk_reversal_25d=0.0, spot=100000.0,
+        )
+        assert "Deeply negative GEX" in result
 
 
 # =============================================================================

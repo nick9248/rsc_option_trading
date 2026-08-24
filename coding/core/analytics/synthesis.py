@@ -413,9 +413,22 @@ class ScoringEngine:
 
         Thresholds normalized: dex/spot.
         At BTC $100K: ±0.005 = ±500, ±0.001 = ±100.
+
+        Task Wave-J-C Fix 5: ``spot <= 0`` used to silently substitute a
+        BTC-shaped 100000.0 and keep scoring as if that were a real
+        measurement -- badly distorting dex_norm (and therefore this
+        score) for ETH or any other asset, or simply masking a genuine
+        upstream spot-price failure. Callers always pass the real
+        ``market.spot_price``/expiry forward price (never omit ``spot``
+        to fall on the default), so an invalid value here means that
+        upstream reading was itself invalid -- treated the same as every
+        other "insufficient data" input in this scorer set: weight zero,
+        explicit disclosure, no fabricated score.
         """
         if spot <= 0:
-            spot = 100000.0
+            logger.warning(
+                f"score_dex: spot={spot} is invalid (<=0) — cannot normalize DEX, weight zero")
+            return (0.0, 0.0, "DEX: insufficient data (invalid spot price) — weight zero")
         dex_norm = total_dex / spot
 
         if dex_norm > 0.005:
@@ -676,10 +689,22 @@ class ScoringEngine:
 
         combined = (vanna_signal + charm_signal) / 2
 
-        # Gamma-adjusted weight
-        if spot <= 0:
-            spot = 100000.0
-        gex_normalized = gex_total / spot
+        # Gamma-adjusted weight. Task Wave-J-C Fix 5: ``spot <= 0`` used
+        # to silently substitute a BTC-shaped 100000.0 to force a
+        # gamma_normalized reading out of an invalid price -- badly
+        # distorting which weight band this fell into for ETH or any
+        # other asset. Unlike net_vanna/net_charm=None above, an invalid
+        # spot here doesn't invalidate the vanna/charm signal itself
+        # (``combined``, already computed) -- only the GEX-based weight
+        # adjustment. Fall back to the same neutral/default weight this
+        # function already uses for the middle GEX band, and disclose why.
+        if spot > 0:
+            gex_normalized = gex_total / spot
+        else:
+            logger.warning(
+                f"score_vanna_charm: spot={spot} is invalid (<=0) — cannot "
+                "gamma-adjust the weight, using default weight")
+            gex_normalized = 0.0
         if gex_normalized < -50:
             weight = 0.4
         elif gex_normalized > 50:
@@ -1146,16 +1171,31 @@ class RegimeClassifier:
         value and why a full HistoricalNormalizer percentile (the
         architecturally correct fix) is a separate, larger change flagged
         as a follow-up rather than done here.
+
+        Task Wave-J-C Fix 5: ``spot <= 0`` used to silently substitute a
+        BTC-shaped 100000.0 and keep classifying as if that were a real
+        price -- badly distorting gex_normalized (and therefore the
+        SUPPRESSED/EXPLOSIVE regime decision) for ETH or any other
+        asset, or masking a genuine upstream spot-price failure. An
+        invalid spot means GEX cannot be honestly normalized, so the two
+        GEX-gated branches (SUPPRESSED, EXPLOSIVE) are skipped entirely
+        -- classification falls through to the IV-only ELEVATED/NORMAL
+        checks below, and the skip is disclosed in ``reasons`` rather
+        than silently narrowing the decision tree.
         """
-        if spot <= 0:
-            spot = 100000.0
-        gex_normalized = gex_total / spot
+        gex_normalized = None
+        if spot > 0:
+            gex_normalized = gex_total / spot
+        else:
+            logger.warning(
+                f"classify_vol_regime: spot={spot} is invalid (<=0) — skipping "
+                "GEX-based SUPPRESSED/EXPLOSIVE checks")
         reasons = []
 
-        if gex_normalized > GEX_NORMALIZED_REGIME_THRESHOLD and iv_pctile_score <= 0:
+        if gex_normalized is not None and gex_normalized > GEX_NORMALIZED_REGIME_THRESHOLD and iv_pctile_score <= 0:
             regime = VolRegime.SUPPRESSED
             reasons.append(f"Positive GEX (norm {gex_normalized:+.1f}) + low IV → Volatility suppressed")
-        elif gex_normalized < -GEX_NORMALIZED_REGIME_THRESHOLD and iv_pctile_score >= 1 and skew_score <= -1:
+        elif gex_normalized is not None and gex_normalized < -GEX_NORMALIZED_REGIME_THRESHOLD and iv_pctile_score >= 1 and skew_score <= -1:
             regime = VolRegime.EXPLOSIVE
             reasons.append(f"Negative GEX (norm {gex_normalized:+.1f}) + high IV + steep put-side skew → Explosive regime")
         elif iv_pctile_score >= 1 and (vrp_score >= 1 or term_structure_score <= -1):
@@ -1167,6 +1207,9 @@ class RegimeClassifier:
         else:
             regime = VolRegime.NORMAL
             reasons.append("Normal volatility regime")
+
+        if gex_normalized is None:
+            reasons.append("GEX-based regime checks skipped: spot price unavailable/invalid")
 
         return (regime, reasons)
 
@@ -1598,14 +1641,24 @@ class NarrativeGenerator:
             risks.append(
                 f"30d RV at {cone_30d_pctile:.0f}th percentile — recent extreme move may repeat or mean-revert violently")
 
-        # GEX threshold normalized by spot
-        if spot <= 0:
-            spot = 100000.0
-        gex_norm = gex_total / spot
-        if gex_norm < -50:
-            gex_m = gex_total / 1_000_000
-            risks.append(
-                f"Deeply negative GEX ({gex_m:.1f}M, norm {gex_norm:.0f}) — cascading stop-outs possible")
+        # GEX threshold normalized by spot. Task Wave-J-C Fix 5: ``spot
+        # <= 0`` used to silently substitute a BTC-shaped 100000.0 and
+        # keep computing gex_norm as if that were a real price -- badly
+        # distorting this check for ETH or any other asset, or masking a
+        # genuine upstream spot-price failure. An invalid spot means GEX
+        # cannot be honestly normalized here -- same "missing input is
+        # not itself a risk factor" convention as cone_30d_pctile/
+        # funding_8h above: skip the check rather than fabricate an input.
+        if spot > 0:
+            gex_norm = gex_total / spot
+            if gex_norm < -50:
+                gex_m = gex_total / 1_000_000
+                risks.append(
+                    f"Deeply negative GEX ({gex_m:.1f}M, norm {gex_norm:.0f}) — cascading stop-outs possible")
+        else:
+            logger.warning(
+                f"generate_risk_factors: spot={spot} is invalid (<=0) — skipping "
+                "GEX-based risk factor check")
 
         if gamma_rolloff is not None and gamma_rolloff.gamma_cliff_7d:
             near_expiries = [r.expiration for r in gamma_rolloff.rows if r.dte_days <= 7.0]
