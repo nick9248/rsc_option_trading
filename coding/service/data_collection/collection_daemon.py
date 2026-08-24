@@ -21,7 +21,7 @@ import signal
 import sys
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -146,6 +146,20 @@ class CollectionDaemon:
         Check for gaps since last run:
         - If gap < 1.5 hours: Attempt backfill
         - If gap > 1.5 hours: Log gap, start fresh
+
+        Task Wave-J-F Fix 3: ``_get_last_collection_time`` queries
+        ``TO_TIMESTAMP(trade_timestamp / 1000.0)``, which Postgres types as
+        ``timestamptz`` -- psycopg2 hands that back as a TIMEZONE-AWARE
+        datetime (verified live: the returned value carries a real
+        ``tzinfo``, e.g. ``+02:00``, not None). The old code compared this
+        against naive ``datetime.now()``, which raises
+        ``TypeError: can't subtract offset-naive and offset-aware
+        datetimes`` -- caught by this method's own broad ``except
+        Exception``, so the gap check silently never ran, on any host,
+        ever. Comparing against ``datetime.now(timezone.utc)`` (also
+        aware) instead fixes the crash; Python's aware-aware subtraction
+        correctly normalizes both operands to the same instant regardless
+        of which UTC offset each one happens to carry.
         """
         logger.info("Checking for gaps since last run...")
 
@@ -154,23 +168,24 @@ class CollectionDaemon:
             last_collection = self._get_last_collection_time()
 
             if last_collection:
-                gap = datetime.now() - last_collection
+                now_utc = datetime.now(timezone.utc)
+                gap = now_utc - last_collection
                 gap_hours = gap.total_seconds() / 3600
 
                 logger.info(f"  Last collection: {last_collection}")
-                logger.info(f"  Current time: {datetime.now()}")
+                logger.info(f"  Current time: {now_utc}")
                 logger.info(f"  Gap: {gap_hours:.2f} hours")
 
                 if gap_hours <= 1.5:
                     logger.info(f"  [OK] Gap is small ({gap_hours:.2f}h) - attempting backfill...")
-                    self._backfill_gap(last_collection, datetime.now())
+                    self._backfill_gap(last_collection, now_utc)
                 else:
                     logger.warning(f"  [WARN] Gap is large ({gap_hours:.2f}h) - cannot backfill")
                     logger.warning(f"      API only provides 1.5h lookback")
                     logger.warning(f"      Accepting gap and starting fresh")
 
                     # Log gap to database for tracking
-                    self._log_gap(last_collection, datetime.now(), gap_hours)
+                    self._log_gap(last_collection, now_utc, gap_hours)
             else:
                 logger.info(f"  No previous collection found - this is first run")
 
@@ -183,7 +198,11 @@ class CollectionDaemon:
         Get timestamp of last successful collection from database.
 
         Returns:
-            Datetime of last collection, or None if no previous runs
+            Timezone-AWARE datetime of the last collection (this query's
+            ``TO_TIMESTAMP(...)`` is a Postgres ``timestamptz``, and
+            psycopg2 returns those as aware ``datetime`` objects -- do not
+            subtract a naive datetime from this without converting first,
+            see ``_handle_startup``), or None if no previous runs.
         """
         try:
             # Get most recent trade timestamp (most reliable indicator)
@@ -212,16 +231,34 @@ class CollectionDaemon:
         Only works if gap < 1.5 hours (API limitation).
 
         Args:
-            start_time: Start of gap
-            end_time: End of gap
+            start_time: Start of gap (timezone-aware, see
+                ``_get_last_collection_time``).
+            end_time: End of gap (timezone-aware, see ``_handle_startup``).
         """
         logger.info(f"  Attempting backfill from {start_time} to {end_time}...")
 
         try:
+            # Task Wave-J-F Fix 3, second bug: ProspectiveCollector.
+            # collect_hour's `hour` convention is naive-UTC-VALUED (UTC
+            # wall-clock time with tzinfo stripped -- see
+            # prospective_collector.py's own default-hour fix), matching
+            # this codebase's "timestamp without time zone, UTC-valued"
+            # storage convention for collection-hour columns. start_time/
+            # end_time arrive here timezone-aware (not necessarily in UTC
+            # -- see _get_last_collection_time); converting to UTC BEFORE
+            # dropping tzinfo is required. The old code called
+            # start_time.replace(tzinfo untouched) with naive-LOCAL
+            # datetime.now() values, which would have handed collect_hour
+            # the wrong hour on any non-UTC host -- the same bug class this
+            # campaign has fixed repeatedly elsewhere (e.g.
+            # prospective_collector.py's own `hour` default).
+            start_time_utc = start_time.astimezone(timezone.utc).replace(tzinfo=None)
+            end_time_utc = end_time.astimezone(timezone.utc).replace(tzinfo=None)
+
             # Calculate hours to backfill
             hours_to_fill = []
-            current = start_time.replace(minute=0, second=0, microsecond=0)
-            end = end_time.replace(minute=0, second=0, microsecond=0)
+            current = start_time_utc.replace(minute=0, second=0, microsecond=0)
+            end = end_time_utc.replace(minute=0, second=0, microsecond=0)
 
             while current <= end:
                 hours_to_fill.append(current)
@@ -256,13 +293,20 @@ class CollectionDaemon:
         Log data gap to collection_logs table for quality tracking.
 
         Args:
-            start_time: Gap start
-            end_time: Gap end
+            start_time: Gap start (timezone-aware, see
+                ``_get_last_collection_time``).
+            end_time: Gap end (timezone-aware, see ``_handle_startup``).
             gap_hours: Gap duration in hours
         """
         try:
+            # Same naive-UTC-valued convention as _backfill_gap's
+            # collect_hour calls -- collection_hour columns in this
+            # codebase are "timestamp without time zone, UTC-valued".
+            collection_hour = start_time.astimezone(timezone.utc).replace(
+                minute=0, second=0, microsecond=0, tzinfo=None
+            )
             self.collector.repo.save_collection_log(
-                collection_hour=start_time.replace(minute=0, second=0, microsecond=0),
+                collection_hour=collection_hour,
                 status="gap_detected",
                 currencies_collected=self.currencies,
                 trades_collected=0,
