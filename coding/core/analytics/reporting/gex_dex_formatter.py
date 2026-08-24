@@ -120,7 +120,15 @@ def _key_levels_and_totals_lines(result: GexDexResult, dex_unit: str) -> list:
     lines.append(_SEPARATOR)
     holder_gamma = result.gamma_exposure_holder_total
     holder_dex = result.delta_exposure_holder_total
-    lines.append(f"  Gamma Exposure: {holder_gamma:+,.2f} USD per 1% move")
+    # Task Wave-J-B Fix 2: gamma_exposure_holder_total is None when at least
+    # one strike row's per-strike gamma_exposure_holder is itself unknown
+    # (a row built without spot_price -- see GexDexStrikeRow's docstring),
+    # not when it's genuinely zero. Report that honestly instead of raising
+    # on a None format spec.
+    if holder_gamma is not None:
+        lines.append(f"  Gamma Exposure: {holder_gamma:+,.2f} USD per 1% move")
+    else:
+        lines.append("  Gamma Exposure: Not available (missing holder gamma on one or more strikes)")
     lines.append(f"  Delta Exposure: {holder_dex:+,.4f} {dex_unit}")
     if holder_dex > 0:
         lines.append("  -> Option holders are net long delta")

@@ -73,8 +73,17 @@ def test_gex_dex_section_key_levels_and_totals():
     # assumption, just a different one from the dealer-view heuristic below.
     assert "EXPOSURES -- HOLDER SIDE (assumes every open contract is held long)" in text
     assert "no positioning assumption" not in text
-    # gamma_exposure_holder_total = row1(1.0+0.5) + row2(0.2+1.5) = 1.5 + 1.7 = 3.2
-    assert "Gamma Exposure: +3.20 USD per 1% move" in text
+    # Task Wave-J-B Fix 2: this fixture builds GexDexStrikeRow directly
+    # (like a real, unmigrated producer) without passing
+    # gamma_exposure_holder -- no spot_price is available at the row level
+    # to reproduce GexDexCalculator's USD-scaled formula, so that field's
+    # own __post_init__ fallback is now None (previously the raw, unscaled
+    # call_gamma+put_gamma sum -- 1.5 + 1.7 = 3.2 -- silently presented in
+    # the wrong unit at the same +,.2f precision as a real USD reading).
+    # gamma_exposure_holder_total's own fallback then can't sum a None
+    # into a float, so it is None too, and the formatter reports that
+    # honestly instead of rendering a wrong-unit number or crashing.
+    assert "Gamma Exposure: Not available (missing holder gamma on one or more strikes)" in text
     assert "Delta Exposure: -0.2000 BTC" in text  # = total_net_dex (holder), unchanged
     assert "Option holders are net short delta" in text
 
@@ -96,6 +105,36 @@ def test_gex_dex_section_key_levels_and_totals():
     # TestDealerDeltaIsNegatedHolderSum covers fixtures where the sign
     # differs from the holder-side reading.
     assert "Dealers net long delta; hedging back to neutral means selling the underlying" in text
+
+
+def test_gex_dex_section_renders_real_usd_scaled_holder_gamma():
+    """
+    Task Wave-J-B Fix 2: when gamma_exposure_holder IS explicitly passed on
+    every strike row (as GexDexCalculator._calculate_gex_dex, the real
+    production construction path, always does -- (call_gamma+put_gamma) *
+    spot^2 * 0.01), the formatter renders the real USD-scaled number, not
+    the "Not available" fallback message.
+    """
+    result = _make_result(
+        strike_rows=(
+            GexDexStrikeRow(
+                strike=95000.0, call_gamma=1.0, put_gamma=0.5, call_delta=0.6, put_delta=-0.4,
+                call_oi=100.0, put_oi=50.0, net_gex=1_000_000.0, net_dex=0.2,
+                net_gamma=0.5, cumulative_gex=500_000.0, cumulative_dex=-0.2,
+                gamma_exposure_holder=1_500_000.0,
+            ),
+            GexDexStrikeRow(
+                strike=90000.0, call_gamma=0.2, put_gamma=1.5, call_delta=0.3, put_delta=-0.7,
+                call_oi=20.0, put_oi=150.0, net_gex=-500_000.0, net_dex=-0.4,
+                net_gamma=-1.3, cumulative_gex=-500_000.0, cumulative_dex=-0.4,
+                gamma_exposure_holder=1_700_000.0,
+            ),
+        ),
+    )
+    text = format_gex_dex_section(result, "BTC")
+
+    assert "Gamma Exposure: +3,200,000.00 USD per 1% move" in text
+    assert "Not available" not in text
 
 
 def test_gex_dex_section_dealer_delta_uses_negated_holder_sum_with_audit_numbers():

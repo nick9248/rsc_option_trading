@@ -56,16 +56,26 @@ class GexDexStrikeRow:
     move). This is what ``GexDexCalculator._calculate_gex_dex`` (the real
     production construction path) computes and passes explicitly.
 
-    bugfix_spec.md Item 8 fix-review (Important #4): the ``__post_init__``
-    fallback below -- used ONLY when a caller constructs this row directly
-    without passing the field (e.g. a test or another producer that hasn't
-    migrated) -- has no S^2 available at the row level and defaults to the
-    RAW, UNSCALED ``call_gamma + put_gamma`` sum instead. That fallback
-    value is a placeholder for callers that don't care about this field's
-    accuracy, not a second unit convention -- do not read a row's
-    ``gamma_exposure_holder`` as USD-scaled unless it came from
-    ``GexDexCalculator``. Unifying the two construction paths' units is a
-    separate, riskier follow-up, not done here."""
+    Task Wave-J-B Fix 2 (was bugfix_spec.md Item 8 fix-review Important #4):
+    the ``__post_init__`` fallback below -- used ONLY when a caller
+    constructs this row directly without passing the field (e.g. a test or
+    another producer that hasn't migrated) -- has no ``spot_price`` available
+    at the row level, so it CANNOT reproduce the USD-scaled formula above.
+    It previously defaulted to the RAW, UNSCALED ``call_gamma + put_gamma``
+    sum instead -- roughly 10 orders of magnitude smaller than a real
+    USD-scaled reading -- with nothing in the data itself distinguishing
+    which convention a given row held. Real consumers
+    (``levels_table_builder.py``'s ``net_gex_holder``, the GUI's on-chain
+    tab) read this field unconditionally and render it next to USD-scaled
+    fields at the same precision, so a wrong-unit fallback value was
+    silently indistinguishable from a real reading.
+
+    Resolved: the fallback now leaves this field ``None`` instead of
+    guessing in the wrong unit. Any caller that constructs a row directly
+    without passing ``gamma_exposure_holder`` gets ``None`` and must handle
+    "no valid holder gamma" explicitly rather than silently receiving a
+    number in the wrong unit. Only ``GexDexCalculator`` (which has
+    ``spot_price``) is a reliable source of a real, USD-scaled reading."""
 
     delta_exposure_holder: Optional[float] = None
     """Alias of ``net_dex`` (same value, correctly-labelled name)."""
@@ -91,8 +101,12 @@ class GexDexStrikeRow:
     formula, which is genuinely two-sided."""
 
     def __post_init__(self) -> None:
-        if self.gamma_exposure_holder is None:
-            object.__setattr__(self, "gamma_exposure_holder", self.call_gamma + self.put_gamma)
+        # Task Wave-J-B Fix 2: no ``spot_price`` is available at the row
+        # level, so this fallback cannot reconstruct the USD-scaled formula
+        # ``GexDexCalculator`` uses. Leave it None (an explicit "not
+        # computed") rather than defaulting to the raw, unscaled
+        # ``call_gamma + put_gamma`` sum, which silently carried the wrong
+        # unit convention with no way for a reader to tell the two apart.
         if self.delta_exposure_holder is None:
             object.__setattr__(self, "delta_exposure_holder", self.net_dex)
         if self.dealer_gamma_exposure is None:
@@ -266,7 +280,21 @@ class GexDexResult:
             )
             object.__setattr__(self, "dealer_delta_exposure_total", dealer_delta_total)
         if self.gamma_exposure_holder_total is None:
-            total = sum(row.gamma_exposure_holder for row in self.strike_rows) if self.strike_rows else 0.0
+            # Task Wave-J-B Fix 2: GexDexStrikeRow.gamma_exposure_holder can
+            # now be None (a row built directly, without spot_price, that
+            # hit that field's own __post_init__ fallback -- see that
+            # docstring). Summing None into a float would raise TypeError;
+            # silently treating it as 0.0 would understate the total without
+            # any signal that data is missing. If every row has a real
+            # value, sum them; if the book is non-empty but ANY row's value
+            # is unknown, the total is unknown too -- None, not a partial
+            # sum presented as complete.
+            if not self.strike_rows:
+                total: Optional[float] = 0.0
+            elif all(row.gamma_exposure_holder is not None for row in self.strike_rows):
+                total = sum(row.gamma_exposure_holder for row in self.strike_rows)
+            else:
+                total = None
             object.__setattr__(self, "gamma_exposure_holder_total", total)
 
     def to_dict(self) -> Dict[str, Any]:

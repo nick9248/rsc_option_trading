@@ -245,6 +245,52 @@ def test_expiration_analysis_result_to_dict_none_short_term_levels():
 
 
 # ---------------------------------------------------------------------------
+# gex_dex_results — GexDexStrikeRow.__post_init__ gamma_exposure_holder
+# fallback (Task Wave-J-B Fix 2)
+# ---------------------------------------------------------------------------
+
+def _make_gex_dex_strike_row(**overrides) -> GexDexStrikeRow:
+    defaults = dict(
+        strike=95000.0, call_gamma=1.5, put_gamma=0.5, call_delta=0.6, put_delta=-0.4,
+        call_oi=100.0, put_oi=50.0, net_gex=1_000_000.0, net_dex=0.2,
+        net_gamma=1.0, cumulative_gex=1_000_000.0, cumulative_dex=0.2,
+    )
+    defaults.update(overrides)
+    return GexDexStrikeRow(**defaults)
+
+
+def test_gex_dex_strike_row_gamma_exposure_holder_fallback_is_none_when_not_passed():
+    """
+    Task Wave-J-B Fix 2: constructing a GexDexStrikeRow directly without
+    passing gamma_exposure_holder -- e.g. a test, or a producer other than
+    GexDexCalculator._calculate_gex_dex -- used to silently default to the
+    RAW, UNSCALED call_gamma+put_gamma sum (2.0 for this fixture), roughly
+    10 orders of magnitude smaller than a real USD-scaled reading, with
+    nothing in the row itself distinguishing the wrong-unit fallback from a
+    real value. There is no spot_price available at the row level to
+    reproduce GexDexCalculator's (call_gamma+put_gamma)*spot^2*0.01
+    formula, so the fallback is now an explicit None instead of a
+    wrong-unit guess.
+    """
+    row = _make_gex_dex_strike_row()
+
+    assert row.gamma_exposure_holder is None
+    # Confirms the fallback isn't just "None" by coincidence of some other
+    # default -- the unscaled sum it used to return is a real, different
+    # number from None, so this pins down the deliberate behavior change.
+    assert row.call_gamma + row.put_gamma == 2.0
+
+
+def test_gex_dex_strike_row_gamma_exposure_holder_explicit_value_is_preserved():
+    """The real production path (GexDexCalculator._calculate_gex_dex) always
+    passes gamma_exposure_holder explicitly, USD-scaled by spot^2 -- that
+    explicit value must pass through __post_init__ untouched."""
+    row = _make_gex_dex_strike_row(gamma_exposure_holder=1_500_000.0)
+
+    assert row.gamma_exposure_holder == 1_500_000.0
+
+
+# ---------------------------------------------------------------------------
 # gex_dex_results — GexDexResult.to_dict()
 # ---------------------------------------------------------------------------
 
@@ -282,20 +328,25 @@ def test_gex_dex_result_to_dict_matches_legacy_shape():
             "call_gamma": 1.5, "put_gamma": 0.5, "call_delta": 0.6, "put_delta": -0.4,
             "call_oi": 100.0, "put_oi": 50.0, "net_gex": 1_000_000.0, "net_dex": 0.2,
             "net_gamma": 1.0, "cumulative_gex": 1_000_000.0, "cumulative_dex": 0.2,
-            # bugfix_spec.md Item 8 (additive): gamma_exposure_holder
-            # defaults to call_gamma+put_gamma (unscaled fallback -- this
-            # fixture constructs GexDexStrikeRow directly, not through
-            # GexDexCalculator, which is the only path that scales it by
-            # S^2*0.01). dealer_gamma_exposure/delta_exposure_holder alias
-            # net_gex/net_dex. Wave-H-A (reverting Task G2-D fix 2 /
-            # commit cb1770a): dealer_delta_exposure is -net_dex =
-            # -0.2 (dealers short whatever holders hold), per
-            # GexDexCalculator's canonical SIGN CONVENTION -- NOT
-            # call_delta - put_delta (1.0, cb1770a's regression: the
+            # bugfix_spec.md Item 8 (additive): dealer_gamma_exposure/
+            # delta_exposure_holder alias net_gex/net_dex. Wave-H-A
+            # (reverting Task G2-D fix 2 / commit cb1770a): dealer_delta_
+            # exposure is -net_dex = -0.2 (dealers short whatever holders
+            # hold), per GexDexCalculator's canonical SIGN CONVENTION --
+            # NOT call_delta - put_delta (1.0, cb1770a's regression: the
             # gamma-style split applied to delta, which cb1770a claimed
             # matched dealer_gamma_exposure's convention but which the
             # class docstring reserves for gamma only).
-            "gamma_exposure_holder": 2.0,
+            #
+            # Task Wave-J-B Fix 2: gamma_exposure_holder used to default to
+            # the raw, unscaled call_gamma+put_gamma sum (2.0) here -- this
+            # fixture constructs GexDexStrikeRow directly, not through
+            # GexDexCalculator (the only path with spot_price available to
+            # scale it by S^2*0.01) -- silently presenting a ~10-orders-of-
+            # magnitude-wrong number as if it were a real USD reading. The
+            # fallback is now None: an explicit "not computed" instead of a
+            # wrong-unit guess.
+            "gamma_exposure_holder": None,
             "delta_exposure_holder": 0.2,
             "dealer_gamma_exposure": 1_000_000.0,
             "dealer_delta_exposure": -0.2,
@@ -324,7 +375,14 @@ def test_gex_dex_result_to_dict_matches_legacy_shape():
     # sums from strike_rows (each row's dealer_delta_exposure = -net_dex
     # at that strike = -0.2 for this single row) -- matches -total_net_dex
     # exactly now that the canonical negation convention is restored.
-    assert d["gamma_exposure_holder_total"] == 2.0
+    #
+    # Task Wave-J-B Fix 2: gamma_exposure_holder_total can no longer sum
+    # this fixture's single row (its own gamma_exposure_holder is now None,
+    # not the old unscaled 2.0 fallback) -- summing a None into a float
+    # would raise, so the total is None too, matching the per-row value's
+    # own "unknown, not fabricated" semantics rather than crashing or
+    # silently reporting a partial/wrong-unit sum.
+    assert d["gamma_exposure_holder_total"] is None
     assert d["delta_exposure_holder_total"] == 0.2
     assert d["dealer_gamma_exposure_total"] == 1_000_000.0
     assert d["dealer_delta_exposure_total"] == -0.2
@@ -337,6 +395,52 @@ def test_gex_dex_result_to_dict_includes_expiration_count_when_aggregate():
     result = _make_gex_dex_result(expiration_count=5)
     d = result.to_dict()
     assert d["expiration_count"] == 5
+
+
+def _make_gex_dex_result_with_rows(*rows: GexDexStrikeRow) -> GexDexResult:
+    cumulative_gex = {row.strike: row.cumulative_gex for row in rows}
+    cumulative_dex = {row.strike: row.cumulative_dex for row in rows}
+    return GexDexResult(
+        strike_rows=rows,
+        cumulative_gex=cumulative_gex,
+        cumulative_dex=cumulative_dex,
+        key_levels=GexDexKeyLevels(call_resistance=None, put_support=None, hvl=None, gamma_flip=None),
+        spot_price=95000.0,
+        total_net_gex=sum(row.net_gex for row in rows),
+        total_net_dex=sum(row.net_dex for row in rows),
+        currency="BTC",
+    )
+
+
+class TestGammaExposureHolderTotalAggregation:
+    """
+    Task Wave-J-B Fix 2: GexDexResult.gamma_exposure_holder_total's own
+    __post_init__ fallback sums strike_rows.gamma_exposure_holder. Now that
+    a row's own value can be None (this field's __post_init__ fallback,
+    used when a row is built directly without spot_price), that sum must
+    not silently treat a missing value as 0 (understating the total with no
+    signal anything is missing) or crash with TypeError -- it must resolve
+    to None whenever ANY row's contribution is unknown, matching that
+    per-row field's own "unknown, not fabricated" semantics.
+    """
+
+    def test_all_rows_have_real_values_sums_normally(self):
+        result = _make_gex_dex_result_with_rows(
+            _make_gex_dex_strike_row(strike=95000.0, gamma_exposure_holder=1_500_000.0),
+            _make_gex_dex_strike_row(strike=90000.0, gamma_exposure_holder=1_700_000.0),
+        )
+        assert result.gamma_exposure_holder_total == 3_200_000.0
+
+    def test_one_row_missing_value_makes_total_none_not_a_partial_sum(self):
+        result = _make_gex_dex_result_with_rows(
+            _make_gex_dex_strike_row(strike=95000.0, gamma_exposure_holder=1_500_000.0),
+            _make_gex_dex_strike_row(strike=90000.0),  # fallback -> None
+        )
+        assert result.gamma_exposure_holder_total is None
+
+    def test_empty_strike_rows_gives_zero_not_none(self):
+        result = _make_gex_dex_result_with_rows()
+        assert result.gamma_exposure_holder_total == 0.0
 
 
 # ---------------------------------------------------------------------------
