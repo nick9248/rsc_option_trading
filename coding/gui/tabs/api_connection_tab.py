@@ -27,8 +27,7 @@ from PySide6.QtCore import Qt, QThread, Signal
 from coding.gui.components.log_viewer import LogViewer, GuiLogHandler
 from coding.gui.theme.colors import Colors
 from coding.core.endpoints.deribit_endpoints import DeribitEndpoints
-from coding.service.deribit.deribit_api_service import DeribitApiService
-from coding.core.api.external_apis import ExternalMetricsFetcher
+from coding.service.api_testing.api_test_service import ApiTestService
 
 
 logger = logging.getLogger(__name__)
@@ -64,39 +63,27 @@ class ApiWorker(QThread):
         self.parameters = parameters
 
     def run(self) -> None:
-        """Execute the API call in background."""
+        """
+        Execute the API call in background.
+
+        Task Wave-J-F Fix 1: this used to own an endpoint-name -> service-
+        method dispatch table, per-endpoint parameter coercion, and
+        construct DeribitApiService/ExternalMetricsFetcher directly --
+        business logic that does not belong in a GUI worker (CLAUDE.md's
+        Code Quality Checklist). That all moved to
+        ``ApiTestService.invoke``, mirroring OnChainWorkflowService's
+        one-call pattern for on_chain_analysis_tab.py. This worker now also
+        handles the endpoints that used to run through the separate
+        ExternalApiWorker (Fear & Greed, CoinGecko) -- ApiTestService
+        dispatches to the right underlying client itself, so the GUI no
+        longer needs to know which endpoints are "external".
+        """
         self.started.emit()
 
         try:
-            with DeribitApiService() as service:
-                method_map = {
-                    "Test Connection": service.check_connectivity,
-                    "Get Expirations": service.get_expirations,
-                    "Get Instruments": service.get_instruments,
-                    "Get Book Summary": service.get_book_summary,
-                    "Get Ticker": service.get_ticker,
-                    "Get Order Book": service.get_order_book,
-                    "Get Funding Chart": service.get_funding_chart_data,
-                    "Get Historical Volatility": service.get_historical_volatility,
-                    "Get Volatility Index": service.get_volatility_index_data,
-                    "Get Last Trades": service.get_last_trades_by_currency,
-                    "Get Last Trades By Time": service.get_last_trades_by_currency_and_time,
-                    "Get TradingView Chart": service.get_tradingview_chart_data,
-                }
-
-                method = method_map.get(self.endpoint_name)
-                if method:
-                    if self.endpoint_name == "Test Connection":
-                        result = method()
-                    else:
-                        params = dict(self.parameters)
-                        if self.endpoint_name == "Get Last Trades By Time":
-                            params["start_timestamp"] = int(params["start_timestamp"])
-                            params["end_timestamp"] = int(params["end_timestamp"])
-                        result = method(**params)
-                    self.finished.emit(result)
-                else:
-                    self.error.emit(f"Unknown endpoint: {self.endpoint_name}")
+            service = ApiTestService()
+            result = service.invoke(self.endpoint_name, self.parameters)
+            self.finished.emit(result)
 
         except Exception as error:
             self.error.emit(str(error))
@@ -124,40 +111,12 @@ class InstrumentLoaderWorker(QThread):
     def run(self) -> None:
         """Load instruments from API."""
         try:
-            with DeribitApiService() as service:
-                instruments = service.get_instruments(currency=self.currency, kind=self.kind)
-                self.finished.emit(instruments)
+            service = ApiTestService()
+            instruments = service.load_instruments(self.currency, self.kind)
+            self.finished.emit(instruments)
 
         except Exception as error:
             logger.exception("Error loading instruments")
-            self.error.emit(str(error))
-
-
-class ExternalApiWorker(QThread):
-    """Worker thread for executing external API calls (Fear & Greed, CoinGecko)."""
-
-    finished = Signal(object)
-    error = Signal(str)
-
-    EXTERNAL_ENDPOINTS = {"Fear & Greed Index", "CoinGecko Market Data"}
-
-    def __init__(self, endpoint_name: str, parent: Optional[QWidget] = None):
-        super().__init__(parent)
-        self.endpoint_name = endpoint_name
-
-    def run(self) -> None:
-        """Execute the external API call in background."""
-        try:
-            fetcher = ExternalMetricsFetcher()
-            if self.endpoint_name == "Fear & Greed Index":
-                result = fetcher.fear_greed.get_latest()
-            elif self.endpoint_name == "CoinGecko Market Data":
-                result = fetcher.coingecko.get_global_market_data()
-            else:
-                self.error.emit(f"Unknown external endpoint: {self.endpoint_name}")
-                return
-            self.finished.emit(result)
-        except Exception as error:
             self.error.emit(str(error))
 
 
@@ -281,7 +240,6 @@ class ApiConnectionTab(QWidget):
         super().__init__(parent)
         self.parameter_widgets: Dict[str, QWidget] = {}
         self.worker: Optional[ApiWorker] = None
-        self.external_worker: Optional[ExternalApiWorker] = None
 
         self._setup_ui()
         self._setup_logging()
@@ -668,8 +626,7 @@ class ApiConnectionTab(QWidget):
 
     def _run_endpoint(self) -> None:
         """Execute the selected API endpoint."""
-        active_worker = self.external_worker if self.external_worker and self.external_worker.isRunning() else self.worker
-        if active_worker is not None and active_worker.isRunning():
+        if self.worker is not None and self.worker.isRunning():
             self.log_viewer.log_warning("A request is already in progress")
             return
 
@@ -684,16 +641,10 @@ class ApiConnectionTab(QWidget):
         self.status_label.setText("Running...")
         self.status_label.setStyleSheet(f"color: {Colors.WARNING};")
 
-        if endpoint_name in ExternalApiWorker.EXTERNAL_ENDPOINTS:
-            self.external_worker = ExternalApiWorker(endpoint_name)
-            self.external_worker.finished.connect(self._on_request_finished)
-            self.external_worker.error.connect(self._on_request_error)
-            self.external_worker.start()
-        else:
-            self.worker = ApiWorker(endpoint_name, parameters)
-            self.worker.finished.connect(self._on_request_finished)
-            self.worker.error.connect(self._on_request_error)
-            self.worker.start()
+        self.worker = ApiWorker(endpoint_name, parameters)
+        self.worker.finished.connect(self._on_request_finished)
+        self.worker.error.connect(self._on_request_error)
+        self.worker.start()
 
     def _on_request_finished(self, result: Any) -> None:
         """
