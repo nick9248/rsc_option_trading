@@ -11,7 +11,7 @@ loudly instead of silently hitting a real connection.
 """
 
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -43,6 +43,18 @@ class FakeDatabaseRepository:
         self._atm_iv_history: Dict[str, Dict[str, Any]] = self._load_per_expiration(
             db_dir, "atm_iv_history_"
         )
+        # Task Wave-J-A Fix 4: the real DatabaseRepository.get_atm_iv_history
+        # reads a psycopg2 DATE column, which comes back as a real
+        # datetime.date object -- never a string. The recorded JSON fixture
+        # only has strings (JSON has no native date type), so without this
+        # parse, this fake would hand callers a shape the real repository
+        # never produces, silently hiding a TypeError this fixture should
+        # have caught (`str - str` in the service's calendar-span
+        # calculation raises, `date - date` does not).
+        for entry in self._atm_iv_history.values():
+            for row in entry.get("history", []):
+                if isinstance(row.get("snapshot_date"), str):
+                    row["snapshot_date"] = date.fromisoformat(row["snapshot_date"])
         self._onchain_snapshot_history: Dict[str, List[Dict[str, Any]]] = self._load_per_expiration(
             db_dir, "onchain_snapshot_history_"
         )

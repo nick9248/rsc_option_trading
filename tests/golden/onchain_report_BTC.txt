@@ -2563,7 +2563,7 @@ HIRO/premium/gross: no data for this expiry
 LARGE OI CHANGES (Day-over-Day)
 --------------------------------------------------------------------------------
   No significant OI changes (>20%) detected
-IV PERCENTILE (per-expiry, 33 days history)
+IV PERCENTILE (per-expiry, 92 days history)
 --------------------------------------------------------------------------------
 ATM Strike: $64,000  |  Current IV: 36.2%  |  Percentile: 15.2%
   IV is very low relative to history - favor buying vol

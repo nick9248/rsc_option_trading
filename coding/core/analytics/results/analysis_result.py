@@ -88,6 +88,15 @@ class IvPercentileResult:
     current_iv: float
     percentile: float
     history_days: int
+    """Task Wave-J-A Fix 4: the real oldest-to-newest CALENDAR SPAN (in
+    days) of the observations behind ``percentile`` -- NOT a raw
+    observation count. ``daily_oi_snapshots`` (this field's data source,
+    via ``get_atm_iv_history``) is one row per day but has real collection
+    gaps (documented VPS downtime elsewhere in this codebase), so N
+    observations commonly span MORE than N calendar days. Rendered
+    verbatim by ``format_iv_percentile_section`` as "N days history" --
+    must stay a genuine calendar span, never an observation count, or that
+    label overclaims."""
 
 
 @dataclass(frozen=True)

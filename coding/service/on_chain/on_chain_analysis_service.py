@@ -3088,7 +3088,16 @@ class OnChainAnalysisService:
                     strike=atm_strike,
                 )
 
-                if iv_history and len(iv_history) >= 5:
+                # Task Wave-J-A Fix 3: this was gated at >= 5 observations,
+                # inconsistent with HistoricalNormalizer.MIN_OBS (30) and
+                # VrpCalculator's own MIN_OBS import (both established
+                # elsewhere in this exact codebase) for the same "is there
+                # enough history to trust a percentile against it"
+                # decision. 5 observations produced a percentile printed to
+                # one decimal with a directive ("favor buying/selling vol")
+                # and no caveat. Reusing the existing constant rather than
+                # hardcoding a second 30.
+                if iv_history and len(iv_history) >= HistoricalNormalizer.MIN_OBS:
                     current_iv = next(
                         (i["mark_iv"] for i in instruments
                          if i["strike"] == atm_strike and i["option_type"] == "C"
@@ -3096,12 +3105,35 @@ class OnChainAnalysisService:
                         None
                     )
                     if current_iv is not None:
+                        # get_atm_iv_history's own SQL already filters
+                        # mark_iv IS NOT NULL and returns ascending by
+                        # snapshot_date (oldest first) -- this comprehension
+                        # is a defensive no-op kept for clarity, not a real
+                        # filter.
                         historical_ivs = [
                             float(h["mark_iv"]) for h in iv_history
                             if h["mark_iv"] is not None
                         ]
                         below = sum(1 for iv in historical_ivs if iv < current_iv)
                         percentile = (below / len(historical_ivs)) * 100
+
+                        # Task Wave-J-A Fix 4: history_days used to be
+                        # len(historical_ivs) -- a raw OBSERVATION COUNT
+                        # rendered into a field the formatter labels "N
+                        # days history". get_atm_iv_history reads
+                        # daily_oi_snapshots (one row per DAY, UPSERTed),
+                        # so this is only accurate with zero collection
+                        # gaps -- this codebase documents real VPS downtime
+                        # elsewhere, so N rows commonly span MORE than N
+                        # calendar days. Computed here as the real
+                        # oldest-to-newest calendar span instead (mirrors
+                        # historical_normalizer.py's own span-vs-count
+                        # distinction, Task G2-E's MIN_SPAN_FRACTION) --
+                        # iv_history is ascending by snapshot_date, so the
+                        # first/last rows are the oldest/newest.
+                        span_days = (
+                            iv_history[-1]["snapshot_date"] - iv_history[0]["snapshot_date"]
+                        ).days
 
                         # T10: text generation (previously appended to
                         # analyzer.oi_changes_data) deleted --
@@ -3112,7 +3144,7 @@ class OnChainAnalysisService:
                                 expiration,
                                 IvPercentileResult(
                                     atm_strike=atm_strike, current_iv=current_iv,
-                                    percentile=percentile, history_days=len(historical_ivs),
+                                    percentile=percentile, history_days=span_days,
                                 ),
                             )
 
