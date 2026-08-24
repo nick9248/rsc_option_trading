@@ -1335,6 +1335,99 @@ class TestGenerateVolNarrativeNoneRiskReversal:
         assert "49.0%" in result
 
 
+class TestGenerateVolNarrativeRichCheapSide:
+    """
+    Task Wave-J-C Fix 2: risk_reversal_25d = call IV - put IV (score_skew's
+    docstring). ANY negative RR25 means puts are richer than calls, however
+    close to zero. The old tri-branch (< -8 "puts rich" / <= -4 "normal,
+    no clear side" / else "puts cheap") inverted the entire -4..0 sub-range
+    (including this campaign's real fixture value, -3.6): puts are still
+    richer there, just not extremely, yet the "else" branch told a reader
+    to favor buying puts -- the MORE expensive side -- as "cheap". These
+    tests pin the corrected mapping across the whole real number line,
+    using ``sell_strong`` (vrp=12.0 > 10) so {rich_side} is live, and
+    ``buy_moderate`` (vrp=-8.0, between -5 and -10) so {cheap_side} is live.
+    """
+
+    @staticmethod
+    def _sell_strong(risk_reversal_25d):
+        from coding.core.analytics.synthesis import NarrativeGenerator
+        return NarrativeGenerator.generate_vol_narrative(
+            iv_pctile=85, vrp=12.0, vrp_adjustment="30d RV within normal range.",
+            risk_reversal_25d=risk_reversal_25d, sell_expiry="6MAR26", sell_iv=49.0,
+            buy_expiry="27MAR26",
+        )
+
+    @staticmethod
+    def _buy_moderate(risk_reversal_25d):
+        from coding.core.analytics.synthesis import NarrativeGenerator
+        return NarrativeGenerator.generate_vol_narrative(
+            iv_pctile=15, vrp=-8.0, vrp_adjustment="30d RV within normal range.",
+            risk_reversal_25d=risk_reversal_25d, sell_expiry="6MAR26", sell_iv=49.0,
+            buy_expiry="27MAR26",
+        )
+
+    def test_extreme_negative_rr25_favors_puts_as_rich_side(self):
+        result = self._sell_strong(-8.0)
+        assert "makes puts the higher-edge side to sell" in result
+
+    def test_mild_negative_rr25_this_campaigns_real_fixture_value_still_favors_puts(self):
+        """
+        risk_reversal_25d=-3.6 is the real value from this campaign's BTC
+        golden fixture (tests/golden/onchain_synthesis_BTC.txt, "RR25
+        -3.6%"). This is the exact sub-range the old code got backwards.
+        """
+        result = self._sell_strong(-3.6)
+        assert "makes puts the higher-edge side to sell" in result
+        assert "makes calls" not in result
+
+    def test_rr25_near_zero_has_no_clear_rich_side(self):
+        from coding.core.analytics.thresholds import RISK_REVERSAL_MILD_POINTS
+        result = self._sell_strong(RISK_REVERSAL_MILD_POINTS)  # boundary, inclusive
+        assert "makes neither side the higher-edge side to sell" in result
+
+    def test_positive_rr25_favors_calls_as_rich_side(self):
+        result = self._sell_strong(6.0)
+        assert "makes calls the higher-edge side to sell" in result
+
+    def test_none_rr25_has_no_clear_rich_side_and_no_crash(self):
+        result = self._sell_strong(None)
+        assert "makes neither side the higher-edge side to sell" in result
+
+    def test_extreme_negative_rr25_favors_calls_as_cheap_side(self):
+        result = self._buy_moderate(-8.0)
+        assert "edge toward calls" in result
+
+    def test_mild_negative_rr25_this_campaigns_real_fixture_value_still_favors_calls_as_cheap(self):
+        """Puts are still the RICHER side at -3.6 -- calls, not puts, are cheap."""
+        result = self._buy_moderate(-3.6)
+        assert "edge toward calls" in result
+        assert "edge toward puts" not in result
+
+    def test_rr25_near_zero_has_no_clear_cheap_side(self):
+        from coding.core.analytics.thresholds import RISK_REVERSAL_MILD_POINTS
+        result = self._buy_moderate(-RISK_REVERSAL_MILD_POINTS)  # boundary, inclusive
+        assert "edge toward neither side" in result
+
+    def test_positive_rr25_favors_puts_as_cheap_side(self):
+        result = self._buy_moderate(6.0)
+        assert "edge toward puts" in result
+
+    def test_no_double_word_or_broken_grammar_across_all_bands(self):
+        """
+        The old template had a literal hardcoded "puts" after {rich_side}
+        ("... makes {rich_side} puts the higher-edge side to sell."), so a
+        rich_side value of "OTM puts are rich..." rendered "puts puts" and
+        a full clause where a noun was expected. Guard against any
+        regression to double words for every band.
+        """
+        for rr25 in (-8.0, -3.6, 0.0, 6.0, None):
+            result = self._sell_strong(rr25)
+            assert "puts puts" not in result
+            assert "calls calls" not in result
+            assert "side side" not in result
+
+
 class TestGenerateRiskFactorsNoneRiskReversal:
     def test_none_risk_reversal_skips_extreme_rr25_check_no_crash(self):
         """

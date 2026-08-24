@@ -1318,13 +1318,13 @@ class NarrativeGenerator:
             "Volatility is expensive (IV at {iv_pctile}th percentile, "
             "VRP {vrp:+.1f}pts). {vrp_adjustment} "
             "Sell premium in {sell_expiry} where ATM IV is {sell_iv}. "
-            "RR25 at {skew} makes {rich_side} puts the higher-edge side to sell."
+            "RR25 at {skew} makes {rich_side} the higher-edge side to sell."
         ),
         "sell_moderate": (
             "Volatility is moderately elevated (IV at {iv_pctile}th percentile). "
             "{vrp_adjustment} "
             "Selling premium has edge but size conservatively. "
-            "Favor {sell_expiry} expiry, {rich_side} side."
+            "Favor {sell_expiry} expiry with an edge toward {rich_side}."
         ),
         "neutral": (
             "Volatility is fairly priced. No strong edge in selling or buying premium. "
@@ -1333,7 +1333,7 @@ class NarrativeGenerator:
         "buy_moderate": (
             "Volatility is cheap (IV at {iv_pctile}th percentile, "
             "VRP {vrp:+.1f}pts). Long vol positions have edge. "
-            "Buy {buy_expiry} straddles or strangles. Favor {cheap_side} side."
+            "Buy {buy_expiry} straddles or strangles, with an edge toward {cheap_side}."
         ),
         "buy_strong": (
             "Volatility is extremely cheap. Strongly favor long vol. "
@@ -1499,24 +1499,35 @@ class NarrativeGenerator:
         else:
             template_key = "buy_strong"
 
-        # Rich/cheap side based on the risk reversal (re-signed: rr = -skew).
-        # Task G2-G: None is its own branch; the two existing threshold
-        # checks below (rich_side's tri-branch at -8/-4, cheap_side's
-        # independent < -4 check) are otherwise UNCHANGED -- deliberately
-        # not merged into one set of branches, since cheap_side's boundary
-        # (strict < -4) differs from rich_side's middle branch (<= -4) at
-        # exactly risk_reversal_25d == -4.0.
-        if risk_reversal_25d is None:
-            rich_side = "RR25 unavailable — insufficient data to identify rich/cheap side"
-            cheap_side = "insufficient data"
+        # Rich/cheap side based on the risk reversal (call IV - put IV --
+        # score_skew's docstring). ANY negative RR25 means put IV is above
+        # call IV, i.e. puts are richer than calls, however close to zero --
+        # the old tri-branch (< -8 "puts rich" / <= -4 "normal, no clear
+        # side" / else "puts cheap") got this backwards for the entire
+        # -4..0 sub-range (including this fixture's real -3.6 reading):
+        # puts are still the richer side there, just not extremely, yet
+        # the "else" branch told a reader to favor buying puts (the MORE
+        # expensive side) as the "cheap" one. Task Wave-J-C Fix 2.
+        #
+        # Rebuilt as a plain three-way directional split using the SAME
+        # near-zero boundary score_skew already uses (RISK_REVERSAL_
+        # MILD_POINTS) so this axis has one shared threshold instead of
+        # two independently-tuned copies (the same divergence-prevention
+        # rationale as max_pain_utils.calculate_max_pain_distance_pct).
+        # rich_side/cheap_side are now short noun phrases (not full
+        # sentences) so every VOL_TEMPLATES entry that interpolates them
+        # stays grammatical regardless of which band fires; severity
+        # ("extreme" vs "mild") is conveyed by score_skew's own text
+        # elsewhere in the report, not duplicated here.
+        if risk_reversal_25d is None or -RISK_REVERSAL_MILD_POINTS <= risk_reversal_25d <= RISK_REVERSAL_MILD_POINTS:
+            rich_side = "neither side"
+            cheap_side = "neither side"
+        elif risk_reversal_25d < -RISK_REVERSAL_MILD_POINTS:
+            rich_side = "puts"
+            cheap_side = "calls"
         else:
-            if risk_reversal_25d < -8:
-                rich_side = "OTM puts are rich — selling put premium has edge"
-            elif risk_reversal_25d <= -4:
-                rich_side = "RR25 is normal — no clear rich/cheap side"
-            else:
-                rich_side = "OTM puts are cheap relative to calls — tail risk underpriced"
-            cheap_side = "calls" if risk_reversal_25d < -4 else "puts"
+            rich_side = "calls"
+            cheap_side = "puts"
 
         template = cls.VOL_TEMPLATES[template_key]
 
