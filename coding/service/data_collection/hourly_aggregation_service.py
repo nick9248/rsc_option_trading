@@ -15,7 +15,7 @@ Produces hourly snapshots with:
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
 from coding.core.analytics.black_scholes_calculator import BlackScholesCalculator
@@ -324,12 +324,27 @@ class HourlyAggregationService:
         buy_trades = [t for t in trades if t[3] == "buy"]
         sell_trades = [t for t in trades if t[3] == "sell"]
 
+        # Task Wave-J-E Fix 2: bid_price/ask_price have never been a real
+        # order-book quote -- they are always derived from this hour's
+        # trades. When a side has no trade to derive from, the value below
+        # falls back to a vwap+/-0.5% guess with no market evidence behind
+        # it at all. bid_is_estimated/ask_is_estimated disclose exactly
+        # that, per side, so a downstream "quoted" filter (e.g.
+        # VolatilitySurfaceCalculator._build_delta_points) can tell a
+        # genuine trade-derived value from a pure guess instead of trusting
+        # the column name at face value.
+        bid_is_estimated = not sell_trades
+        ask_is_estimated = not buy_trades
+
         ask_estimate = max((float(t[1]) for t in buy_trades), default=vwap * 1.005)
         bid_estimate = min((float(t[1]) for t in sell_trades), default=vwap * 0.995)
 
-        # Ensure bid <= ask
+        # Ensure bid <= ask (swap the estimated-flags along with the
+        # values -- otherwise a flag would end up describing the wrong
+        # price after the swap)
         if bid_estimate > ask_estimate:
             bid_estimate, ask_estimate = ask_estimate, bid_estimate
+            bid_is_estimated, ask_is_estimated = ask_is_estimated, bid_is_estimated
 
         # Calculate Greeks using Black-Scholes
         greeks = None
@@ -368,6 +383,8 @@ class HourlyAggregationService:
                 mark_price=mark_price if mark_price > 0 else vwap,
                 bid_price=bid_estimate if bid_estimate > 0 else vwap * 0.995,
                 ask_price=ask_estimate if ask_estimate > 0 else vwap * 1.005,
+                bid_is_estimated=bid_is_estimated,
+                ask_is_estimated=ask_is_estimated,
                 mark_iv=avg_iv,
                 underlying_price=avg_index_price,
                 volume=total_volume,
@@ -381,10 +398,17 @@ class HourlyAggregationService:
             logger.warning(f"Snapshot validation failed for {instrument_name}: {e}")
             return None
 
-        # Build the full snapshot dict matching all 22 database columns
+        # Build the full snapshot dict matching all 24 database columns
         return {
             "snapshot_hour": hour_start,
-            "captured_at": datetime.now(),
+            # Task Wave-J-E Fix 2: this machine's local timezone is not UTC
+            # (matching the day-boundary bug class this campaign has fixed
+            # repeatedly elsewhere, e.g. save_daily_oi_snapshot). captured_at
+            # is a naive-UTC-valued `timestamp without time zone` column --
+            # `.replace(tzinfo=None)` strips the tzinfo tag datetime.now(
+            # timezone.utc) attaches without reinterpreting the value, so
+            # the stored number is the correct UTC wall-clock time.
+            "captured_at": datetime.now(timezone.utc).replace(tzinfo=None),
             "instrument_name": instrument_name,
             "currency": currency,
             "strike": strike,
@@ -395,6 +419,8 @@ class HourlyAggregationService:
             "vwap": vwap,
             "bid_price": validated.bid_price,
             "ask_price": validated.ask_price,
+            "bid_is_estimated": validated.bid_is_estimated,
+            "ask_is_estimated": validated.ask_is_estimated,
             "mark_price": validated.mark_price,
             "mark_iv": validated.mark_iv,
             "open_interest": open_interest,

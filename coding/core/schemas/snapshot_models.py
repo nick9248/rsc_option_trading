@@ -28,6 +28,14 @@ class HourlySnapshotData(BaseModel):
     bid_price: float = Field(..., gt=0, description="Estimated bid price")
     ask_price: float = Field(..., gt=0, description="Estimated ask price")
 
+    # Task Wave-J-E Fix 2: disclose, per side, whether bid_price/ask_price
+    # is backed by a real trade this hour or is the vwap+/-0.5% fallback
+    # used when no trade occurred on that side. See migration 025 and
+    # HourlyAggregationService._aggregate_instrument for the provenance
+    # this mirrors 1:1.
+    bid_is_estimated: bool = Field(..., description="True when bid_price is the vwap*0.995 fallback, not a real sell-side trade this hour")
+    ask_is_estimated: bool = Field(..., description="True when ask_price is the vwap*1.005 fallback, not a real buy-side trade this hour")
+
     # Volatility (DECIMAL(8,4) in database - 0 to 9999.9999%)
     mark_iv: Optional[float] = Field(None, ge=0, le=500.0, description="Average IV for the hour")
 
@@ -136,6 +144,8 @@ class HourlySnapshotData(BaseModel):
             self.mark_price,
             self.bid_price,
             self.ask_price,
+            self.bid_is_estimated,
+            self.ask_is_estimated,
             self.mark_iv,
             self.underlying_price,
             self.volume,

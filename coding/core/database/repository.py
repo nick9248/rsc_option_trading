@@ -904,14 +904,16 @@ class DatabaseRepository:
                     snapshot_hour, captured_at, instrument_name, currency,
                     strike, expiration, option_type,
                     trade_count, total_volume, vwap,
-                    bid_price, ask_price, mark_price, mark_iv,
+                    bid_price, ask_price, bid_is_estimated, ask_is_estimated,
+                    mark_price, mark_iv,
                     open_interest, index_price, futures_price, basis,
                     avg_delta, avg_gamma, avg_theta, avg_vega
                 ) VALUES (
                     %(snapshot_hour)s, %(captured_at)s, %(instrument_name)s, %(currency)s,
                     %(strike)s, %(expiration)s, %(option_type)s,
                     %(trade_count)s, %(total_volume)s, %(vwap)s,
-                    %(bid_price)s, %(ask_price)s, %(mark_price)s, %(mark_iv)s,
+                    %(bid_price)s, %(ask_price)s, %(bid_is_estimated)s, %(ask_is_estimated)s,
+                    %(mark_price)s, %(mark_iv)s,
                     %(open_interest)s, %(index_price)s, %(futures_price)s, %(basis)s,
                     %(avg_delta)s, %(avg_gamma)s, %(avg_theta)s, %(avg_vega)s
                 )
@@ -923,6 +925,8 @@ class DatabaseRepository:
                     vwap = EXCLUDED.vwap,
                     bid_price = EXCLUDED.bid_price,
                     ask_price = EXCLUDED.ask_price,
+                    bid_is_estimated = EXCLUDED.bid_is_estimated,
+                    ask_is_estimated = EXCLUDED.ask_is_estimated,
                     mark_price = EXCLUDED.mark_price,
                     mark_iv = EXCLUDED.mark_iv,
                     open_interest = EXCLUDED.open_interest,
