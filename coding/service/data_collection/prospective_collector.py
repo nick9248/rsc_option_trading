@@ -927,9 +927,15 @@ class ProspectiveCollector:
                         )
                         forward_price = underlying_price
 
-                    # Enrich with greeks for GEX/DEX (nested → top-level, with BS fallback)
+                    # Enrich with greeks for GEX/DEX (nested → top-level, with BS fallback).
+                    # Task Wave-J-A (Fix 2): index_price (== underlying_price,
+                    # set above from analyzer.set_index_price) is passed
+                    # separately so gamma is anchored on the SAME spot
+                    # GexDexCalculator uses for its S² scaling a few lines
+                    # below, while delta/vega/theta stay forward-anchored.
                     gex_instruments = self._enrich_with_greeks(
-                        instruments_for_exp, raw_by_name, forward_price
+                        instruments_for_exp, raw_by_name, forward_price,
+                        index_price=underlying_price,
                     )
 
                     # Run GEX/DEX calculation. GEX/DEX are exposures to a
@@ -1215,6 +1221,7 @@ class ProspectiveCollector:
         instruments: List[Dict],
         raw_by_name: Dict[str, Dict],
         underlying_price: float,
+        index_price: Optional[float] = None,
     ) -> List[Dict]:
         """
         Promote greeks from the nested 'greeks' dict in the raw book-summary items
@@ -1223,56 +1230,95 @@ class ProspectiveCollector:
         "quoted" filter, institutional_metrics_spec.md section 3(b) step 1 --
         parse_instruments() strips these from the top-level parsed dict).
 
-        Falls back to Black-Scholes when the API omits greeks (delta/gamma are 0
-        or absent). This is required before feeding GexDexCalculator, which reads
-        delta and gamma at the top level.
+        Falls back to Black-Scholes when the exchange omits greeks --
+        ``get_book_summary`` carries no ``greeks`` key at all, so this
+        fallback is the daemon's ONLY source of delta/gamma/vega/theta in
+        practice (matches ``OnChainAnalysisService._compute_bs_gamma``'s
+        docstring, which documents this same fact from the report/GUI
+        path's side).
+
+        Task Wave-J-A (Fix 1, BLOCKER): a genuinely-missing greek (BS
+        fallback declined to run -- missing/absurd mark_iv, unparseable
+        name, or the option is already past its 08:00 UTC settlement,
+        ``tte <= 0``) is emitted as ``None``, never a fabricated ``0``.
+        ``GexDexCalculator._aggregate_by_strike``'s completeness tracking
+        (Task G2-A) reads ``gamma_raw is None``/``delta_raw is None`` as
+        "missing, count it in instruments_missing_gamma/oi_missing_
+        gamma"; a literal ``0`` reads as "confirmed zero exposure",
+        silently defeating that tracking on this daemon path -- it was
+        structurally always 0 here, whatever the real completeness. All
+        guards (mark_iv/strike/name/parsed-name/time-to-expiry) are
+        delegated to ``BlackScholesCalculator.calculate_greeks_safe``
+        (explicit numeric-range checks, never bare truthiness -- ``not
+        -50000`` is ``False`` in Python, so the old ``if mark_iv and
+        strike and name`` guard let a negative strike/mark_iv straight
+        through to ``calculate_greeks``'s blanket ``except Exception``,
+        which silently returns an all-zero-greeks dict).
+
+        Task Wave-J-A (Fix 2): delta/vega/theta stay anchored on
+        ``underlying_price`` (this expiry's own FORWARD -- bugfix_spec.md
+        Item 7: these are settlement-space greeks, the existing, correct
+        convention). Gamma is anchored on ``index_price`` instead, when
+        supplied: ``GexDexCalculator`` scales gamma by ``spot_price ** 2``
+        using the INDEX ("GEX's S² term amplifies any basis error" --
+        this method's own caller comment), so gamma's VALUE must be
+        computed at the SAME anchor its scaling uses, not the forward --
+        previously an anchor mismatch (gamma computed at the forward,
+        scaled at the index). Falls back to forward-anchored gamma if no
+        index price is supplied (keeps this method usable by any caller
+        that only has one anchor available).
+
+        Args:
+            instruments: Parsed instrument dicts for one expiration.
+            raw_by_name: Raw book-summary items keyed by instrument_name.
+            underlying_price: This expiry's forward price -- anchor for
+                delta/vega/theta.
+            index_price: The spot index price -- anchor for gamma. Falls
+                back to ``underlying_price`` if omitted or non-positive.
         """
         bs = BlackScholesCalculator()
         enriched = []
+        gamma_anchor = (
+            index_price if index_price is not None and index_price > 0
+            else underlying_price
+        )
+        now_utc_naive = datetime.now(timezone.utc).replace(tzinfo=None)
 
         for inst in instruments:
             raw = raw_by_name.get(inst.get("instrument_name", ""), {})
             nested = raw.get("greeks") or {}
-            delta = nested.get("delta") or inst.get("delta")
-            gamma = nested.get("gamma") or inst.get("gamma")
-            vega = nested.get("vega") or inst.get("vega")
-            theta = nested.get("theta") or inst.get("theta")
+            # Explicit None-checks (not `nested.get(...) or inst.get(...)`):
+            # a real, exactly-zero greek (a deep OTM/near-expiry leg) is a
+            # legitimate value, not "missing" -- the same truthiness bug
+            # class this method's own final assembly used to have.
+            delta = nested.get("delta") if nested.get("delta") is not None else inst.get("delta")
+            gamma = nested.get("gamma") if nested.get("gamma") is not None else inst.get("gamma")
+            vega = nested.get("vega") if nested.get("vega") is not None else inst.get("vega")
+            theta = nested.get("theta") if nested.get("theta") is not None else inst.get("theta")
 
-            # BS fallback when exchange didn't return greeks
-            if (not delta or not gamma) and underlying_price > 0:
-                mark_iv = inst.get("mark_iv")
-                strike = inst.get("strike")
-                name = inst.get("instrument_name", "")
-                if mark_iv and strike and name:
-                    parsed = bs.parse_instrument_name(name)
-                    if parsed:
-                        # institutional_metrics_spec.md section 4(b), "Known
-                        # latent bug to fix in the same change": parsed
-                        # expiry_time is naive-UTC (BlackScholesCalculator.
-                        # parse_instrument_name always builds it at 08:00
-                        # UTC settlement). datetime.now() here was naive
-                        # LOCAL time -- on this machine (CET/CEST) that is a
-                        # 1-2 hour τ error, material for 0-DTE options,
-                        # feeding directly into this BS-fallback greeks path
-                        # (and therefore into GexDexCalculator and the new
-                        # ExposureProfileCalculator, both of which consume
-                        # this enriched instrument list). Fixed to naive-UTC
-                        # so both sides of the subtraction agree.
-                        now_utc_naive = datetime.now(timezone.utc).replace(tzinfo=None)
-                        tte = bs.calculate_time_to_expiry(now_utc_naive, parsed["expiry_time"])
-                        if tte > 0:
-                            iv_decimal = float(mark_iv) / 100.0
-                            calc = bs.calculate_greeks(
-                                spot_price=underlying_price,
-                                strike_price=float(strike),
-                                time_to_expiry=tte,
-                                implied_volatility=iv_decimal,
-                                option_type=parsed["option_type"],
-                            )
-                            delta = delta or calc["delta"]
-                            gamma = gamma or calc["gamma"]
-                            vega = vega or calc["vega"]
-                            theta = theta or calc["theta"]
+            mark_iv = inst.get("mark_iv")
+
+            # institutional_metrics_spec.md section 4(b) / this task's Fix
+            # 1: BlackScholesCalculator.parse_instrument_name always builds
+            # a naive-UTC expiry_time (08:00 UTC settlement) --
+            # now_utc_naive must be naive-UTC too, never naive-LOCAL, or
+            # the subtraction silently mixes timezones (a 1-2 hour τ error
+            # on this machine's CET/CEST clock, material for 0-DTE
+            # options).
+            if delta is None or vega is None or theta is None:
+                calc_forward = bs.calculate_greeks_safe(inst, mark_iv, underlying_price, now_utc_naive)
+                if calc_forward is not None:
+                    if delta is None:
+                        delta = calc_forward["delta"]
+                    if vega is None:
+                        vega = calc_forward["vega"]
+                    if theta is None:
+                        theta = calc_forward["theta"]
+
+            if gamma is None:
+                calc_gamma = bs.calculate_greeks_safe(inst, mark_iv, gamma_anchor, now_utc_naive)
+                if calc_gamma is not None:
+                    gamma = calc_gamma["gamma"]
 
             # institutional_metrics_spec.md section 3(b) step 1 (Task C4):
             # the RR25/BF25 delta-interpolation's "quoted" filter needs
@@ -1281,10 +1327,10 @@ class ProspectiveCollector:
             # item greeks came from -- no extra API call.
             enriched.append({
                 **inst,
-                "delta": delta or 0,
-                "gamma": gamma or 0,
-                "vega": vega or 0,
-                "theta": theta or 0,
+                "delta": delta,
+                "gamma": gamma,
+                "vega": vega,
+                "theta": theta,
                 "bid_price": raw.get("bid_price"),
                 "ask_price": raw.get("ask_price"),
             })

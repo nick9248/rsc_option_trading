@@ -11,23 +11,23 @@ VRP: +10.8pts  | Term Structure: CONTANGO (+28.3pts)
 Perp Funding: 0.0000%  | 8h: 0.0003%
 ────────────────────────────────────────────────────────────────────────────────
 
-RANGE-BOUND (BULLISH) regime. Vol suppressed but bullish lean. Positive gamma (+139.9M GEX) is dampening volatility — dealers buy dips and sell rallies. Expect grind-higher in range toward $70,000. Priority: sell put spreads preferred, skew short strikes higher.
+RANGE-BOUND (BULLISH) regime. Vol suppressed but bullish lean. Positive gamma (+133.5M GEX) is dampening volatility — dealers buy dips and sell rallies. Expect grind-higher in range toward $70,000. Priority: sell put spreads preferred, skew short strikes higher.
 
-NEAR-TERM (0-7 DTE): NEUTRAL bias | GEX +85.4M (dampening) | OI: 154,865 contracts
+NEAR-TERM (0-7 DTE): NEUTRAL bias | GEX +83.8M (dampening) | OI: 154,865 contracts
   31JUL26 (5d): MaxPain $64,000 (-0.6%) | P/C 0.29 | ATM IV 36.2% | RR25 -3.6% | Flow: Insufficient flow data
   26JUL26 (0d): MaxPain $64,000 (-0.6%) | P/C 0.72 | ATM IV 14.8% | RR25 N/A | Flow: Insufficient flow data
 
-MID-TERM (7-30 DTE): BULLISH bias | GEX +25.9M (dampening) | OI: 24,185 contracts
+MID-TERM (7-30 DTE): BULLISH bias | GEX +25.1M (dampening) | OI: 24,185 contracts
   7AUG26 (12d): MaxPain $64,000 (-0.7%) | P/C 0.13 | ATM IV 35.8% | RR25 -4.1% | Flow: Insufficient flow data
   14AUG26 (19d): MaxPain $65,000 (+0.8%) | P/C 0.30 | ATM IV 35.1% | RR25 -4.2% | Flow: Insufficient flow data
 
-FAR-TERM (30+ DTE): BULLISH bias | GEX +28.6M (dampening) | OI: 257,391 contracts
+FAR-TERM (30+ DTE): BULLISH bias | GEX +24.6M (dampening) | OI: 257,391 contracts
   25SEP26 (61d): MaxPain $70,000 (+8.0%) | P/C 0.58 | ATM IV 36.7% | RR25 -4.5% | Flow: Insufficient flow data
   25DEC26 (152d): MaxPain $70,000 (+6.9%) | P/C 0.56 | ATM IV 40.8% | RR25 -4.6% | Flow: Insufficient flow data
 
 VOL ASSESSMENT: Volatility is expensive (IV at 20th percentile, VRP +10.8pts). NOTE: 30d RV at 11th pctile — unusually calm period. VRP may compress further if realized vol reverts to mean. Sell premium in 31JUL26 where ATM IV is 36.2%. RR25 at -3.6% makes puts the higher-edge side to sell.
 
-RISK FACTORS: GAMMA CLIFF: 63% of gamma mass expires within 7 DTE (26JUL26, 27JUL26, 28JUL26, 29JUL26, 31JUL26) — pin risk and gamma spike around max pain
+RISK FACTORS: GAMMA CLIFF: 65% of gamma mass expires within 7 DTE (26JUL26, 27JUL26, 28JUL26, 29JUL26, 31JUL26) — pin risk and gamma spike around max pain
 
 INSTITUTIONAL FLOW (Block Trades): 3 block(s), combined premium $0.15M
   Largest: BLOCK-281702 (2 legs, structure: N/A) $0.09M
@@ -41,7 +41,7 @@ DATA QUALITY:
   - Order flow: insufficient data for all 12 expiries (no qualifying trades in the lookback window) — flow bias/trend not usable for any expiry this run
 
 SCORING DETAIL:
-  Direction: BULLISH (confidence: 17%)
+  Direction: BULLISH (confidence: 18%)
   Fragility: NONE
   Near-term: NEUTRAL | Far-term: BULLISH
   Vol Regime: suppressed

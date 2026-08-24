@@ -12,7 +12,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-from coding.core.analytics.black_scholes_calculator import BlackScholesCalculator
+from coding.core.analytics.black_scholes_calculator import (
+    BlackScholesCalculator,
+    MAX_SANE_MARK_IV_PCT,
+)
 from coding.core.analytics.buy_sell_flow_analyzer import BuySellFlowAnalyzer
 from coding.core.analytics.chart_generator import (
     generate_flow_distribution_chart,
@@ -142,7 +145,12 @@ _DEALER_INVENTORY_MAX_EXCLUSION_RATE = 0.20
 # real book has shown even during extreme crypto vol spikes (typical peak
 # is low hundreds of percent) -- a documented, generous ceiling, not a
 # tuned statistical bound.
-_MAX_SANE_MARK_IV_PCT = 1000.0
+#
+# Task Wave-J-A: re-exported from BlackScholesCalculator.MAX_SANE_MARK_IV_PCT
+# (Core) rather than a second hardcoded 1000.0 -- ProspectiveCollector's
+# BS-fallback path shares the exact same constant now, so the two can never
+# silently drift apart on what counts as "absurd" mark_iv.
+_MAX_SANE_MARK_IV_PCT = MAX_SANE_MARK_IV_PCT
 
 
 class OnChainAnalysisService:
@@ -1455,43 +1463,18 @@ class OnChainAnalysisService:
             orthogonal to this method (which never recomputes delta) and
             is not a re-open of this finding.
         """
-        if underlying_price is None or underlying_price <= 0:
-            return None
-
-        if (
-            mark_iv is None
-            or mark_iv <= 0
-            or mark_iv > _MAX_SANE_MARK_IV_PCT
-        ):
-            return None
-
-        strike = item.get("strike")
-        name = item.get("instrument_name", "")
-        if strike is None or strike <= 0 or not name:
-            return None
-
-        parsed = bs_calculator.parse_instrument_name(name)
-        if parsed is None:
-            return None
-
-        # Mirrors ProspectiveCollector._enrich_with_greeks's own naive-UTC
-        # convention exactly (BlackScholesCalculator.parse_instrument_name
-        # always builds a naive-UTC 08:00 expiry_time) -- a naive-LOCAL
-        # "now" here would reintroduce the same tau error this campaign
-        # already fixed for that daemon path.
-        now_utc_naive = now_utc.replace(tzinfo=None) if now_utc.tzinfo is not None else now_utc
-        time_to_expiry = bs_calculator.calculate_time_to_expiry(now_utc_naive, parsed["expiry_time"])
-        if time_to_expiry <= 0:
-            return None
-
-        calc = bs_calculator.calculate_greeks(
-            spot_price=float(underlying_price),
-            strike_price=float(strike),
-            time_to_expiry=time_to_expiry,
-            implied_volatility=float(mark_iv) / 100.0,
-            option_type=parsed["option_type"],
+        # Task Wave-J-A (Fix 1): the guard logic below used to be inlined
+        # here; it now lives once, shared with ProspectiveCollector's own
+        # BS-fallback path, in BlackScholesCalculator.calculate_greeks_safe
+        # (Core layer -- this is business logic reusable by any Service,
+        # not something that should be duplicated per call site). Behavior
+        # (guard order, None-not-0.0 contract, _MAX_SANE_MARK_IV_PCT ==
+        # BlackScholesCalculator.MAX_SANE_MARK_IV_PCT) is unchanged.
+        calc = bs_calculator.calculate_greeks_safe(
+            item, mark_iv, underlying_price, now_utc,
+            max_sane_mark_iv_pct=_MAX_SANE_MARK_IV_PCT,
         )
-        return calc["gamma"]
+        return calc["gamma"] if calc is not None else None
 
     def _fetch_greeks_and_store_gex_dex(
         self,
@@ -1609,9 +1592,26 @@ class OnChainAnalysisService:
                     # _compute_bs_gamma's docstring for why. This is the one
                     # deliberate exception to this loop's "trust the
                     # ticker" convention.
+                    #
+                    # Task Wave-J-A (Fix 2): the spot fed into this BS
+                    # gamma computation must be analyzer.index_price -- the
+                    # SAME anchor GexDexCalculator uses for its S² scaling
+                    # a few lines below (`GexDexCalculator(instruments_
+                    # with_greeks, analyzer.index_price, ...)`). The old
+                    # code passed item_with_greeks["underlying_price"]
+                    # (ticker.get("underlying_price"), a FUTURE/forward
+                    # price -- bugfix_spec.md Item 7's own anchor table),
+                    # which computed gamma's VALUE at one anchor while
+                    # GexDexCalculator's S² term scaled it at a DIFFERENT
+                    # one -- internally inconsistent with the "GEX must
+                    # anchor on the index" comment at that construction
+                    # site. Measured basis in this repo's own fixture: up
+                    # to +3.9% forward/spot divergence on the far-dated
+                    # expiry, largest exactly where aggregate_across_
+                    # expirations sums everything together.
                     item_with_greeks["gamma"] = self._compute_bs_gamma(
                         bs_calculator, item, item_with_greeks["mark_iv"],
-                        item_with_greeks["underlying_price"], fixed_strike_vol_now_utc,
+                        analyzer.index_price, fixed_strike_vol_now_utc,
                     )
                     instruments_with_greeks.append(item_with_greeks)
 
