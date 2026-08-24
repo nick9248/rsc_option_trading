@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional
 
 from coding.core.analytics.market_wide_calculator import (
     MINIMUM_PRICE_HISTORY_DAYS_FOR_VOL_CONE,
+    MINIMUM_TERM_STRUCTURE_ENTRIES,
     MarketWideCalculator,
 )
 from coding.core.analytics.on_chain_analyzer import OnChainMetricsCalculator
@@ -203,6 +204,24 @@ class MarketWideOrchestrator:
             if dte is not None:
                 entries.append(TermStructureEntry(expiration=exp, dte=dte, atm_iv=iv))
         entries.sort(key=lambda e: e.dte)
+
+        # Task Wave-J-D Fix 2: calculate_iv_term_structure pre-seeds its
+        # returned dict with {"shape": "FLAT", "spread": 0.0} and only
+        # overwrites those with a REAL computed shape/spread once
+        # >= MINIMUM_TERM_STRUCTURE_ENTRIES entries survive DTE parsing.
+        # With fewer usable entries -- a single expiry, or a set of
+        # expiries whose labels all fail DTE parsing -- the gate above
+        # (`if not atm_ivs`) never catches it, because atm_ivs itself can
+        # be non-empty; the pre-seeded default then flows straight into a
+        # REAL, non-None TermStructureResult that is indistinguishable
+        # from a genuinely-computed flat term structure. Gate on the same
+        # threshold the calculator itself uses and return None instead --
+        # Wave-H-B Fix 2's downstream None handling (synthesis.py,
+        # market_wide_formatter.py) already expects and correctly renders
+        # this "not computed" case, but only gets a chance to if this is
+        # actually None rather than a fabricated real object.
+        if len(entries) < MINIMUM_TERM_STRUCTURE_ENTRIES:
+            return None
 
         return TermStructureResult(
             entries=tuple(entries),

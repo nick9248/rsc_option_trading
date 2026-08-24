@@ -78,6 +78,38 @@ class TestCalculateTermStructure:
         assert result.entries[0].dte <= result.entries[1].dte
         assert result.shape in ("CONTANGO", "BACKWARDATION", "FLAT")
 
+    def test_single_atm_iv_returns_none_not_fabricated_flat(self):
+        """
+        Task Wave-J-D Fix 2: calculate_iv_term_structure pre-seeds its
+        returned dict with {"shape": "FLAT", "spread": 0.0} and only
+        overwrites those with a real computed shape/spread once >= 2
+        entries survive DTE parsing. A single atm_iv is non-empty (so the
+        `if not atm_ivs` gate above doesn't catch it) but has only 1 entry
+        -- before this fix that produced a real, non-None
+        TermStructureResult(shape="FLAT", spread_signed=0.0) that was
+        indistinguishable from a genuinely-computed flat term structure.
+        Must now be None, matching Wave-H-B Fix 2's downstream contract.
+        """
+        orchestrator = MarketWideOrchestrator(api=MagicMock())
+        analyzer = _FakeAnalyzer(atm_ivs={"28MAR30": 70.0})
+        result = orchestrator._calculate_term_structure(
+            analyzer, _calc(), progress_callback=lambda m: None,
+        )
+
+        assert result is None
+
+    def test_two_atm_ivs_with_only_one_dte_parseable_returns_none(self):
+        """Same Fix 2 gate, reached via the OTHER route: atm_ivs has 2
+        entries, but only 1 survives DTE parsing (an unparseable expiration
+        label) -- still fewer than 2 usable entries, still None."""
+        orchestrator = MarketWideOrchestrator(api=MagicMock())
+        analyzer = _FakeAnalyzer(atm_ivs={"28MAR30": 70.0, "NOT-A-DATE": 60.0})
+        result = orchestrator._calculate_term_structure(
+            analyzer, _calc(), progress_callback=lambda m: None,
+        )
+
+        assert result is None
+
     def test_progress_callback_invoked_when_atm_ivs_present(self):
         """
         task A7 review: this phase's progress_callback("Calculating IV term
@@ -392,7 +424,13 @@ class TestRunIntegration:
         api.get_volatility_index_data.side_effect = get_volatility_index_data
 
         orchestrator = MarketWideOrchestrator(api=api)
-        analyzer = _FakeAnalyzer(atm_ivs={"27MAR26": 65.0})
+        # Task Wave-J-D Fix 2: term_structure is now None with fewer than
+        # MINIMUM_TERM_STRUCTURE_ENTRIES (2) usable entries -- a single
+        # atm_iv used to fabricate a real FLAT/0.0 TermStructureResult from
+        # calculate_iv_term_structure's pre-seeded default. Two expiries
+        # keep this "produces a populated result" test asserting a
+        # genuinely-computed term structure, not the fabricated one.
+        analyzer = _FakeAnalyzer(atm_ivs={"27MAR26": 65.0, "26JUN26": 60.0})
 
         result = orchestrator.run(analyzer, "BTC", progress_callback=lambda m: None)
 

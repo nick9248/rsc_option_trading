@@ -45,6 +45,17 @@ MINIMUM_DAYS_FOR_ANNUALIZATION = 1.0
 # own "Insufficient" branch, producing a fake all-zero-percentile result.
 MINIMUM_PRICE_HISTORY_DAYS_FOR_VOL_CONE = 35
 
+# Task Wave-J-D Fix 2: calculate_iv_term_structure's own threshold for
+# computing a REAL shape/spread (as opposed to leaving the pre-seeded
+# {"shape": "FLAT", "spread": 0.0} default untouched below). Named so
+# market_wide_orchestrator.py's TermStructureResult construction can gate
+# on the SAME threshold instead of re-declaring the literal 2 -- the same
+# "shared named constant, not a duplicated literal" pattern
+# MINIMUM_PRICE_HISTORY_DAYS_FOR_VOL_CONE above already establishes for the
+# volatility cone's identical "typed result must not be constructed from a
+# pre-seeded default" bug class.
+MINIMUM_TERM_STRUCTURE_ENTRIES = 2
+
 # bugfix_spec.md Item 11 — DVOL correlation must be computed on log CHANGES
 # of the raw DVOL levels, not the levels themselves: correlating levels of
 # two trending, highly persistent series measures shared trend, not
@@ -149,7 +160,7 @@ class MarketWideCalculator:
             )
 
         # Determine structure shape
-        if len(entries) >= 2:
+        if len(entries) >= MINIMUM_TERM_STRUCTURE_ENTRIES:
             front_iv = entries[0]["atm_iv"]
             back_iv = entries[-1]["atm_iv"]
             diff = back_iv - front_iv
