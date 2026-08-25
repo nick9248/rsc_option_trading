@@ -753,7 +753,10 @@ class ProspectiveCollector:
                 trade_id,
                 trade.get("trade_seq"),
                 timestamp,
-                datetime.now(),
+                # Final verification sweep (post Wave J): explicit UTC into
+                # historical_trades.captured_at (naive `TIMESTAMP` column) --
+                # same fix, same convention as save_snapshot's captured_at.
+                datetime.now(timezone.utc).replace(tzinfo=None),
                 instrument_name,
                 currency,
                 expiration,
@@ -812,10 +815,14 @@ class ProspectiveCollector:
 
             # Store to snapshots table using repository method
             try:
+                # Final verification sweep (post Wave J): explicit UTC, not
+                # naive-local -- matches save_snapshot's own now-fixed
+                # default and this codebase's established convention for
+                # every naive `TIMESTAMP` column.
                 rows_saved = self.repo.save_snapshot(
                     currency=currency,
                     data=instruments,
-                    captured_at=datetime.now()
+                    captured_at=datetime.now(timezone.utc).replace(tzinfo=None)
                 )
                 logger.info(f"    Stored {rows_saved} snapshots to database")
             except Exception as e:

@@ -124,7 +124,12 @@ class DatabaseRepository:
         if not data:
             return 0
 
-        captured_at = captured_at or datetime.now()
+        # Final verification sweep (post Wave J): naive-local datetime.now()
+        # into a `TIMESTAMP` (no time zone) column -- this codebase's
+        # established convention throughout is UTC-valued naive datetimes
+        # for every such column (see e.g. Wave-J-E's identical fix for
+        # hourly_snapshots.captured_at). Explicit UTC, then drop tzinfo.
+        captured_at = captured_at or datetime.now(timezone.utc).replace(tzinfo=None)
 
         try:
             with self._db_cursor() as cursor:
@@ -974,7 +979,12 @@ class DatabaseRepository:
         if not flow_data:
             return 0
 
-        captured_at = captured_at or datetime.now()
+        # Final verification sweep (post Wave J): naive-local datetime.now()
+        # into a `TIMESTAMP` (no time zone) column -- this codebase's
+        # established convention throughout is UTC-valued naive datetimes
+        # for every such column (see e.g. Wave-J-E's identical fix for
+        # hourly_snapshots.captured_at). Explicit UTC, then drop tzinfo.
+        captured_at = captured_at or datetime.now(timezone.utc).replace(tzinfo=None)
 
         try:
             with self._db_cursor() as cursor:
