@@ -1683,6 +1683,15 @@ class TestBuildMarketWide:
         assert market.term_structure_spread is None
         assert market.term_structure_spread_signed is None
         assert market.futures_basis == {}
+        # Final verification sweep (post Wave J): aggregate_gex_dex=None
+        # (the whole aggregate-GEX/DEX computation never ran) must reach
+        # MarketWideMetrics as aggregate_total_gex/dex=None, never a
+        # fabricated 0.0 -- the old fabrication made a genuinely-missing
+        # aggregate indistinguishable from a real, measured gamma-neutral
+        # book at the SynthesisEngine.run() regime-selection fallback
+        # (see test_run_real_zero_aggregate_gex_not_swapped_for_largest_expiry).
+        assert market.aggregate_total_gex is None
+        assert market.aggregate_total_dex is None
 
     def test_partial_rv_and_cone_windows_stay_none_not_fabricated_zero(self):
         """
@@ -2519,6 +2528,39 @@ class TestSynthesisEngineRun:
         result = engine.run(market, [expiry])
         assert "86.8M GEX" in result
         assert "13.7M GEX" not in result
+
+    def test_run_real_zero_aggregate_gex_not_swapped_for_largest_expiry(self):
+        """
+        Final verification sweep (post Wave J): a REAL, measured
+        aggregate_total_gex of exactly 0.0 (a genuinely gamma-neutral
+        book) must NOT be treated the same as a missing aggregate and
+        silently swapped for largest_expiry.total_gex -- the old
+        `gex_for_regime = aggregate_total_gex if aggregate_total_gex !=
+        0.0 else largest_expiry.total_gex` sentinel check did exactly
+        that (0.0, whether genuinely measured or fabricated for a
+        missing computation, always failed `!= 0.0` and triggered the
+        swap). Reproduced with a real aggregate of 0.0 alongside a
+        large, easily-distinguished largest_expiry.total_gex (13.7M) --
+        the regime narrative must describe the real 0.0 aggregate, not
+        the swapped-in per-expiry value.
+        """
+        engine = SynthesisEngine()
+        market = make_market_wide(aggregate_total_gex=0.0)
+        expiry = make_expiry_metrics(total_gex=13_700_000.0)
+        result = engine.run(market, [expiry])
+        assert "13.7M GEX" not in result
+        assert "0.0M GEX" in result
+
+    def test_run_missing_aggregate_gex_still_falls_back_to_largest_expiry(self):
+        """Sanity check: a GENUINELY missing aggregate (None, not a real
+        0.0) must still fall back to largest_expiry.total_gex -- only the
+        sentinel comparison changed (`is not None` instead of `!= 0.0`),
+        not the fallback behavior itself for the actually-missing case."""
+        engine = SynthesisEngine()
+        market = make_market_wide(aggregate_total_gex=None)
+        expiry = make_expiry_metrics(total_gex=13_700_000.0)
+        result = engine.run(market, [expiry])
+        assert "13.7M GEX" in result
 
     def test_run_with_minimal_expiries(self):
         engine = SynthesisEngine()

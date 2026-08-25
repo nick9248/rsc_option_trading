@@ -313,9 +313,20 @@ class MarketWideMetrics:
     blocks: List[dict] = field(default_factory=list)
     large_prints: List[dict] = field(default_factory=list)
 
-    # Aggregate GEX/DEX across all expirations
-    aggregate_total_gex: float = 0.0
-    aggregate_total_dex: float = 0.0
+    # Aggregate GEX/DEX across all expirations. Final verification sweep
+    # (post Wave J): None exactly when the whole aggregate-GEX/DEX
+    # computation never ran (mw.aggregate_gex_dex is None) -- NOT a
+    # measured 0.0. Before this fix, both fields defaulted to a fabricated
+    # 0.0 on that path, and the regime-selection fallback at
+    # SynthesisEngine.run (``gex_for_regime = aggregate_total_gex if
+    # aggregate_total_gex != 0.0 else largest_expiry.total_gex``) used that
+    # fabricated 0.0 as its "unavailable, fall back" sentinel -- which
+    # happened to give the right answer when the aggregate genuinely never
+    # computed, but silently discarded a REAL, valid measurement whenever
+    # aggregate GEX/DEX was genuinely, exactly 0.0 (a real gamma-neutral
+    # book), substituting one expiry's GEX instead of the true aggregate.
+    aggregate_total_gex: Optional[float] = None
+    aggregate_total_dex: Optional[float] = None
     aggregate_call_resistance: Optional[Dict] = None
     aggregate_put_support: Optional[Dict] = None
     aggregate_hvl: Optional[float] = None
@@ -2085,10 +2096,16 @@ class SynthesisEngine:
         )
         dir_confidence *= fragility_multiplier
 
-        # Vol regime — prefer market-wide aggregate GEX; fall back to largest expiry
+        # Vol regime — prefer market-wide aggregate GEX; fall back to largest
+        # expiry. Final verification sweep (post Wave J): gated on `is not
+        # None`, not `!= 0.0` -- the old sentinel comparison discarded a
+        # REAL aggregate GEX/DEX measurement of exactly 0.0 (a genuinely
+        # gamma-neutral book) the same way it caught a genuinely-missing
+        # aggregate, silently substituting largest_expiry.total_gex for a
+        # real, valid market-wide reading.
         gex_for_regime = (
             market.aggregate_total_gex
-            if market.aggregate_total_gex != 0.0
+            if market.aggregate_total_gex is not None
             else largest_expiry.total_gex
         )
         vol_regime, vol_reasons = self.classifier.classify_vol_regime(
@@ -2994,8 +3011,11 @@ class SynthesisMapper:
         agg_gex = mw.aggregate_gex_dex
         if agg_gex is not None:
             agg_key_levels = agg_gex.key_levels
-            aggregate_total_gex = agg_gex.total_net_gex or 0.0
-            aggregate_total_dex = agg_gex.total_net_dex or 0.0
+            # GexDexResult.total_net_gex/total_net_dex are plain (never-
+            # None) float fields on a real result object -- no `or 0.0`
+            # collapse needed or wanted here.
+            aggregate_total_gex = agg_gex.total_net_gex
+            aggregate_total_dex = agg_gex.total_net_dex
             aggregate_call_resistance = (
                 {"strike": agg_key_levels.call_resistance.strike,
                  "net_gex": agg_key_levels.call_resistance.net_gex}
@@ -3008,8 +3028,8 @@ class SynthesisMapper:
             )
             aggregate_hvl = agg_key_levels.hvl
         else:
-            aggregate_total_gex = 0.0
-            aggregate_total_dex = 0.0
+            aggregate_total_gex = None
+            aggregate_total_dex = None
             aggregate_call_resistance = None
             aggregate_put_support = None
             aggregate_hvl = None
