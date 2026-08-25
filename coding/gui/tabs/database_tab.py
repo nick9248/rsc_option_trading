@@ -6,7 +6,10 @@ collection - it runs hourly and writes directly to the VPS database. This tab
 only pulls that data down to the local database for analysis/GUI use, and
 offers a shortcut to browse any historical chart artifacts on disk.
 
-This is a thin GUI layer - all business logic is in scripts/sync_from_vps.py.
+This is a thin GUI layer - all sync business logic (SSH tunnel, raw DB
+connections, table-sync loop) lives in
+coding.service.database.vps_sync_service.VpsSyncService, which itself
+reuses scripts/sync_from_vps.py's mechanics rather than duplicating them.
 """
 
 import logging
@@ -28,60 +31,30 @@ from PySide6.QtCore import QThread, Signal
 
 from coding.gui.components.log_viewer import LogViewer, GuiLogHandler
 from coding.gui.theme.colors import Colors
+from coding.service.database.vps_sync_service import VpsSyncService
 
 logger = logging.getLogger(__name__)
 
 
 class SyncWorker(QThread):
-    """Worker thread for syncing data from VPS."""
+    """
+    Worker thread for syncing data from VPS.
+
+    Wave G task G2-F fix 3: this used to import psycopg2 and manage raw
+    connections/an SSH tunnel directly in this GUI file (with no
+    try/finally, so a mid-loop failure leaked both connections and the
+    tunnel). All of that now lives in VpsSyncService.sync() -- this class
+    only calls it and translates the result into Qt signals.
+    """
 
     progress = Signal(str)
     finished = Signal(bool, str)  # (success, summary_message)
 
     def run(self) -> None:
-        """Run VPS sync."""
+        """Run VPS sync via VpsSyncService, emitting Qt signals for progress/completion."""
         try:
-            from scripts.sync_from_vps import (
-                open_ssh_tunnel, sync_table, SYNC_TABLES,
-                VPS_TUNNEL_CONN, LOCAL_CONN, _pull_health_json
-            )
-            import psycopg2
-            from datetime import datetime
-
-            start = datetime.now()
-            self.progress.emit("Opening SSH tunnel to VPS...")
-
-            tunnel = open_ssh_tunnel()
-            self.progress.emit("Tunnel established. Connecting to databases...")
-
-            vps_conn = psycopg2.connect(**VPS_TUNNEL_CONN)
-            vps_conn.autocommit = True
-            local_conn = psycopg2.connect(**LOCAL_CONN)
-
-            total_rows = 0
-            errors = []
-
-            for table in SYNC_TABLES:
-                count, msg = sync_table(vps_conn, local_conn, table)
-                status = "OK " if count >= 0 else "ERR"
-                self.progress.emit(f"  [{status}] {table['name']}: {msg}")
-                if count > 0:
-                    total_rows += count
-                if count < 0:
-                    errors.append(table["name"])
-
-            _pull_health_json()
-
-            vps_conn.close()
-            local_conn.close()
-            tunnel.terminate()
-
-            duration = (datetime.now() - start).total_seconds()
-            summary = f"Synced {total_rows:,} rows in {duration:.1f}s"
-            if errors:
-                summary += f" — {len(errors)} error(s): {', '.join(errors)}"
-            self.finished.emit(len(errors) == 0, summary)
-
+            result = VpsSyncService().sync(progress_callback=self.progress.emit)
+            self.finished.emit(result.success, result.summary_message)
         except Exception as e:
             self.finished.emit(False, f"Sync failed: {e}")
 

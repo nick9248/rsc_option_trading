@@ -8,7 +8,7 @@ import json
 import logging
 import math
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -797,8 +797,15 @@ def generate_flow_trend_chart(
     """
     display_label = expiration if expiration else "All Expirations"
 
-    # Calculate time range
-    end_time = datetime.now()
+    # Calculate time range. Final verification sweep (post Wave J): naive
+    # datetime.now() is host-local and ambiguous during the DST fall-back
+    # hour (the repeated local hour maps to two different UTC instants) --
+    # same failure mode Task Wave-I-C Fix 1 fixed at two sites in
+    # on_chain_analysis_service.py, present here too since this method was
+    # never in that task's scope. Kept timezone-AWARE (not naive-UTC) since
+    # end_time/start_time are only ever used via .timestamp() below, which
+    # is unambiguous for an aware datetime regardless of host tz/DST state.
+    end_time = datetime.now(timezone.utc)
     start_time = end_time - timedelta(days=lookback_days)
 
     start_ts = int(start_time.timestamp() * 1000)
@@ -1358,7 +1365,7 @@ def generate_iron_condor_payoff_chart(
     inject_theme_toggle_js (which can only remap colors set explicitly on
     the figure, never colors baked into a `template=...` string).
     """
-    from coding.service.scanner.defined_risk_candidate_builder import iron_condor_payoff
+    from coding.core.analytics.payoff_calculator import iron_condor_payoff
 
     theme = get_chart_theme()
 
@@ -1422,7 +1429,7 @@ def generate_butterfly_payoff_chart(
     currency: str, expiry: str, dte: float, future_price: float, candidate: Dict[str, float],
 ) -> go.Figure:
     """Long call butterfly payoff-at-expiry chart. Same visual contract as generate_iron_condor_payoff_chart."""
-    from coding.service.scanner.defined_risk_candidate_builder import butterfly_payoff
+    from coding.core.analytics.payoff_calculator import butterfly_payoff
 
     theme = get_chart_theme()
 

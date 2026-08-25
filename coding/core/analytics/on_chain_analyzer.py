@@ -1,19 +1,127 @@
 """
 On-chain analytics for options market data.
 
-Calculates max pain, put/call ratios, support/resistance levels,
-and generates formatted text reports per expiration.
+Calculates max pain, put/call ratios, support/resistance levels, and
+moneyness breakdowns per expiration.
+
+refactor_design_spec.md section T10: this module was ``OnChainAnalyzer``, a
+mutable accumulator that also owned 351 lines of report-text generation
+(``generate_report()``) plus 14 setters and 16 mutable section attributes
+for that report's bookkeeping. All of that moved out over T3 (formatters
+extracted to ``core/analytics/reporting/``), T6 (``OnChainAnalysisBuilder``
+replaced the setters as the typed aggregation point), T8/T10 (rendering
+moved to ``OnChainReportFormatter.render_full_from_result``, fed by the
+builder's typed result, not this class's dicts). This module is now
+``OnChainMetricsCalculator``: pure per-expiration calculation, narrowed to
+exactly the methods ``ProspectiveCollector`` (the production daemon) and
+``OnChainAnalysisService`` actually call, plus the state those calls need
+across phases (``enriched_instruments``, ``market_metrics``,
+``_recent_trades``, ``_atm_ivs`` -- real cross-phase data, not report
+bookkeeping, so they stay as plain attributes the service writes directly,
+with no setter method).
+
+``OnChainAnalyzer`` remains a back-compat alias for any caller that still
+imports the old name.
 """
 
 import logging
-import math
-from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+import statistics
+import warnings
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
+from coding.core.analytics.forward_price_utils import select_forward_price
+from coding.core.analytics.market_wide_calculator import DERIBIT_SETTLEMENT_HOUR_UTC
+from coding.core.analytics.results.analysis_result import MarketMetricsResult
+from coding.core.analytics.thresholds import (
+    OI_SKEW_ITM_HEAVY_THRESHOLD_PCT,
+    OI_SKEW_OTM_HEAVY_THRESHOLD_PCT,
+    interpret_put_call_ratio,
+)
+from coding.core.analytics.results.expiry_results import (
+    ExpirationAnalysisResult,
+    LevelRef,
+    MaxPainResult,
+    MoneynessLeg,
+    MoneynessResult,
+    PutCallRatioResult,
+    StrikeOiRow,
+    SupportResistanceResult,
+    VolumeStatsResult,
+)
 
 logger = logging.getLogger(__name__)
 
 
-class OnChainAnalyzer:
+def _to_market_metrics(market_metrics: Dict[str, Any]) -> Optional[MarketMetricsResult]:
+    """Adapt the legacy market_metrics dict into a MarketMetricsResult.
+
+    Returns None when market_metrics was never populated (empty dict) —
+    matches the legacy ``if self.market_metrics:`` truthiness gate.
+    """
+    if not market_metrics:
+        return None
+    return MarketMetricsResult(**market_metrics)
+
+
+def _level_ref(level: Optional[Dict[str, Any]], oi_key: str) -> Optional[LevelRef]:
+    """Adapt a legacy {"strike": ..., "call_oi"|"put_oi": ...} dict into a LevelRef."""
+    if not level:
+        return None
+    return LevelRef(strike=level["strike"], open_interest=level[oi_key])
+
+
+def _to_expiration_analysis_result(analysis: Dict[str, Any]) -> ExpirationAnalysisResult:
+    """
+    Adapt the legacy ``analyze_expiration()`` dict shape into an
+    ExpirationAnalysisResult. Used internally by ``analyze_expiration``
+    (the method itself now returns the typed result directly, T10).
+    """
+    strike_data = analysis["strike_data"]
+    strike_rows = tuple(
+        StrikeOiRow(
+            strike=strike,
+            call_oi=strike_data[strike]["call_oi"],
+            put_oi=strike_data[strike]["put_oi"],
+            call_volume=strike_data[strike]["call_volume"],
+            put_volume=strike_data[strike]["put_volume"],
+        )
+        for strike in sorted(strike_data.keys())
+    )
+
+    money = analysis["moneyness"]
+    sr = analysis["support_resistance"]
+
+    return ExpirationAnalysisResult(
+        expiration=analysis["expiration"],
+        underlying_price=analysis["underlying_price"],
+        total_instruments=analysis["total_instruments"],
+        call_count=analysis["call_count"],
+        put_count=analysis["put_count"],
+        strike_rows=strike_rows,
+        max_pain=MaxPainResult(**analysis["max_pain"]),
+        put_call_ratio=PutCallRatioResult(**analysis["put_call_ratio"]),
+        volume_stats=VolumeStatsResult(**analysis["volume_stats"]),
+        moneyness=MoneynessResult(
+            calls=MoneynessLeg(**money["calls"]),
+            puts=MoneynessLeg(**money["puts"]),
+            totals=MoneynessLeg(**money["totals"]),
+            oi_skew=money["oi_skew"],
+        ),
+        support_resistance=SupportResistanceResult(
+            resistance_levels=tuple(
+                _level_ref(level, "call_oi") for level in sr["resistance_levels"]
+            ),
+            support_levels=tuple(
+                _level_ref(level, "put_oi") for level in sr["support_levels"]
+            ),
+            short_term_resistance=_level_ref(sr["short_term_resistance"], "call_oi"),
+            short_term_support=_level_ref(sr["short_term_support"], "put_oi"),
+        ),
+    )
+
+
+class OnChainMetricsCalculator:
     """
     Calculate on-chain analytics from option book summary data.
 
@@ -22,12 +130,40 @@ class OnChainAnalyzer:
     - Put/Call ratios
     - Support and resistance levels
     - Open interest by strike
-    - GEX/DEX exposure (when Greeks data is provided)
+    - Moneyness (ITM/OTM) breakdown
+
+    Pure calculation (refactor_design_spec.md section T10) -- GEX/DEX, flow,
+    volatility-surface, market-wide, and report-rendering concerns all live
+    in their own calculator/formatter modules now; this class only knows
+    about the per-expiration book-summary numbers.
     """
 
     def __init__(self, data: List[Dict[str, Any]], currency: str):
         """
-        Initialize analyzer with book summary data.
+        Initialize calculator with book summary data.
+
+        bugfix_spec.md Item 7: this used to auto-extract a single global
+        "spot" price -- the ``underlying_price`` (a FUTURE, not the index)
+        of whichever instrument in the WHOLE book happened to have the
+        highest 24h volume -- and apply it everywhere (GEX/DEX, moneyness,
+        max-pain distance, ...), regardless of expiry. That is wrong twice
+        over: (1) ``underlying_price`` is a future, not the index, so it is
+        the wrong basis for spot-anchored metrics (GEX/DEX, USD conversion);
+        (2) even where a future price IS correct (moneyness, breakevens --
+        strike-space math), using ONE expiry's future for every OTHER
+        expiry ignores the futures basis, which the audit measured at up to
+        +3.9% across expiries (GEX distortion up to +7.9%, since GEX scales
+        with S²).
+
+        Fix: two prices now, each anchored correctly --
+        ``index_price`` (spot index, set explicitly via ``set_index_price``,
+        no heuristic -- the service supplies it from
+        ``DeribitApiService.get_index_price``) and
+        ``forward_price_by_expiration`` (this expiry's own future price,
+        picked per-expiry from ``data`` at construction time -- no network
+        call needed, it's the same book-summary rows already passed in).
+        See ``DeribitApiService.get_option_chain_snapshot``'s docstring for
+        the authoritative index-vs-future rule this follows.
 
         Args:
             data: List of book summary items from Deribit API.
@@ -35,72 +171,153 @@ class OnChainAnalyzer:
         """
         self.raw_data = data
         self.currency = currency
-        self.underlying_price: float = 0.0
+        self.index_price: float = 0.0
+        self.forward_price_by_expiration: Dict[str, Optional[float]] = {}
         self.parsed_data: Dict[str, List[Dict]] = {}
-        self.gex_dex_data: Dict[str, str] = {}  # Stores GEX/DEX report per expiration
-        self.buy_sell_flow_data: Dict[str, str] = {}  # Stores buy/sell flow report per expiration
-        self.buy_sell_flow_charts: Dict[str, Dict[str, str]] = {}  # Stores chart paths per expiration
-        self.market_metrics: Dict[str, Any] = {}  # Stores DVOL, funding rate, etc.
+
+        # Cross-phase state written directly by OnChainAnalysisService (no
+        # setter methods -- these are real data dependencies between
+        # pipeline phases, not report-text bookkeeping):
         self.enriched_instruments: Dict[str, List[Dict]] = {}  # Instruments with full Greeks/IV
-        self.volatility_surface_data: Dict[str, str] = {}  # Vol surface report per expiration
-        self.oi_changes_data: Dict[str, str] = {}  # OI changes report per expiration
-        self.market_wide_sections: Dict[str, str] = {}  # Market-wide report sections
-        self.gex_dex_structured: Dict[str, Dict] = {}           # Raw GEX/DEX data per expiry
-        self.buy_sell_flow_structured: Dict[str, Dict] = {}     # Raw flow data per expiry
-        self.volatility_surface_structured: Dict[str, Dict] = {}  # Raw vol surface per expiry
-        self.market_wide_structured: Dict[str, Any] = {}        # Raw market-wide metrics
-        self.trend_data: Dict[str, Optional[Dict]] = {}         # Previous DB snapshot per expiry
-        self._recent_trades: List[Dict[str, Any]] = []          # Recent trades for block trade detection
-        self._atm_ivs: Dict[str, float] = {}                    # ATM IV per expiration (for term structure)
+        self.market_metrics: Dict[str, Any] = {}  # DVOL, funding rate, IV rank/percentile
+        self._recent_trades: List[Dict[str, Any]] = []  # For block trade detection
+        self._atm_ivs: Dict[str, float] = {}  # ATM IV per expiration (for term structure)
+        # institutional_metrics_spec.md section 3 (Task C4): delta-
+        # interpolated RR25/BF25 dict (VolatilitySurfaceCalculator.
+        # calculate_risk_reversal_butterfly()'s return shape) per
+        # expiration, populated during the same vol-surface phase that
+        # fills _atm_ivs -- feeds the SKEW TERM STRUCTURE report section.
+        self._skew_by_expiry: Dict[str, Dict[str, Any]] = {}
 
-        # Extract underlying price using most common value (mode)
-        # Different instruments may have slightly different underlying_price values
-        # depending on when their data was last updated. The mode gives us
-        # the most current price since most instruments share it.
         if data:
-            self.underlying_price = self._extract_underlying_price(data)
+            self.forward_price_by_expiration = self._extract_forward_prices(data)
 
-        logger.info(f"Initialized OnChainAnalyzer with {len(data)} instruments")
+        logger.info(f"Initialized OnChainMetricsCalculator with {len(data)} instruments")
 
-    def _extract_underlying_price(self, data: List[Dict[str, Any]]) -> float:
+    @property
+    def underlying_price(self) -> float:
         """
-        Extract the most accurate underlying price from data.
+        DEPRECATED (bugfix_spec.md Item 7): historically the single global
+        "spot" price (actually a future's price, from the highest-volume
+        instrument in the whole book). Kept for one release as a read-only
+        alias for ``index_price`` so existing readers (``save_onchain_snapshot``
+        callers, report code that has not yet migrated) keep working.
 
-        Uses the underlying_price from the highest volume instrument,
-        as actively traded instruments have the most recently updated
-        price data. The book_summary endpoint caches underlying_price
-        per instrument, so stale instruments may have outdated values.
+        Use ``index_price`` for spot-anchored metrics (GEX/DEX, USD
+        conversion) or ``forward_price_by_expiration[expiration]`` for
+        settlement-space metrics (moneyness, max-pain distance, breakevens).
+        """
+        warnings.warn(
+            "OnChainMetricsCalculator.underlying_price is deprecated -- use "
+            "index_price (spot-anchored metrics) or "
+            "forward_price_by_expiration[expiration] (settlement-space "
+            "metrics). bugfix_spec.md Item 7.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.index_price
+
+    def set_index_price(self, index_price: float) -> None:
+        """
+        Set the spot index price (bugfix_spec.md Item 7).
+
+        The service supplies this from ``DeribitApiService.get_index_price``
+        -- no heuristic, no volume race. Anchors every spot-anchored metric
+        (GEX/DEX, USD notional conversion).
+
+        Args:
+            index_price: Current spot index price (USD per unit currency).
+        """
+        self.index_price = index_price
+
+    def _extract_forward_prices(self, data: List[Dict[str, Any]]) -> Dict[str, Optional[float]]:
+        """
+        Per-expiry forward (future) price, picked from ``data`` directly (no
+        network call -- this is the same book-summary rows already passed to
+        the constructor).
+
+        Groups by expiry parsed from ``instrument_name`` (mirrors
+        ``parse_instruments``'s own parsing, done separately here because
+        ``parse_instruments`` drops ``underlying_price`` from its parsed
+        shape) and applies the shared ``select_forward_price`` pick --
+        the same highest-volume-in-group logic
+        ``DeribitApiService.get_option_chain_snapshot`` uses for its own
+        ``futures_by_expiry`` (bugfix_spec.md F7.3.1: shared helper, not a
+        third duplicate).
 
         Args:
             data: List of book summary items.
 
         Returns:
-            Underlying price from highest volume instrument, or 0 if none found.
+            Dict mapping expiry -> forward price. A group with no priced
+            instrument at all maps to ``None`` (resolved to ``index_price``
+            with a ``logger.warning`` at the point of use, once
+            ``index_price`` is actually known -- see ``analyze_expiration``).
         """
-        # Filter to instruments with volume and valid price
-        active_instruments = [
-            item for item in data
-            if (item.get("volume") or 0) > 0 and item.get("underlying_price")
+        grouped: Dict[str, List[Dict[str, Any]]] = {}
+        for item in data:
+            parts = item.get("instrument_name", "").split("-")
+            if len(parts) < 2:
+                continue
+            grouped.setdefault(parts[1], []).append(item)
+
+        return {expiry: select_forward_price(items) for expiry, items in grouped.items()}
+
+    def nearest_expiry_median_underlying_price(self) -> Optional[float]:
+        """
+        Fallback spot price when ``get_index_price`` fails (bugfix_spec.md
+        Item 7 / 7.4 edge case): the median ``underlying_price`` across the
+        NEAREST expiry's instruments -- the smallest-basis proxy available
+        without the index -- never the old global highest-volume pick.
+
+        Callers must ``logger.error`` when they use this (a fallback firing
+        means the primary index-price fetch failed) -- this method only
+        computes the value.
+
+        Returns:
+            The nearest expiry's median underlying_price, or ``None`` if no
+            instrument in ``raw_data`` has a parseable expiry with a priced
+            underlying_price at all (Wave H Task H-F, Fix 3: was ``0.0``,
+            which is indistinguishable from a genuine $0 price once
+            persisted -- a caller with NO real price must be able to tell
+            "no price" apart from "priced at zero" and refuse to write a
+            poisoned snapshot).
+        """
+        prices_by_expiry: Dict[str, List[float]] = {}
+        for item in self.raw_data:
+            parts = item.get("instrument_name", "").split("-")
+            if len(parts) < 2:
+                continue
+            price = item.get("underlying_price")
+            if not price:
+                continue
+            prices_by_expiry.setdefault(parts[1], []).append(price)
+
+        if not prices_by_expiry:
+            return None
+
+        now_utc = datetime.now(timezone.utc)
+
+        def _parse_expiry(expiry: str) -> Optional[datetime]:
+            try:
+                return datetime.strptime(expiry, "%d%b%y").replace(
+                    hour=DERIBIT_SETTLEMENT_HOUR_UTC, minute=0, second=0,
+                    microsecond=0, tzinfo=timezone.utc,
+                )
+            except ValueError:
+                return None
+
+        dated_expiries = [
+            (expiry, _parse_expiry(expiry)) for expiry in prices_by_expiry
         ]
+        dated_expiries = [(expiry, dt) for expiry, dt in dated_expiries if dt is not None]
+        if not dated_expiries:
+            return None
 
-        if not active_instruments:
-            # Fallback: use any instrument with a price
-            for item in data:
-                if item.get("underlying_price"):
-                    return item.get("underlying_price")
-            return 0.0
-
-        # Get the instrument with highest volume (most recently active)
-        highest_volume_item = max(active_instruments, key=lambda x: x.get("volume", 0))
-        price = highest_volume_item.get("underlying_price", 0)
-
-        logger.debug(
-            f"Underlying price: {price} "
-            f"(from {highest_volume_item.get('instrument_name')} "
-            f"with volume {highest_volume_item.get('volume')})"
+        nearest_expiry, _ = min(
+            dated_expiries, key=lambda pair: abs((pair[1] - now_utc).total_seconds())
         )
-
-        return price
+        return float(statistics.median(prices_by_expiry[nearest_expiry]))
 
     def parse_instruments(self) -> Dict[str, List[Dict[str, Any]]]:
         """
@@ -203,12 +420,14 @@ class OnChainAnalyzer:
         Max pain is the strike where option writers (sellers) pay the minimum
         to option buyers. It's where the most options expire worthless.
 
-        Formula:
-        For each candidate strike K:
-          - Call loss at strike S: max(0, K - S) * call_OI
-          - Put loss at strike S: max(0, S - K) * put_OI
-          - Total pain = sum of all call + put losses
-        Max Pain = K with minimum total pain
+        Formula (Wave G task G2-F fix: this docstring previously had the
+        call/put terms swapped relative to the code below -- the code was
+        always correct; only the docstring was inverted):
+        For each candidate settlement price S:
+          - Call loss at strike K: max(0, S - K) * call_OI
+          - Put loss at strike K: max(0, K - S) * put_OI
+          - Total pain = sum over all strikes K of call + put losses
+        Max Pain = S with minimum total pain
 
         Args:
             strike_data: Dict mapping strike -> {call_oi, put_oi}.
@@ -273,17 +492,11 @@ class OnChainAnalyzer:
         else:
             ratio = float("inf") if total_put_oi > 0 else 0
 
-        # Determine bias
-        if ratio < 0.7:
-            bias = "Strong Bullish"
-        elif ratio < 1.0:
-            bias = "Bullish"
-        elif ratio == 1.0:
-            bias = "Neutral"
-        elif ratio < 1.3:
-            bias = "Bearish"
-        else:
-            bias = "Strong Bearish"
+        # M4 (code_quality_review.md): shared interpreter, unifying this
+        # method's vocabulary with VolatilitySurfaceCalculator's per-bucket
+        # P/C ratio bias (refactor_design_spec.md T12 -- planned golden
+        # delta).
+        bias = interpret_put_call_ratio(ratio)
 
         return {
             "total_call_oi": total_call_oi,
@@ -404,9 +617,9 @@ class OnChainAnalyzer:
         total_otm_pct = (total_otm_notional / total_notional * 100) if total_notional > 0 else 0
 
         # Determine OI skew interpretation
-        if total_otm_pct > 70:
+        if total_otm_pct > OI_SKEW_OTM_HEAVY_THRESHOLD_PCT:
             oi_skew = "Heavy OTM (Speculative)"
-        elif total_itm_pct > 40:
+        elif total_itm_pct > OI_SKEW_ITM_HEAVY_THRESHOLD_PCT:
             oi_skew = "Heavy ITM (Hedging)"
         else:
             oi_skew = "Balanced"
@@ -538,19 +751,28 @@ class OnChainAnalyzer:
             "short_term_support": short_term_support,
         }
 
-    def analyze_expiration(self, expiration: str) -> Dict[str, Any]:
+    def analyze_expiration(self, expiration: str) -> Optional[ExpirationAnalysisResult]:
         """
         Perform full analysis for a single expiration.
+
+        refactor_design_spec.md section T10 (compat map row #8): returns
+        the typed ``ExpirationAnalysisResult`` directly now (previously a
+        plain dict; the adapter that used to sit in the caller,
+        ``_to_expiration_analysis_result``, now lives inside this method).
+        Every caller (``OnChainAnalysisService``, ``ProspectiveCollector``)
+        updated in the same commit.
 
         Args:
             expiration: Expiration date string (e.g., "27DEC24").
 
         Returns:
-            Dict with all analysis results for this expiration.
+            The expiration's typed analysis result, or None if the
+            expiration is not in the parsed data (matches the legacy
+            ``return {}`` "not found" case's falsy/absent semantics).
         """
         if expiration not in self.parsed_data:
             logger.warning(f"Expiration {expiration} not found in data")
-            return {}
+            return None
 
         instruments = self.parsed_data[expiration]
         strike_data = self.group_by_strike(instruments)
@@ -559,18 +781,32 @@ class OnChainAnalyzer:
         call_count = sum(1 for i in instruments if i["option_type"] == "C")
         put_count = sum(1 for i in instruments if i["option_type"] == "P")
 
+        # bugfix_spec.md Item 7 / 7.2 anchor table: moneyness, max-pain
+        # distance, and support/resistance are settlement-space (strike vs.
+        # where THIS expiry's contract settles) -- the per-expiry forward is
+        # the correct anchor, not the global index. Fall back to the index
+        # (with a warning) only for the rare expiry with no priced
+        # instrument at all (edge case 7.4).
+        forward_price = self.forward_price_by_expiration.get(expiration)
+        if forward_price is None:
+            logger.warning(
+                f"No forward price for expiration {expiration} -- falling "
+                f"back to index price ({self.index_price})"
+            )
+            forward_price = self.index_price
+
         # Calculate analytics
         max_pain = self.calculate_max_pain(strike_data)
         put_call_ratio = self.calculate_put_call_ratio(strike_data)
         volume_stats = self.calculate_volume_stats(strike_data)
-        moneyness = self.analyze_moneyness(instruments, self.underlying_price)
+        moneyness = self.analyze_moneyness(instruments, forward_price)
         support_resistance = self.find_support_resistance(
-            strike_data, self.underlying_price
+            strike_data, forward_price
         )
 
-        return {
+        analysis = {
             "expiration": expiration,
-            "underlying_price": self.underlying_price,
+            "underlying_price": forward_price,
             "total_instruments": len(instruments),
             "call_count": call_count,
             "put_count": put_count,
@@ -581,359 +817,7 @@ class OnChainAnalyzer:
             "moneyness": moneyness,
             "support_resistance": support_resistance,
         }
-
-    def generate_report(self) -> str:
-        """
-        Generate a formatted text report for all expirations.
-
-        Returns:
-            Formatted text report string.
-        """
-        if not self.parsed_data:
-            self.parse_instruments()
-
-        lines = []
-        separator = "=" * 80
-        sub_separator = "-" * 80
-
-        # Header
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        lines.append(separator)
-        lines.append("ON CHAIN ANALYSIS REPORT")
-        lines.append(f"Generated: {timestamp}")
-        lines.append(f"Currency: {self.currency}")
-        lines.append(f"Current Underlying Price: ${self.underlying_price:,.2f}")
-        lines.append(separator)
-        lines.append("")
-
-        # Market Metrics (DVOL, Funding Rate) - if available
-        if self.market_metrics:
-            lines.append("MARKET METRICS")
-            lines.append(sub_separator)
-
-            dvol = self.market_metrics.get("dvol")
-            iv_percentile = self.market_metrics.get("iv_percentile")
-            current_funding = self.market_metrics.get("current_funding")
-            funding_8h = self.market_metrics.get("funding_8h")
-            iv_rank = self.market_metrics.get("iv_rank")
-
-            if dvol is not None:
-                lines.append(f"DVOL (Volatility Index): {dvol:.2f}")
-            if iv_percentile is not None:
-                lines.append(f"IV Percentile (365d): {iv_percentile:.1f}%")
-            if iv_rank is not None:
-                lines.append(f"IV Rank (365d): {iv_rank:.1f}%")
-            if dvol is not None:
-                daily_move = dvol / 100 / math.sqrt(365) * self.underlying_price
-                weekly_move = dvol / 100 / math.sqrt(52) * self.underlying_price
-                monthly_move = dvol / 100 / math.sqrt(12) * self.underlying_price
-                daily_pct = dvol / 100 / math.sqrt(365) * 100
-                weekly_pct = dvol / 100 / math.sqrt(52) * 100
-                monthly_pct = dvol / 100 / math.sqrt(12) * 100
-                lines.append(
-                    f"Expected Daily Move:    ${daily_move:,.2f}  ({daily_pct:.1f}%)"
-                )
-                lines.append(
-                    f"Expected Weekly Move:   ${weekly_move:,.2f}  ({weekly_pct:.1f}%)"
-                )
-                lines.append(
-                    f"Expected Monthly Move:  ${monthly_move:,.2f}  ({monthly_pct:.1f}%)"
-                )
-            if current_funding is not None:
-                # Convert to percentage and annualized
-                funding_pct = current_funding * 100
-                funding_annualized = current_funding * 3 * 365 * 100  # 3 funding periods per day
-                lines.append(
-                    f"Current Funding Rate: {funding_pct:.4f}% "
-                    f"({funding_annualized:.2f}% annualized)"
-                )
-            if funding_8h is not None:
-                funding_8h_pct = funding_8h * 100
-                lines.append(f"8h Funding Rate: {funding_8h_pct:.4f}%")
-
-            lines.append("")
-            lines.append(separator)
-            lines.append("")
-
-        # Sort expirations chronologically
-        expirations = sorted(self.parsed_data.keys())
-
-        for expiration in expirations:
-            analysis = self.analyze_expiration(expiration)
-            if not analysis:
-                continue
-
-            lines.append(f"EXPIRATION: {expiration}")
-            lines.append(sub_separator)
-
-            # Summary
-            lines.append(
-                f"Total Instruments: {analysis['total_instruments']} "
-                f"({analysis['call_count']} Calls, {analysis['put_count']} Puts)"
-            )
-            lines.append("")
-
-            # Max Pain
-            max_pain = analysis["max_pain"]
-            max_pain_strike = max_pain["max_pain_strike"]
-            lines.append("MAX PAIN ANALYSIS")
-            lines.append(sub_separator)
-            if max_pain_strike is not None:
-                lines.append(f"Max Pain Strike: ${max_pain_strike:,.0f}")
-                diff = self.underlying_price - max_pain_strike
-                diff_pct = (diff / max_pain_strike * 100) if max_pain_strike else 0
-                lines.append(f"Distance from Current: ${diff:+,.2f} ({diff_pct:+.2f}%)")
-            else:
-                lines.append("Max Pain Strike: N/A")
-
-            prev = self.trend_data.get(expiration)
-            if prev:
-                prev_mp = prev.get("max_pain_strike")
-                if prev_mp is not None and max_pain_strike is not None:
-                    trend_str = self._format_trend(max_pain_strike, prev_mp)
-                    lines.append(f"Trend (Max Pain): {trend_str.strip()}")
-
-            lines.append("")
-
-            # Put/Call Ratio
-            pcr = analysis["put_call_ratio"]
-            lines.append("PUT/CALL RATIO (Open Interest)")
-            lines.append(sub_separator)
-            lines.append(f"Total Call OI: {pcr['total_call_oi']:,.0f}")
-            lines.append(f"Total Put OI: {pcr['total_put_oi']:,.0f}")
-            if pcr["ratio"] != float("inf"):
-                lines.append(f"P/C Ratio: {pcr['ratio']:.2f} ({pcr['bias']})")
-            else:
-                lines.append(f"P/C Ratio: N/A (No Call OI)")
-
-            if prev:
-                prev_call_oi = prev.get("call_oi")
-                prev_put_oi = prev.get("put_oi")
-                prev_pc = prev.get("pc_ratio")
-                if prev_call_oi is not None:
-                    lines.append(
-                        f"Trend (Call OI):  {self._format_trend(pcr['total_call_oi'], prev_call_oi).strip()}"
-                    )
-                    lines.append(
-                        f"Trend (Put OI):   {self._format_trend(pcr['total_put_oi'], prev_put_oi).strip()}"
-                    )
-                if prev_pc is not None and pcr["ratio"] != float("inf"):
-                    lines.append(
-                        f"Trend (P/C):      {self._format_trend(pcr['ratio'], prev_pc, is_ratio=True).strip()}"
-                    )
-
-            lines.append("")
-
-            # Volume Stats
-            vol = analysis["volume_stats"]
-            lines.append("VOLUME STATISTICS")
-            lines.append(sub_separator)
-            lines.append(f"Total Call Volume: {vol['total_call_volume']:,.2f}")
-            lines.append(f"Total Put Volume: {vol['total_put_volume']:,.2f}")
-            lines.append(f"Total Volume: {vol['total_volume']:,.2f}")
-            if vol["volume_ratio"] != float("inf"):
-                lines.append(f"Volume P/C Ratio: {vol['volume_ratio']:.2f}")
-            else:
-                lines.append("Volume P/C Ratio: N/A (No Call Volume)")
-
-            if prev:
-                prev_vol = prev.get("total_volume")
-                prev_vr = prev.get("volume_ratio")
-                if prev_vol is not None:
-                    lines.append(
-                        f"Trend (Volume):   {self._format_trend(vol['total_volume'], prev_vol).strip()}"
-                    )
-                if prev_vr is not None and vol["volume_ratio"] != float("inf"):
-                    lines.append(
-                        f"Trend (Vol P/C):  {self._format_trend(vol['volume_ratio'], prev_vr, is_ratio=True).strip()}"
-                    )
-
-            lines.append("")
-
-            # ITM/OTM Analysis (Deribit-style, no ATM)
-            money = analysis["moneyness"]
-            totals = money["totals"]
-            calls = money["calls"]
-            puts = money["puts"]
-
-            lines.append("MONEYNESS ANALYSIS (ITM/OTM)")
-            lines.append(sub_separator)
-            lines.append(f"OI Skew: {money['oi_skew']}")
-            lines.append("")
-
-            # Calls breakdown
-            lines.append("CALLS:")
-            lines.append(
-                f"  ITM: {calls['itm_oi']:>8,.0f} OI    "
-                f"Notional: ${calls['itm_notional']:>14,.2f}    ({calls['itm_pct']:>5.2f}%)"
-            )
-            lines.append(
-                f"  OTM: {calls['otm_oi']:>8,.0f} OI    "
-                f"Notional: ${calls['otm_notional']:>14,.2f}    ({calls['otm_pct']:>5.2f}%)"
-            )
-            lines.append(
-                f"  Total: {calls['total_oi']:>6,.0f} OI    "
-                f"Notional: ${calls['total_notional']:>14,.2f}"
-            )
-            lines.append("")
-
-            # Puts breakdown
-            lines.append("PUTS:")
-            lines.append(
-                f"  ITM: {puts['itm_oi']:>8,.0f} OI    "
-                f"Notional: ${puts['itm_notional']:>14,.2f}    ({puts['itm_pct']:>5.2f}%)"
-            )
-            lines.append(
-                f"  OTM: {puts['otm_oi']:>8,.0f} OI    "
-                f"Notional: ${puts['otm_notional']:>14,.2f}    ({puts['otm_pct']:>5.2f}%)"
-            )
-            lines.append(
-                f"  Total: {puts['total_oi']:>6,.0f} OI    "
-                f"Notional: ${puts['total_notional']:>14,.2f}"
-            )
-            lines.append("")
-
-            # Combined totals
-            lines.append("COMBINED TOTALS:")
-            lines.append(
-                f"  ITM: {totals['itm_oi']:>8,.0f} OI    "
-                f"Notional: ${totals['itm_notional']:>14,.2f}    ({totals['itm_pct']:>5.2f}%)"
-            )
-            lines.append(
-                f"  OTM: {totals['otm_oi']:>8,.0f} OI    "
-                f"Notional: ${totals['otm_notional']:>14,.2f}    ({totals['otm_pct']:>5.2f}%)"
-            )
-            lines.append(
-                f"  Total: {totals['total_oi']:>6,.0f} OI    "
-                f"Notional: ${totals['total_notional']:>14,.2f}"
-            )
-            lines.append("")
-
-            # Open Interest and Volume by Strike
-            lines.append("OPEN INTEREST & VOLUME BY STRIKE")
-            lines.append(sub_separator)
-            lines.append(
-                f"{'Strike':>10}  {'Call OI':>10}  {'Put OI':>10}  "
-                f"{'Call Vol':>10}  {'Put Vol':>10}  Notes"
-            )
-            lines.append(
-                f"{'------':>10}  {'--------':>10}  {'-------':>10}  "
-                f"{'--------':>10}  {'-------':>10}  -----"
-            )
-
-            strike_data = analysis["strike_data"]
-            sr = analysis["support_resistance"]
-
-            # Get top OI strikes for annotations
-            top_call_strikes = set(
-                level["strike"] for level in sr["resistance_levels"]
-            )
-            top_put_strikes = set(level["strike"] for level in sr["support_levels"])
-
-            for strike in sorted(strike_data.keys()):
-                data = strike_data[strike]
-
-                notes = []
-                if strike == max_pain_strike:
-                    notes.append("<< MAX PAIN")
-                if strike in top_call_strikes:
-                    notes.append("Resistance")
-                if strike in top_put_strikes:
-                    notes.append("Support")
-
-                notes_str = " | ".join(notes) if notes else ""
-
-                lines.append(
-                    f"{strike:>10,.0f}  {data['call_oi']:>10,.0f}  "
-                    f"{data['put_oi']:>10,.0f}  {data['call_volume']:>10,.2f}  "
-                    f"{data['put_volume']:>10,.2f}  {notes_str}"
-                )
-            lines.append("")
-
-            # Support/Resistance Levels
-            lines.append("SUPPORT/RESISTANCE LEVELS")
-            lines.append(sub_separator)
-
-            lines.append("RESISTANCE (Top 3 Call OI):")
-            for i, level in enumerate(sr["resistance_levels"], 1):
-                lines.append(
-                    f"  {i}. ${level['strike']:,.0f} - Call OI: {level['call_oi']:,.0f}"
-                )
-            if not sr["resistance_levels"]:
-                lines.append("  None found")
-            lines.append("")
-
-            lines.append("SUPPORT (Top 3 Put OI):")
-            for i, level in enumerate(sr["support_levels"], 1):
-                lines.append(
-                    f"  {i}. ${level['strike']:,.0f} - Put OI: {level['put_oi']:,.0f}"
-                )
-            if not sr["support_levels"]:
-                lines.append("  None found")
-            lines.append("")
-
-            lines.append(
-                f"SHORT-TERM LEVELS (nearest to current price ${self.underlying_price:,.2f}):"
-            )
-            if sr["short_term_resistance"]:
-                lines.append(
-                    f"  Nearest Resistance: ${sr['short_term_resistance']['strike']:,.0f} "
-                    f"(Call OI: {sr['short_term_resistance']['call_oi']:,.0f})"
-                )
-            else:
-                lines.append("  Nearest Resistance: None found above current price")
-
-            if sr["short_term_support"]:
-                lines.append(
-                    f"  Nearest Support: ${sr['short_term_support']['strike']:,.0f} "
-                    f"(Put OI: {sr['short_term_support']['put_oi']:,.0f})"
-                )
-            else:
-                lines.append("  Nearest Support: None found below current price")
-
-            lines.append("")
-
-            # GEX/DEX section (if available for this expiration)
-            if expiration in self.gex_dex_data:
-                lines.append(self.gex_dex_data[expiration])
-
-            # Buy/Sell Flow section (if available for this expiration)
-            if expiration in self.buy_sell_flow_data:
-                lines.append(self.buy_sell_flow_data[expiration])
-
-            # Volatility Surface section (if available for this expiration)
-            if expiration in self.volatility_surface_data:
-                lines.append(self.volatility_surface_data[expiration])
-
-            # OI Changes section (if available for this expiration)
-            if expiration in self.oi_changes_data:
-                lines.append(self.oi_changes_data[expiration])
-
-            lines.append(separator)
-            lines.append("")
-
-        # Market-wide sections (appended after all per-expiry sections)
-        if self.market_wide_sections:
-            lines.append(separator)
-            lines.append(
-                f"{'MARKET-WIDE METRICS':^80}"
-            )
-            lines.append(separator)
-            lines.append("")
-
-            for section_name in [
-                "aggregate_gex_dex",
-                "iv_term_structure", "futures_basis",
-                "realized_volatility", "vrp", "volatility_cone",
-                "perpetual_funding", "block_trades", "cross_asset_correlation"
-            ]:
-                if section_name in self.market_wide_sections:
-                    lines.append(self.market_wide_sections[section_name])
-                    lines.append("")
-
-            lines.append(separator)
-
-        return "\n".join(lines)
+        return _to_expiration_analysis_result(analysis)
 
     def get_expirations(self) -> List[str]:
         """
@@ -946,143 +830,24 @@ class OnChainAnalyzer:
             self.parse_instruments()
         return sorted(self.parsed_data.keys())
 
-    def set_gex_dex_data(self, expiration: str, report_text: str) -> None:
-        """
-        Store GEX/DEX report text for an expiration.
 
-        Args:
-            expiration: Expiration date string (e.g., "27DEC24").
-            report_text: Formatted GEX/DEX report section text.
-        """
-        self.gex_dex_data[expiration] = report_text
-
-    def set_buy_sell_flow_data(self, expiration: str, report_text: str) -> None:
-        """
-        Store buy/sell flow report text for an expiration.
-
-        Args:
-            expiration: Expiration date string (e.g., "27DEC24").
-            report_text: Formatted buy/sell flow report section text.
-        """
-        self.buy_sell_flow_data[expiration] = report_text
-
-    def set_buy_sell_flow_charts(self, expiration: str, chart_paths: Dict[str, str]) -> None:
-        """
-        Store buy/sell flow chart paths for an expiration.
-
-        Args:
-            expiration: Expiration date string (e.g., "27DEC24").
-            chart_paths: Dict with keys: distribution, net_flow, trend (values are file paths).
-        """
-        self.buy_sell_flow_charts[expiration] = chart_paths
-
-    def set_volatility_surface_data(self, expiration: str, report_text: str) -> None:
-        """Store volatility surface report text for an expiration."""
-        self.volatility_surface_data[expiration] = report_text
-
-    def set_oi_changes_data(self, expiration: str, report_text: str) -> None:
-        """Store OI changes report text for an expiration."""
-        self.oi_changes_data[expiration] = report_text
-
-    def set_market_wide_section(self, section_name: str, report_text: str) -> None:
-        """Store a market-wide report section."""
-        self.market_wide_sections[section_name] = report_text
-
-    def set_gex_dex_structured(self, expiration: str, data: Dict) -> None:
-        """Store raw GEX/DEX structured data for an expiration."""
-        self.gex_dex_structured[expiration] = data
-
-    def set_buy_sell_flow_structured(self, expiration: str, data: Dict) -> None:
-        """Store raw buy/sell flow structured data for an expiration."""
-        self.buy_sell_flow_structured[expiration] = data
-
-    def set_volatility_surface_structured(self, expiration: str, data: Dict) -> None:
-        """Store raw volatility surface structured data for an expiration."""
-        self.volatility_surface_structured[expiration] = data
-
-    def set_market_wide_structured(self, data: Dict) -> None:
-        """Store raw market-wide structured metrics."""
-        self.market_wide_structured = data
-
-    def set_recent_trades(self, trades: List[Dict[str, Any]]) -> None:
-        """
-        Store recent trades fetched from API for block trade detection.
-
-        Args:
-            trades: List of recent trade dicts from get_last_trades_by_currency.
-        """
-        self._recent_trades = trades
-
-    def set_atm_iv(self, expiration: str, atm_iv: float) -> None:
-        """
-        Store ATM IV for a specific expiration (used for term structure in market-wide analysis).
-
-        Args:
-            expiration: Expiration string (e.g. '27MAR26').
-            atm_iv: ATM implied volatility as a percentage (e.g. 55.3).
-        """
-        self._atm_ivs[expiration] = atm_iv
-
-    def set_trend_data(self, expiration: str, data: Optional[Dict]) -> None:
-        """
-        Store previous DB snapshot for trend comparison in report.
-
-        Args:
-            expiration: Expiration string (e.g. '10MAR26').
-            data: Dict with prev values, or None if no prior record.
-                  Keys: max_pain_strike, call_oi, put_oi, pc_ratio,
-                        total_volume, volume_ratio.
-        """
-        self.trend_data[expiration] = data
-
-    def _format_trend(
-        self, current: float, previous: Optional[float], is_ratio: bool = False
-    ) -> str:
-        """
-        Format trend vs previous value.
-
-        Args:
-            current: Current value.
-            previous: Previous value, or None if unavailable.
-            is_ratio: If True, format as ratio (2 decimal places); otherwise as integer.
-
-        Returns:
-            Formatted trend string, or empty string if no previous value.
-        """
-        if previous is None:
-            return ""
-        delta = current - previous
-        if delta == 0:
-            return "  [→ unchanged]"
-        arrow = "↑" if delta > 0 else "↓"
-        if is_ratio:
-            return f"  [{arrow} from {previous:.2f}, {delta:+.2f}]"
-        return f"  [{arrow} from {previous:,.0f}, {delta:+,.0f}]"
-
-    def set_market_metrics(
-        self,
-        dvol: Optional[float] = None,
-        iv_percentile: Optional[float] = None,
-        current_funding: Optional[float] = None,
-        funding_8h: Optional[float] = None,
-        iv_rank: Optional[float] = None,
-    ) -> None:
-        """
-        Store market-wide metrics (DVOL, funding rate, IV rank).
-
-        These metrics are currency-wide, not from the book summary data.
-
-        Args:
-            dvol: Current DVOL (Deribit Volatility Index) value.
-            iv_percentile: IV percentile based on past 365 days.
-            current_funding: Current funding rate from perpetual.
-            funding_8h: 8-hour funding rate from perpetual.
-            iv_rank: IV rank over 52 weeks (0-100 scale).
-        """
-        self.market_metrics = {
-            "dvol": dvol,
-            "iv_percentile": iv_percentile,
-            "current_funding": current_funding,
-            "funding_8h": funding_8h,
-            "iv_rank": iv_rank,
-        }
+# T10 design choice (refactor_design_spec.md): back-compat alias for any
+# caller that still imports the pre-T10 name. ProspectiveCollector (the
+# production daemon) is the highest-risk consumer of this class -- this
+# alias means an import site that was never updated still works.
+#
+# CHANGELOG / removal candidate (carried finding #5, A6 review; re-verified
+# at task A7): this alias is NOT yet dead code. As of task A7, two in-repo
+# call sites still import it directly by the old name --
+# tests/unit/test_on_chain_analysis_service_flow.py::
+# TestCalculateBuySellFlowSingleFetch._make_analyzer and
+# scripts/record_onchain_fixture.py (the golden-master fixture recorder) --
+# so a same-task removal is not free even ignoring any out-of-tree caller.
+# `analyze_expiration`'s dict->typed-result flip (T10) is the one real
+# behavior change that could hide behind this alias for an out-of-tree
+# caller that never migrated. Flagged for removal in a future cleanup
+# task, once the two in-repo call sites above are migrated to
+# OnChainMetricsCalculator and the removal is treated as the
+# breaking-change decision it is -- not bundled into T12's janitorial
+# scope.
+OnChainAnalyzer = OnChainMetricsCalculator

@@ -15,7 +15,16 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Optional, Any
 from enum import Enum, IntEnum
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+from coding.core.analytics.buy_sell_flow_analyzer import INSUFFICIENT_DATA_LABEL
+from coding.core.analytics.market_wide_calculator import MarketWideCalculator
+from coding.core.analytics.max_pain_utils import calculate_max_pain_distance_pct
+from coding.core.analytics.results.analysis_result import OnChainAnalysisResult
+from coding.core.analytics.results.market_wide_results import GammaRolloffResult
+from coding.core.analytics.thresholds import (
+    GEX_NORMALIZED_REGIME_THRESHOLD, RISK_REVERSAL_MILD_POINTS, RISK_REVERSAL_STRONG_POINTS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -56,38 +65,135 @@ class MarketRegime(Enum):
 
 @dataclass
 class ExpiryMetrics:
-    """Parsed metrics for a single expiry"""
+    """
+    Parsed metrics for a single expiry.
+
+    Task G2-G (Wave G fresh audit, follow-on to G2-B's MarketWideMetrics
+    fix): every field below that can genuinely be absent upstream for THIS
+    expiry (the vol surface never computed, second-order Greeks never
+    computed, no identified GEX level in this expiry's strike range) is
+    ``Optional[float]`` with no fabricated ``0.0`` default. Before this
+    fix, ``SynthesisMapper.build_expiry_metrics`` collapsed a real
+    ``None`` (e.g. ``VolSurfaceResult.atm_iv is None`` because no ATM
+    instruments were found, or ``SkewResult.risk_reversal_25d is None``)
+    into a fabricated ``0.0`` via patterns like
+    ``vol.atm_iv if vol is not None and vol.atm_iv is not None else 0.0``.
+    That fabricated zero then flowed into scorers with no ``None`` branch
+    (e.g. ``score_skew``) and was scored as the SAME thing as a
+    genuinely-measured 0 -- for ``risk_reversal_25d`` this meant "no
+    skew data" silently became "RR25 +0.0%: Normal", a confident,
+    specific reading for a metric that was never measured. Every scorer
+    and narrative formatter consuming these fields now has an explicit
+    ``None`` branch that returns a neutral score at (near-)zero weight or
+    an "insufficient data"/"N/A" disclosure string, instead of silently
+    treating absence as a measured value.
+
+    Wave-H-A (Task 5, correcting this docstring's own prior claim):
+    ``pc_atm``/``pc_near_otm``/``pc_far_otm`` are ``Optional[float]``.
+    They used to be documented here as "DELIBERATELY left as plain float,
+    NOT touched" because ``MoneynessBucket.ratio`` was believed to be an
+    intentional "H2 fix" convention ("ALWAYS present; 0.0 when
+    undefined"). That belief was wrong: the 0.0-for-undefined convention
+    was itself the bug (an empty moneyness bucket -- zero instruments --
+    was indistinguishable from a genuinely-measured ratio of 0.0, and fed
+    a "Strong Bullish" bias label off the fabricated zero). ``
+    MoneynessBucket.ratio`` is now ``Optional[float]`` (``None`` for a
+    truly empty bucket), and these three fields propagate that ``None``
+    the same way every other genuinely-absent field on this dataclass
+    does. ``pc_ratio``'s ``inf`` -> ``99.0`` cap is a separate, still
+    deliberately-left-alone convention, unaffected by this fix.
+
+    ``max_pain``'s fallback to spot price when ``calculate_max_pain``
+    returns ``None`` was PREVIOUSLY judged (incorrectly, by this
+    campaign's own earlier pass) to belong in that same "deliberate,
+    documented, harmless" category. It does not: unlike ``pc_ratio``, the
+    fallback value is fed straight into ``score_max_pain_gravity`` at
+    three call sites in ``SynthesisEngine.run``, which has no way to tell
+    "measured max pain that happens to equal spot" from "no max pain was
+    ever computed" -- it produces a real, non-zero-weight score and a
+    confident-sounding message (e.g. "Max pain $64,371 is near spot
+    (+0.0%)") from a computation that never ran. Task Wave-H-B Fix 4: the
+    display fallback stays (a report line has to show something), but
+    ``max_pain_sufficient_data`` (mirroring ``flow_sufficient_data``'s
+    value-plus-sufficiency-flag pattern below) travels alongside it so
+    the scorer can tell the difference and take its own explicit
+    insufficient-data branch instead of scoring the fabricated value as a
+    real measurement.
+    """
     expiry: str
     dte: int
     total_oi: int
     notional: float
     max_pain: float
     pc_ratio: float
+    # CARRIED FINDING (B2 review, task C1): this expiry's OWN forward/
+    # underlying price (bundle.analysis.underlying_price -- the same
+    # source bugfix_spec.md Item 7's report_formatter fix uses), not the
+    # single global market.spot_price. _generate_timeframe_section's
+    # max-pain-distance line and all three score_max_pain_gravity call
+    # sites anchor against this field now instead of one shared spot
+    # value across every expiry -- the same defect class Item 7 already
+    # fixed at the report/formatter layer.
+    underlying_price: float
 
-    # GEX/DEX
+    # GEX/DEX. call_resistance_strike/call_resistance_gex/
+    # put_support_strike/put_support_gex/hvl_strike: None exactly when
+    # GexDexKeyLevels.call_resistance/put_support/hvl is None -- no
+    # identified level in this expiry's strike range -- NOT a measured
+    # strike/GEX of 0.0.
     total_gex: float
     total_dex: float
     gex_environment: str  # "Positive" or "Negative"
-    call_resistance_strike: float
-    call_resistance_gex: float
-    put_support_strike: float
-    put_support_gex: float
-    hvl_strike: float  # Zero gamma level
+    call_resistance_strike: Optional[float]
+    call_resistance_gex: Optional[float]
+    put_support_strike: Optional[float]
+    put_support_gex: Optional[float]
+    hvl_strike: Optional[float]
+    """GexDexKeyLevels.hvl -- the STRIKE where cumulative net GEX changes
+    sign (a strike-axis OI-distribution artifact), NOT the re-priced Zero
+    Gamma Level (GexDexKeyLevels.zero_gamma_level, a different quantity
+    from GammaProfileCalculator -- not carried by this dataclass). Wave-H-A
+    Task 6: this field was previously commented "# Zero gamma level",
+    which is the wrong label for what it actually holds -- see
+    GexDexKeyLevels's own docstring for the full distinction."""
 
-    # Volatility surface
-    atm_iv: float
-    skew_25d: float  # put IV - call IV
-    put_25d_iv: float
-    call_25d_iv: float
+    # Volatility surface. atm_iv: None exactly when
+    # VolatilitySurfaceCalculator._calculate_atm_iv found no ATM
+    # instruments -- NOT a measured 0% IV.
+    atm_iv: Optional[float]
+    # bugfix_spec.md Item 9: renamed from skew_25d (put IV - call IV, a
+    # non-standard sign) to risk_reversal_25d (call IV - put IV -- the
+    # market "25-delta risk reversal" convention). Positive = calls richer
+    # (bullish/upside speculation); negative = puts richer (bearish/
+    # downside hedging demand) -- the opposite sign from the old skew_25d.
+    # None exactly when the vol surface (or its skew_25d sub-result)
+    # never computed for this expiry -- NOT a measured 0.0% (Normal).
+    risk_reversal_25d: Optional[float]
+    put_25d_iv: Optional[float]
+    call_25d_iv: Optional[float]
 
-    # Moneyness P/C
-    pc_atm: float
-    pc_near_otm: float
-    pc_far_otm: float
+    # Moneyness P/C. None exactly when MoneynessBucket.ratio is None (zero
+    # instruments in this bucket) -- NOT a measured 0.0 ratio (Wave-H-A
+    # Task 5; see this dataclass's own docstring above).
+    pc_atm: Optional[float]
+    pc_near_otm: Optional[float]
+    pc_far_otm: Optional[float]
 
-    # Second-order Greeks
-    net_vanna: float
-    net_charm: float
+    # Second-order Greeks. bugfix_spec.md Item 8 fix-review (Important #3):
+    # these are the ASSUMED-DEALER exposures (SecondOrderGreeks.
+    # dealer_vanna_exposure/dealer_charm_exposure), not the holder-side raw
+    # sum -- F8.4 requires score_* functions to consume the dealer fields,
+    # matching the report text's own dealer-derived vanna_signal/
+    # charm_signal. None exactly when the vol surface never computed for
+    # this expiry (``vol is None``), OR (Wave-H-A Task 4) when the vol
+    # surface DID compute but nothing could be measured for vanna/charm
+    # specifically (every instrument's greeks were unavailable --
+    # SecondOrderGreeks.dealer_vanna_exposure/dealer_charm_exposure are
+    # themselves Optional now, for exactly this reason) -- NOT a measured
+    # net_vanna/net_charm of 0.0, which score_vanna_charm treats as its
+    # own distinct "zero" signal.
+    net_vanna: Optional[float]
+    net_charm: Optional[float]
 
     # Flow
     flow_bias: str  # "Heavy Buying", "Moderate Selling", etc.
@@ -97,56 +203,156 @@ class ExpiryMetrics:
     total_volume: int = 0
     top_buy_strikes: List[dict] = field(default_factory=list)
     top_sell_strikes: List[dict] = field(default_factory=list)
+    # bugfix_spec.md Item 6 / F6.3.4 (carried from A4 review): True unless the
+    # flow analyzer's data-sufficiency gate tripped for this expiry. When
+    # False, the scoring engine must contribute the flow score at weight 0,
+    # not a neutral score at full weight — a neutral score is itself a claim.
+    flow_sufficient_data: bool = True
+    # Task Wave-H-B Fix 4: True unless calculate_max_pain returned None
+    # (nothing to compute from) and ``max_pain`` above is therefore the
+    # spot-price display fallback, not a real measurement. When False,
+    # score_max_pain_gravity must take its explicit insufficient-data
+    # branch (weight zero) instead of scoring the fallback as if it were
+    # a genuine max-pain reading -- same value-plus-sufficiency-flag
+    # pattern as ``flow_sufficient_data`` above.
+    max_pain_sufficient_data: bool = True
 
 
 @dataclass
 class MarketWideMetrics:
-    """Parsed market-wide metrics"""
-    spot_price: float
-    dvol: float
-    iv_percentile_365d: float
-    funding_rate: float
-    funding_8h: float
+    """
+    Parsed market-wide metrics.
 
-    # Term structure
-    term_structure_shape: str  # "CONTANGO" or "BACKWARDATION"
-    term_structure_spread: float  # abs pts — used for scoring
-    term_structure_spread_signed: float = 0.0  # signed pts (back - front) — used for display
+    Task G2-B (Wave G fresh audit, BLOCKER): every field below that can
+    genuinely be absent upstream (the source calculation never ran, or
+    raised) is ``Optional[float]`` with a ``None`` default — NOT ``0.0``.
+    Before this fix, ``SynthesisMapper.build_market_wide`` collapsed a
+    real ``None`` (e.g. ``MarketWideResult.dvol is None`` because DVOL
+    was unavailable) into a fabricated ``0.0`` via ``mw.dvol or 0.0``.
+    That fabricated zero then flowed into scorers with no ``None``
+    branch (e.g. ``score_iv_percentile``) and was scored as the SAME
+    thing as a genuinely-measured 0 — for ``iv_percentile_365d`` this
+    meant "no data" silently became "IV 0th pctile: Extremely cheap —
+    strong buy-vol", the single strongest, highest-confidence signal the
+    scorer can emit, for a metric that was never measured. Every scorer
+    consuming these fields now has an explicit ``None`` branch that
+    returns a neutral score at (near-)zero weight/confidence and an
+    "insufficient data" message, instead of silently treating absence as
+    a measured extreme.
+    """
+    spot_price: float
+    dvol: Optional[float]
+    iv_percentile_365d: Optional[float]
+    funding_rate: Optional[float]
+    funding_8h: Optional[float]
+
+    # Term structure. Task Wave-H-B Fix 2: these three are genuinely
+    # Optional -- None exactly when MarketWideResult.term_structure is
+    # None (fewer than 2 usable per-expiry ATM IVs, the whole term-
+    # structure computation never ran) -- NOT a fabricated "CONTANGO"
+    # reading. "FLAT" is also a real, computed, non-CONTANGO/
+    # BACKWARDATION shape (calculator emits it when |back - front| <=
+    # 2pts) and must pass through as "FLAT", not get relabelled
+    # "CONTANGO" -- the old normalize-to-CONTANGO logic in
+    # SynthesisMapper.build_market_wide collapsed all three of (a) ts is
+    # None, (b) shape == "FLAT", and (c) a genuine backwardated tilt too
+    # small to cross the calculator's +/-2pt threshold into the SAME
+    # fabricated "CONTANGO" reading -- and for case (c) specifically,
+    # term_structure_spread_signed still carried the real (negative)
+    # sign, producing self-contradictory output like "CONTANGO (-1.8pts)"
+    # in the report header.
+    term_structure_shape: Optional[str]  # "CONTANGO", "BACKWARDATION", "FLAT", or None
+    term_structure_spread: Optional[float]  # abs pts — used for scoring
+    term_structure_spread_signed: Optional[float] = None  # signed pts (back - front) — used for display
     iv_by_dte: Dict[int, float] = field(default_factory=dict)
 
-    # Realized vol
-    rv_10d: float = 0.0
-    rv_20d: float = 0.0
-    rv_30d: float = 0.0
+    # Realized vol. None when MarketWideResult.realized_volatility is None
+    # (the whole RV calculation never ran), OR when that specific window
+    # was never computed (Task Wave-J-D Fix 1 -- RealizedVolatilityResult's
+    # rv_10d/rv_20d/rv_30d properties are themselves Optional[float] now,
+    # per-window) -- NEITHER case is a measured 0.0.
+    rv_10d: Optional[float] = None
+    rv_20d: Optional[float] = None
+    rv_30d: Optional[float] = None
 
-    # VRP
-    vrp: float = 0.0
+    # VRP. None exactly when MarketWideResult.variance_risk_premium is
+    # None (DVOL or realized vol unavailable) -- NOT a measured 0.0.
+    vrp: Optional[float] = None
 
-    # Vol cone
-    cone_10d_pctile: float = 0.0
-    cone_20d_pctile: float = 0.0
-    cone_30d_pctile: float = 0.0
+    # Vol cone. None exactly when MarketWideResult.volatility_cone is
+    # None, OR that specific window was never computed -- NOT a measured
+    # 0th percentile.
+    cone_10d_pctile: Optional[float] = None
+    cone_20d_pctile: Optional[float] = None
+    cone_30d_pctile: Optional[float] = None
 
-    # Futures basis
-    futures_basis: Dict[str, float] = field(default_factory=dict)
+    # Futures basis. Optional[float] values (Decision D12, bugfix_spec.md
+    # Item 5): None for a suppressed sub-daily/expired tenor. See the
+    # basis_values filter at score_futures_basis's call site below, which
+    # already relies on this being possible at runtime.
+    futures_basis: Dict[str, Optional[float]] = field(default_factory=dict)
 
-    # Perp
-    perp_oi: float = 0.0
+    # Perp. None exactly when MarketWideResult.perpetual_funding is None
+    # (the whole funding calculation never ran) -- NOT a measured 0 OI.
+    perp_oi: Optional[float] = None
     perp_funding_trend: str = "Stable"
 
-    # Cross-asset
-    btc_eth_price_corr: float = 0.0
-    btc_eth_dvol_corr: float = 0.0
+    # Cross-asset. None exactly when MarketWideResult.cross_asset_correlation
+    # is None, or the underlying correlation itself is None (insufficient
+    # sample) -- NOT a measured zero correlation.
+    btc_eth_price_corr: Optional[float] = None
+    btc_eth_dvol_corr: Optional[float] = None
 
-    # Block trades
-    block_trades: List[dict] = field(default_factory=list)
+    # Block trades (institutional_metrics_spec.md section 9 / Migration M2,
+    # Task D1 review round 2, Important #3): `blocks` is grouped by
+    # block_trade_id (real blocks, one row per block); `large_prints` is
+    # the pre-existing notional-filter list, relabelled here for the same
+    # reason the report was -- a large single-leg screen print is not a
+    # block, and narrating it as one conflates exactly what section 9 was
+    # written to separate.
+    blocks: List[dict] = field(default_factory=list)
+    large_prints: List[dict] = field(default_factory=list)
 
-    # Aggregate GEX/DEX across all expirations
-    aggregate_total_gex: float = 0.0
-    aggregate_total_dex: float = 0.0
+    # Aggregate GEX/DEX across all expirations. Final verification sweep
+    # (post Wave J): None exactly when the whole aggregate-GEX/DEX
+    # computation never ran (mw.aggregate_gex_dex is None) -- NOT a
+    # measured 0.0. Before this fix, both fields defaulted to a fabricated
+    # 0.0 on that path, and the regime-selection fallback at
+    # SynthesisEngine.run (``gex_for_regime = aggregate_total_gex if
+    # aggregate_total_gex != 0.0 else largest_expiry.total_gex``) used that
+    # fabricated 0.0 as its "unavailable, fall back" sentinel -- which
+    # happened to give the right answer when the aggregate genuinely never
+    # computed, but silently discarded a REAL, valid measurement whenever
+    # aggregate GEX/DEX was genuinely, exactly 0.0 (a real gamma-neutral
+    # book), substituting one expiry's GEX instead of the true aggregate.
+    aggregate_total_gex: Optional[float] = None
+    aggregate_total_dex: Optional[float] = None
     aggregate_call_resistance: Optional[Dict] = None
     aggregate_put_support: Optional[Dict] = None
     aggregate_hvl: Optional[float] = None
+    """Cross-expiration GexDexKeyLevels.hvl -- see ExpiryMetrics.hvl_strike's
+    docstring for the strike-axis-artifact-vs-Zero-Gamma-Level distinction
+    this field is also subject to (Wave-H-A Task 6)."""
+
+    # Task Wave-I-A Fix 1: threaded through unchanged from
+    # MarketWideResult.gamma_rolloff so generate_risk_factors can reuse
+    # GexDexCalculator.calculate_rolloff_profile's own "GAMMA CLIFF"
+    # near-term concentration flag (>30% of gamma mass within 7 DTE)
+    # instead of the largest-OI expiry's DTE, which for BTC is almost
+    # always a far-dated quarterly and can never trip a near-term pin-risk
+    # check. None exactly when the whole roll-off computation never ran
+    # (e.g. no per-expiry GEX at all) -- NOT "no gamma cliff".
+    gamma_rolloff: Optional[GammaRolloffResult] = None
+
+    # Task G2-B Finding 3: names of MarketWideResult sections whose
+    # calculation raised (threaded through from
+    # MarketWideOrchestrator.run(), which used to hardcode this at `()`
+    # unconditionally -- see market_wide_orchestrator.py). Read by
+    # SynthesisEngine.run() to disclose which inputs are missing because
+    # of an actual error, distinct from inputs that are simply not
+    # computed yet (those already disclose via the Optional fields above
+    # being None).
+    failed_sections: Tuple[str, ...] = ()
 
 
 # =============================================================================
@@ -218,9 +424,22 @@ class ScoringEngine:
 
         Thresholds normalized: dex/spot.
         At BTC $100K: ±0.005 = ±500, ±0.001 = ±100.
+
+        Task Wave-J-C Fix 5: ``spot <= 0`` used to silently substitute a
+        BTC-shaped 100000.0 and keep scoring as if that were a real
+        measurement -- badly distorting dex_norm (and therefore this
+        score) for ETH or any other asset, or simply masking a genuine
+        upstream spot-price failure. Callers always pass the real
+        ``market.spot_price``/expiry forward price (never omit ``spot``
+        to fall on the default), so an invalid value here means that
+        upstream reading was itself invalid -- treated the same as every
+        other "insufficient data" input in this scorer set: weight zero,
+        explicit disclosure, no fabricated score.
         """
         if spot <= 0:
-            spot = 100000.0
+            logger.warning(
+                f"score_dex: spot={spot} is invalid (<=0) — cannot normalize DEX, weight zero")
+            return (0.0, 0.0, "DEX: insufficient data (invalid spot price) — weight zero")
         dex_norm = total_dex / spot
 
         if dex_norm > 0.005:
@@ -248,15 +467,35 @@ class ScoringEngine:
 
     @staticmethod
     def score_max_pain_gravity(max_pain: float, spot: float,
-                               dte: Optional[int] = None) -> Tuple[float, float, str]:
+                               dte: Optional[int] = None,
+                               sufficient_data: bool = True) -> Tuple[float, float, str]:
         """
         Max pain pull interpretation with DTE-scaled weight.
 
         Gravity effect is strongest near expiration and weakens with time.
         DTE-based weight: 0-7→0.5, 8-14→0.4, 15-30→0.3, >30→0.15.
         Neutral always uses weight 0.2 regardless of DTE.
+
+        Task Wave-H-B Fix 4: ``max_pain`` is deliberately still typed
+        plain ``float`` here (not ``Optional``) because ExpiryMetrics.
+        max_pain always carries a display value (the real max-pain strike,
+        or the spot-price fallback when calculate_max_pain returned
+        None) -- ``sufficient_data`` is the separate signal for whether
+        that value is a genuine measurement, mirroring
+        ``score_flow_gated``'s ``sufficient_data`` gate for
+        ``flow_sufficient_data``. When False, the caller is passing the
+        spot-price fallback (or otherwise knows this reading is
+        fabricated) -- score it as insufficient data (weight zero)
+        instead of a real "near spot" reading, which is exactly what the
+        fallback would otherwise produce (distance_pct == 0.0, a
+        confident-sounding "Max pain $X is near spot (+0.0%)" for a
+        computation that never ran).
         """
-        distance_pct = (max_pain - spot) / spot * 100
+        if not sufficient_data:
+            return (0.0, 0.0,
+                    "Max pain: insufficient data (calculation did not resolve a strike) — weight zero, no signal")
+
+        distance_pct = calculate_max_pain_distance_pct(max_pain, spot)
 
         # DTE-scaled weight for non-neutral scores
         if dte is not None:
@@ -283,14 +522,23 @@ class ScoringEngine:
             return (-2.0, dte_weight, f"Max pain ${max_pain:,.0f} is {distance_pct:+.1f}% below — strong downward pull")
 
     @staticmethod
-    def score_funding(funding_8h: float) -> Tuple[float, float, str]:
+    def score_funding(funding_8h: Optional[float]) -> Tuple[float, float, str]:
         """
         Funding rate interpretation. Uses funding_8h only.
 
         Annualized rate = funding_8h × 3 × 365.
         Positive funding → crowded long → contrarian bearish.
         Negative funding → crowded short → contrarian bullish.
+
+        Task G2-B: `funding_8h is None` means the perpetual-funding
+        section never ran/no reading was available -- weight-zero the
+        same way ``score_flow_gated`` already does for insufficient flow
+        data, rather than defaulting to 0.0 (which would silently score
+        as "Neutral leverage", a real claim about a real measurement).
         """
+        if funding_8h is None:
+            return (0.0, 0.0, "Funding: insufficient data — weight zero")
+
         ann_rate = funding_8h * 3 * 365
 
         if abs(ann_rate) < 5:
@@ -366,9 +614,31 @@ class ScoringEngine:
 
         return (score, 0.6, f"Flow: {flow_bias} + {flow_trend} → net {score:+.1f}")
 
+    @classmethod
+    def score_flow_gated(
+        cls, flow_bias: str, flow_trend: str, sufficient_data: bool
+    ) -> Tuple[float, float, str]:
+        """
+        score_flow, with the weight forced to 0 when the flow analyzer's
+        data-sufficiency gate tripped (bugfix_spec.md Item 6 / F6.3.4,
+        carried from A4 review).
+
+        An insufficient-data expiry's ``flow_bias``/``flow_trend`` are the
+        literal ``"Insufficient flow data"`` sentinel strings, which
+        ``score_flow`` doesn't recognize and scores as 0.0 (logging a
+        warning) — but at the *legacy* weight of 0.6 that "neutral" score
+        still dilutes the weighted average (denominator inflation) as if it
+        were a real, if uncertain, signal. Weight 0 removes it entirely —
+        a neutral score is itself a claim.
+        """
+        score, weight, description = cls.score_flow(flow_bias, flow_trend)
+        if not sufficient_data:
+            return (score, 0.0, f"{description} [insufficient data - weight zero]")
+        return (score, weight, description)
+
     @staticmethod
-    def score_vanna_charm(net_vanna: float, net_charm: float,
-                          iv_pctile: float = 50.0, gex_total: float = 0.0,
+    def score_vanna_charm(net_vanna: Optional[float], net_charm: Optional[float],
+                          iv_pctile: Optional[float] = 50.0, gex_total: float = 0.0,
                           spot: float = 100000.0) -> Tuple[float, float, str]:
         """
         Second-order Greeks interpretation.
@@ -381,7 +651,30 @@ class ScoringEngine:
         Zero inputs produce 0 signal (no phantom signals).
 
         Gamma-adjusted weight: negative GEX amplifies, positive GEX dampens.
+
+        Task G2-B: ``iv_pctile=None`` (IV percentile unavailable) is
+        treated the same as the mid-range 40-60 band -- "no clear IV
+        direction" is already the correct, honest description of "we
+        don't know," and that band already produces vanna_signal=0.0
+        with no fabricated direction, so no separate branch is needed.
+
+        Task G2-G: ``net_vanna``/``net_charm`` are ``None`` exactly when
+        the vol surface never computed for this expiry -- genuinely
+        missing, NOT a measured 0.0. This is a DIFFERENT case from
+        ``net_vanna == 0``/``net_charm == 0`` below (a real reading that
+        happens to net to zero, e.g. a balanced call/put book), which
+        must keep producing its own "zero" signal/direction text -- a
+        real measurement of "no structural drift" is not the same claim
+        as "we never measured it". None short-circuits to a neutral
+        score at zero weight with an explicit insufficient-data message,
+        before either the vanna or charm band logic runs.
         """
+        if net_vanna is None or net_charm is None:
+            return (0.0, 0.0, "Vanna/Charm: insufficient data (vol surface unavailable) — weight zero")
+
+        if iv_pctile is None:
+            iv_pctile = 50.0
+
         # Vanna signal (IV-regime-conditional)
         if net_vanna == 0:
             vanna_signal = 0.0
@@ -407,10 +700,22 @@ class ScoringEngine:
 
         combined = (vanna_signal + charm_signal) / 2
 
-        # Gamma-adjusted weight
-        if spot <= 0:
-            spot = 100000.0
-        gex_normalized = gex_total / spot
+        # Gamma-adjusted weight. Task Wave-J-C Fix 5: ``spot <= 0`` used
+        # to silently substitute a BTC-shaped 100000.0 to force a
+        # gamma_normalized reading out of an invalid price -- badly
+        # distorting which weight band this fell into for ETH or any
+        # other asset. Unlike net_vanna/net_charm=None above, an invalid
+        # spot here doesn't invalidate the vanna/charm signal itself
+        # (``combined``, already computed) -- only the GEX-based weight
+        # adjustment. Fall back to the same neutral/default weight this
+        # function already uses for the middle GEX band, and disclose why.
+        if spot > 0:
+            gex_normalized = gex_total / spot
+        else:
+            logger.warning(
+                f"score_vanna_charm: spot={spot} is invalid (<=0) — cannot "
+                "gamma-adjust the weight, using default weight")
+            gex_normalized = 0.0
         if gex_normalized < -50:
             weight = 0.4
         elif gex_normalized > 50:
@@ -444,7 +749,7 @@ class ScoringEngine:
     # -------------------------------------------------------------------------
 
     @staticmethod
-    def score_iv_percentile(iv_pctile: float) -> Tuple[float, float, str]:
+    def score_iv_percentile(iv_pctile: Optional[float]) -> Tuple[float, float, str]:
         """
         IV Percentile interpretation for vol regime.
 
@@ -454,7 +759,20 @@ class ScoringEngine:
             25-75th → Normal (0)              — neutral
             < 25th → Cheap (-1)               — buy vol
             < 10th → Extremely cheap (-2)     — strong buy vol
+
+        Task G2-B (BLOCKER): ``iv_pctile=None`` (IV percentile unavailable)
+        used to be silently converted to ``0.0`` upstream by
+        ``SynthesisMapper.build_market_wide`` and fell into the final
+        ``else`` branch below -- "IV 0th pctile: Extremely cheap — strong
+        buy-vol" (score -2.0, confidence/weight 0.8), the single strongest
+        and most confident signal this scorer can emit, for a metric that
+        was never measured. None now gets its own explicit branch: a
+        neutral score at zero weight, with the reasoning saying plainly
+        that the data is missing.
         """
+        if iv_pctile is None:
+            return (0.0, 0.0, "IV percentile: insufficient data — weight zero, no signal")
+
         if iv_pctile > 90:
             return (2.0, 0.8, f"IV {iv_pctile:.0f}th pctile: Extremely expensive — strong sell-vol edge")
         elif iv_pctile > 75:
@@ -467,8 +785,8 @@ class ScoringEngine:
             return (-2.0, 0.8, f"IV {iv_pctile:.0f}th pctile: Extremely cheap — strong buy-vol")
 
     @staticmethod
-    def score_vrp(vrp: float, rv_10d: float, rv_20d: float, rv_30d: float,
-                  cone_30d_pctile: float) -> Tuple[float, float, str]:
+    def score_vrp(vrp: Optional[float], rv_10d: Optional[float], rv_20d: Optional[float],
+                  rv_30d: Optional[float], cone_30d_pctile: Optional[float]) -> Tuple[float, float, str]:
         """
         Variance Risk Premium interpretation with stale-data correction.
 
@@ -483,21 +801,46 @@ class ScoringEngine:
 
         Forward VRP = DVOL - avg(10d RV, 20d RV)
         Use forward VRP when 30d cone percentile > 85th or < 15th.
+
+        Task G2-B (BLOCKER): ``vrp=None`` (DVOL or realized vol
+        unavailable) used to be silently converted to ``0.0`` upstream,
+        landing in the "Neutral" band at weight 0.5 -- a claim that vol is
+        fairly priced, when in fact nothing was measured. ``vrp=None``
+        now returns a neutral score at zero weight instead. The
+        stale-data correction inputs (``rv_10d``/``rv_20d``/``rv_30d``/
+        ``cone_30d_pctile``) can independently be None (that section
+        failed while VRP itself succeeded) -- the correction is skipped
+        (falls back to raw ``vrp``) rather than crashing or fabricating a
+        correction from a missing percentile/RV window.
         """
+        if vrp is None:
+            return (0.0, 0.0, "VRP: insufficient data (DVOL or realized volatility unavailable) — weight zero")
+
         # Stale-data correction: only for cone > 85 (spike inflated 30d RV)
         # Cone < 15 (abnormally quiet) uses raw VRP — 10d/20d are equally quiet
-        if cone_30d_pctile > 85:
+        if (cone_30d_pctile is not None and cone_30d_pctile > 85
+                and rv_10d is not None and rv_20d is not None and rv_30d is not None):
             forward_rv = (rv_10d + rv_20d) / 2
             dvol_approx = vrp + rv_30d
             forward_vrp = dvol_approx - forward_rv
             effective_vrp = forward_vrp
             stale_note = (f"30d RV at {cone_30d_pctile:.0f}th pctile (STALE). "
                           f"Forward VRP using 10d/20d avg: {forward_vrp:+.1f}pts")
-        elif cone_30d_pctile < 15:
+        elif cone_30d_pctile is not None and cone_30d_pctile > 85:
+            # Cone says stale but the RV windows needed for the forward-VRP
+            # correction are themselves missing — disclose the gap rather
+            # than silently applying (or silently skipping) the correction.
+            effective_vrp = vrp
+            stale_note = (f"30d RV at {cone_30d_pctile:.0f}th pctile (STALE), but 10d/20d/30d RV "
+                          f"unavailable — forward-VRP correction skipped, using raw VRP")
+        elif cone_30d_pctile is not None and cone_30d_pctile < 15:
             effective_vrp = vrp
             stale_note = (f"30d RV at {cone_30d_pctile:.0f}th pctile — abnormally quiet period. "
                           f"If realized vol reverts to historical norms, VRP will compress. "
                           f"Treat current sell-vol edge as potentially overstated")
+        elif cone_30d_pctile is None:
+            effective_vrp = vrp
+            stale_note = "30d RV percentile: insufficient data — stale-data correction not applied"
         else:
             effective_vrp = vrp
             stale_note = f"30d RV within normal range"
@@ -514,27 +857,61 @@ class ScoringEngine:
             return (-2.0, 0.8, f"VRP {effective_vrp:+.1f}pts: Extreme mispricing — strong buy vol. {stale_note}")
 
     @staticmethod
-    def score_skew(skew_25d: float) -> Tuple[float, float, str]:
+    def score_skew(risk_reversal_25d: Optional[float]) -> Tuple[float, float, str]:
         """
-        25-Delta Skew — FEAR INDICATOR axis (not buy/sell vol).
+        25-Delta Risk Reversal (bugfix_spec.md Item 9 / Decision D6).
 
-        +2 = extreme fear/hedging, -2 = extreme complacency.
-        Feeds into: vol regime classifier, risk factors, trade recs,
-        vol assessment narrative. Does NOT feed into directional scoring.
+        Re-signed from the old ``skew_25d`` (put IV - call IV, a magnitude-
+        of-fear axis where BOTH extremes scored positive-ish/negative-ish
+        independent of direction) to the market "risk reversal" convention
+        (call IV - put IV). This is now a genuinely DIRECTIONAL axis:
+        +2 = calls much richer (upside speculation), -2 = puts much richer
+        (downside hedging demand) -- a NEGATIVE risk reversal scores
+        NEGATIVE, a POSITIVE one scores POSITIVE (acceptance test T9.4).
+
+        Decision D6 (task-B2-brief.md, already ruled): correctness over
+        historical comparability, same as every other convention fix in
+        this campaign -- an intentional, reviewed break, not a bug.
+
+        Consumer note: ``classify_vol_regime``'s EXPLOSIVE-regime trigger
+        reads this score and was re-signed alongside this function (fix-
+        review Critical #1, ``skew_score >= 1`` -> ``skew_score <= -1`` --
+        see that method's own docstring for the full history; not repeated
+        here to avoid two copies of the same story drifting out of sync).
+
+        Feeds into: vol regime classifier, risk factors, trade recs, vol
+        assessment narrative. Does NOT feed into directional scoring
+        (``all_direction_scores``).
+
+        Task G2-G: ``risk_reversal_25d=None`` (vol surface/skew never
+        computed for this expiry) is now its own explicit branch -- a
+        neutral score at (near-)zero weight and an "insufficient data"
+        message, instead of falling through to the ``<= MILD_POINTS``
+        band and being reported as "RR25 +0.0%: Normal", a specific,
+        confident reading for a metric that was never measured (the same
+        BLOCKER-class defect Task G2-B fixed for
+        ``score_iv_percentile``/``iv_percentile_365d=None``). Task G2-D
+        (commit 9f14e53) unified per-expiry and market-wide RR25 onto one
+        bracket-gated computation, which makes this None case fire more
+        often than the old ungated picker did -- this was already latent
+        before G2-D, just less frequently triggered.
         """
-        if skew_25d > 12:
-            return (2.0, 0.6, f"Skew {skew_25d:+.1f}%: Extreme put demand — fear elevated")
-        elif skew_25d > 8:
-            return (1.0, 0.6, f"Skew {skew_25d:+.1f}%: Heavy hedging demand")
-        elif skew_25d > 4:
-            return (0.0, 0.4, f"Skew {skew_25d:+.1f}%: Normal")
-        elif skew_25d > 0:
-            return (-1.0, 0.5, f"Skew {skew_25d:+.1f}%: Complacent — puts relatively cheap")
+        if risk_reversal_25d is None:
+            return (0.0, 0.0, "RR25: insufficient data — weight zero, no signal")
+
+        if risk_reversal_25d < -RISK_REVERSAL_STRONG_POINTS:
+            return (-2.0, 0.6, f"RR25 {risk_reversal_25d:+.1f}%: Extreme put demand — fear elevated")
+        elif risk_reversal_25d < -RISK_REVERSAL_MILD_POINTS:
+            return (-1.0, 0.6, f"RR25 {risk_reversal_25d:+.1f}%: Heavy hedging demand")
+        elif risk_reversal_25d <= RISK_REVERSAL_MILD_POINTS:
+            return (0.0, 0.4, f"RR25 {risk_reversal_25d:+.1f}%: Normal")
+        elif risk_reversal_25d <= RISK_REVERSAL_STRONG_POINTS:
+            return (1.0, 0.5, f"RR25 {risk_reversal_25d:+.1f}%: Calls richer — upside speculation")
         else:
-            return (-2.0, 0.6, f"Skew {skew_25d:+.1f}%: Inverted — extremely unusual")
+            return (2.0, 0.6, f"RR25 {risk_reversal_25d:+.1f}%: Calls much richer — unusual")
 
     @staticmethod
-    def score_term_structure(shape: str, spread: float,
+    def score_term_structure(shape: Optional[str], spread: Optional[float],
                              iv_by_dte: Dict[int, float]) -> Tuple[float, float, str]:
         """
         Term structure interpretation.
@@ -551,7 +928,24 @@ class ScoringEngine:
 
         IMPORTANT: Check for kinks — if front 3 expiries have wildly
         different IVs, the structure is kinked (near-expiry distortion).
+
+        Task Wave-H-B Fix 2: ``shape``/``spread`` are now genuinely
+        Optional (``MarketWideMetrics.term_structure_shape``/
+        ``term_structure_spread`` -- None when fewer than 2 usable
+        per-expiry ATM IVs were available upstream). This scorer used to
+        have no None branch at all -- the mapper fabricated a confident
+        "CONTANGO" for every missing-data case, which this scorer then
+        happily scored as a real reading. ``shape == "FLAT"`` is also a
+        real, computed, non-CONTANGO/BACKWARDATION reading (the
+        calculator's own third shape, emitted when |back - front| <=
+        2pts) and gets its own neutral branch instead of falling into
+        the old bare ``else`` (which treated anything not literally
+        "CONTANGO" as backwardation).
         """
+        if shape is None or spread is None:
+            return (0.0, 0.0,
+                    "Term structure: insufficient data (fewer than 2 usable expiries) — weight zero, no signal")
+
         # Check for kinks in front end
         sorted_dtes = sorted(iv_by_dte.keys())
         kink_detected = False
@@ -570,7 +964,7 @@ class ScoringEngine:
                 return (1.0, 0.4, f"Contango +{spread:.0f}pts: Normal curve{kink_note}")
             else:
                 return (0.0, 0.3, f"Contango +{spread:.0f}pts: Flat{kink_note}")
-        else:
+        elif shape == "BACKWARDATION":
             if spread > 10:
                 return (-2.0, 0.6,
                         f"Backwardation -{spread:.0f}pts: Extreme near-term fear — sell front month{kink_note}")
@@ -578,6 +972,9 @@ class ScoringEngine:
                 return (-1.0, 0.5, f"Backwardation -{spread:.0f}pts: Near-term stress{kink_note}")
             else:
                 return (0.0, 0.3, f"Backwardation -{spread:.0f}pts: Mild{kink_note}")
+        else:
+            # shape == "FLAT" (calculator: |back - front| <= 2pts)
+            return (0.0, 0.3, f"Term structure flat ({spread:.1f}pts): Neutral{kink_note}")
 
     # -------------------------------------------------------------------------
     # FRAGILITY DETECTION (post-scoring confidence adjustment)
@@ -586,7 +983,7 @@ class ScoringEngine:
     @staticmethod
     def detect_fragility(
             all_direction_scores: List[Tuple[float, float, str]],
-            funding_8h: float
+            funding_8h: Optional[float]
     ) -> Tuple[float, str]:
         """
         Detect fragile crowding setups where flow consensus is strong
@@ -594,7 +991,18 @@ class ScoringEngine:
 
         Returns (multiplier, level): HIGH→0.5, MODERATE→0.7, NONE→1.0.
         This is NOT a scorer — it's a post-hoc confidence multiplier.
+
+        Task G2-B: ``funding_8h=None`` (funding data unavailable) cannot
+        support a fragility claim one way or the other -- return the
+        no-op multiplier (1.0, "NONE") rather than treating a fabricated
+        0.0 as "definitely not crowded" (which happened to be harmless
+        under the old thresholds here, since 0.0 never exceeds the ±15%
+        annualized bands, but was still the wrong reason to reach the
+        right answer).
         """
+        if funding_8h is None:
+            return (1.0, "NONE")
+
         # Compute directional avg excluding funding scores
         non_funding = [(s, w, r) for s, w, r in all_direction_scores
                        if "funding" not in r.lower()]
@@ -643,7 +1051,44 @@ class RegimeClassifier:
         Weighted average of directional scores → Signal enum.
 
         Returns: (signal, confidence, reasoning_list)
-        Confidence = weighted score magnitude / max possible magnitude
+        Confidence = weighted score magnitude / max possible magnitude,
+        scaled by how much of the input actually carried weight (Task
+        Wave-I-A Fix 2 — see below).
+
+        Task Wave-I-A Fix 2: ``confidence`` used to be
+        ``abs(avg_score) / 2.0`` alone — the magnitude of the *tilt*
+        among whichever scores happened to carry weight, with no
+        reference to how many of the scores handed in actually
+        contributed one. Every weight-zero "insufficient data" entry
+        (``score_flow_gated``, ``score_max_pain_gravity``'s
+        ``sufficient_data=False`` branch, etc.) contributes exactly 0 to
+        both ``weighted_sum`` and ``total_weight`` — a complete no-op in
+        the weighted average — so a run where only 2 of 10 attempted
+        scorers actually resolved reported the IDENTICAL "confidence" as
+        a run where all 10 resolved and happened to average to the same
+        tilt. Worse: turning a real, weakly-disagreeing measurement into
+        a weight-zero "insufficient data" entry (same score, weight
+        1.0 -> 0.0) used to *raise* the reported number, because the
+        diluting entry was dropped from the average entirely instead of
+        correctly signaling "we know less than before". Reproduced
+        directly: three real signals (1.0, 1.0, -0.4) all at weight 1.0
+        gave confidence 0.267; downgrading only the third to weight 0.0
+        (same score, now "insufficient data") raised it to 0.5 — with
+        strictly less real information feeding the number, not more.
+
+        Fix: multiply the tilt magnitude by a data-coverage factor — the
+        fraction of the scores handed in that actually carried weight
+        (were not themselves an insufficient-data placeholder). When
+        every input resolves (coverage == 1.0, the common case), this is
+        numerically identical to the old formula; it only pulls the
+        number down when some of the scores that were attempted came
+        back weight-zero, which is exactly the case the old formula was
+        blind to. (Relabeling the output text alone was considered and
+        rejected — the fix is in scope here since coverage is fully
+        computable from ``scores`` itself, no new plumbing needed, and
+        this metric gates nothing downstream — it is display-only in the
+        rendered report — so widening its meaning carries no behavioral
+        risk beyond the displayed percentage.)
         """
         if not scores:
             return (Signal.NEUTRAL, 0.0, ["No directional data"])
@@ -655,7 +1100,13 @@ class RegimeClassifier:
             return (Signal.NEUTRAL, 0.0, ["No weighted data"])
 
         avg_score = weighted_sum / total_weight
-        confidence = abs(avg_score) / 2.0  # Normalize to 0-1
+        # Data-coverage factor: what fraction of the scores handed in
+        # actually carried weight (i.e. were not an insufficient-data
+        # placeholder at weight 0). Bounded [0, 1]; total_weight > 0 here
+        # (guarded above) guarantees at least one entry has weight > 0,
+        # so this is never 0.
+        coverage = sum(1 for s in scores if s[1] > 0) / len(scores)
+        confidence = (abs(avg_score) / 2.0) * coverage  # tilt magnitude x data coverage
 
         reasons = [s[2] for s in scores if abs(s[0]) > 0]
 
@@ -688,18 +1139,76 @@ class RegimeClassifier:
             3. IV high AND (VRP confirms OR term structure stressed) → ELEVATED
             4. IV high alone → ELEVATED (mixed confirmation)
             5. Otherwise → NORMAL
+
+        bugfix_spec.md Item 9 / Decision D6 fix-review (Critical #1): the
+        EXPLOSIVE branch's "steep skew" condition must check the
+        crash-correlated side of ``score_skew``'s output. Before Item 9,
+        ``score_skew`` took the old put-call ``skew_25d`` (positive = puts
+        richer) and this branch checked ``skew_score >= 1`` -- correctly
+        firing on extreme PUT-side richness (the side that empirically
+        correlates with crash/explosive vol, per score_skew's own historical
+        design). Item 9 re-signed ``score_skew`` to the market
+        ``risk_reversal_25d`` convention (call - put), which FLIPS which
+        real-world condition produces a positive vs. negative score: a
+        negative score now means puts-richer (the same crash-correlated
+        condition), not a positive one. The B2 sub-task 3 commit re-signed
+        score_skew but did NOT re-sign this consumer -- an oversight
+        (flagged in task-B2-report.md, confirmed as a real regression in
+        review, fixed here): on the live golden fixture the old condition
+        made EXPLOSIVE literally unreachable (every expiry's risk reversal
+        scored negative -1, so ``skew_score >= 1`` never fired). The
+        correct condition, restoring the original semantics against the
+        NEW sign convention, is ``skew_score <= -1``.
+
+        Also note (per the same review): re-signing score_skew was not a
+        pure sign flip of otherwise-identical bands -- the threshold widths
+        themselves changed. The old put-call bands were 4/8/12 points
+        (Balanced up to 4, Heavy at 8, Extreme at 12); the new
+        RISK_REVERSAL_MILD_POINTS/STRONG_POINTS bands are 1/5 points. The
+        score now reacts to roughly 4x-2.4x smaller risk-reversal moves
+        than before at the mild/strong boundaries respectively -- a real
+        sensitivity increase, not a relabeling. Not remediated here (out of
+        this fix round's scope per the coordinator's ruling) -- flagged for
+        awareness only.
+
+        Task Wave-I-A Fix 3: the SUPPRESSED/EXPLOSIVE branches used to
+        compare ``gex_normalized`` against a bare +-20. At a real BTC spot
+        (~$64k+) and real GEX magnitudes (six-to-nine-figure USD), that
+        ratio comes out in the tens to low thousands, not single/double
+        digits -- +-20 fired for almost any expiry/aggregate with
+        meaningful open interest, degenerating into a pure sign check. See
+        ``GEX_NORMALIZED_REGIME_THRESHOLD``'s own docstring in
+        thresholds.py for the fixture evidence behind the replacement
+        value and why a full HistoricalNormalizer percentile (the
+        architecturally correct fix) is a separate, larger change flagged
+        as a follow-up rather than done here.
+
+        Task Wave-J-C Fix 5: ``spot <= 0`` used to silently substitute a
+        BTC-shaped 100000.0 and keep classifying as if that were a real
+        price -- badly distorting gex_normalized (and therefore the
+        SUPPRESSED/EXPLOSIVE regime decision) for ETH or any other
+        asset, or masking a genuine upstream spot-price failure. An
+        invalid spot means GEX cannot be honestly normalized, so the two
+        GEX-gated branches (SUPPRESSED, EXPLOSIVE) are skipped entirely
+        -- classification falls through to the IV-only ELEVATED/NORMAL
+        checks below, and the skip is disclosed in ``reasons`` rather
+        than silently narrowing the decision tree.
         """
-        if spot <= 0:
-            spot = 100000.0
-        gex_normalized = gex_total / spot
+        gex_normalized = None
+        if spot > 0:
+            gex_normalized = gex_total / spot
+        else:
+            logger.warning(
+                f"classify_vol_regime: spot={spot} is invalid (<=0) — skipping "
+                "GEX-based SUPPRESSED/EXPLOSIVE checks")
         reasons = []
 
-        if gex_normalized > 20 and iv_pctile_score <= 0:
+        if gex_normalized is not None and gex_normalized > GEX_NORMALIZED_REGIME_THRESHOLD and iv_pctile_score <= 0:
             regime = VolRegime.SUPPRESSED
             reasons.append(f"Positive GEX (norm {gex_normalized:+.1f}) + low IV → Volatility suppressed")
-        elif gex_normalized < -20 and iv_pctile_score >= 1 and skew_score >= 1:
+        elif gex_normalized is not None and gex_normalized < -GEX_NORMALIZED_REGIME_THRESHOLD and iv_pctile_score >= 1 and skew_score <= -1:
             regime = VolRegime.EXPLOSIVE
-            reasons.append(f"Negative GEX (norm {gex_normalized:+.1f}) + high IV + steep skew → Explosive regime")
+            reasons.append(f"Negative GEX (norm {gex_normalized:+.1f}) + high IV + steep put-side skew → Explosive regime")
         elif iv_pctile_score >= 1 and (vrp_score >= 1 or term_structure_score <= -1):
             regime = VolRegime.ELEVATED
             reasons.append(f"High IV + {'VRP confirms' if vrp_score >= 1 else 'term structure stressed'} → Elevated vol")
@@ -709,6 +1218,9 @@ class RegimeClassifier:
         else:
             regime = VolRegime.NORMAL
             reasons.append("Normal volatility regime")
+
+        if gex_normalized is None:
+            reasons.append("GEX-based regime checks skipped: spot price unavailable/invalid")
 
         return (regime, reasons)
 
@@ -774,27 +1286,36 @@ class NarrativeGenerator:
     # REGIME DESCRIPTIONS
     # -------------------------------------------------------------------------
 
+    # Task G2-G: ``{put_support}``/``{call_resistance}`` carry NO numeric
+    # format spec (were ``${put_support:,.0f}``/``${call_resistance:,.0f}``,
+    # literal "$" included). ``generate_regime_narrative`` now pre-formats
+    # both into a display string ("$65,000" or "an unidentified level
+    # (insufficient data)", "$" included) before calling ``.format()`` --
+    # same reasoning/pattern as VOL_TEMPLATES' ``{iv_pctile}`` fix below.
+    # ``{max_pain}`` keeps its numeric spec: max_pain is deliberately never
+    # None (falls back to spot price -- see ExpiryMetrics' docstring), so
+    # it never needs a display-string branch.
     REGIME_TEMPLATES = {
         MarketRegime.RANGE_BOUND_NEUTRAL: (
             "RANGE-BOUND (NEUTRAL) regime. {gex_detail} "
-            "Expect price to oscillate between put support at ${put_support:,.0f} "
-            "and call resistance at ${call_resistance:,.0f}. "
+            "Expect price to oscillate between put support at {put_support} "
+            "and call resistance at {call_resistance}. "
             "Priority: sell premium via symmetric iron condors/strangles, harvest theta decay."
         ),
         MarketRegime.RANGE_BOUND_BULLISH: (
             "RANGE-BOUND (BULLISH) regime. Vol suppressed but bullish lean. {gex_detail} "
-            "Expect grind-higher in range toward ${call_resistance:,.0f}. "
+            "Expect grind-higher in range toward {call_resistance}. "
             "Priority: sell put spreads preferred, skew short strikes higher."
         ),
         MarketRegime.RANGE_BOUND_BEARISH: (
             "RANGE-BOUND (BEARISH) regime. Vol suppressed but bearish lean. {gex_detail} "
-            "Expect grind-lower in range toward ${put_support:,.0f}. "
+            "Expect grind-lower in range toward {put_support}. "
             "Priority: sell call spreads preferred, skew short strikes lower."
         ),
         MarketRegime.RANGE_BOUND_ELEVATED: (
             "RANGE-BOUND (ELEVATED VOL) regime. No directional lean but vol is expensive. "
             "Best premium-selling environment — widest wings, most aggressive capture. "
-            "Put support at ${put_support:,.0f}, call resistance at ${call_resistance:,.0f}. "
+            "Put support at {put_support}, call resistance at {call_resistance}. "
             "Priority: wide iron condors at GEX support/resistance."
         ),
         MarketRegime.TRENDING_UP: (
@@ -804,7 +1325,7 @@ class NarrativeGenerator:
         ),
         MarketRegime.TRENDING_DOWN: (
             "TRENDING-DOWN regime. Bearish structural positioning with normal volatility. "
-            "Put support at ${put_support:,.0f} is the key level to watch. "
+            "Put support at {put_support} is the key level to watch. "
             "Priority: long put spreads, protective puts. Sell call spreads on bounces."
         ),
         MarketRegime.VOLATILE_BULLISH: (
@@ -828,27 +1349,46 @@ class NarrativeGenerator:
     # VOL RECOMMENDATION TEMPLATES
     # -------------------------------------------------------------------------
 
+    # Task G2-B: ``{iv_pctile}`` has NO numeric format spec (was
+    # ``{iv_pctile:.0f}``) -- ``generate_vol_narrative`` pre-formats it
+    # into a display string ("73" or "insufficient data") before calling
+    # ``.format()``, since a bare ``:.0f`` spec cannot render "insufficient
+    # data" without raising. ``vrp`` keeps its numeric spec: every template
+    # that references ``vrp`` is only ever selected when ``vrp`` is not
+    # None (see ``generate_vol_narrative``'s ``vrp is None`` branch, which
+    # forces the "neutral" template -- the one template with no
+    # ``vrp``/``iv_pctile`` placeholders at all).
+    #
+    # Task G2-G: ``{sell_iv}``/``{skew}`` ALSO have NO numeric format spec
+    # now (were ``{sell_iv:.1f}%``/``{skew:+.1f}%``) -- both
+    # ``risk_reversal_25d`` (ExpiryMetrics field, vol surface may never
+    # have computed for this expiry) and ``sell_iv``
+    # (``best_sell_expiry.atm_iv``, same reason) are genuinely Optional
+    # independent of whether ``vrp`` selected this template, so
+    # ``generate_vol_narrative`` pre-formats both into display strings
+    # ("-8.0%"/"insufficient data") the same way it already does for
+    # ``iv_pctile``.
     VOL_TEMPLATES = {
         "sell_strong": (
-            "Volatility is expensive (IV at {iv_pctile:.0f}th percentile, "
+            "Volatility is expensive (IV at {iv_pctile}th percentile, "
             "VRP {vrp:+.1f}pts). {vrp_adjustment} "
-            "Sell premium in {sell_expiry} where ATM IV is {sell_iv:.1f}%. "
-            "Skew at {skew:+.1f}% makes {rich_side} puts the higher-edge side to sell."
+            "Sell premium in {sell_expiry} where ATM IV is {sell_iv}. "
+            "RR25 at {skew} makes {rich_side} the higher-edge side to sell."
         ),
         "sell_moderate": (
-            "Volatility is moderately elevated (IV at {iv_pctile:.0f}th percentile). "
+            "Volatility is moderately elevated (IV at {iv_pctile}th percentile). "
             "{vrp_adjustment} "
             "Selling premium has edge but size conservatively. "
-            "Favor {sell_expiry} expiry, {rich_side} side."
+            "Favor {sell_expiry} expiry with an edge toward {rich_side}."
         ),
         "neutral": (
             "Volatility is fairly priced. No strong edge in selling or buying premium. "
             "Focus on directional trades with defined risk structures."
         ),
         "buy_moderate": (
-            "Volatility is cheap (IV at {iv_pctile:.0f}th percentile, "
+            "Volatility is cheap (IV at {iv_pctile}th percentile, "
             "VRP {vrp:+.1f}pts). Long vol positions have edge. "
-            "Buy {buy_expiry} straddles or strangles. Favor {cheap_side} side."
+            "Buy {buy_expiry} straddles or strangles, with an edge toward {cheap_side}."
         ),
         "buy_strong": (
             "Volatility is extremely cheap. Strongly favor long vol. "
@@ -861,12 +1401,28 @@ class NarrativeGenerator:
     # KEY LEVELS TEMPLATE
     # -------------------------------------------------------------------------
 
+    # Wave-H-A (Task 6): this template has no live consumer -- confirmed
+    # never ``.format()``-ed anywhere in this codebase (an earlier audit's
+    # finding, re-confirmed here) -- but the label was still wrong for
+    # what {hvl} actually is, a landmine for whoever wires this up next.
+    # {hvl} is GexDexKeyLevels.hvl: the STRIKE where CUMULATIVE net GEX
+    # (summed strike-by-strike) changes sign -- a strike-axis artifact of
+    # how open interest is distributed, NOT the re-priced dealer-gamma
+    # flip. The actual "Zero Gamma Level" is GexDexKeyLevels.
+    # zero_gamma_level (computed separately by GammaProfileCalculator,
+    # bugfix_spec.md Item 2) and is not threaded into this template at
+    # all. See gex_dex_calculator.py's class docstring ("Key Levels"
+    # section) and GexDexKeyLevels's own docstring for the full
+    # distinction -- the live full-report formatter
+    # (gex_dex_formatter.py's KEY LEVELS block) already uses the correct
+    # "Cumulative GEX Zero Strike" label for this same value.
     LEVELS_TEMPLATE = (
         "KEY LEVELS: "
         "Resistance ${resistance:,.0f} (call wall {res_oi:,} OI). "
         "Support ${support:,.0f} (put wall {sup_oi:,} OI). "
         "Max pain ${max_pain:,.0f} ({mp_distance:+.1f}% from spot). "
-        "Zero Gamma Level ${hvl:,.0f}."
+        "Cumulative GEX Zero Strike ${hvl:,.0f} (strike-axis artifact, NOT "
+        "a re-priced gamma flip)."
     )
 
     # -------------------------------------------------------------------------
@@ -887,14 +1443,26 @@ class NarrativeGenerator:
             cls,
             regime: MarketRegime,
             spot: float,
-            put_support: float,
-            call_resistance: float,
+            put_support: Optional[float],
+            call_resistance: Optional[float],
             max_pain: float,
             gex_total: float,
             conflict_detail: str = "",
             transition_window: str = "7-14 days"
     ) -> str:
-        """Generate regime description with filled parameters."""
+        """
+        Generate regime description with filled parameters.
+
+        Task G2-G: ``put_support``/``call_resistance`` (the largest
+        expiry's GEX-derived strike levels) are genuinely Optional -- no
+        identified level in that expiry's strike range, NOT a level at
+        strike 0.0. Pre-formatted into a display string ("$65,000" or an
+        explicit "insufficient data" phrase) before ``.format()`` runs, so
+        a missing level neither raises (a bare ``:,.0f`` spec on None)
+        nor silently renders as "put support at $0" -- a specific,
+        wrong price level. ``max_pain`` keeps its direct numeric format:
+        it's deliberately never None (falls back to spot price).
+        """
 
         gex_millions = gex_total / 1_000_000
         if gex_millions > 0:
@@ -902,11 +1470,20 @@ class NarrativeGenerator:
         else:
             gex_detail = f"Negative gamma ({gex_millions:.1f}M GEX) is amplifying moves — dealers chase momentum both directions."
 
+        put_support_display = (
+            f"${put_support:,.0f}" if put_support is not None
+            else "an unidentified level (insufficient data)"
+        )
+        call_resistance_display = (
+            f"${call_resistance:,.0f}" if call_resistance is not None
+            else "an unidentified level (insufficient data)"
+        )
+
         template = cls.REGIME_TEMPLATES.get(regime, cls.REGIME_TEMPLATES[MarketRegime.RANGE_BOUND_NEUTRAL])
 
         return template.format(
-            put_support=put_support,
-            call_resistance=call_resistance,
+            put_support=put_support_display,
+            call_resistance=call_resistance_display,
             max_pain=max_pain,
             gex_detail=gex_detail,
             conflict_detail=conflict_detail,
@@ -916,18 +1493,57 @@ class NarrativeGenerator:
     @classmethod
     def generate_vol_narrative(
             cls,
-            iv_pctile: float,
-            vrp: float,
+            iv_pctile: Optional[float],
+            vrp: Optional[float],
             vrp_adjustment: str,
-            skew: float,
+            risk_reversal_25d: Optional[float],
             sell_expiry: str,
-            sell_iv: float,
+            sell_iv: Optional[float],
             buy_expiry: str = "",
     ) -> str:
-        """Generate volatility assessment narrative."""
+        """
+        Generate volatility assessment narrative.
+
+        bugfix_spec.md Item 9 fix-review (Important #6): this used to take
+        the legacy put-call ``skew`` (positive = puts richer) and printed
+        it under the generic label "Skew" -- the same report bundle's GEX/
+        DEX/vol-surface sections had already switched to the RR25 (call -
+        put) convention and sign, so the SAME quantity was shown with TWO
+        CONTRADICTORY signs under an unlabelled name in one report. Now
+        takes ``risk_reversal_25d`` directly (market convention) and prints
+        it as "RR25", with the rich/cheap-side thresholds re-signed to
+        match (mechanically: substitute risk_reversal_25d = -skew into the
+        prior skew>8/skew>=4/skew<4 boundaries -- same decision boundaries,
+        opposite-signed input, no new thresholds introduced).
+
+        Task G2-B: ``vrp=None`` (VRP unavailable) forces ``template_key``
+        to "neutral" -- the one template with no ``{vrp}``/``{iv_pctile}``
+        placeholder, so it can never fabricate a directional vol call from
+        missing data, and never crashes trying to format ``None`` with a
+        numeric spec. ``iv_pctile=None`` is pre-formatted into a plain
+        "insufficient data" string (the templates' ``{iv_pctile}``
+        placeholder carries no format spec for exactly this reason) so it
+        can still render inside a "sell"/"buy" template driven by a real,
+        non-None ``vrp``.
+
+        Task G2-G: ``risk_reversal_25d``/``sell_iv`` are independently
+        Optional from ``vrp`` (the largest/best-sell expiry's vol surface
+        can be missing even when market-wide VRP is real) -- both are
+        pre-formatted into display strings the same way ``iv_pctile`` is,
+        and the rich/cheap-side classification below gets its own explicit
+        None branch instead of comparing None against a numeric threshold
+        (which raises ``TypeError`` in Python 3).
+        """
+        iv_pctile_display = f"{iv_pctile:.0f}" if iv_pctile is not None else "insufficient data"
+        risk_reversal_display = (
+            f"{risk_reversal_25d:+.1f}%" if risk_reversal_25d is not None else "insufficient data"
+        )
+        sell_iv_display = f"{sell_iv:.1f}%" if sell_iv is not None else "insufficient data"
 
         # Determine which template — unified ±5 thresholds matching VRP scorer
-        if vrp > 10:
+        if vrp is None:
+            template_key = "neutral"
+        elif vrp > 10:
             template_key = "sell_strong"
         elif vrp > 5:
             template_key = "sell_moderate"
@@ -938,24 +1554,45 @@ class NarrativeGenerator:
         else:
             template_key = "buy_strong"
 
-        # Rich/cheap side based on skew
-        if skew > 8:
-            rich_side = "OTM puts are rich — selling put premium has edge"
-        elif skew >= 4:
-            rich_side = "Skew is normal — no clear rich/cheap side"
+        # Rich/cheap side based on the risk reversal (call IV - put IV --
+        # score_skew's docstring). ANY negative RR25 means put IV is above
+        # call IV, i.e. puts are richer than calls, however close to zero --
+        # the old tri-branch (< -8 "puts rich" / <= -4 "normal, no clear
+        # side" / else "puts cheap") got this backwards for the entire
+        # -4..0 sub-range (including this fixture's real -3.6 reading):
+        # puts are still the richer side there, just not extremely, yet
+        # the "else" branch told a reader to favor buying puts (the MORE
+        # expensive side) as the "cheap" one. Task Wave-J-C Fix 2.
+        #
+        # Rebuilt as a plain three-way directional split using the SAME
+        # near-zero boundary score_skew already uses (RISK_REVERSAL_
+        # MILD_POINTS) so this axis has one shared threshold instead of
+        # two independently-tuned copies (the same divergence-prevention
+        # rationale as max_pain_utils.calculate_max_pain_distance_pct).
+        # rich_side/cheap_side are now short noun phrases (not full
+        # sentences) so every VOL_TEMPLATES entry that interpolates them
+        # stays grammatical regardless of which band fires; severity
+        # ("extreme" vs "mild") is conveyed by score_skew's own text
+        # elsewhere in the report, not duplicated here.
+        if risk_reversal_25d is None or -RISK_REVERSAL_MILD_POINTS <= risk_reversal_25d <= RISK_REVERSAL_MILD_POINTS:
+            rich_side = "neither side"
+            cheap_side = "neither side"
+        elif risk_reversal_25d < -RISK_REVERSAL_MILD_POINTS:
+            rich_side = "puts"
+            cheap_side = "calls"
         else:
-            rich_side = "OTM puts are cheap relative to calls — tail risk underpriced"
-        cheap_side = "calls" if skew > 4 else "puts"
+            rich_side = "calls"
+            cheap_side = "puts"
 
         template = cls.VOL_TEMPLATES[template_key]
 
         return template.format(
-            iv_pctile=iv_pctile,
+            iv_pctile=iv_pctile_display,
             vrp=vrp,
             vrp_adjustment=vrp_adjustment,
-            skew=skew,
+            skew=risk_reversal_display,
             sell_expiry=sell_expiry,
-            sell_iv=sell_iv,
+            sell_iv=sell_iv_display,
             buy_expiry=buy_expiry,
             rich_side=rich_side,
             cheap_side=cheap_side,
@@ -964,37 +1601,86 @@ class NarrativeGenerator:
     @classmethod
     def generate_risk_factors(
             cls,
-            cone_30d_pctile: float,
+            cone_30d_pctile: Optional[float],
             gex_total: float,
-            largest_expiry_dte: int,
-            funding_8h: float,
-            skew: float,
+            gamma_rolloff: Optional[GammaRolloffResult],
+            funding_8h: Optional[float],
+            risk_reversal_25d: Optional[float],
             spot: float = 100000.0,
             fragility_multiplier: float = 1.0,
             fragility_level: str = "NONE",
     ) -> str:
-        """Generate risk factor list based on thresholds."""
+        """
+        Generate risk factor list based on thresholds.
+
+        bugfix_spec.md Item 9 fix-review (Important #6): takes
+        ``risk_reversal_25d`` (market convention) directly now, not the
+        legacy put-call ``skew`` -- the "Extreme skew" threshold below is
+        re-signed to match (rr = -skew; puts-rich extreme is now a large
+        NEGATIVE risk reversal).
+
+        Task G2-B: ``cone_30d_pctile``/``funding_8h`` can now be None
+        (unavailable) -- both threshold checks below are skipped, never
+        evaluated against a fabricated 0.0, when their input is missing.
+        A missing input is not itself a "risk factor" to report here; the
+        run-level DATA QUALITY section is where its absence gets disclosed.
+
+        Task G2-G: ``risk_reversal_25d`` is the same kind of genuinely-
+        Optional field (the largest expiry's vol surface may never have
+        computed) -- its threshold check below is skipped the same way,
+        for the same reason.
+
+        Task Wave-I-A Fix 1: ``gamma_rolloff`` replaces the old
+        ``largest_expiry_dte`` parameter. The old "Major expiry in N DTE"
+        trigger used ``largest_expiry`` = ``max(expiries, key=lambda e:
+        e.total_oi)`` -- for BTC the largest-OI expiry is essentially
+        always a far-dated quarterly, so ``largest_expiry_dte <= 3`` could
+        never fire even when a genuinely near-dated expiry carried a large
+        share of the book's gamma mass (real pin risk). This reuses
+        ``GexDexCalculator.calculate_rolloff_profile``'s own "GAMMA CLIFF"
+        flag (``gamma_cliff_7d``, threshold >30% of gamma mass within 7
+        DTE -- see ``format_gamma_rolloff_section``) instead of inventing
+        a second, parallel near-term-concentration metric. ``None`` when
+        the roll-off computation never ran (no per-expiry GEX at all) --
+        the check is skipped, same "missing input is not itself a risk
+        factor" convention as ``cone_30d_pctile``/``funding_8h`` above.
+        """
 
         risks = []
 
-        if cone_30d_pctile > 90:
+        if cone_30d_pctile is not None and cone_30d_pctile > 90:
             risks.append(
                 f"30d RV at {cone_30d_pctile:.0f}th percentile — recent extreme move may repeat or mean-revert violently")
 
-        # GEX threshold normalized by spot
-        if spot <= 0:
-            spot = 100000.0
-        gex_norm = gex_total / spot
-        if gex_norm < -50:
-            gex_m = gex_total / 1_000_000
-            risks.append(
-                f"Deeply negative GEX ({gex_m:.1f}M, norm {gex_norm:.0f}) — cascading stop-outs possible")
+        # GEX threshold normalized by spot. Task Wave-J-C Fix 5: ``spot
+        # <= 0`` used to silently substitute a BTC-shaped 100000.0 and
+        # keep computing gex_norm as if that were a real price -- badly
+        # distorting this check for ETH or any other asset, or masking a
+        # genuine upstream spot-price failure. An invalid spot means GEX
+        # cannot be honestly normalized here -- same "missing input is
+        # not itself a risk factor" convention as cone_30d_pctile/
+        # funding_8h above: skip the check rather than fabricate an input.
+        if spot > 0:
+            gex_norm = gex_total / spot
+            if gex_norm < -50:
+                gex_m = gex_total / 1_000_000
+                risks.append(
+                    f"Deeply negative GEX ({gex_m:.1f}M, norm {gex_norm:.0f}) — cascading stop-outs possible")
+        else:
+            logger.warning(
+                f"generate_risk_factors: spot={spot} is invalid (<=0) — skipping "
+                "GEX-based risk factor check")
 
-        if largest_expiry_dte <= 3:
-            risks.append(f"Major expiry in {largest_expiry_dte} DTE — pin risk and gamma spike around max pain")
+        if gamma_rolloff is not None and gamma_rolloff.gamma_cliff_7d:
+            near_expiries = [r.expiration for r in gamma_rolloff.rows if r.dte_days <= 7.0]
+            expiry_note = ", ".join(near_expiries) if near_expiries else "near-dated expiries"
+            risks.append(
+                f"GAMMA CLIFF: {gamma_rolloff.cum_share_7d:.0f}% of gamma mass expires "
+                f"within 7 DTE ({expiry_note}) — pin risk and gamma spike around max pain"
+            )
 
         # Funding threshold: |funding_8h| > 0.03% per 8h (~32.85% ann)
-        if abs(funding_8h) > 0.03:
+        if funding_8h is not None and abs(funding_8h) > 0.03:
             direction = "long" if funding_8h > 0 else "short"
             ann_rate = abs(funding_8h) * 3 * 365
             level = "Extreme" if ann_rate > 20 else "Elevated"
@@ -1003,8 +1689,8 @@ class NarrativeGenerator:
                 f"— crowded {direction} at risk of squeeze"
             )
 
-        if skew > 12:
-            risks.append(f"Extreme skew ({skew:+.1f}%) — tail hedging elevated, crash risk priced in")
+        if risk_reversal_25d is not None and risk_reversal_25d < -12:
+            risks.append(f"Extreme RR25 ({risk_reversal_25d:+.1f}%) — tail hedging elevated, crash risk priced in")
 
         # Fragility flag
         if fragility_multiplier < 1.0:
@@ -1022,12 +1708,13 @@ class NarrativeGenerator:
             cls,
             regime: MarketRegime,
             vol_regime: VolRegime,
-            iv_pctile: float,
-            skew: float,
+            iv_pctile: Optional[float],
+            risk_reversal_25d: Optional[float],
             gex_total: float,
             near_term_expiry: str,
             far_term_expiry: str,
             skew_expiry: str = "",
+            vrp: Optional[float] = None,
     ) -> str:
         """
         Generate trade recommendations based on regime.
@@ -1041,8 +1728,69 @@ class NarrativeGenerator:
             4. Calendar spreads → Term structure dislocation
             5. Risk reversal → Strong skew + directional view
             6. Cash/reduce → Transition regime
+
+        bugfix_spec.md Item 9 fix-review (Important #6): takes
+        ``risk_reversal_25d`` (market convention, call - put) directly now,
+        not the legacy put-call ``skew`` -- every threshold below is
+        re-signed to match (rr = -skew; same decision boundaries, no new
+        thresholds introduced).
+
+        Task G2-B: ``iv_pctile=None`` (IV percentile unavailable) must not
+        silently satisfy an IV threshold check via a fabricated 0.0 --
+        both IV-gated strategies below now require ``iv_pctile is not
+        None`` before comparing it, so a missing IV percentile can never
+        trigger "cheap IV, buy vol" (the old ``0.0 < 30`` phantom trigger)
+        or be blocked from "expensive IV, sell vol" for the wrong reason.
+
+        Task G2-G: ``risk_reversal_25d=None`` is handled per-strategy, not
+        with one blanket guard, because each strategy uses it differently:
+        Strategy 1's skew-adjustment sub-recommendation gets its own
+        explicit None branch (the IC recommendation itself is still
+        printed -- ``iv_pctile``/``regime``/``vol_regime`` already justify
+        it; only the skew-specific wing adjustment degrades to "insufficient
+        data"). Strategy 3 is triggered by ``regime`` alone, so its RR25
+        annotation is pre-formatted into a display string rather than
+        skipping the whole recommendation. Strategy 4 IS gated on
+        ``risk_reversal_25d`` itself (a specific RR25 threshold trigger,
+        same as ``iv_pctile is not None`` gating Strategies 1/2) -- a
+        missing reading cannot satisfy "RR25 < -10%", so the whole
+        recommendation is skipped, matching the existing iv_pctile pattern
+        rather than inventing a new one.
+
+        Task Wave-H-B Fix 3: Strategies 1 and 2 used to trigger purely off
+        ``iv_pctile`` thresholds (>70 / <30) with no awareness of VRP --
+        the SAME report's vol-assessment narrative (``generate_vol_narrative``,
+        ``VOL_TEMPLATES``) independently picks its sell/buy framing off
+        ``vrp`` thresholds (>10 / <-10) alone. IV percentile (relative-to-
+        365-day-history valuation) and VRP (implied vs. realized, the
+        direct priced-vol-vs-actual-vol edge measure -- see
+        ``score_vrp``'s docstring) are genuinely different, uncorrelated
+        reads and CAN legitimately disagree (e.g. IV is cheap vs. its own
+        year but still priced above a currently-quiet realized vol). Left
+        unarbitrated, this produced a report that said "sell premium" in
+        the vol-assessment narrative and "PRIMARY — Long Straddle" (buy
+        vol) in trade recommendations, both with top billing, no
+        disclosure of the conflict.
+
+        VRP is the more direct, actionable edge measure for a premium
+        trade (it's a direct comparison of priced vol to realized vol,
+        not a historical-percentile rank), so it takes precedence when
+        the two disagree: the IV-percentile-triggered strategy is
+        demoted from PRIMARY to an explicitly-flagged, reduced-confidence
+        idea rather than silently standing as equal-billing advice. A
+        missing ``vrp`` (None) cannot disagree with anything -- both
+        strategies fall back to their original iv_pctile-only behavior.
         """
         recommendations = []
+
+        # Task Wave-H-B Fix 3: VRP vs. IV-percentile disagreement,
+        # computed once and applied to whichever strategy it contradicts.
+        # "Disagreement" is scoped to the two thresholds these strategies
+        # already use (70/30), not score_vrp's finer bands, so a mild VRP
+        # reading that doesn't itself justify a strong sell/buy call
+        # doesn't manufacture a conflict that isn't really there.
+        vrp_says_sell = vrp is not None and vrp > 5   # score_vrp: sell-vol edge or stronger
+        vrp_says_buy = vrp is not None and vrp < -5   # score_vrp: buy-vol edge or stronger
 
         # Strategy 1: Premium selling conditions (all RANGE_BOUND variants)
         range_bound_regimes = (
@@ -1052,15 +1800,17 @@ class NarrativeGenerator:
             MarketRegime.RANGE_BOUND_ELEVATED,
         )
         if (regime in range_bound_regimes and
-                iv_pctile > 70 and
+                iv_pctile is not None and iv_pctile > 70 and
                 vol_regime != VolRegime.EXPLOSIVE):
-            # Skew-adjusted IC
-            if skew > 8:
+            # RR25-adjusted IC (re-signed: was skew > 8 / skew < 2)
+            if risk_reversal_25d is None:
+                skew_adj = "RR25 unavailable — symmetric wings at GEX support/resistance levels (insufficient data to skew-adjust). "
+            elif risk_reversal_25d < -8:
                 skew_adj = "Puts are rich — keep short put at 25-delta, push long put protection further OTM (5-delta). "
-            elif skew < 2:
+            elif risk_reversal_25d > -2:
                 skew_adj = "Calls relatively expensive — keep short call at 25-delta, push long call protection further OTM. "
             else:
-                skew_adj = "Normal skew — symmetric wings at GEX support/resistance levels. "
+                skew_adj = "Normal RR25 — symmetric wings at GEX support/resistance levels. "
 
             # Regime-specific center shift
             if regime == MarketRegime.RANGE_BOUND_BULLISH:
@@ -1070,48 +1820,79 @@ class NarrativeGenerator:
             elif regime == MarketRegime.RANGE_BOUND_ELEVATED:
                 skew_adj += "Elevated vol: widest wings for maximum premium capture."
 
-            recommendations.append(
-                f"PRIMARY — Short Iron Condor ({near_term_expiry}): "
-                f"Sell premium in range-bound regime. IV at {iv_pctile:.0f}th pctile provides edge. "
-                f"{skew_adj}"
-                f"Target 50% of max profit, close before final 3 DTE."
-            )
+            if vrp_says_buy:
+                recommendations.append(
+                    f"OPPORTUNISTIC (signals disagree) — Short Iron Condor ({near_term_expiry}): "
+                    f"IV at {iv_pctile:.0f}th pctile looks expensive vs. its own history, but "
+                    f"VRP {vrp:+.1f}pts says implied vol is cheap vs. currently realized vol — "
+                    f"buying volatility has the more reliable near-term edge. Treat this "
+                    f"sell-premium idea with reduced confidence; do not size as a primary position. "
+                    f"{skew_adj}"
+                    f"Target 50% of max profit, close before final 3 DTE."
+                )
+            else:
+                recommendations.append(
+                    f"PRIMARY — Short Iron Condor ({near_term_expiry}): "
+                    f"Sell premium in range-bound regime. IV at {iv_pctile:.0f}th pctile provides edge. "
+                    f"{skew_adj}"
+                    f"Target 50% of max profit, close before final 3 DTE."
+                )
 
         # Strategy 2: Long vol conditions
-        if vol_regime == VolRegime.EXPLOSIVE or iv_pctile < 30:
-            recommendations.append(
-                f"PRIMARY — Long Straddle/Strangle ({far_term_expiry}): "
-                f"{'Explosive gamma regime' if vol_regime == VolRegime.EXPLOSIVE else 'Cheap IV'} "
-                f"favors owning volatility. Buy ATM straddle or 25-delta strangle."
-            )
+        iv_pctile_cheap = iv_pctile is not None and iv_pctile < 30
+        if vol_regime == VolRegime.EXPLOSIVE or iv_pctile_cheap:
+            if vol_regime != VolRegime.EXPLOSIVE and iv_pctile_cheap and vrp_says_sell:
+                recommendations.append(
+                    f"OPPORTUNISTIC (signals disagree) — Long Straddle/Strangle ({far_term_expiry}): "
+                    f"IV at {iv_pctile:.0f}th pctile looks cheap vs. its own history, but "
+                    f"VRP {vrp:+.1f}pts says implied vol is still rich vs. currently realized "
+                    f"vol — selling volatility has the more reliable near-term edge. Treat this "
+                    f"long-vol idea with reduced confidence; do not size as a primary position."
+                )
+            else:
+                recommendations.append(
+                    f"PRIMARY — Long Straddle/Strangle ({far_term_expiry}): "
+                    f"{'Explosive gamma regime' if vol_regime == VolRegime.EXPLOSIVE else 'Cheap IV'} "
+                    f"favors owning volatility. Buy ATM straddle or 25-delta strangle."
+                )
 
-        # Strategy 3: Directional spreads
+        # Strategy 3: Directional spreads. Task G2-G: triggered by
+        # ``regime`` alone (not risk_reversal_25d), so a missing RR25
+        # reading pre-formats to "insufficient data" rather than skipping
+        # a recommendation the regime already justifies.
+        rr25_display = (
+            f"{risk_reversal_25d:+.1f}%" if risk_reversal_25d is not None else "insufficient data"
+        )
         if regime in (MarketRegime.TRENDING_UP, MarketRegime.VOLATILE_BULLISH):
             recommendations.append(
                 f"SECONDARY — Bull Call Spread ({far_term_expiry}): "
                 f"Bullish regime supports upside exposure. Buy near-ATM, sell at call resistance. "
-                f"Skew {skew:+.1f}% makes calls relatively cheap vs puts."
+                f"RR25 {rr25_display} makes calls relatively cheap vs puts."
             )
         elif regime in (MarketRegime.TRENDING_DOWN, MarketRegime.VOLATILE_BEARISH):
             recommendations.append(
                 f"SECONDARY — Bear Put Spread ({far_term_expiry}): "
                 f"Bearish regime supports downside positioning. "
-                f"Steep skew ({skew:+.1f}%) makes puts expensive — use spreads to offset."
+                f"Steep RR25 ({rr25_display}) makes puts expensive — use spreads to offset."
             )
 
-        # Strategy 4: Skew trade — exclude bearish regimes
+        # Strategy 4: Skew trade — exclude bearish regimes (re-signed: was skew > 10)
         bearish_exclusions = (
             MarketRegime.VOLATILE_BEARISH,
             MarketRegime.TRENDING_DOWN,
             MarketRegime.RANGE_BOUND_BEARISH,
         )
-        if skew > 10 and regime not in bearish_exclusions:
+        # Task G2-G: this IS a risk_reversal_25d-gated trigger (like
+        # iv_pctile gating Strategies 1/2 above) -- a missing reading
+        # cannot satisfy "RR25 < -10%", so skip the whole recommendation
+        # rather than fabricate a trigger from a None comparison.
+        if risk_reversal_25d is not None and risk_reversal_25d < -10 and regime not in bearish_exclusions:
             skew_src = f" [{skew_expiry}]" if skew_expiry else ""
             recommendations.append(
                 f"OPPORTUNISTIC — Risk Reversal ({skew_expiry or near_term_expiry}): "
-                f"25D skew{skew_src} at {skew:+.1f}% is elevated (threshold: >10%). "
+                f"25D RR25{skew_src} at {risk_reversal_25d:+.1f}% is elevated (threshold: <-10%). "
                 f"Sell OTM put, buy OTM call. "
-                f"Verify skew on target expiry before executing — skew varies across the curve."
+                f"Verify RR25 on target expiry before executing — it varies across the curve."
             )
 
         # Strategy 5: Transition
@@ -1194,8 +1975,13 @@ class SynthesisEngine:
             self.scorer.score_funding(market.funding_8h)
         )
 
-        # Futures basis (front only)
-        basis_values = list(market.futures_basis.values())
+        # Futures basis (front only). bugfix_spec.md Item 5 / Decision D12:
+        # basis is now Optional[float] (None when annualization is
+        # suppressed for a sub-daily tenor) — None must weight-zero here,
+        # never be treated as a neutral score. Ordering is preserved (dict
+        # insertion order == DTE-ascending, per synthesis_logic.md:112);
+        # filtering keeps that order, it just skips suppressed entries.
+        basis_values = [v for v in market.futures_basis.values() if v is not None]
         if basis_values:
             all_direction_scores.append(
                 self.scorer.score_futures_basis(basis_values[0])
@@ -1213,9 +1999,14 @@ class SynthesisEngine:
             all_direction_scores.append(
                 self.scorer.score_dex(exp.total_dex, spot=spot, dte=exp.dte))
             all_direction_scores.append(
-                self.scorer.score_max_pain_gravity(exp.max_pain, spot, dte=exp.dte))
+                # CARRIED FINDING (B2 review, task C1): this expiry's own
+                # forward price, not the single global ``spot`` -- same
+                # defect class as bugfix_spec.md Item 7.
+                self.scorer.score_max_pain_gravity(
+                    exp.max_pain, exp.underlying_price, dte=exp.dte,
+                    sufficient_data=exp.max_pain_sufficient_data))
             all_direction_scores.append(
-                self.scorer.score_flow(exp.flow_bias, exp.flow_trend))
+                self.scorer.score_flow_gated(exp.flow_bias, exp.flow_trend, exp.flow_sufficient_data))
             all_direction_scores.append(
                 self.scorer.score_vanna_charm(
                     exp.net_vanna, exp.net_charm,
@@ -1230,9 +2021,14 @@ class SynthesisEngine:
             near_direction_scores.append(
                 self.scorer.score_dex(exp.total_dex, spot=spot, dte=exp.dte))
             near_direction_scores.append(
-                self.scorer.score_max_pain_gravity(exp.max_pain, spot, dte=exp.dte))
+                # CARRIED FINDING (B2 review, task C1): this expiry's own
+                # forward price, not the single global ``spot`` -- same
+                # defect class as bugfix_spec.md Item 7.
+                self.scorer.score_max_pain_gravity(
+                    exp.max_pain, exp.underlying_price, dte=exp.dte,
+                    sufficient_data=exp.max_pain_sufficient_data))
             near_direction_scores.append(
-                self.scorer.score_flow(exp.flow_bias, exp.flow_trend))
+                self.scorer.score_flow_gated(exp.flow_bias, exp.flow_trend, exp.flow_sufficient_data))
             near_direction_scores.append(
                 self.scorer.score_vanna_charm(
                     exp.net_vanna, exp.net_charm,
@@ -1247,9 +2043,14 @@ class SynthesisEngine:
             far_direction_scores.append(
                 self.scorer.score_dex(exp.total_dex, spot=spot, dte=exp.dte))
             far_direction_scores.append(
-                self.scorer.score_max_pain_gravity(exp.max_pain, spot, dte=exp.dte))
+                # CARRIED FINDING (B2 review, task C1): this expiry's own
+                # forward price, not the single global ``spot`` -- same
+                # defect class as bugfix_spec.md Item 7.
+                self.scorer.score_max_pain_gravity(
+                    exp.max_pain, exp.underlying_price, dte=exp.dte,
+                    sufficient_data=exp.max_pain_sufficient_data))
             far_direction_scores.append(
-                self.scorer.score_flow(exp.flow_bias, exp.flow_trend))
+                self.scorer.score_flow_gated(exp.flow_bias, exp.flow_trend, exp.flow_sufficient_data))
             far_direction_scores.append(
                 self.scorer.score_vanna_charm(
                     exp.net_vanna, exp.net_charm,
@@ -1267,7 +2068,7 @@ class SynthesisEngine:
             market.cone_30d_pctile
         )
 
-        skew_score = self.scorer.score_skew(largest_expiry.skew_25d)
+        skew_score = self.scorer.score_skew(largest_expiry.risk_reversal_25d)
 
         term_score = self.scorer.score_term_structure(
             market.term_structure_shape,
@@ -1295,10 +2096,16 @@ class SynthesisEngine:
         )
         dir_confidence *= fragility_multiplier
 
-        # Vol regime — prefer market-wide aggregate GEX; fall back to largest expiry
+        # Vol regime — prefer market-wide aggregate GEX; fall back to largest
+        # expiry. Final verification sweep (post Wave J): gated on `is not
+        # None`, not `!= 0.0` -- the old sentinel comparison discarded a
+        # REAL aggregate GEX/DEX measurement of exactly 0.0 (a genuinely
+        # gamma-neutral book) the same way it caught a genuinely-missing
+        # aggregate, silently substituting largest_expiry.total_gex for a
+        # real, valid market-wide reading.
         gex_for_regime = (
             market.aggregate_total_gex
-            if market.aggregate_total_gex != 0.0
+            if market.aggregate_total_gex is not None
             else largest_expiry.total_gex
         )
         vol_regime, vol_reasons = self.classifier.classify_vol_regime(
@@ -1317,30 +2124,65 @@ class SynthesisEngine:
 
         # =====================================================================
         # STEP 4: Calculate forward VRP for narrative
+        #
+        # Task G2-B: every input here (market.rv_10d/rv_20d, market.dvol,
+        # market.vrp, market.cone_30d_pctile) can now genuinely be None.
+        # The old code assumed all five were always real floats -- with
+        # the mapper fix above, that assumption is false whenever a
+        # section's calculation didn't run, so every branch below is
+        # guarded and discloses "insufficient data" instead of silently
+        # computing a forward-VRP proxy (or a stale-data correction) from
+        # a fabricated zero.
         # =====================================================================
 
-        forward_rv = (market.rv_10d + market.rv_20d) / 2
-        forward_vrp = market.dvol - forward_rv
+        forward_rv = (
+            (market.rv_10d + market.rv_20d) / 2
+            if market.rv_10d is not None and market.rv_20d is not None
+            else None
+        )
+        forward_vrp = (
+            market.dvol - forward_rv
+            if market.dvol is not None and forward_rv is not None
+            else None
+        )
         effective_vrp = market.vrp
 
-        if market.cone_30d_pctile > 85:
-            signals_agree = (market.vrp >= 0) == (forward_vrp >= 0)
-            agreement_note = (
-                "Confirms primary signal direction."
-                if signals_agree
-                else f"Conflicts with primary VRP ({market.vrp:+.1f}pts) — treat as uncertain."
-            )
+        if market.vrp is None:
             vrp_adjustment = (
-                f"NOTE [model]: 30d RV at {market.cone_30d_pctile:.0f}th pctile — "
-                f"may be inflated by a prior extreme move. "
-                f"Forward VRP proxy using 10d/20d avg RV ({forward_rv:.1f}%) = {forward_vrp:+.1f}pts. "
-                f"{agreement_note} "
-                f"Primary VRP ({market.vrp:+.1f}pts) drives this recommendation."
+                "VRP: insufficient data (DVOL or realized volatility unavailable) — "
+                "no stale-data correction applied."
             )
-        elif market.cone_30d_pctile < 15:
+        elif market.cone_30d_pctile is not None and market.cone_30d_pctile > 85:
+            if forward_vrp is not None:
+                signals_agree = (market.vrp >= 0) == (forward_vrp >= 0)
+                agreement_note = (
+                    "Confirms primary signal direction."
+                    if signals_agree
+                    else f"Conflicts with primary VRP ({market.vrp:+.1f}pts) — treat as uncertain."
+                )
+                vrp_adjustment = (
+                    f"NOTE [model]: 30d RV at {market.cone_30d_pctile:.0f}th pctile — "
+                    f"may be inflated by a prior extreme move. "
+                    f"Forward VRP proxy using 10d/20d avg RV ({forward_rv:.1f}%) = {forward_vrp:+.1f}pts. "
+                    f"{agreement_note} "
+                    f"Primary VRP ({market.vrp:+.1f}pts) drives this recommendation."
+                )
+            else:
+                vrp_adjustment = (
+                    f"NOTE [model]: 30d RV at {market.cone_30d_pctile:.0f}th pctile — may be "
+                    f"inflated by a prior extreme move, but the forward-VRP proxy is unavailable "
+                    f"(10d/20d RV or DVOL missing). "
+                    f"Primary VRP ({market.vrp:+.1f}pts) drives this recommendation, uncorrected."
+                )
+        elif market.cone_30d_pctile is not None and market.cone_30d_pctile < 15:
             vrp_adjustment = (
                 f"NOTE: 30d RV at {market.cone_30d_pctile:.0f}th pctile — unusually calm period. "
                 f"VRP may compress further if realized vol reverts to mean."
+            )
+        elif market.cone_30d_pctile is None:
+            vrp_adjustment = (
+                "30d RV percentile: insufficient data — cannot assess whether the primary "
+                "VRP is representative of current conditions."
             )
         else:
             vrp_adjustment = "30d RV within normal range. VRP is representative."
@@ -1355,13 +2197,25 @@ class SynthesisEngine:
 
         header = self._generate_header(market, overall_direction, vol_regime, market_regime)
 
+        # Task G2-B Finding 2: the regime/risk/trade narratives below must
+        # describe the SAME GEX value ``gex_for_regime`` (STEP 3) already
+        # used to classify vol_regime -- not ``largest_expiry.total_gex``.
+        # Before this fix, the vol-regime score correctly preferred the
+        # market-wide aggregate GEX (falling back to the largest-OI
+        # expiry only when the aggregate is unavailable/zero), while every
+        # narrative sentence quoting a "+X.XM GEX" figure was fed the
+        # largest-OI expiry's OWN gamma regardless -- on the confirmed
+        # live case, the narrative read "+13.7M GEX" (that one expiry's
+        # value) in a sentence describing the market's positioning, while
+        # the true market-wide aggregate was "+86.8M" (6.3x larger). The
+        # text and the number it's allegedly describing must agree.
         regime_narrative = self.narrator.generate_regime_narrative(
             regime=market_regime,
             spot=spot,
             put_support=put_support,
             call_resistance=call_resistance,
             max_pain=max_pain,
-            gex_total=largest_expiry.total_gex,
+            gex_total=gex_for_regime,
             conflict_detail=regime_reason if market_regime == MarketRegime.TRANSITION else "",
             transition_window=self._estimate_transition_window(expiries_sorted),
         )
@@ -1381,13 +2235,33 @@ class SynthesisEngine:
         if not sellable_near:
             # Fallback: nearest meaningful expiry
             sellable_near = [e for e in expiries_sorted if e.dte >= 1 and e.total_oi > 500]
-        best_sell_expiry = max(sellable_near, key=lambda e: e.atm_iv) if sellable_near else meaningful_near
+        # Task G2-G: atm_iv is genuinely Optional (vol surface may never
+        # have computed for a given expiry) -- max() with a key returning
+        # None for some candidates and float for others raises TypeError
+        # in Python 3 (None is not orderable against float). Rank a
+        # missing reading below every real one instead of crashing, so a
+        # real ATM IV is always preferred when at least one candidate has
+        # one.
+        best_sell_expiry = (
+            max(sellable_near, key=lambda e: e.atm_iv if e.atm_iv is not None else float("-inf"))
+            if sellable_near else meaningful_near
+        )
 
+        # bugfix_spec.md Item 9 fix-review (Important #6): the sub-task 3
+        # commit fed these methods the NEGATED risk_reversal_25d (the old
+        # put-call sign) so their internal thresholds "kept working" --
+        # but that meant this report bundle printed the SAME quantity with
+        # TWO CONTRADICTORY signs under the generic label "Skew" (RR25
+        # correctly signed in the vol-surface section; "Skew" here still
+        # legacy-signed), for a task whose entire point was fixing exactly
+        # this kind of sign confusion. Fixed: pass risk_reversal_25d
+        # directly; NarrativeGenerator's own thresholds are re-signed to
+        # match in the same pass (see each method's docstring).
         vol_narrative = self.narrator.generate_vol_narrative(
             iv_pctile=market.iv_percentile_365d,
             vrp=effective_vrp,
             vrp_adjustment=vrp_adjustment,
-            skew=largest_expiry.skew_25d,
+            risk_reversal_25d=largest_expiry.risk_reversal_25d,
             sell_expiry=best_sell_expiry.expiry,
             sell_iv=best_sell_expiry.atm_iv,
             buy_expiry=meaningful_far.expiry,
@@ -1395,10 +2269,10 @@ class SynthesisEngine:
 
         risk_narrative = self.narrator.generate_risk_factors(
             cone_30d_pctile=market.cone_30d_pctile,
-            gex_total=largest_expiry.total_gex,
-            largest_expiry_dte=largest_expiry.dte,
+            gex_total=gex_for_regime,
+            gamma_rolloff=market.gamma_rolloff,
             funding_8h=market.funding_8h,
-            skew=largest_expiry.skew_25d,
+            risk_reversal_25d=largest_expiry.risk_reversal_25d,
             spot=spot,
             fragility_multiplier=fragility_multiplier,
             fragility_level=fragility_level,
@@ -1409,19 +2283,117 @@ class SynthesisEngine:
             regime=market_regime,
             vol_regime=vol_regime,
             iv_pctile=market.iv_percentile_365d,
-            skew=largest_expiry.skew_25d,
-            gex_total=largest_expiry.total_gex,
+            risk_reversal_25d=largest_expiry.risk_reversal_25d,
+            gex_total=gex_for_regime,
             near_term_expiry=best_sell_expiry.expiry,
             far_term_expiry=meaningful_far.expiry,
             skew_expiry=largest_expiry.expiry,
+            # Task Wave-H-B Fix 3: same VRP value driving vol_narrative's
+            # sell/buy framing above, so the two sections can't silently
+            # disagree -- see generate_trade_recommendations's docstring.
+            vrp=effective_vrp,
         )
 
         # Block trade summary
-        block_narrative = self._generate_block_summary(market.block_trades)
+        block_narrative = self._generate_block_summary(market.blocks, market.large_prints)
 
         # =====================================================================
         # STEP 6: Assemble final output
         # =====================================================================
+
+        # Task G2-B Finding 1 + Finding 3: a component scored as
+        # "insufficient data" must be visibly disclosed in the assembled
+        # output, not just quietly weighted to (near-)zero inside an
+        # average. `dir_reasons`/`vol_reasons` (classify_direction/
+        # classify_vol_regime's own reasoning lists) filter out exactly
+        # the zero-score entries this fix introduces, so they can't carry
+        # this disclosure -- collect it explicitly instead.
+        data_quality_notes: List[str] = []
+        if iv_pctile_score[2].startswith("IV percentile: insufficient data"):
+            data_quality_notes.append(iv_pctile_score[2])
+        if vrp_score[2].startswith("VRP: insufficient data"):
+            data_quality_notes.append(vrp_score[2])
+        funding_note = next(
+            (r for _, w, r in all_direction_scores if r.startswith("Funding: insufficient data") and w == 0.0),
+            None,
+        )
+        if funding_note is not None:
+            data_quality_notes.append(funding_note)
+        # Wave H follow-up (institutional-benchmark audit P0-4): this block
+        # previously inspected ONLY iv_pctile/vrp/funding plus explicitly-
+        # thrown exceptions -- it printed "All market-wide sections
+        # computed successfully" over a run where every expiry had zero
+        # flow trades and max pain never resolved anywhere, because
+        # neither of those failure modes touches the three fields checked
+        # above. Scoped to signals already computed and available here
+        # (per-expiry sufficiency flags, market-wide term structure) --
+        # NOT dealer-positioning coverage or the historical-percentile
+        # context table, which live in the separate full-report pipeline
+        # (report_formatter.py/historical_context_formatter.py) and are
+        # not currently plumbed into this synthesis path at all; wiring
+        # those in is a larger, separate change, not done here.
+        # Task Wave-J-C Fix 4: the checks below used to require ALL
+        # expiries to fail before saying anything (``all(...)``) -- a
+        # single expiry's max-pain-fallback-to-spot or flow-never-ran
+        # passed through completely silently whenever at least one other
+        # expiry had real data. Broadened to flag PARTIAL failures too:
+        # "N of M expiries" whenever N > 0, not just N == M.
+        flow_insufficient_count = sum(1 for e in expiries if not e.flow_sufficient_data)
+        if flow_insufficient_count == len(expiries) and expiries:
+            data_quality_notes.append(
+                f"Order flow: insufficient data for all {len(expiries)} expiries "
+                "(no qualifying trades in the lookback window) — flow bias/trend "
+                "not usable for any expiry this run"
+            )
+        elif flow_insufficient_count > 0:
+            data_quality_notes.append(
+                f"Order flow: insufficient data for {flow_insufficient_count} of "
+                f"{len(expiries)} expiries (no qualifying trades in the lookback "
+                "window) — flow bias/trend not usable for those expiries this run"
+            )
+        max_pain_insufficient_count = sum(1 for e in expiries if not e.max_pain_sufficient_data)
+        if max_pain_insufficient_count == len(expiries) and expiries:
+            data_quality_notes.append(
+                f"Max pain: did not resolve for any of {len(expiries)} expiries "
+                "(displayed max-pain figures are the spot-price fallback, not a "
+                "computed strike, and were not scored)"
+            )
+        elif max_pain_insufficient_count > 0:
+            data_quality_notes.append(
+                f"Max pain: did not resolve for {max_pain_insufficient_count} of "
+                f"{len(expiries)} expiries (those expiries' displayed max-pain "
+                "figures are the spot-price fallback, not a computed strike, "
+                "and were not scored)"
+            )
+        if market.term_structure_shape is None:
+            data_quality_notes.append(
+                "Term structure: insufficient data (fewer than 2 usable expiries) "
+                "— not scored"
+            )
+        if market.failed_sections:
+            data_quality_notes.append(
+                "Sections that raised an error during calculation (not simply "
+                f"unavailable): {', '.join(market.failed_sections)}"
+            )
+
+        if data_quality_notes:
+            data_quality_block = "DATA QUALITY:\n" + "\n".join(
+                f"  - {note}" for note in data_quality_notes
+            )
+        else:
+            data_quality_block = "DATA QUALITY: All market-wide sections computed successfully."
+
+        effective_vrp_display = (
+            f"{effective_vrp:+.1f}pts" if effective_vrp is not None else "insufficient data"
+        )
+        # Task G2-G: risk_reversal_25d can be genuinely None here (largest
+        # expiry's vol surface never computed) -- a direct ``:+.1f`` format
+        # spec on None raises TypeError, same as every other Optional
+        # field already given an "insufficient data" display string above.
+        largest_rr25_display = (
+            f"{largest_expiry.risk_reversal_25d:+.1f}%"
+            if largest_expiry.risk_reversal_25d is not None else "insufficient data"
+        )
 
         synthesis = f"""{header}
 
@@ -1442,13 +2414,15 @@ VOL ASSESSMENT: {vol_narrative}
 TRADE RECOMMENDATIONS:
 {trade_narrative}
 
+{data_quality_block}
+
 SCORING DETAIL:
   Direction: {overall_direction.name} (confidence: {dir_confidence:.0%})
   Fragility: {fragility_level}
   Near-term: {near_direction.name} | Far-term: {far_direction.name}
   Vol Regime: {vol_regime.value}
   Market Regime: {market_regime.value}
-  Effective VRP: {effective_vrp:+.1f}pts | Skew: {largest_expiry.skew_25d:+.1f}%
+  Effective VRP: {effective_vrp_display} | RR25: {largest_rr25_display}
 """
 
         return synthesis
@@ -1464,24 +2438,63 @@ SCORING DETAIL:
             vol_regime: VolRegime,
             market_regime: MarketRegime
     ) -> str:
-        """Generate the dashboard header."""
-        # Bug fix: safe IV access — find first DTE >= 5 instead of fragile index access
+        """
+        Generate the dashboard header.
+
+        Task G2-B: every market-wide field interpolated below can now be
+        None (genuinely unavailable) -- each gets pre-formatted into a
+        safe display string ("N/A") instead of applying a numeric format
+        spec directly to a value that might be None (which would raise
+        TypeError) or silently substituting 0.0 (which would render as a
+        real, confident-looking measurement).
+        """
+        # Safe IV access — find first DTE >= 5 instead of fragile index access.
+        # Task Wave-J-C Fix 3: this docstring's own contract (above) says
+        # never silently substitute 0.0, which would render as a real,
+        # confident-looking measurement -- this line violated that
+        # directly. Reachable whenever market.iv_by_dte is empty (the
+        # market-wide term-structure phase failed entirely). Preserve
+        # None and render "N/A" below, matching every sibling field on
+        # the same output line (dvol_str, iv_pctile_str, rv_*_str, vrp_str).
         front_iv = next(
             (v for k, v in sorted(market.iv_by_dte.items()) if k >= 5),
-            0.0
+            None
+        )
+        front_iv_str = f"~{front_iv:.1f}%" if front_iv is not None else "N/A"
+
+        dvol_str = f"{market.dvol:.1f}%" if market.dvol is not None else "N/A"
+        iv_pctile_str = f"{market.iv_percentile_365d:.0f}th" if market.iv_percentile_365d is not None else "N/A"
+        rv_10d_str = f"{market.rv_10d:.1f}%" if market.rv_10d is not None else "N/A"
+        rv_20d_str = f"{market.rv_20d:.1f}%" if market.rv_20d is not None else "N/A"
+        rv_30d_str = f"{market.rv_30d:.1f}%" if market.rv_30d is not None else "N/A"
+        cone_30d_str = f"{market.cone_30d_pctile:.0f}th cone" if market.cone_30d_pctile is not None else "cone N/A"
+        vrp_str = f"{market.vrp:+.1f}pts" if market.vrp is not None else "N/A (insufficient data)"
+        funding_rate_str = f"{market.funding_rate:.4f}%" if market.funding_rate is not None else "N/A"
+        funding_8h_str = f"{market.funding_8h:.4f}%" if market.funding_8h is not None else "N/A"
+        # Task Wave-H-B Fix 2: term_structure_shape/spread_signed are now
+        # genuinely Optional (None when fewer than 2 usable expiries) --
+        # show "N/A" instead of the old fabricated "CONTANGO (+0.0pts)".
+        term_structure_str = (
+            f"{market.term_structure_shape} ({market.term_structure_spread_signed:+.1f}pts)"
+            if market.term_structure_shape is not None and market.term_structure_spread_signed is not None
+            else "N/A (insufficient data)"
         )
 
+        # Task G2-C: naive-local datetime.now() -> explicit UTC, labeled as
+        # such in the output (this module is already in
+        # tests/conftest.py's frozen-clock list, same as every other
+        # naive-local site this task fixed).
         return f"""================================================================================
 EXECUTIVE SYNTHESIS — BTC OPTIONS MARKET
-Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC
 ================================================================================
 BTC ${market.spot_price:,.2f} | Regime: {market_regime.value.upper().replace('_', ' ')}
 Direction: {direction.name} | Vol: {vol_regime.value.upper()}
 ────────────────────────────────────────────────────────────────────────────────
-DVOL: {market.dvol:.1f}%  | IV Pctile: {market.iv_percentile_365d:.0f}th  | ATM IV (front): ~{front_iv:.1f}%
-10d RV: {market.rv_10d:.1f}%  | 20d RV: {market.rv_20d:.1f}%  | 30d RV: {market.rv_30d:.1f}% ({market.cone_30d_pctile:.0f}th cone)
-VRP: {market.vrp:+.1f}pts  | Term Structure: {market.term_structure_shape} ({market.term_structure_spread_signed:+.1f}pts)
-Perp Funding: {market.funding_rate:.4f}%  | 8h: {market.funding_8h:.4f}%
+DVOL: {dvol_str}  | IV Pctile: {iv_pctile_str}  | ATM IV (front): {front_iv_str}
+10d RV: {rv_10d_str}  | 20d RV: {rv_20d_str}  | 30d RV: {rv_30d_str} ({cone_30d_str})
+VRP: {vrp_str}  | Term Structure: {term_structure_str}
+Perp Funding: {funding_rate_str}  | 8h: {funding_8h_str}
 ────────────────────────────────────────────────────────────────────────────────"""
 
     def _generate_timeframe_section(
@@ -1518,17 +2531,59 @@ Perp Funding: {market.funding_rate:.4f}%  | 8h: {market.funding_8h:.4f}%
         # Add per-expiry one-liners for the top 2 by OI
         top2 = sorted(expiries, key=lambda e: e.total_oi, reverse=True)[:2]
         for exp in top2:
-            mp_dist = (exp.max_pain - spot) / spot * 100
+            # CARRIED FINDING (B2 review, task C1): this expiry's own
+            # forward price, not the single global ``spot`` shared across
+            # every expiry -- the same defect class bugfix_spec.md Item 7
+            # already fixed at the report/formatter layer.
+            mp_dist = calculate_max_pain_distance_pct(exp.max_pain, exp.underlying_price)
+            # bugfix_spec.md Item 9 fix-review (Important #6): print the
+            # correctly-signed risk_reversal_25d, relabelled "RR25" -- the
+            # legacy-signed "Skew" label here contradicted the vol-surface
+            # section's own (correct) RR25 sign for the same expiry/quantity.
+            #
+            # Task G2-G: atm_iv/risk_reversal_25d are genuinely Optional
+            # (vol surface may never have computed for this expiry) -- a
+            # direct ``:.1f``/``:+.1f`` format spec on None raises
+            # TypeError. "N/A" matches this line's own compact-summary
+            # convention (same as the header's dvol_str/iv_pctile_str
+            # etc.), distinct from the more verbose "insufficient data"
+            # phrasing used in prose narratives elsewhere.
+            atm_iv_display = f"{exp.atm_iv:.1f}%" if exp.atm_iv is not None else "N/A"
+            rr25_display = f"{exp.risk_reversal_25d:+.1f}%" if exp.risk_reversal_25d is not None else "N/A"
             lines.append(
                 f"  {exp.expiry} ({exp.dte}d): MaxPain ${exp.max_pain:,.0f} ({mp_dist:+.1f}%) | "
-                f"P/C {exp.pc_ratio:.2f} | ATM IV {exp.atm_iv:.1f}% | "
-                f"Skew {exp.skew_25d:+.1f}% | Flow: {exp.flow_bias}"
+                f"P/C {exp.pc_ratio:.2f} | ATM IV {atm_iv_display} | "
+                f"RR25 {rr25_display} | Flow: {exp.flow_bias}"
             )
 
         return "\n".join(lines)
 
     def _estimate_transition_window(self, expiries: List[ExpiryMetrics]) -> str:
-        """Estimate when the regime transition will complete."""
+        """
+        Estimate when the regime transition will complete.
+
+        Walks the expiries looking for the FIRST GEX sign flip and reports
+        it as "the nearest transition point" — only correct if the input
+        is ordered ascending by DTE. ``SynthesisEngine.run`` already
+        passes its own DTE-sorted ``expiries_sorted`` here (confirmed: no
+        live call site was reachable with unsorted input), but this
+        function had no such precondition documented or enforced, so any
+        future caller — or a refactor of that one call site — could
+        silently report a sign flip at a FARTHER expiry as the nearest
+        one, with no error. Reproduced directly: expiries
+        [(5d, +GEX), (10d, -GEX), (20d, -GEX), (30d, +GEX)] handed in
+        DTE order correctly find "10 days" (5d->10d flip); the identical
+        4 expiries handed in a different order (e.g. OI order) found
+        "20 days" instead — same data, wrong answer, entirely order-
+        dependent (Task Wave-I-A Fix 4).
+
+        Fix: sort by DTE ascending here — idempotent, negligible cost on
+        the ~handful of expiries this ever sees — so correctness is a
+        property of this function, not an unstated contract with its one
+        caller.
+        """
+        expiries = sorted(expiries, key=lambda e: e.dte)
+
         # Only consider expiries with meaningful OI — low-OI expiries produce
         # near-zero GEX values whose sign is effectively noise, not a regime signal.
         MIN_OI = 500
@@ -1549,31 +2604,56 @@ Perp Funding: {market.funding_rate:.4f}%  | 8h: {market.funding_8h:.4f}%
 
         return "unclear — monitor GEX evolution"
 
-    def _generate_block_summary(self, block_trades: List[dict]) -> str:
-        """Summarize block trade activity."""
-        if not block_trades:
-            return "INSTITUTIONAL FLOW: No block trades detected in lookback window."
+    def _generate_block_summary(self, blocks: List[dict], large_prints: List[dict]) -> str:
+        """
+        Summarize institutional block-trade activity.
 
-        buy_blocks = [b for b in block_trades if b.get('direction') == 'buy']
-        sell_blocks = [b for b in block_trades if b.get('direction') == 'sell']
+        institutional_metrics_spec.md section 9 / Migration M2 (Task D1
+        review round 2, Important #3): ``blocks`` (grouped by
+        ``block_trade_id``, real blocks) is the primary narrative --
+        ``large_prints`` (the pre-existing notional-filter list of large
+        single-leg screen prints) is narrated separately, explicitly
+        labelled "Screen Prints", never conflated with real blocks.
+        """
+        if not blocks:
+            lines = ["INSTITUTIONAL FLOW (Block Trades): none detected in lookback window."]
+        else:
+            total_premium = sum(b.get('combined_premium_usd', 0) for b in blocks)
+            lines = [
+                f"INSTITUTIONAL FLOW (Block Trades): {len(blocks)} block(s), "
+                f"combined premium ${total_premium / 1e6:.2f}M"
+            ]
 
-        total_buy_notional = sum(b.get('notional', 0) for b in buy_blocks)
-        total_sell_notional = sum(b.get('notional', 0) for b in sell_blocks)
-
-        lines = [
-            f"INSTITUTIONAL FLOW (Block Trades): "
-            f"{len(buy_blocks)} buys (${total_buy_notional / 1e6:.1f}M) | "
-            f"{len(sell_blocks)} sells (${total_sell_notional / 1e6:.1f}M)"
-        ]
-
-        # Highlight the largest block
-        if block_trades:
-            largest = max(block_trades, key=lambda b: b.get('notional', 0))
+            largest = max(blocks, key=lambda b: b.get('combined_premium_usd', 0))
+            structure = largest.get('combo_id') or "N/A"
             lines.append(
-                f"  Largest: {largest.get('instrument', 'N/A')} "
-                f"{'BUY' if largest.get('direction') == 'buy' else 'SELL'} "
-                f"{largest.get('size', 0)} BTC "
-                f"(${largest.get('notional', 0) / 1e6:.2f}M) at {largest.get('iv', 0):.1f}% IV"
+                f"  Largest: {largest.get('block_trade_id', 'N/A')} "
+                f"({largest.get('leg_count', 0)} legs, structure: {structure}) "
+                f"${largest.get('combined_premium_usd', 0) / 1e6:.2f}M"
+            )
+
+        if large_prints:
+            buy_prints = [t for t in large_prints if t.get('direction') == 'buy']
+            sell_prints = [t for t in large_prints if t.get('direction') == 'sell']
+
+            total_buy_notional = sum(t.get('notional', 0) for t in buy_prints)
+            total_sell_notional = sum(t.get('notional', 0) for t in sell_prints)
+
+            lines.append(
+                f"SCREEN PRINTS (large single-leg trades, not blocks): "
+                f"{len(buy_prints)} buys (${total_buy_notional / 1e6:.1f}M) | "
+                f"{len(sell_prints)} sells (${total_sell_notional / 1e6:.1f}M)"
+            )
+
+            largest_print = max(large_prints, key=lambda t: t.get('notional', 0))
+            largest_print_iv = largest_print.get('iv')
+            iv_str = f"{largest_print_iv:.1f}% IV" if largest_print_iv is not None else "N/A IV"
+            lines.append(
+                f"  Largest: {largest_print.get('instrument', 'N/A')} "
+                f"{'BUY' if largest_print.get('direction') == 'buy' else 'SELL'} "
+                f"{largest_print.get('size', 0)} BTC "
+                f"(${largest_print.get('notional', 0) / 1e6:.2f}M) at "
+                f"{iv_str}"
             )
 
         return "\n".join(lines)
@@ -1585,94 +2665,227 @@ Perp Funding: {market.funding_rate:.4f}%  | 8h: {market.funding_8h:.4f}%
 
 class SynthesisMapper:
     """
-    Maps OnChainAnalyzer structured data to SynthesisEngine input dataclasses.
+    Maps a typed OnChainAnalysisResult to SynthesisEngine input dataclasses.
 
-    Bridges the gap between the analyzer's raw structured outputs and the
-    strongly-typed dataclasses that SynthesisEngine expects.
+    Bridges the gap between the pipeline's frozen result aggregate
+    (refactor_design_spec.md section T7) and the strongly-typed dataclasses
+    that SynthesisEngine expects. Reads typed attributes throughout — no
+    dict lookups, no calls back into an analyzer.
     """
 
-    @staticmethod
-    def _calculate_dte(expiration: str) -> int:
-        """Calculate days to expiration from expiration string like '27MAR26'."""
-        try:
-            exp_date = datetime.strptime(expiration, "%d%b%y")
-            dte = (exp_date - datetime.now()).days
-            return max(dte, 0)
-        except ValueError:
-            return 0
-
     @classmethod
-    def build_expiry_metrics(cls, analyzer: Any, expiration: str) -> Optional[ExpiryMetrics]:
+    def build_expiry_metrics(
+        cls, result: OnChainAnalysisResult, expiration: str
+    ) -> Optional[ExpiryMetrics]:
         """
-        Build ExpiryMetrics for one expiration from analyzer structured data.
+        Build ExpiryMetrics for one expiration from the typed result.
 
-        Returns None if critical data (GEX or instruments) is missing.
+        Returns None if critical data (GEX or instruments) is missing —
+        mirrors the legacy dict-based gate exactly (T7: no behavior change).
         """
-        instruments = analyzer.parsed_data.get(expiration, [])
+        instruments = result.parsed_instruments.get(expiration, ())
         if not instruments:
             return None
 
-        # GEX/DEX structured data — must exist for meaningful synthesis
-        gex_data = analyzer.gex_dex_structured.get(expiration, {})
-        if not gex_data:
+        bundle = result.bundle(expiration)
+        if bundle is None or bundle.gex_dex is None:
             return None
 
-        vol_data = analyzer.volatility_surface_structured.get(expiration, {})
-        flow_data = analyzer.buy_sell_flow_structured.get(expiration, {})
+        gex = bundle.gex_dex
+        vol = bundle.vol_surface
+        flow = bundle.flow
 
-        dte = cls._calculate_dte(expiration)
+        # Task G2-C: this used to be SynthesisMapper's own duplicate DTE
+        # calc (naive-local datetime.now(), local-midnight anchor, and a
+        # fabricated 0 -- not None -- on parse failure). Now delegates to
+        # the canonical MarketWideCalculator.calculate_dte (08:00 UTC
+        # settlement anchor, exact-fractional-days floor, None on parse
+        # failure). result.generated_at is this pipeline run's own already-
+        # resolved UTC "now" (OnChainAnalysisBuilder.build() stamps it) --
+        # reused here rather than reading a second, independent clock.
+        #
+        # Task Wave-I-A Fix 5: this used to be
+        # ``calculate_dte(...) or 0`` -- collapsing calculate_dte's real
+        # ``None`` ("this expiration label didn't parse -- a genuinely
+        # unparseable key") into the same ``0`` that a REAL same-day
+        # expiry legitimately produces ("this expires today"). Downstream
+        # logic (score_pc_ratio's DTE<=2 settlement-day clamp,
+        # near_term/mid_term/far_term bucketing, the "expiry (Nd)" report
+        # line) cannot tell "expires today" from "we don't know when this
+        # expires" once collapsed to 0 -- the settlement-day clamp in
+        # particular treats DTE=0 as meaningfully different scoring
+        # behavior from every other DTE, so a parse failure silently
+        # picked up that specific behavior for a metric that was never a
+        # real measurement.
+        #
+        # Fix: skip this expiration entirely (return None, same as this
+        # method's pre-existing "critical data missing" gates above for
+        # missing instruments/bundle/gex_dex) instead of threading
+        # Optional[int] through ExpiryMetrics.dte and every one of its
+        # ~15 consumers (sorting, near/mid/far bucketing, half a dozen
+        # inequality comparisons, three scorer call sites, the report's
+        # "{dte}d" display line) -- virtually every one of those becomes
+        # meaningless anyway once the calendar date itself is unknown, so
+        # threading None through all of them would only defer the same
+        # "what does this mean" question to every consumer individually.
+        # This mirrors GexDexCalculator.calculate_rolloff_profile's own
+        # handling of the identical scenario ("An unparseable label is
+        # skipped (logged), never raised") rather than inventing a
+        # second convention for the same failure mode. In practice this
+        # is effectively unreachable -- ``expiration`` is the same string
+        # that already keyed a successful ``parsed_instruments`` lookup
+        # and ``result.bundle(expiration)`` above, so calculate_dte
+        # failing on it would mean every other per-expiry computation
+        # for this same key already worked off a label calculate_dte
+        # itself rejects -- but the gate exists so this can never
+        # silently masquerade as a real "expires today" reading.
+        dte = MarketWideCalculator.calculate_dte(expiration, result.generated_at)
+        if dte is None:
+            logger.warning(
+                "build_expiry_metrics: skipping expiration %r -- "
+                "calculate_dte returned None (unparseable expiration "
+                "label) even though instruments/bundle resolved for the "
+                "same key; refusing to fabricate DTE=0 for it",
+                expiration,
+            )
+            return None
 
-        # Total OI and volume from parsed_data
+        # Total OI and volume from parsed instruments
         total_oi = sum(i.get("open_interest", 0) for i in instruments)
         total_volume = sum(i.get("volume", 0) for i in instruments)
-        notional = total_oi * analyzer.underlying_price
+        notional = total_oi * result.underlying_price
 
-        # Max pain and OI P/C ratio
-        strike_data = analyzer.group_by_strike(instruments)
-        max_pain_result = analyzer.calculate_max_pain(strike_data)
-        max_pain = max_pain_result.get("max_pain_strike") or analyzer.underlying_price
+        # Max pain and OI P/C ratio — read directly from the analysis result
+        # (T7: stops calling analyzer.group_by_strike/calculate_max_pain/
+        # calculate_put_call_ratio; the result already carries both).
+        #
+        # Task Wave-H-B Fix 4: calculate_max_pain returns None when it has
+        # nothing to compute from -- the spot-price fallback below stays
+        # for DISPLAY (a report line has to show something), but
+        # max_pain_sufficient_data travels alongside it so
+        # score_max_pain_gravity can tell a real measurement from this
+        # fallback and take its own explicit insufficient-data branch
+        # instead of scoring the fallback as if it were genuine (see the
+        # ExpiryMetrics/score_max_pain_gravity docstrings).
+        analysis = bundle.analysis
+        max_pain = analysis.max_pain.max_pain_strike
+        max_pain_sufficient_data = max_pain is not None
+        if max_pain is None:
+            max_pain = result.underlying_price
 
-        pc_result = analyzer.calculate_put_call_ratio(strike_data)
-        pc_ratio = pc_result.get("ratio", 1.0)
+        pc_ratio = analysis.put_call_ratio.ratio
         if pc_ratio == float("inf"):
             pc_ratio = 99.0
 
         # GEX/DEX
-        total_gex = gex_data.get("total_net_gex", 0.0) or 0.0
-        total_dex = gex_data.get("total_net_dex", 0.0) or 0.0
+        total_gex = gex.total_net_gex or 0.0
+        total_dex = gex.total_net_dex or 0.0
         gex_environment = "Positive" if total_gex >= 0 else "Negative"
 
-        key_levels = gex_data.get("key_levels") or {}
-        call_res = key_levels.get("call_resistance") or {}
-        put_sup = key_levels.get("put_support") or {}
+        # Task G2-G: GexDexKeyLevels.call_resistance/put_support/hvl are
+        # genuinely Optional -- "no identified level in this expiry's
+        # strike range", not a level/GEX at strike/value 0.0. Preserve
+        # None straight through instead of the old ``... else 0.0``
+        # collapse (same defect class G2-B fixed for MarketWideMetrics).
+        key_levels = gex.key_levels
+        call_res = key_levels.call_resistance
+        put_sup = key_levels.put_support
 
-        call_resistance_strike = call_res.get("strike") or 0.0
-        call_resistance_gex = call_res.get("net_gex") or 0.0
-        put_support_strike = put_sup.get("strike") or 0.0
-        put_support_gex = put_sup.get("net_gex") or 0.0
-        hvl_strike = key_levels.get("hvl") or 0.0
+        call_resistance_strike = call_res.strike if call_res is not None else None
+        call_resistance_gex = call_res.net_gex if call_res is not None else None
+        put_support_strike = put_sup.strike if put_sup is not None else None
+        put_support_gex = put_sup.net_gex if put_sup is not None else None
+        hvl_strike = key_levels.hvl
 
-        # Vol surface
-        atm_iv = vol_data.get("atm_iv") or 0.0
-        skew_data = vol_data.get("skew_25d") or {}
-        skew_25d = skew_data.get("skew") or 0.0
-        put_25d_iv = skew_data.get("put_25d_iv") or 0.0
-        call_25d_iv = skew_data.get("call_25d_iv") or 0.0
+        # Vol surface. bugfix_spec.md Item 9: risk_reversal_25d (call -
+        # put, market convention) replaces skew_25d (put - call).
+        # Task G2-G: ``vol.atm_iv``/``skew.risk_reversal_25d``/
+        # ``skew.put_25d_iv``/``skew.call_25d_iv`` are already
+        # Optional[float] on their source result models -- None means
+        # genuinely unavailable (no ATM instruments found / vol surface
+        # never computed for this expiry). Pass the value straight
+        # through (accessing an attribute on a None-valued field already
+        # yields None) instead of collapsing to a fabricated 0.0.
+        atm_iv = vol.atm_iv if vol is not None else None
+        skew = vol.skew_25d if vol is not None else None
+        risk_reversal_25d = skew.risk_reversal_25d if skew is not None else None
+        put_25d_iv = skew.put_25d_iv if skew is not None else None
+        call_25d_iv = skew.call_25d_iv if skew is not None else None
 
-        pc_moneyness = vol_data.get("pc_by_moneyness") or {}
-        pc_atm = (pc_moneyness.get("atm") or {}).get("ratio") or 0.0
-        pc_near_otm = (pc_moneyness.get("near_otm") or {}).get("ratio") or 0.0
-        pc_far_otm = (pc_moneyness.get("far_otm") or {}).get("ratio") or 0.0
+        # Wave-H-A (Task 5): pc_atm/pc_near_otm/pc_far_otm propagate
+        # MoneynessBucket.ratio's own None (zero instruments in that
+        # bucket, or the whole vol surface missing) -- NOT a fabricated
+        # 0.0. See this mapper's ExpiryMetrics docstring for why the prior
+        # "0.0 when undefined" belief was itself the bug.
+        pc_moneyness = vol.pc_by_moneyness if vol is not None else None
+        pc_atm = (pc_moneyness.atm.ratio if pc_moneyness is not None else None)
+        pc_near_otm = (pc_moneyness.near_otm.ratio if pc_moneyness is not None else None)
+        pc_far_otm = (pc_moneyness.far_otm.ratio if pc_moneyness is not None else None)
 
-        second_order = vol_data.get("second_order_greeks") or {}
-        net_vanna = second_order.get("net_vanna") or 0.0
-        net_charm = second_order.get("net_charm") or 0.0
+        # bugfix_spec.md Item 8 fix-review (Important #3, overrules the
+        # original B2 sub-task 2 commit): F8.4 states plainly "score_*
+        # functions consume the dealer fields" -- a requirement, not a
+        # suggestion. score_vanna_charm's own docstring reasoning ("IV
+        # drop -> positive vanna = bullish") is dealer-hedging logic, so it
+        # must be fed the DEALER exposure (report text and scoring engine
+        # now agree on the same book), not the holder-side raw sum. This
+        # flips ExpiryMetrics.net_vanna/net_charm's sign relative to the
+        # prior sub-task-2 commit and is a real, intentional scoring
+        # behavior change -- score_vanna_charm's output can differ from
+        # before for the same underlying market state. Covered by
+        # test_synthesis.py::TestBuildExpiryMetrics (mapper wiring) and the
+        # golden master (re-verified, not assumed).
+        #
+        # Task G2-G: dealer_vanna_exposure/dealer_charm_exposure are
+        # REQUIRED (non-Optional) fields on SecondOrderGreeks whenever a
+        # vol surface exists for this expiry -- the only genuinely-missing
+        # case is the whole surface being absent (``vol is None``), which
+        # now maps to None here instead of a fabricated 0.0 (a value
+        # score_vanna_charm treats as its own distinct, real "zero
+        # structural drift" signal -- see that method's None branch).
+        second_order = vol.second_order_greeks if vol is not None else None
+        net_vanna = second_order.dealer_vanna_exposure if second_order is not None else None
+        net_charm = second_order.dealer_charm_exposure if second_order is not None else None
 
-        # Flow
-        flow_bias = flow_data.get("bias_interpretation") or "Mixed/Neutral"
-        flow_trend = flow_data.get("flow_trend") or "Mixed/Neutral Flow"
-        top_buy_strikes = flow_data.get("top_buy_strikes") or []
-        top_sell_strikes = flow_data.get("top_sell_strikes") or []
+        # Flow. bugfix_spec.md Item 6 / F6.3.4 (carried from A4 review):
+        # flow_sufficient_data propagates the data-sufficiency gate so the
+        # scoring engine can force weight 0 instead of a neutral score.
+        #
+        # Task Wave-J-C Fix 4: when the flow analyzer never ran at all for
+        # this expiry (``flow is None``), flow_bias used to fall back to
+        # the literal string "Mixed/Neutral" -- a RECOGNIZED key in
+        # score_flow's bias_map, so it read exactly like a genuinely-
+        # measured balanced book (e.g. the per-expiry summary line's
+        # "Flow: Mixed/Neutral"), indistinguishable from a real reading.
+        # buy_sell_flow_analyzer already has an honest sentinel for
+        # exactly this "insufficient data" case
+        # (INSUFFICIENT_DATA_LABEL = "Insufficient flow data", used both
+        # when trade_count is too low AND when the 1h trend can't be
+        # detected) -- reuse it here instead of inventing a second,
+        # dishonest-looking one.
+        flow_bias = flow.bias_interpretation if flow is not None else INSUFFICIENT_DATA_LABEL
+        flow_trend = flow.flow_trend if flow is not None else INSUFFICIENT_DATA_LABEL
+        flow_sufficient_data = flow.sufficient_data if flow is not None else False
+        top_buy_strikes = (
+            [
+                {
+                    "strike": e.strike, "option_type": e.option_type,
+                    "net_flow": e.net_flow, "buy_volume": e.volume, "buy_notional": e.notional,
+                }
+                for e in flow.top_buy_strikes
+            ]
+            if flow is not None else []
+        )
+        top_sell_strikes = (
+            [
+                {
+                    "strike": e.strike, "option_type": e.option_type,
+                    "net_flow": e.net_flow, "sell_volume": e.volume, "sell_notional": e.notional,
+                }
+                for e in flow.top_sell_strikes
+            ]
+            if flow is not None else []
+        )
 
         return ExpiryMetrics(
             expiry=expiration,
@@ -1682,108 +2895,253 @@ class SynthesisMapper:
             total_volume=int(total_volume),
             max_pain=float(max_pain),
             pc_ratio=float(pc_ratio),
+            # CARRIED FINDING (B2 review, task C1): this expiry's own
+            # forward price, sourced the same way Item 7's report_formatter
+            # fix does -- bundle.analysis.underlying_price, not the global
+            # result.underlying_price used above for notional.
+            underlying_price=float(analysis.underlying_price),
             total_gex=total_gex,
             total_dex=total_dex,
             gex_environment=gex_environment,
-            call_resistance_strike=float(call_resistance_strike),
-            call_resistance_gex=float(call_resistance_gex),
-            put_support_strike=float(put_support_strike),
-            put_support_gex=float(put_support_gex),
-            hvl_strike=float(hvl_strike),
-            atm_iv=float(atm_iv),
-            skew_25d=float(skew_25d),
-            put_25d_iv=float(put_25d_iv),
-            call_25d_iv=float(call_25d_iv),
-            pc_atm=float(pc_atm),
-            pc_near_otm=float(pc_near_otm),
-            pc_far_otm=float(pc_far_otm),
-            net_vanna=float(net_vanna),
-            net_charm=float(net_charm),
+            # Task G2-G: ``float(None)`` raises TypeError -- every field
+            # that can now genuinely be None guards the cast so a missing
+            # reading propagates as None, not a crash or a fabricated 0.0.
+            call_resistance_strike=(float(call_resistance_strike) if call_resistance_strike is not None else None),
+            call_resistance_gex=(float(call_resistance_gex) if call_resistance_gex is not None else None),
+            put_support_strike=(float(put_support_strike) if put_support_strike is not None else None),
+            put_support_gex=(float(put_support_gex) if put_support_gex is not None else None),
+            hvl_strike=(float(hvl_strike) if hvl_strike is not None else None),
+            atm_iv=(float(atm_iv) if atm_iv is not None else None),
+            risk_reversal_25d=(float(risk_reversal_25d) if risk_reversal_25d is not None else None),
+            put_25d_iv=(float(put_25d_iv) if put_25d_iv is not None else None),
+            call_25d_iv=(float(call_25d_iv) if call_25d_iv is not None else None),
+            pc_atm=(float(pc_atm) if pc_atm is not None else None),
+            pc_near_otm=(float(pc_near_otm) if pc_near_otm is not None else None),
+            pc_far_otm=(float(pc_far_otm) if pc_far_otm is not None else None),
+            net_vanna=(float(net_vanna) if net_vanna is not None else None),
+            net_charm=(float(net_charm) if net_charm is not None else None),
             flow_bias=flow_bias,
             flow_trend=flow_trend,
-            top_buy_strikes=list(top_buy_strikes),
-            top_sell_strikes=list(top_sell_strikes),
+            top_buy_strikes=top_buy_strikes,
+            top_sell_strikes=top_sell_strikes,
+            flow_sufficient_data=flow_sufficient_data,
+            max_pain_sufficient_data=max_pain_sufficient_data,
         )
 
     @staticmethod
-    def build_market_wide(analyzer: Any) -> MarketWideMetrics:
-        """Build MarketWideMetrics from analyzer.market_wide_structured."""
-        mw = analyzer.market_wide_structured
+    def build_market_wide(result: OnChainAnalysisResult) -> MarketWideMetrics:
+        """Build MarketWideMetrics from the typed OnChainAnalysisResult.market_wide."""
+        mw = result.market_wide
 
         # RV values from calculator are decimals (e.g. 0.585 = 58.5%).
         # dvol and vrp are in percentage points (e.g. 58.7, -7.6).
         # Multiply RV by 100 here so all vol fields share the same scale.
-        rv_10d = (mw.get("rv_10d") or 0.0) * 100
-        rv_20d = (mw.get("rv_20d") or 0.0) * 100
-        rv_30d = (mw.get("rv_30d") or 0.0) * 100
+        #
+        # Task G2-B: `rv is None` means the realized-volatility calculation
+        # never ran (MarketWideOrchestrator._calculate_realized_volatility
+        # returned None) -- genuinely missing, not a measured 0.0. Preserve
+        # None so score_vrp's None branch (not a fabricated-zero branch)
+        # fires downstream.
+        #
+        # Task Wave-J-D Fix 1: `rv is not None` alone used to be sufficient
+        # here because RealizedVolatilityResult.rv_10d/rv_20d/rv_30d always
+        # returned a float (fabricating 0.0 via `.get(window, 0.0)` when
+        # that specific window was never computed) -- silently undoing
+        # Wave-H-D's deliberate per-window omission one layer up, and
+        # making score_vrp's "stale-data correction skipped, RV window
+        # unavailable" branch unreachable in practice (it only ever saw a
+        # real float or the coarser all-sections-None case). The properties
+        # are now Optional[float]; guard each window independently so a
+        # per-window None survives to score_vrp instead of being multiplied
+        # into a fabricated `0.0 * 100`.
+        rv = mw.realized_volatility
+        rv_10d = (rv.rv_10d * 100) if (rv is not None and rv.rv_10d is not None) else None
+        rv_20d = (rv.rv_20d * 100) if (rv is not None and rv.rv_20d is not None) else None
+        rv_30d = (rv.rv_30d * 100) if (rv is not None and rv.rv_30d is not None) else None
 
         # API funding values are also decimals (e.g. -0.000201 = -0.0201%).
         # Multiply by 100 so score_funding thresholds (5/10/20%) work correctly.
-        funding_rate = (mw.get("funding_rate") or 0.0) * 100
-        funding_8h = (mw.get("funding_8h") or 0.0) * 100
+        #
+        # Task G2-B: two independent None cases, both genuinely "no data",
+        # neither a measured 0.0 -- (1) `funding is None`: the whole
+        # perpetual-funding phase never ran; (2) `funding.funding_rate`/
+        # `funding.funding_8h` is None even though `funding` exists: the
+        # ticker itself returned no reading for that specific field
+        # (PerpetualFundingResult declares both Optional). The old
+        # `(funding.funding_rate or 0.0) if funding is not None else 0.0`
+        # collapsed BOTH cases into a fabricated zero.
+        funding = mw.perpetual_funding
+        funding_rate = (
+            funding.funding_rate * 100
+            if funding is not None and funding.funding_rate is not None
+            else None
+        )
+        funding_8h = (
+            funding.funding_8h * 100
+            if funding is not None and funding.funding_8h is not None
+            else None
+        )
 
-        # Validate term_structure_shape: must be CONTANGO or BACKWARDATION only
-        raw_shape = mw.get("shape") or ""
-        raw_spread = mw.get("spread") or 0.0
-        if raw_shape in ("CONTANGO", "BACKWARDATION"):
-            ts_shape = raw_shape
-            ts_spread = raw_spread
+        # Task Wave-H-B Fix 2: term_structure is genuinely Optional --
+        # ``ts is None`` means fewer than 2 usable per-expiry ATM IVs
+        # (the whole computation never ran), NOT a measured "CONTANGO".
+        # The calculator's own ``shape`` field (CONTANGO/BACKWARDATION/
+        # FLAT) is already authoritative when ts is not None -- pass it
+        # through unchanged instead of "normalizing" every non-CONTANGO/
+        # BACKWARDATION reading (including real FLAT readings and small
+        # genuinely-backwardated tilts) into a fabricated "CONTANGO".
+        # That old normalize-to-CONTANGO logic is exactly what produced
+        # self-contradictory output like "CONTANGO (-1.8pts)" -- the
+        # signed spread (below) carried the true sign while the shape
+        # label always said CONTANGO regardless.
+        ts = mw.term_structure
+        if ts is not None:
+            ts_shape = ts.shape
+            ts_spread = ts.spread
         else:
-            # Normalize: spread < 0.5 → CONTANGO with spread=0
-            if raw_spread >= 0.5:
-                ts_shape = "CONTANGO"
-                ts_spread = raw_spread
-            else:
-                ts_shape = "CONTANGO"
-                ts_spread = 0.0
+            ts_shape = None
+            ts_spread = None
 
-        # Ensure futures_basis is ordered by DTE ascending
-        raw_basis = mw.get("futures_basis") or {}
-        # Re-sort not possible by label alone, but the upstream should provide
-        # ordered data. We trust insertion order from the source.
-        futures_basis = raw_basis
+        # futures_basis: trust insertion order from the source (DTE-ascending,
+        # per synthesis_logic.md:112) — Optional[float] values pass through
+        # unchanged (Decision D12; score_futures_basis's caller filters None).
+        futures_basis = dict(mw.futures_basis.futures_basis) if mw.futures_basis is not None else {}
 
-        # Aggregate GEX/DEX from AGGREGATE key in gex_dex_structured
-        agg_gex = getattr(analyzer, "gex_dex_structured", {}).get("AGGREGATE", {})
-        agg_key_levels = agg_gex.get("key_levels", {})
+        # Aggregate GEX/DEX
+        agg_gex = mw.aggregate_gex_dex
+        if agg_gex is not None:
+            agg_key_levels = agg_gex.key_levels
+            # GexDexResult.total_net_gex/total_net_dex are plain (never-
+            # None) float fields on a real result object -- no `or 0.0`
+            # collapse needed or wanted here.
+            aggregate_total_gex = agg_gex.total_net_gex
+            aggregate_total_dex = agg_gex.total_net_dex
+            aggregate_call_resistance = (
+                {"strike": agg_key_levels.call_resistance.strike,
+                 "net_gex": agg_key_levels.call_resistance.net_gex}
+                if agg_key_levels.call_resistance is not None else None
+            )
+            aggregate_put_support = (
+                {"strike": agg_key_levels.put_support.strike,
+                 "net_gex": agg_key_levels.put_support.net_gex}
+                if agg_key_levels.put_support is not None else None
+            )
+            aggregate_hvl = agg_key_levels.hvl
+        else:
+            aggregate_total_gex = None
+            aggregate_total_dex = None
+            aggregate_call_resistance = None
+            aggregate_put_support = None
+            aggregate_hvl = None
+
+        # institutional_metrics_spec.md section 9 / Migration M2 (Task D1
+        # review round 2, Important #3): `blocks` (real, block_trade_id-
+        # grouped) and `large_prints` (the pre-existing notional-filter
+        # list) are wired separately -- large_prints already excludes any
+        # trade with a block_trade_id (see MarketWideCalculator.
+        # detect_block_trades), so the two never conflate or double-count.
+        blocks = [
+            {
+                "block_trade_id": b.block_trade_id, "leg_count": b.leg_count,
+                "observed_leg_count": b.observed_leg_count, "combo_id": b.combo_id,
+                "combined_premium_usd": b.combined_premium_usd,
+                "total_amount": b.total_amount, "instruments": b.instruments,
+                "timestamp": b.timestamp,
+            }
+            for b in (mw.block_trades.blocks if mw.block_trades is not None else ())
+        ]
+        large_prints = [
+            {
+                "timestamp": t.timestamp, "instrument": t.instrument_name,
+                "size": t.amount, "amount": t.amount, "direction": t.direction,
+                "notional": t.notional, "iv": t.implied_volatility,
+            }
+            for t in (mw.block_trades.trades if mw.block_trades is not None else ())
+        ]
+
+        corr = mw.cross_asset_correlation
 
         return MarketWideMetrics(
-            spot_price=mw.get("spot_price") or analyzer.underlying_price,
-            dvol=mw.get("dvol") or 0.0,
-            iv_percentile_365d=mw.get("iv_percentile_365d") or 0.0,
+            spot_price=mw.spot_price or result.underlying_price,
+            # Task G2-B (BLOCKER): `mw.dvol`/`mw.iv_percentile_365d` are
+            # already Optional[float] on MarketWideResult -- None means
+            # genuinely unavailable. `mw.dvol or 0.0` used to collapse
+            # that None (and a legitimate 0.0) into the same fabricated
+            # zero; pass the value straight through so downstream scorers
+            # see the real None and take their explicit insufficient-data
+            # branch instead of scoring a phantom extreme.
+            dvol=mw.dvol,
+            iv_percentile_365d=mw.iv_percentile_365d,
             funding_rate=funding_rate,
             funding_8h=funding_8h,
             term_structure_shape=ts_shape,
             term_structure_spread=ts_spread,
-            term_structure_spread_signed=mw.get("spread_signed") or 0.0,
-            iv_by_dte=mw.get("iv_by_dte") or {},
+            # Task Wave-H-B Fix 2: preserve None (was `... or 0.0`,
+            # which fabricated a measured-looking 0.0 spread whenever
+            # ts was None OR ts.spread_signed was genuinely 0.0).
+            term_structure_spread_signed=ts.spread_signed if ts is not None else None,
+            iv_by_dte=dict(ts.iv_by_dte) if ts is not None else {},
             rv_10d=rv_10d,
             rv_20d=rv_20d,
             rv_30d=rv_30d,
-            vrp=mw.get("vrp") or 0.0,
-            cone_10d_pctile=mw.get("cone_10d_pctile") or 0.0,
-            cone_20d_pctile=mw.get("cone_20d_pctile") or 0.0,
-            cone_30d_pctile=mw.get("cone_30d_pctile") or 0.0,
+            # None exactly when the VRP calculation never ran (dvol or
+            # 30d RV unavailable) -- not a measured 0.0.
+            vrp=(mw.variance_risk_premium.vrp if mw.variance_risk_premium is not None else None),
+            # `.get(window)` (no default) so a window missing from the
+            # dict -- OR the whole `volatility_cone` result being None --
+            # both yield None, never a fabricated 0th percentile.
+            cone_10d_pctile=(
+                mw.volatility_cone.percentile_by_window.get(10)
+                if mw.volatility_cone is not None else None
+            ),
+            cone_20d_pctile=(
+                mw.volatility_cone.percentile_by_window.get(20)
+                if mw.volatility_cone is not None else None
+            ),
+            cone_30d_pctile=(
+                mw.volatility_cone.percentile_by_window.get(30)
+                if mw.volatility_cone is not None else None
+            ),
             futures_basis=futures_basis,
-            perp_oi=mw.get("perp_oi") or 0.0,
-            perp_funding_trend=mw.get("perp_funding_trend") or "Stable",
-            btc_eth_price_corr=mw.get("btc_eth_price_corr") or 0.0,
-            btc_eth_dvol_corr=mw.get("btc_eth_dvol_corr") or 0.0,
-            block_trades=mw.get("block_trades") or [],
-            aggregate_total_gex=agg_gex.get("total_net_gex") or 0.0,
-            aggregate_total_dex=agg_gex.get("total_net_dex") or 0.0,
-            aggregate_call_resistance=agg_key_levels.get("call_resistance"),
-            aggregate_put_support=agg_key_levels.get("put_support"),
-            aggregate_hvl=agg_key_levels.get("hvl"),
+            # None exactly when the perpetual-funding phase never ran --
+            # not a measured zero open interest.
+            perp_oi=(funding.perp_open_interest if funding is not None else None),
+            perp_funding_trend=(funding.funding_trend if funding is not None else "Stable"),
+            # CrossAssetCorrelationResult.price_correlation/dvol_correlation
+            # are already Optional[float] (None on insufficient sample) --
+            # pass through unchanged instead of collapsing to 0.0, same as
+            # `corr is None` (the whole correlation phase never ran).
+            btc_eth_price_corr=(
+                corr.price_correlation if corr is not None else None
+            ),
+            btc_eth_dvol_corr=(
+                corr.dvol_correlation if corr is not None else None
+            ),
+            blocks=blocks,
+            large_prints=large_prints,
+            aggregate_total_gex=aggregate_total_gex,
+            aggregate_total_dex=aggregate_total_dex,
+            aggregate_call_resistance=aggregate_call_resistance,
+            aggregate_put_support=aggregate_put_support,
+            aggregate_hvl=aggregate_hvl,
+            # Task Wave-I-A Fix 1: same "already computed elsewhere,
+            # thread it through unchanged" pattern as failed_sections
+            # below -- MarketWideResult.gamma_rolloff already carries the
+            # GAMMA CLIFF flag/rows; no re-computation here.
+            gamma_rolloff=mw.gamma_rolloff,
+            # Task G2-B Finding 3: thread the orchestrator's real
+            # failed-sections list through instead of dropping it on the
+            # floor -- MarketWideResult already carries it correctly.
+            failed_sections=tuple(mw.failed_sections),
         )
 
     @classmethod
-    def build_all(cls, analyzer: Any) -> Tuple[MarketWideMetrics, List[ExpiryMetrics]]:
-        """Build complete input for SynthesisEngine from a fully-run analyzer."""
-        market = cls.build_market_wide(analyzer)
+    def build_all(cls, result: OnChainAnalysisResult) -> Tuple[MarketWideMetrics, List[ExpiryMetrics]]:
+        """Build complete input for SynthesisEngine from a typed OnChainAnalysisResult."""
+        market = cls.build_market_wide(result)
         expiries = [
-            m for exp in analyzer.get_expirations()
-            if (m := cls.build_expiry_metrics(analyzer, exp)) is not None
+            m for exp in result.expiration_names()
+            if (m := cls.build_expiry_metrics(result, exp)) is not None
         ]
         return market, expiries
 
@@ -1829,7 +3187,11 @@ def build_from_current_data():
         perp_funding_trend="Stable",
         btc_eth_price_corr=0.93,
         btc_eth_dvol_corr=0.93,
-        block_trades=[
+        # institutional_metrics_spec.md section 9 / Migration M2 (Task D1
+        # review round 2): this hardcoded example data predates block_trade_id
+        # capture entirely, so these are large single-leg screen prints, not
+        # real blocks -- `blocks` intentionally has no example data here.
+        large_prints=[
             {"instrument": "BTC-6MAR26-50000-P", "size": 30.0, "direction": "sell",
              "notional": 1_968_044, "iv": 101.7},
             {"instrument": "BTC-24APR26-77000-C", "size": 20.0, "direction": "buy",
@@ -1850,13 +3212,14 @@ def build_from_current_data():
         ExpiryMetrics(
             expiry="28FEB26", dte=0, total_oi=6181,
             notional=406_145_555, max_pain=66000, pc_ratio=2.39,
+            underlying_price=65707.65,
 
             total_gex=-12_402_566, total_dex=-390.66,
             gex_environment="Negative",
             call_resistance_strike=66000, call_resistance_gex=265785,
             put_support_strike=65000, put_support_gex=-4_578_703,
             hvl_strike=66000,
-            atm_iv=30.3, skew_25d=11.7, put_25d_iv=37.3, call_25d_iv=25.6,
+            atm_iv=30.3, risk_reversal_25d=-11.7, put_25d_iv=37.3, call_25d_iv=25.6,
 
             pc_atm=2.60, pc_near_otm=2.37, pc_far_otm=0.0,
             net_vanna=0.000062, net_charm=59.96,
@@ -1865,13 +3228,14 @@ def build_from_current_data():
         ExpiryMetrics(
             expiry="6MAR26", dte=6, total_oi=23883,
             notional=1_569_282_663, max_pain=67000, pc_ratio=1.23,
+            underlying_price=65707.65,
 
             total_gex=-7_885_127, total_dex=-1496.14,
             gex_environment="Negative",
             call_resistance_strike=70000, call_resistance_gex=2_263_058,
             put_support_strike=58000, put_support_gex=-4_456_432,
             hvl_strike=65500,
-            atm_iv=49.1, skew_25d=8.9, put_25d_iv=55.3, call_25d_iv=46.5,
+            atm_iv=49.1, risk_reversal_25d=-8.9, put_25d_iv=55.3, call_25d_iv=46.5,
 
             pc_atm=2.45, pc_near_otm=0.82, pc_far_otm=1.72,
             net_vanna=0.000349, net_charm=93.19,
@@ -1880,13 +3244,14 @@ def build_from_current_data():
         ExpiryMetrics(
             expiry="13MAR26", dte=13, total_oi=8785,
             notional=577_248_276, max_pain=66000, pc_ratio=0.93,
+            underlying_price=65707.65,
 
             total_gex=-13_297, total_dex=-146.97,
             gex_environment="Negative",
             call_resistance_strike=75000, call_resistance_gex=1_200_177,
             put_support_strike=55000, put_support_gex=-1_147_244,
             hvl_strike=66000,
-            atm_iv=49.0, skew_25d=10.4, put_25d_iv=57.2, call_25d_iv=46.8,
+            atm_iv=49.0, risk_reversal_25d=-10.4, put_25d_iv=57.2, call_25d_iv=46.8,
 
             pc_atm=1.44, pc_near_otm=0.60, pc_far_otm=1.75,
             net_vanna=0.000179, net_charm=22.69,
@@ -1895,13 +3260,14 @@ def build_from_current_data():
         ExpiryMetrics(
             expiry="27MAR26", dte=27, total_oi=149488,
             notional=9_822_511_753, max_pain=80000, pc_ratio=0.70,
+            underlying_price=65707.65,
 
             total_gex=-14_812_074, total_dex=-26914.66,
             gex_environment="Negative",
             call_resistance_strike=80000, call_resistance_gex=3_116_454,
             put_support_strike=60000, put_support_gex=-6_600_975,
             hvl_strike=67000,
-            atm_iv=49.2, skew_25d=9.2, put_25d_iv=55.8, call_25d_iv=46.7,
+            atm_iv=49.2, risk_reversal_25d=-9.2, put_25d_iv=55.8, call_25d_iv=46.7,
 
             pc_atm=1.38, pc_near_otm=1.81, pc_far_otm=0.51,
             net_vanna=0.001561, net_charm=94.23,
@@ -1910,13 +3276,14 @@ def build_from_current_data():
         ExpiryMetrics(
             expiry="24APR26", dte=55, total_oi=39117,
             notional=2_570_273_003, max_pain=70000, pc_ratio=0.68,
+            underlying_price=65707.65,
 
             total_gex=3_072_631, total_dex=-1179.31,
             gex_environment="Positive",
             call_resistance_strike=75000, call_resistance_gex=2_095_712,
             put_support_strike=60000, put_support_gex=-3_372_438,
             hvl_strike=84000,
-            atm_iv=48.0, skew_25d=8.6, put_25d_iv=53.9, call_25d_iv=45.3,
+            atm_iv=48.0, risk_reversal_25d=-8.6, put_25d_iv=53.9, call_25d_iv=45.3,
 
             pc_atm=2.00, pc_near_otm=0.95, pc_far_otm=0.41,
             net_vanna=0.000944, net_charm=27.06,
@@ -1925,13 +3292,14 @@ def build_from_current_data():
         ExpiryMetrics(
             expiry="26JUN26", dte=118, total_oi=70893,
             notional=4_658_212_431, max_pain=85000, pc_ratio=0.91,
+            underlying_price=65707.65,
 
             total_gex=-8_447_524, total_dex=-11001.86,
             gex_environment="Negative",
             call_resistance_strike=90000, call_resistance_gex=489_690,
             put_support_strike=60000, put_support_gex=-2_930_370,
             hvl_strike=72000,
-            atm_iv=48.7, skew_25d=7.4, put_25d_iv=53.7, call_25d_iv=46.3,
+            atm_iv=48.7, risk_reversal_25d=-7.4, put_25d_iv=53.7, call_25d_iv=46.3,
 
             pc_atm=1.54, pc_near_otm=3.37, pc_far_otm=0.64,
             net_vanna=0.001305, net_charm=17.56,
@@ -1940,13 +3308,14 @@ def build_from_current_data():
         ExpiryMetrics(
             expiry="25DEC26", dte=300, total_oi=45475,
             notional=2_988_048_812, max_pain=80000, pc_ratio=0.60,
+            underlying_price=65707.65,
 
             total_gex=2_890_951, total_dex=352.39,
             gex_environment="Positive",
             call_resistance_strike=120000, call_resistance_gex=2_422_244,
             put_support_strike=60000, put_support_gex=-1_777_383,
             hvl_strike=120000,
-            atm_iv=50.3, skew_25d=4.8, put_25d_iv=52.8, call_25d_iv=48.0,
+            atm_iv=50.3, risk_reversal_25d=-4.8, put_25d_iv=52.8, call_25d_iv=48.0,
             pc_atm=1.01, pc_near_otm=5.94, pc_far_otm=0.41,
             net_vanna=0.000954, net_charm=5.22,
             flow_bias="Moderate Selling", flow_trend="Accelerating Sell Pressure",

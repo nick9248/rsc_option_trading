@@ -1,0 +1,718 @@
+"""
+Top-level report composition for the on-chain analysis text report.
+
+``OnChainReportFormatter`` extracted from ``OnChainAnalyzer.generate_report()``
+per refactor_design_spec.md section T3. It renders the header, each
+expiration's section, and the market-wide section, then joins them exactly
+as ``generate_report()`` used to build one flat list of lines.
+
+T3 does not yet have a populated ``OnChainAnalysisResult`` (that aggregate is
+assembled by ``OnChainAnalysisBuilder`` starting at T6) or typed GEX/DEX,
+flow, vol-surface, or OI-changes results (those calculators keep returning
+dicts/pre-rendered text until T4/T5/T8). ``ExpirationRenderInput`` is the
+"temporary adapter" the task brief calls for: it carries the one typed model
+the analyzer already computes itself (``ExpirationAnalysisResult``) plus the
+already-formatted text blocks the other calculators still produce, so this
+formatter can render the exact same output while the rest of the pipeline
+still speaks dicts. It is not one of the frozen result models defined in
+refactor_design_spec.md section 2 and does not need to survive past T8.
+"""
+
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Dict, Optional, Tuple
+
+from coding.core.analytics.market_wide_calculator import FUNDING_PERIODS_PER_YEAR
+from coding.core.analytics.reporting.dealer_inventory_formatter import (
+    format_dealer_inventory_section,
+)
+from coding.core.analytics.reporting.delta_flow_formatter import (
+    format_delta_adjusted_flow_section,
+)
+from coding.core.analytics.reporting.expiry_formatter import (
+    format_context_section,
+    format_expiration_section,
+)
+from coding.core.analytics.reporting.exposure_profile_formatter import (
+    format_exposure_profile_section,
+)
+from coding.core.analytics.reporting.fixed_strike_vol_formatter import (
+    format_fixed_strike_vol_section,
+)
+from coding.core.analytics.reporting.gex_dex_formatter import (
+    format_aggregate_gex_dex_section,
+    format_gamma_rolloff_section,
+    format_gex_dex_section,
+)
+from coding.core.analytics.reporting.historical_context_formatter import (
+    format_historical_context_section,
+)
+from coding.core.analytics.reporting.market_wide_formatter import (
+    format_block_trades_section,
+    format_forward_vol_section,
+    format_futures_basis_section,
+    format_market_wide_context_section,
+    format_perpetual_funding_section,
+    format_realized_volatility_section,
+    format_skew_term_structure_section,
+    format_term_structure_section,
+    format_volatility_cone_section,
+    format_vrp_section,
+)
+from coding.core.analytics.reporting.oi_changes_formatter import (
+    format_iv_percentile_section,
+    format_oi_changes_section,
+)
+from coding.core.analytics.reporting.vol_surface_formatter import format_vol_surface_section
+from coding.core.analytics.results.analysis_result import (
+    MarketMetricsResult,
+    OnChainAnalysisResult,
+    TrendSnapshot,
+)
+from coding.core.analytics.results.expiry_results import ExpirationAnalysisResult
+from coding.core.analytics.results.flow_results import FlowResult
+from coding.core.analytics.results.gex_dex_results import GexDexResult
+from coding.core.analytics.results.vol_surface_results import VolSurfaceResult
+
+_SEPARATOR = "=" * 80
+_SUB_SEPARATOR = "-" * 80
+
+# Task G2-A (Wave G fresh audit, bug 2): "EVIDENCE: OI/GEX from full book"
+# is a factual completeness claim, not decoration -- a live audit found one
+# expiry lost 34.49% of its OI-weighted representation to dropped/null-
+# greeks instruments (GexDexResult.oi_missing_gamma) while this line still
+# printed the claim unconditionally. Same convention as on_chain_analysis_
+# service.py's _DEALER_INVENTORY_MAX_EXCLUSION_RATE (Task C3): a round,
+# documented starting point, not a statistically-derived cutoff -- above
+# this OI-weighted gap, the aggregated GEX/DEX no longer represents "the
+# book", so the claim must be withdrawn rather than asserted anyway.
+_GEX_DEX_MAX_MISSING_OI_PCT_FOR_FULL_BOOK_CLAIM = 0.05
+
+# Fixed order market-wide sections are rendered in -- institutional_
+# metrics_spec.md section 9(b)'s market-wide order (Task D2 final reorder
+# commit): NORMALIZED DASHBOARD -> AGGREGATE GEX/DEX -> GAMMA ROLL-OFF
+# (section 5, Task C6) -> SKEW TERM STRUCTURE (section 3) -> IV TERM
+# STRUCTURE -> FORWARD VOL (section 8, Task C9 -- "directly after the IV
+# term structure, which it explains") -> VRP + VOL CONE + REALIZED VOL
+# (spec's own word order) -> FUNDING + BASIS (spec's own word order) ->
+# BLOCK TRADES (Task D1) -> CONTEXT.
+_MARKET_WIDE_SECTION_ORDER = (
+    "normalized_dashboard",
+    "aggregate_gex_dex",
+    "gamma_rolloff",
+    "skew_term_structure",
+    "iv_term_structure",
+    "forward_vol",
+    "vrp",
+    "volatility_cone",
+    "realized_volatility",
+    "perpetual_funding",
+    "futures_basis",
+    "block_trades",
+    # institutional_metrics_spec.md section 9(b) market-wide order item 10
+    # (CONTEXT): BTC/ETH change-correlation + expected move, one line each.
+    # Always last.
+    "context",
+)
+
+
+@dataclass
+class ExpirationRenderInput:
+    """
+    Temporary adapter bundling one expiration's typed analysis result with
+    the previous-snapshot trend and any already-formatted extra section text
+    (GEX/DEX, buy/sell flow, vol surface, OI changes) the legacy calculators
+    still produce. See module docstring.
+    """
+
+    expiration: str
+    analysis: ExpirationAnalysisResult
+    # institutional_metrics_spec.md section 9 (Task D2): trend arrows
+    # against a single prior snapshot are deleted everywhere in the
+    # rendered report -- render_expiration no longer forwards this field
+    # into any formatter. Retained on the dataclass (still populated from
+    # bundle.trend by render_expiration_from_result) so this out-of-scope
+    # plumbing (repository fetch, OnChainAnalysisBuilder.set_trend) does
+    # not need to change for a report-text-only task.
+    trend: Optional[TrendSnapshot] = None
+    extra_sections: Tuple[str, ...] = field(default_factory=tuple)
+    # bugfix_spec.md Item 6 / F6.3.4 (carried from A4 review): a one-line
+    # evidence caveat ("EVIDENCE: OI/GEX from full book | Flow: ...")
+    # printed right under the per-expiration header, so PCR/GEX conclusions
+    # printed alongside an empty/insufficient flow section carry an
+    # explicit caveat. None when the analyzer has no flow bookkeeping yet.
+    evidence_line: Optional[str] = None
+    # institutional_metrics_spec.md section 9(b) per-expiry order item 8
+    # (CONTEXT): the VWAP-IV-gap one-liner needs this expiration's own
+    # VolSurfaceResult. None when unavailable (matches every other
+    # extra_sections entry's "no bundle sub-result -> no data" gate).
+    vol_surface: Optional[VolSurfaceResult] = None
+
+
+class OnChainReportFormatter:
+    """Composes the full on-chain analysis text report from its sections."""
+
+    def render_header(
+        self,
+        currency: str,
+        underlying_price: float,
+        generated_at: datetime,
+        market_metrics: Optional[MarketMetricsResult],
+    ) -> str:
+        """
+        Render the report header and, if present, the MARKET METRICS block.
+
+        Args:
+            currency: Currency symbol (BTC, ETH).
+            underlying_price: Current underlying spot price.
+            generated_at: Report generation timestamp.
+            market_metrics: Currency-wide market metrics, or None if
+                ``set_market_metrics()`` was never called (matches the
+                legacy ``if self.market_metrics:`` truthiness gate on an
+                empty dict).
+
+        Returns:
+            Formatted multi-line string.
+        """
+        lines = []
+        timestamp = generated_at.strftime("%Y-%m-%d %H:%M:%S")
+
+        lines.append(_SEPARATOR)
+        lines.append("ON CHAIN ANALYSIS REPORT")
+        lines.append(f"Generated: {timestamp}")
+        lines.append(f"Currency: {currency}")
+        lines.append(f"Current Underlying Price: ${underlying_price:,.2f}")
+        lines.append(_SEPARATOR)
+        lines.append("")
+
+        if market_metrics is not None:
+            lines.append("MARKET METRICS")
+            lines.append(_SUB_SEPARATOR)
+
+            dvol = market_metrics.dvol
+            iv_percentile = market_metrics.iv_percentile
+            current_funding = market_metrics.current_funding
+            funding_8h = market_metrics.funding_8h
+            iv_rank = market_metrics.iv_rank
+
+            if dvol is not None:
+                lines.append(f"DVOL (Volatility Index): {dvol:.2f}")
+            if iv_percentile is not None:
+                lines.append(f"IV Percentile (365d): {iv_percentile:.1f}%")
+            if iv_rank is not None:
+                # Wave H Task H-F, Fix 4: surface the observation count the
+                # rank was computed from, so a reader can judge confidence
+                # (a rank from a handful of DVOL observations is much
+                # weaker evidence than one from a near-full 365d history)
+                # instead of every rank looking equally authoritative.
+                obs_count = market_metrics.iv_rank_observation_count
+                obs_suffix = f" (n={obs_count} obs)" if obs_count is not None else ""
+                lines.append(f"IV Rank (365d): {iv_rank:.1f}%{obs_suffix}")
+            # institutional_metrics_spec.md section 9 (Task D2): "Expected
+            # daily/weekly/monthly move -> one line, integer dollars".
+            # The three-line $+% breakdown that used to render here is
+            # deleted -- its one-line replacement
+            # (market_wide_formatter.format_expected_move_line) renders in
+            # the market-wide CONTEXT block instead (spec 9(b) market-wide
+            # order item 10), alongside the BTC/ETH change-correlation
+            # one-liner.
+            if current_funding is not None:
+                # CARRIED FINDING #2 (A5 review, task A6 brief): this line
+                # used to compute funding_annualized = current_funding * 3
+                # * 365 * 100 -- current_funding is the instantaneous
+                # accruing rate, not the realised 8h rate; bugfix_spec.md
+                # Item 4 defect (b) already fixed the calculator's own
+                # annualization (market_wide_formatter.format_
+                # perpetual_funding_section) to use funding_8h but missed
+                # this second site, so the header and the funding section
+                # printed two contradictory annualized numbers for the same
+                # instant. Same basis as the calculator fix: funding_8h *
+                # FUNDING_PERIODS_PER_YEAR. When funding_8h is unavailable
+                # there is no correct annualization basis -- show the
+                # instantaneous rate alone rather than a fabricated figure.
+                funding_pct = current_funding * 100
+                # Wave-I-C Fix 7: current_funding (the instantaneous
+                # accruing rate) can be genuinely non-zero but far smaller
+                # in magnitude than funding_8h (the realised 8h rate) --
+                # market_wide_calculator.py's render_market_wide_from_result
+                # docstring notes "a 61x divergence was observed live
+                # between the two". At :.4f (4 decimal places of a
+                # percentage), a real rate that small rounds to 0.0000%,
+                # which reads as "no funding" even while the annualized
+                # figure right next to it (derived from funding_8h) is
+                # clearly non-zero. 8 decimal places keeps a real small
+                # rate visible without switching to a different notation.
+                funding_pct_str = f"{funding_pct:.8f}%"
+                if funding_8h is not None:
+                    funding_annualized = funding_8h * FUNDING_PERIODS_PER_YEAR * 100
+                    lines.append(
+                        f"Current Funding Rate: {funding_pct_str} "
+                        f"({funding_annualized:.2f}% annualized)"
+                    )
+                else:
+                    lines.append(f"Current Funding Rate: {funding_pct_str}")
+            if funding_8h is not None:
+                funding_8h_pct = funding_8h * 100
+                lines.append(f"8h Funding Rate: {funding_8h_pct:.4f}%")
+
+            lines.append("")
+            lines.append(_SEPARATOR)
+            lines.append("")
+
+        return "\n".join(lines)
+
+    def render_header_from_result(self, result: OnChainAnalysisResult) -> str:
+        """
+        Render the report header directly from the typed
+        ``OnChainAnalysisResult`` (refactor_design_spec.md section T8).
+
+        Thin wrapper over ``render_header`` — extracts the same four
+        arguments from the result aggregate instead of the caller passing
+        them separately, so ``_save_reports_per_expiration`` can render
+        from the result without string-scanning the full report text.
+        """
+        return self.render_header(
+            currency=result.currency,
+            underlying_price=result.underlying_price,
+            generated_at=result.generated_at,
+            market_metrics=result.market_metrics,
+        )
+
+    def render_expiration(
+        self, render_input: ExpirationRenderInput, spot_price: float, now_utc: datetime,
+    ) -> str:
+        """
+        Render one expiration's full section: header line, the analysis
+        block, any extra pre-rendered sections (GEX/DEX, flow, vol surface,
+        OI changes), and the CONTEXT one-liners, followed by the closing
+        separator.
+
+        Args:
+            render_input: The expiration's typed analysis + extras.
+            spot_price: Underlying price to anchor this section's
+                settlement-space distances (Max Pain's "% from spot" one-
+                liner) against. bugfix_spec.md Item 7: this is THIS
+                expiration's own forward price, not a single value shared
+                across every expiration.
+            now_utc: The report's own "now" reference, threaded down into
+                ``format_context_section``'s expiry-week gate (independent
+                review round 2, Important #1 -- see that function's
+                docstring). Explicit, UTC-aware, caller-supplied -- never
+                read fresh here or downstream.
+
+        Returns:
+            Formatted multi-line string.
+        """
+        lines = [f"EXPIRATION: {render_input.expiration}", _SUB_SEPARATOR]
+        if render_input.evidence_line is not None:
+            lines.append(render_input.evidence_line)
+            lines.append("")
+        lines.append(format_expiration_section(render_input.analysis))
+        for extra in render_input.extra_sections:
+            lines.append(extra)
+        # institutional_metrics_spec.md section 9(b) per-expiry order item
+        # 8: CONTEXT is always rendered LAST in the expiration's block.
+        lines.append(
+            format_context_section(
+                render_input.analysis, spot_price, render_input.vol_surface, now_utc,
+            )
+        )
+        lines.append(_SEPARATOR)
+        lines.append("")
+        return "\n".join(lines)
+
+    def render_expiration_from_result(
+        self, result: OnChainAnalysisResult, expiration: str, now_utc: datetime,
+    ) -> str:
+        """
+        Render one expiration's full section directly from the typed
+        ``OnChainAnalysisResult`` (refactor_design_spec.md section T8 —
+        kills the report-text splitter in ``_save_reports_per_expiration``).
+
+        Builds an ``ExpirationRenderInput`` from the expiration's
+        ``ExpirationBundle`` — extra sections come from the reporting
+        package's own formatters (``format_gex_dex_section``,
+        ``format_delta_adjusted_flow_section``, ``format_vol_surface_section``,
+        ``format_oi_changes_section``/``format_iv_percentile_section``)
+        operating on the bundle's typed sub-results, in the same fixed
+        order the legacy pre-rendered-text adapter used (GEX/DEX, flow,
+        vol surface, OI-changes+IV-percentile) — so this renders the exact
+        same text ``render_expiration`` would for an
+        ``ExpirationRenderInput`` built by ``OnChainAnalyzer.generate_report()``.
+
+        Args:
+            result: The typed aggregate.
+            expiration: Which expiration to render.
+            now_utc: The report's own "now" reference (independent review
+                round 2, Important #1), threaded to ``render_expiration``'s
+                CONTEXT rendering. Explicit, UTC-aware, caller-supplied.
+
+        Returns "" if the expiration is not in the result (matches the
+        legacy behavior of skipping an expiration with no analysis).
+        """
+        bundle = result.bundle(expiration)
+        if bundle is None:
+            return ""
+
+        # institutional_metrics_spec.md section 9(b)'s per-expiry order
+        # (Task D2 reorder commit):
+        #   1. POSITIONING -- TWO VIEWS (dealer_inventory)
+        #   2. GEX/DEX PROFILE BY STRIKE (gex_dex)
+        #   3. VANNA/CHARM PROFILE (exposure_profile)
+        #   4. SKEW (vol_surface)
+        #   5. DELTA-ADJUSTED FLOW (independent review, Important #1: spec
+        #      6(c) "replaces the contract-count 'net flow' headline; keep
+        #      the per-strike table" is a MERGE instruction, not a choice
+        #      between the old BUY/SELL FLOW ANALYSIS section and the new
+        #      HIRO/premium/gross series -- format_delta_adjusted_flow_
+        #      section implements the merge: this expiry's own bucket from
+        #      delta_flow_buckets supplies the new headline, bundle.flow
+        #      supplies the kept per-strike tables. The old currency-wide
+        #      "Total" delta-flow table (format_delta_flow_section) is no
+        #      longer rendered anywhere -- see render_full_from_result's
+        #      comment for why it was dropped rather than kept.)
+        #   6. FIXED-STRIKE VOL CHANGE (fixed_strike_vol)
+        #   7. OI CHANGES (oi_changes + iv_percentile)
+        #   8. CONTEXT -- rendered separately, always last (render_expiration)
+        extra_sections = []
+        # institutional_metrics_spec.md section 2 / task C3: dealer
+        # positioning renders FIRST (before GEX/DEX PROFILE BY STRIKE) per
+        # the spec's per-expiry order -- both still use the same "ASSUMED
+        # DEALER VIEW" label (D7), regardless of which renders first. Never
+        # rendered without a dealer_inventory result -- unlike gex_dex,
+        # there is no legacy fallback path for this section.
+        if bundle.dealer_inventory is not None:
+            extra_sections.append(
+                format_dealer_inventory_section(bundle.dealer_inventory, bundle.gex_dex, result.currency)
+            )
+        if bundle.gex_dex is not None:
+            extra_sections.append(format_gex_dex_section(bundle.gex_dex, result.currency))
+        # institutional_metrics_spec.md section 4 / task C5: per-strike
+        # vanna/charm exposure profile, placed alongside the other
+        # exposure-family sections (GEX/DEX, dealer inventory) so the
+        # "holder-side raw / assumed-dealer view" convention reads as one
+        # continuous block. Replaces the old aggregate "SECOND-ORDER
+        # GREEKS" text that used to render inside format_vol_surface_section
+        # (spec 4(c): "replaces the aggregate vanna/charm advice block
+        # entirely") -- VolSurfaceResult.second_order_greeks itself is
+        # unchanged and still feeds synthesis.py's scoring engine, only its
+        # TEXT rendering moved here with true per-strike numbers.
+        if bundle.exposure_profile is not None:
+            extra_sections.append(
+                format_exposure_profile_section(bundle.exposure_profile, result.currency)
+            )
+        if bundle.vol_surface is not None:
+            extra_sections.append(format_vol_surface_section(bundle.vol_surface, expiration))
+        own_delta_flow_bucket = next(
+            (b for b in result.delta_flow_buckets if b.expiration == expiration), None
+        )
+        if own_delta_flow_bucket is not None or bundle.flow is not None:
+            extra_sections.append(
+                format_delta_adjusted_flow_section(
+                    own_delta_flow_bucket, bundle.flow, result.delta_flow_lookback_hours,
+                )
+            )
+
+        # institutional_metrics_spec.md section 7 / task C8: fixed-strike
+        # vol change matrix. format_fixed_strike_vol_section renders even
+        # an INDETERMINATE (insufficient/stale history) result with an
+        # explicit message rather than "" -- unlike the "no data -> no
+        # section" convention every other extra_sections entry here uses,
+        # a present bundle.fixed_strike_vol is never silently dropped.
+        if bundle.fixed_strike_vol is not None:
+            extra_sections.append(format_fixed_strike_vol_section(bundle.fixed_strike_vol))
+
+        # OI changes + IV percentile concatenate into ONE block with no
+        # separator between them (matches the legacy in-service
+        # `existing + iv_section` string concatenation exactly — joining
+        # them as two separate extra_sections entries would insert an
+        # extra blank line neither the legacy path nor format_oi_changes_section
+        # /format_iv_percentile_section's own text expects).
+        oi_iv_text = ""
+        if bundle.oi_changes is not None and bundle.oi_changes.has_previous_snapshot:
+            oi_iv_text += format_oi_changes_section(bundle.oi_changes)
+        if bundle.iv_percentile is not None:
+            oi_iv_text += format_iv_percentile_section(bundle.iv_percentile)
+        if oi_iv_text:
+            extra_sections.append(oi_iv_text)
+
+        render_input = ExpirationRenderInput(
+            expiration=expiration,
+            analysis=bundle.analysis,
+            trend=bundle.trend,
+            extra_sections=tuple(extra_sections),
+            evidence_line=self._evidence_line_from_flow(bundle.flow, bundle.gex_dex),
+            vol_surface=bundle.vol_surface,
+        )
+        # bugfix_spec.md Item 7 anchor table: format_context_section's
+        # spot_price feeds the Max Pain "% from spot" one-liner -- this is
+        # settlement-space (strike vs. where THIS expiry's contract
+        # settles), so this expiry's own forward (bundle.analysis.
+        # underlying_price, already anchored there by analyze_expiration)
+        # is correct here, not the aggregate result.underlying_price (the
+        # index, same for every expiration).
+        return self.render_expiration(render_input, bundle.analysis.underlying_price, now_utc)
+
+    @staticmethod
+    def _book_completeness_claim(gex_dex: Optional[GexDexResult]) -> str:
+        """
+        Task G2-A (Wave G fresh audit, bug 2): the "OI/GEX from full book"
+        wording is only true when ``gex_dex``'s own completeness
+        bookkeeping (``instruments_missing_gamma``/``oi_missing_gamma``,
+        set by ``GexDexCalculator._aggregate_by_strike``) says so.
+
+        ``gex_dex is None`` (no GEX/DEX data at all for this expiration)
+        keeps the legacy unconditional wording -- there is nothing to gate
+        on here, matching every other extra_sections entry's "no data ->
+        no new disclosure" convention rather than a fabricated worst-case
+        claim. This is now a genuinely different case from "every
+        instrument in this expiration failed its ticker fetch" (Wave G
+        re-review, Important #2): the service layer
+        (``_fetch_greeks_and_store_gex_dex``) builds an explicit,
+        fully-degenerate ``GexDexResult`` for that 100%-failure case
+        instead of leaving ``gex_dex`` as ``None`` -- ``None`` here means
+        "there were no instruments to begin with", never "we tried and
+        got nothing back".
+        """
+        if gex_dex is None:
+            return "OI/GEX from full book"
+
+        if gex_dex.oi_missing_gamma <= 0:
+            return "OI/GEX from full book"
+
+        total_oi = sum(row.call_oi + row.put_oi for row in gex_dex.strike_rows)
+        if total_oi > 0:
+            missing_pct = min(gex_dex.oi_missing_gamma / total_oi, 1.0)
+        else:
+            # Wave G re-review (Important #2): every bit of "book" that
+            # exists for this expiration IS the missing part (e.g. a
+            # 100%-ticker-fetch-failure expiration -- strike_rows is
+            # empty, there is nothing represented at all). This is 100%
+            # missing, not a division-by-zero excuse to fall back to the
+            # claim this branch exists to withdraw.
+            missing_pct = 1.0
+
+        if missing_pct <= _GEX_DEX_MAX_MISSING_OI_PCT_FOR_FULL_BOOK_CLAIM:
+            return "OI/GEX from full book"
+
+        return (
+            f"OI/GEX INCOMPLETE -- {gex_dex.instruments_missing_gamma} instrument(s) "
+            f"({missing_pct:.1%} of OI) missing gamma/delta, contributed 0 exposure"
+        )
+
+    @staticmethod
+    def _evidence_line_from_flow(
+        flow: Optional[FlowResult], gex_dex: Optional[GexDexResult] = None,
+    ) -> Optional[str]:
+        """
+        bugfix_spec.md Item 6 / F6.3.4 (carried from A4 review): the same
+        evidence-caveat text ``OnChainAnalyzer._build_evidence_line``
+        builds from the dict bookkeeping, built here directly from the
+        typed ``FlowResult`` — the two must stay in lockstep since both
+        render the same per-expiration header line.
+
+        Task G2-A (Wave G fresh audit, bug 2): the "OI/GEX from full book"
+        half of this line is now conditional -- see
+        ``_book_completeness_claim``.
+        """
+        book_claim = OnChainReportFormatter._book_completeness_claim(gex_dex)
+        if flow is None:
+            return f"EVIDENCE: {book_claim} | Flow: NOT ANALYZED"
+        status = "OK" if flow.sufficient_data else "INSUFFICIENT"
+        return (
+            f"EVIDENCE: {book_claim} | "
+            f"Flow: {status} ({flow.trade_count} trades in {flow.lookback_hours:.0f}h)"
+        )
+
+    def render_market_wide(self, sections: Dict[str, str]) -> str:
+        """
+        Render the MARKET-WIDE METRICS block from already-formatted section
+        text, in the fixed legacy order.
+
+        Args:
+            sections: Mapping of section name -> pre-rendered text. Missing
+                keys are skipped (matches the legacy
+                ``if section_name in self.market_wide_sections`` gate).
+
+        Returns:
+            Formatted multi-line string, or "" if ``sections`` is empty
+            (matches the legacy ``if self.market_wide_sections:`` gate —
+            callers should not append an empty result).
+        """
+        if not sections:
+            return ""
+
+        lines = [_SEPARATOR, f"{'MARKET-WIDE METRICS':^80}", _SEPARATOR, ""]
+        for section_name in _MARKET_WIDE_SECTION_ORDER:
+            if section_name in sections:
+                lines.append(sections[section_name])
+                lines.append("")
+        lines.append(_SEPARATOR)
+        return "\n".join(lines)
+
+    def render_market_wide_from_result(self, result: OnChainAnalysisResult) -> str:
+        """
+        Render the MARKET-WIDE METRICS block directly from the typed
+        ``OnChainAnalysisResult.market_wide`` (refactor_design_spec.md
+        section T8), in the same fixed order ``render_market_wide`` uses.
+
+        Not called by ``_save_reports_per_expiration`` — the legacy
+        text-splitter's naive "EXPIRATION:" scan ran the LAST expiration's
+        slice to the end of the full report string, so that one
+        expiration's saved file also picked up the trailing MARKET-WIDE
+        METRICS block (never the intent per this method's own "each
+        expiration folder gets only its section" contract). T8 does not
+        reproduce that leak: per-expiration files now contain only that
+        expiration's own section, for every expiration including the last.
+        This method is live as of T10: it is ``render_full_from_result``'s
+        market-wide block, called from ``fetch_and_analyze``'s report path
+        (task A6 flipped this render path from dead code to the sole full
+        -report renderer — this docstring previously called it "not
+        currently called", which stopped being true then; task A7 review
+        caught the stale comment).
+
+        A section is included only when its typed sub-result is not None —
+        matches the legacy ``if section_name in self.market_wide_sections``
+        gate (a phase whose try/except caught an exception, or whose guard
+        condition wasn't met, never got a dict entry either).
+
+        Returns "" if every sub-result is None (matches the legacy
+        ``if self.market_wide_sections:`` gate on an empty dict).
+        """
+        mw = result.market_wide
+        sections: Dict[str, str] = {}
+
+        # institutional_metrics_spec.md section 9(b) market-wide order item
+        # 1 (NORMALIZED DASHBOARD): §1's front-month percentile/z-score
+        # context, moved here (Task D2 reorder) from its previous position
+        # appended after the whole market-wide block in
+        # render_full_from_result. Same "no data -> no section" gate
+        # format_historical_context_section already applies (returns ""
+        # when result.normalized_metrics is empty) -- this is a position
+        # change only, not a content or gating change. The rendered header
+        # is still "HISTORICAL CONTEXT" (unchanged text) -- the spec's
+        # "NORMALIZED DASHBOARD" is this section's descriptive name in the
+        # order table, not a rename instruction.
+        historical_context_text = format_historical_context_section(
+            result.normalized_metrics,
+            front_month_expiration=result.normalized_metrics_front_month,
+            stale_since=result.normalized_metrics_stale_since,
+        )
+        if historical_context_text:
+            sections["normalized_dashboard"] = historical_context_text
+
+        if mw.aggregate_gex_dex is not None:
+            sections["aggregate_gex_dex"] = format_aggregate_gex_dex_section(
+                mw.aggregate_gex_dex, result.underlying_price, result.currency,
+            )
+        if mw.gamma_rolloff is not None:
+            sections["gamma_rolloff"] = format_gamma_rolloff_section(mw.gamma_rolloff)
+        if mw.skew_term_structure is not None:
+            sections["skew_term_structure"] = format_skew_term_structure_section(
+                mw.skew_term_structure
+            )
+        if mw.term_structure is not None:
+            sections["iv_term_structure"] = format_term_structure_section(mw.term_structure)
+        if mw.forward_vol is not None:
+            sections["forward_vol"] = format_forward_vol_section(mw.forward_vol)
+        if mw.variance_risk_premium is not None:
+            sections["vrp"] = format_vrp_section(mw.variance_risk_premium)
+        if mw.volatility_cone is not None:
+            sections["volatility_cone"] = format_volatility_cone_section(mw.volatility_cone)
+        if mw.realized_volatility is not None:
+            sections["realized_volatility"] = format_realized_volatility_section(mw.realized_volatility)
+        if mw.perpetual_funding is not None:
+            sections["perpetual_funding"] = format_perpetual_funding_section(mw.perpetual_funding)
+        if mw.futures_basis is not None:
+            sections["futures_basis"] = format_futures_basis_section(mw.futures_basis)
+        if mw.block_trades is not None:
+            # Wave-I-C Fix 2: generated_at lets the section detect a report
+            # dated before BLOCK_TRADE_ID_TRACKED_SINCE (historical
+            # reproduction against pre-migration data) and avoid claiming
+            # "Tracked since <a date after this report's own timestamp>".
+            sections["block_trades"] = format_block_trades_section(
+                mw.block_trades, generated_at=result.generated_at,
+            )
+        # institutional_metrics_spec.md section 9(b) market-wide order item
+        # 10 (CONTEXT): rendered whenever any constituent fact has data
+        # (matches the legacy "no data -> no section" gate applied to the
+        # block as a whole, not each one-liner separately -- an all-N/A
+        # block would be noise, not information). Independent review round
+        # 2 (Important #2): delta-flow coverage/staleness disclosure counts
+        # as a constituent fact too, gated on whether delta_flow_buckets
+        # has an "ALL" (currency-level total) entry -- the same "no data ->
+        # no section" gate the prior (now unused) format_delta_flow_section
+        # applied to the whole section it used to own.
+        delta_flow_has_total = any(b.expiration == "ALL" for b in result.delta_flow_buckets)
+        if mw.cross_asset_correlation is not None or mw.dvol is not None or delta_flow_has_total:
+            sections["context"] = format_market_wide_context_section(
+                mw.cross_asset_correlation, result.currency, mw.dvol, result.underlying_price,
+                delta_flow_has_total=delta_flow_has_total,
+                delta_flow_hours_present=result.delta_flow_hours_present,
+                delta_flow_lookback_hours=result.delta_flow_lookback_hours,
+                delta_flow_stale_since=result.delta_flow_stale_since,
+            )
+
+        return self.render_market_wide(sections)
+
+    def render_full_from_result(self, result: OnChainAnalysisResult, now_utc: datetime) -> str:
+        """
+        Render the complete report directly from the typed
+        ``OnChainAnalysisResult`` (refactor_design_spec.md section T10).
+
+        The result-based counterpart to ``render_full`` -- used by
+        ``OnChainAnalysisService.fetch_and_analyze`` once
+        ``OnChainAnalyzer.generate_report()`` (a pure delegator to
+        ``render_full`` as of T3) is deleted. Composes
+        ``render_header_from_result`` + ``render_expiration_from_result``
+        per expiration (both already proven byte-identical to the legacy
+        per-argument renderers by T8's per-expiration characterization
+        test) + ``render_market_wide_from_result`` (dead code before this
+        task -- going live here for the first time), joined exactly as
+        ``render_full`` joins its pieces.
+
+        Args:
+            result: The typed aggregate.
+            now_utc: The report's own "now" reference (independent review
+                round 2, Important #1), threaded to every expiration's
+                CONTEXT rendering. Explicit, UTC-aware -- the caller
+                (``OnChainAnalysisService.fetch_and_analyze``, a module in
+                ``tests/conftest.py``'s clock-freeze list) must compute
+                this via ``datetime.now(timezone.utc)`` itself so the
+                characterization suite's frozen clock actually applies;
+                this method and everything it calls never read the clock
+                themselves.
+        """
+        blocks = [self.render_header_from_result(result)]
+        for expiration in result.expiration_names():
+            blocks.append(self.render_expiration_from_result(result, expiration, now_utc))
+
+        market_wide_text = self.render_market_wide_from_result(result)
+        if market_wide_text:
+            blocks.append(market_wide_text)
+
+        # institutional_metrics_spec.md section 9(b) market-wide order item
+        # 1 (NORMALIZED DASHBOARD): §1's front-month percentile/z-score
+        # context now renders INSIDE render_market_wide_from_result (first
+        # section, Task D2 reorder) rather than being appended here as a
+        # separate block -- see that method's own comment for the gating
+        # rationale.
+
+        # institutional_metrics_spec.md section 6 / task C7 (Task D2
+        # independent review, Important #1): the currency-wide "Total"
+        # delta-flow table (format_delta_flow_section) used to render here,
+        # standalone, after the whole report -- a position neither the
+        # per-expiry nor the market-wide order sanctions. It is dropped
+        # (not rendered) rather than kept: each expiration's own HIRO/
+        # premium/gross line now renders in that expiration's own DELTA-
+        # ADJUSTED FLOW section (section 9(b) per-expiry order item 5, via
+        # format_delta_adjusted_flow_section), so the underlying data is
+        # still surfaced, per-expiry, in a slot the spec DOES sanction --
+        # no spec text supports folding the aggregate "Total" row into
+        # market-wide CONTEXT instead (CONTEXT's own list is exhaustive:
+        # BTC/ETH change-correlation + expected move only). The formatter
+        # function and its own tests are left in place (unused in
+        # production, same treatment as flow_formatter.format_flow_section
+        # after this same review round).
+
+        return "\n".join(blocks)

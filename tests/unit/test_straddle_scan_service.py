@@ -412,7 +412,11 @@ class TestRealizedVol:
         log_returns = [math.log(closes[i] / closes[i - 1]) for i in range(1, len(closes))]
         n = len(log_returns)
         mean = sum(log_returns) / n
-        variance = sum((x - mean) ** 2 for x in log_returns) / (n - 1)
+        # Population variance (ddof=0) -- Wave H Task H-F Fix 2 aligned
+        # realized_vol.py with VRPCalculator's np.std default, replacing
+        # the sample-variance (n - 1) convention this test previously
+        # hand-verified against.
+        variance = sum((x - mean) ** 2 for x in log_returns) / n
         expected_rv = math.sqrt(variance) * math.sqrt(365.0) * 100.0
 
         assert rv == pytest.approx(expected_rv, rel=1e-9)

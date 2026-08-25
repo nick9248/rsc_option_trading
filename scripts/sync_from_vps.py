@@ -90,6 +90,20 @@ SYNC_TABLES = [
         "conflict_target": "(snapshot_hour, currency, expiration) DO NOTHING",
     },
     {
+        # institutional_metrics_spec.md section 6 / infra_spec.md section 2
+        # -- task C7 review fix, Important #3. The daemon writes this table
+        # on the VPS only (ProspectiveCollector._persist_delta_flow); the
+        # GUI and report read from the LOCAL DB. Without a sync entry here,
+        # local queries return empty indefinitely -- never "until 24h of
+        # daemon runs accumulate" as originally (incorrectly) characterized
+        # in task-C7-report.md, but "forever," because the data never
+        # reaches the machine that renders the report.
+        "name": "flow_delta_hourly",
+        "watermark_col": "snapshot_hour",
+        "watermark_type": "timestamp",
+        "conflict_target": "(snapshot_hour, currency, expiration) DO NOTHING",
+    },
+    {
         "name": "funding_rate_history",
         "watermark_col": "date",
         "watermark_type": "timestamp",
@@ -121,18 +135,6 @@ SYNC_TABLES = [
     },
     {
         "name": "volume",
-        "watermark_col": "captured_at",
-        "watermark_type": "timestamp",
-        "conflict_target": None,
-    },
-    {
-        "name": "gex_dex",
-        "watermark_col": "captured_at",
-        "watermark_type": "timestamp",
-        "conflict_target": None,
-    },
-    {
-        "name": "levels",
         "watermark_col": "captured_at",
         "watermark_type": "timestamp",
         "conflict_target": None,

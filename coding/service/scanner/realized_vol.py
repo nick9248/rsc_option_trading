@@ -2,7 +2,13 @@
 Shared realized-vol computation for scanner services. Extracted 2026-07-20
 from StraddleScanService._compute_realized_vol so the defined-risk scanners
 (and RegimeGateService) don't duplicate it. Log-return stdev of daily OHLCV
-closes, annualized -- matches VRPCalculator's existing methodology.
+closes, annualized, using POPULATION variance (ddof=0) -- matches
+VRPCalculator's np.std default and MarketWideCalculator's np.std usage
+(both ddof=0) and HistoricalNormalizer's explicit "ddof=0 because the
+window is the complete observed [population], not a sample" convention.
+Wave H Task H-F, Fix 2: this previously used SAMPLE variance (n-1) while
+claiming to match VRPCalculator, a real ~1.5-2% discrepancy against the
+same thresholds VRPCalculator's figures are compared against elsewhere.
 """
 import math
 from datetime import datetime, timedelta
@@ -47,5 +53,9 @@ def compute_realized_vol(repo, currency: str, window_days: int, as_of: datetime)
     if n < 2:
         return None
     mean = sum(log_returns) / n
-    variance = sum((r - mean) ** 2 for r in log_returns) / (n - 1)
+    # Population variance (ddof=0), matching VRPCalculator.calculate_
+    # realized_volatility's np.std(log_returns) default -- see module
+    # docstring. Was previously sample variance (/ (n - 1)), which silently
+    # diverged from the methodology this docstring claimed to match.
+    variance = sum((r - mean) ** 2 for r in log_returns) / n
     return math.sqrt(variance) * math.sqrt(365.0) * 100.0

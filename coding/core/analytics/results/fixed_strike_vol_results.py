@@ -1,0 +1,84 @@
+"""
+Result models for the fixed-strike vol change matrix
+(institutional_metrics_spec.md section 7 / Task C8).
+
+Frozen dataclasses, mirroring the pattern established by
+``delta_flow_results.py``/``dealer_inventory_results.py``.
+"""
+
+from dataclasses import dataclass
+from datetime import date as date_type
+from typing import Optional, Tuple
+
+
+@dataclass(frozen=True)
+class StrikeIvChangeRow:
+    """
+    One matched strike's day-over-day IV change vs the same-period ATM
+    change, produced by ``FixedStrikeVolCalculator.calculate``.
+
+    "Matched" means this exact ``(strike, option_type)`` had a non-null
+    ``mark_iv`` on BOTH the today and prior snapshot -- a strike present on
+    only one side never gets a row (it is counted in
+    ``FixedStrikeVolResult.n_strikes_unmatched`` instead, see
+    institutional_metrics_spec.md section 7(c)'s edge cases).
+    """
+
+    strike: float
+    option_type: str  # "C" | "P"
+    iv_today: float  # mark_iv, in percent (e.g. 35.71 == 35.71%)
+    iv_prior: float
+    d_iv: float  # iv_today - iv_prior, in vol points (never a fraction)
+    d_vs_atm: Optional[float]  # d_iv - d_atm; None only when d_atm itself is None
+    moneyness_pct: Optional[float]  # |strike - spot_today| / spot_today * 100; None if spot_today unusable
+
+
+@dataclass(frozen=True)
+class FixedStrikeVolResult:
+    """
+    Full per-strike vol change matrix for one expiration, one day-over-day
+    comparison (institutional_metrics_spec.md section 7(c)).
+
+    ``regime`` is one of ``"STICKY_STRIKE"``, ``"STICKY_DELTA"``,
+    ``"REPRICED"``, or ``"INDETERMINATE"`` -- the last one whenever the
+    comparison cannot be trusted (stale/missing prior snapshot, missing ATM
+    IV on either day, or zero matched strikes within the ATM region to
+    evaluate the ladder against). See ``FixedStrikeVolCalculator.
+    _determine_regime`` for the full gate.
+    """
+
+    expiration: str
+    today_date: date_type
+    prior_date: Optional[date_type]
+    expected_prior_date: date_type  # today_date - 1 day; always computable
+    stale_prior: bool  # True when prior_date is None or != expected_prior_date
+    # spot_today/spot_prior: despite the name (inherited from
+    # FixedStrikeVolCalculator's generic "spot" terminology -- this class
+    # is anchor-agnostic pure math), the CALLER must pass the SAME price
+    # anchor on both sides. institutional_metrics_spec.md/bugfix_spec.md
+    # Item 7's settlement-space convention means that anchor is normally
+    # this expiry's FORWARD price, not the spot index -- OnChainAnalysis
+    # Service._calculate_fixed_strike_vol_matrix passes analyzer.
+    # forward_price_by_expiration[expiration] (independent review, Task
+    # C8 fix round, Important #1: mixing spot on one side against forward
+    # on the other prints a spurious "move" on a flat day and can flip
+    # the sticky-strike/sticky-delta/repriced regime label on a skewed
+    # smile).
+    spot_today: Optional[float]
+    spot_prior: Optional[float]
+    spot_move_pct: Optional[float]
+    atm_iv_today: Optional[float]
+    atm_iv_prior: Optional[float]
+    d_atm: Optional[float]
+    rows: Tuple[StrikeIvChangeRow, ...]
+    n_strikes_matched: int
+    n_strikes_unmatched: int
+    regime: str
+    # Fix round 2 (Low #3): whether spot_today is the true per-expiry
+    # forward price (True) or the caller already fell back to the spot
+    # index because no forward price was available (False). Purely a
+    # display flag -- lets the report disclose the fallback, previously
+    # only visible in a logged warning the report reader never sees.
+    # Defaults to True so every pre-existing direct constructor call
+    # (tests) keeps its prior behavior/rendering.
+    spot_today_is_forward: bool = True

@@ -4,11 +4,10 @@ comments for the manual arithmetic each assertion checks.
 """
 import math
 
+from coding.core.analytics.payoff_calculator import butterfly_payoff, iron_condor_payoff
 from coding.service.scanner.defined_risk_candidate_builder import (
     build_butterfly_candidates,
     build_iron_condor_candidates,
-    butterfly_payoff,
-    iron_condor_payoff,
     passes_liquidity,
 )
 

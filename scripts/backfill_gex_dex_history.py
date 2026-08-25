@@ -56,6 +56,7 @@ from coding.core.logging.logging_setup import init_logging
 from coding.core.database.repository import DatabaseRepository
 from coding.core.analytics.gex_dex_calculator import GexDexCalculator
 from coding.core.analytics.black_scholes_calculator import BlackScholesCalculator
+from coding.core.analytics.results.gex_dex_results import GexDexResult
 
 init_logging(level="INFO")
 logger = logging.getLogger(__name__)
@@ -100,15 +101,36 @@ def _apply_bs_fallback(
 
     Mirrors ProspectiveCollector._enrich_with_greeks's BS-fallback branch. Not
     imported directly: that method is a private instance method on a live collector
-    with no reason to exist here, but the call pattern into BlackScholesCalculator
-    is identical. The only difference is `reference_time`: the historical
-    snapshot_hour is used for time-to-expiry instead of datetime.now(), since this
-    is reconstructing the past, not analyzing the present.
+    with no reason to exist here, but the call pattern is identical -- both now
+    delegate their actual guard/compute logic to the shared Core helper,
+    BlackScholesCalculator.calculate_greeks_safe. The only difference is
+    `reference_time`: the historical snapshot_hour is used for time-to-expiry
+    instead of datetime.now(), since this is reconstructing the past, not
+    analyzing the present. This script has only ONE historical price anchor
+    available (the value already persisted in onchain_analysis_snapshots.
+    underlying_price, which the daemon populates from index_price -- see
+    ProspectiveCollector._run_onchain_analysis), so unlike the two live pipelines
+    (Task Wave-J-A Fix 2), there is no separate forward/index split to make here:
+    delta and gamma are both computed at this single anchor, matching what
+    GexDexCalculator's spot_price is called with a few lines below at this
+    script's only call site.
 
     Instruments that already have both delta and gamma are passed through
-    unchanged. Instruments with no usable mark_iv/strike/name are normalized to
-    delta=0, gamma=0 (matches GexDexCalculator's own `item.get("gamma") or 0`
-    defaulting, made explicit here for clarity and testability).
+    unchanged.
+
+    Task Wave-J-A Fix 1 (same bug class as ProspectiveCollector.
+    _enrich_with_greeks, flagged in the same audit): a genuinely-missing
+    delta/gamma (no usable mark_iv/strike/name, an unparseable name, or an
+    already-expired option at `reference_time`) is now emitted as ``None``,
+    never a fabricated 0 -- ``GexDexCalculator._aggregate_by_strike``'s
+    completeness tracking reads ``is None`` as "missing"; this script doesn't
+    currently read that tracking (``_extract_update_values`` only flattens
+    total_net_gex/total_net_dex/the two key-level strikes/hvl, all numerically
+    identical either way, since ``_aggregate_by_strike`` itself does
+    ``gamma_raw or 0`` for the arithmetic regardless), but silently
+    fabricating a 0 here is still the same defect class this task closed
+    everywhere else it was found, and would defeat that tracking the moment
+    anything downstream starts reading it.
 
     Args:
         instruments: Instrument dicts as returned by
@@ -119,7 +141,8 @@ def _apply_bs_fallback(
         bs_calculator: Shared BlackScholesCalculator instance (reused across calls).
 
     Returns:
-        New list of instrument dicts with delta/gamma filled in where possible.
+        New list of instrument dicts with delta/gamma filled in where possible
+        (None where genuinely unknown).
     """
     enriched = []
 
@@ -127,64 +150,52 @@ def _apply_bs_fallback(
         delta = inst.get("delta")
         gamma = inst.get("gamma")
 
-        if (not delta or not gamma) and underlying_price > 0:
+        if delta is None or gamma is None:
             mark_iv = inst.get("mark_iv")
-            strike = inst.get("strike")
-            name = inst.get("instrument_name", "")
-
-            if mark_iv and strike and name:
-                parsed = bs_calculator.parse_instrument_name(name)
-                if parsed:
-                    tte = bs_calculator.calculate_time_to_expiry(
-                        reference_time, parsed["expiry_time"]
-                    )
-                    if tte > 0:
-                        calc = bs_calculator.calculate_greeks(
-                            spot_price=underlying_price,
-                            strike_price=float(strike),
-                            time_to_expiry=tte,
-                            implied_volatility=float(mark_iv) / 100.0,
-                            option_type=parsed["option_type"],
-                        )
-                        delta = delta or calc["delta"]
-                        gamma = gamma or calc["gamma"]
+            calc = bs_calculator.calculate_greeks_safe(
+                inst, mark_iv, underlying_price, reference_time,
+            )
+            if calc is not None:
+                if delta is None:
+                    delta = calc["delta"]
+                if gamma is None:
+                    gamma = calc["gamma"]
 
         enriched.append({
             **inst,
-            "delta": delta or 0,
-            "gamma": gamma or 0,
+            "delta": delta,
+            "gamma": gamma,
         })
 
     return enriched
 
 
 def _extract_update_values(
-    gex_dex_data: Dict[str, Any]
+    gex_dex_result: GexDexResult
 ) -> Tuple[Optional[float], Optional[float], Optional[float], Optional[float], Optional[float]]:
     """
     Flatten GexDexCalculator.calculate() output into the five scalar columns
     onchain_analysis_snapshots stores. Mirrors the exact flattening convention
     already used in DatabaseRepository.save_onchain_snapshot (repository.py:1713-1716):
-    call_resistance/put_support are {"strike", "net_gex"} dicts (or None) — only the
-    strike scalar is persisted.
+    call_resistance/put_support are GexDexLevel(strike, net_gex) objects (or None) —
+    only the strike scalar is persisted.
 
     Args:
-        gex_dex_data: Return value of GexDexCalculator.calculate().
+        gex_dex_result: Return value of GexDexCalculator.calculate() (typed
+            GexDexResult per refactor_design_spec.md T4).
 
     Returns:
         Tuple of (total_net_gex, total_net_dex, call_resistance_strike,
         put_support_strike, hvl_level).
     """
-    key_levels = gex_dex_data.get("key_levels", {}) or {}
-    call_resistance = key_levels.get("call_resistance") or {}
-    put_support = key_levels.get("put_support") or {}
+    key_levels = gex_dex_result.key_levels
 
     return (
-        gex_dex_data.get("total_net_gex"),
-        gex_dex_data.get("total_net_dex"),
-        call_resistance.get("strike"),
-        put_support.get("strike"),
-        key_levels.get("hvl"),
+        gex_dex_result.total_net_gex,
+        gex_dex_result.total_net_dex,
+        key_levels.call_resistance.strike if key_levels.call_resistance else None,
+        key_levels.put_support.strike if key_levels.put_support else None,
+        key_levels.hvl,
     )
 
 

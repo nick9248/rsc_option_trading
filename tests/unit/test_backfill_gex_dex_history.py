@@ -17,6 +17,7 @@ import pytest
 from scripts.backfill_gex_dex_history import _apply_bs_fallback, _extract_update_values
 from coding.core.analytics.black_scholes_calculator import BlackScholesCalculator
 from coding.core.analytics.gex_dex_calculator import GexDexCalculator
+from coding.core.analytics.results.gex_dex_results import GexDexKeyLevels, GexDexLevel, GexDexResult
 
 
 @pytest.fixture
@@ -86,8 +87,13 @@ class TestApplyBsFallback:
         assert result[0]["delta"] == 0.55
         assert result[0]["gamma"] == 0.00002
 
-    def test_no_mark_iv_defaults_to_zero(self, bs_calculator):
-        """Instrument with no mark_iv and no existing greeks defaults to 0, not None."""
+    def test_no_mark_iv_yields_none_not_zero(self, bs_calculator):
+        """
+        Task Wave-J-A Fix 1 (same bug class as ProspectiveCollector.
+        _enrich_with_greeks): an instrument with no mark_iv and no existing
+        greeks is genuinely unknown, not a confirmed zero -- must come back
+        as None, never a fabricated 0.
+        """
         reference_time = datetime(2026, 6, 1, 0, 0, 0)
         instruments = [{
             "instrument_name": "BTC-1JUN26-70000-C",
@@ -102,13 +108,15 @@ class TestApplyBsFallback:
         result = _apply_bs_fallback(instruments, underlying_price=70000.0,
                                      reference_time=reference_time, bs_calculator=bs_calculator)
 
-        assert result[0]["delta"] == 0
-        assert result[0]["gamma"] == 0
+        assert result[0]["delta"] is None
+        assert result[0]["gamma"] is None
 
-    def test_expired_option_at_reference_time_defaults_to_zero(self, bs_calculator):
-        """Option already past expiry at the historical reference time stays at 0/0
-        (time_to_expiry <= 0 guard), matching the aggregation-time behavior that
-        produced the NULL greeks in the first place."""
+    def test_expired_option_at_reference_time_yields_none_not_zero(self, bs_calculator):
+        """
+        Task Wave-J-A Fix 1: an option already past expiry at the historical
+        reference time (time_to_expiry <= 0 guard) is genuinely unknown, not
+        a confirmed zero -- must come back as None.
+        """
         reference_time = datetime(2026, 6, 5, 0, 0, 0)  # after expiry
         instruments = [{
             "instrument_name": "BTC-1JUN26-70000-C",
@@ -123,11 +131,12 @@ class TestApplyBsFallback:
         result = _apply_bs_fallback(instruments, underlying_price=70000.0,
                                      reference_time=reference_time, bs_calculator=bs_calculator)
 
-        assert result[0]["delta"] == 0
-        assert result[0]["gamma"] == 0
+        assert result[0]["delta"] is None
+        assert result[0]["gamma"] is None
 
-    def test_zero_underlying_price_skips_fallback(self, bs_calculator):
-        """Guards against division-by-zero-style errors in BS math."""
+    def test_zero_underlying_price_yields_none_not_zero(self, bs_calculator):
+        """Guards against division-by-zero-style errors in BS math -- the
+        resulting greek is unknown (None), not a fabricated 0."""
         reference_time = datetime(2026, 6, 1, 0, 0, 0)
         instruments = [{
             "instrument_name": "BTC-1JUN26-70000-C",
@@ -142,8 +151,8 @@ class TestApplyBsFallback:
         result = _apply_bs_fallback(instruments, underlying_price=0.0,
                                      reference_time=reference_time, bs_calculator=bs_calculator)
 
-        assert result[0]["delta"] == 0
-        assert result[0]["gamma"] == 0
+        assert result[0]["delta"] is None
+        assert result[0]["gamma"] is None
 
     def test_output_feeds_gex_dex_calculator_without_error(self, bs_calculator):
         """End-to-end sanity: fallback output is directly consumable by GexDexCalculator."""
@@ -175,51 +184,86 @@ class TestApplyBsFallback:
         calc = GexDexCalculator(instruments=enriched, spot_price=70000.0, currency="BTC")
         result = calc.calculate()
 
-        assert "total_net_gex" in result
-        assert "total_net_dex" in result
-        assert isinstance(result["total_net_gex"], float)
+        assert isinstance(result, GexDexResult)
+        assert isinstance(result.total_net_gex, float)
+        assert isinstance(result.total_net_dex, float)
+
+    def test_missing_gamma_counted_by_gex_dex_calculator_completeness_tracking(self, bs_calculator):
+        """
+        Task Wave-J-A Fix 1, end to end: a genuinely-missing greek (no
+        mark_iv) must reach GexDexCalculator as None, incrementing its
+        instruments_missing_gamma/oi_missing_gamma completeness tracking --
+        structurally impossible when the old code fed it a literal 0.
+        """
+        reference_time = datetime(2026, 6, 1, 0, 0, 0)
+        instruments = [
+            {
+                "instrument_name": "BTC-1JUN26-70000-C",
+                "strike": 70000.0,
+                "option_type": "C",
+                "mark_iv": None,
+                "delta": None,
+                "gamma": None,
+                "open_interest": 300.0,
+            },
+            {
+                "instrument_name": "BTC-1JUN26-75000-C",
+                "strike": 75000.0,
+                "option_type": "C",
+                "mark_iv": 60.0,
+                "delta": None,
+                "gamma": None,
+                "open_interest": 200.0,
+            },
+        ]
+
+        enriched = _apply_bs_fallback(instruments, underlying_price=70000.0,
+                                       reference_time=reference_time, bs_calculator=bs_calculator)
+
+        calc = GexDexCalculator(instruments=enriched, spot_price=70000.0, currency="BTC")
+        result = calc.calculate()
+
+        assert result.instruments_missing_gamma == 1
+        assert result.oi_missing_gamma == pytest.approx(300.0)
+
+
+def _make_result(total_net_gex, total_net_dex, call_resistance, put_support, hvl) -> GexDexResult:
+    """Build a minimal GexDexResult for _extract_update_values tests (T4: typed, not dict)."""
+    return GexDexResult(
+        strike_rows=(),
+        cumulative_gex={},
+        cumulative_dex={},
+        key_levels=GexDexKeyLevels(
+            call_resistance=call_resistance, put_support=put_support, hvl=hvl, gamma_flip=hvl,
+        ),
+        spot_price=70000.0,
+        total_net_gex=total_net_gex,
+        total_net_dex=total_net_dex,
+        currency="BTC",
+    )
 
 
 class TestExtractUpdateValues:
     """Tests for flattening GexDexCalculator output into DB column values."""
 
     def test_extracts_all_five_columns(self):
-        gex_dex_data = {
-            "total_net_gex": 1234567.89,
-            "total_net_dex": 12.3456,
-            "key_levels": {
-                "call_resistance": {"strike": 75000.0, "net_gex": 500000.0},
-                "put_support": {"strike": 65000.0, "net_gex": -300000.0},
-                "hvl": 70000.0,
-                "gamma_flip": 70000.0,
-            },
-        }
+        gex_dex_result = _make_result(
+            1234567.89, 12.3456,
+            call_resistance=GexDexLevel(strike=75000.0, net_gex=500000.0),
+            put_support=GexDexLevel(strike=65000.0, net_gex=-300000.0),
+            hvl=70000.0,
+        )
 
-        values = _extract_update_values(gex_dex_data)
+        values = _extract_update_values(gex_dex_result)
 
         assert values == (1234567.89, 12.3456, 75000.0, 65000.0, 70000.0)
 
     def test_handles_none_call_resistance_and_put_support(self):
         """Empty/degenerate strike books should not raise — strikes come back None."""
-        gex_dex_data = {
-            "total_net_gex": 0.0,
-            "total_net_dex": 0.0,
-            "key_levels": {
-                "call_resistance": None,
-                "put_support": None,
-                "hvl": None,
-                "gamma_flip": None,
-            },
-        }
+        gex_dex_result = _make_result(
+            0.0, 0.0, call_resistance=None, put_support=None, hvl=None,
+        )
 
-        values = _extract_update_values(gex_dex_data)
-
-        assert values == (0.0, 0.0, None, None, None)
-
-    def test_handles_missing_key_levels_key(self):
-        """Defensive: key_levels missing entirely should not raise."""
-        gex_dex_data = {"total_net_gex": 0.0, "total_net_dex": 0.0}
-
-        values = _extract_update_values(gex_dex_data)
+        values = _extract_update_values(gex_dex_result)
 
         assert values == (0.0, 0.0, None, None, None)

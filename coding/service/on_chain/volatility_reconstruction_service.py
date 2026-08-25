@@ -18,9 +18,10 @@ Two-pass design (the table itself documents why — see migration 012):
 import logging
 import math
 from collections import Counter
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional
 
+from coding.core.analytics.exposure_profile_calculator import ExposureProfileCalculator
 from coding.core.analytics.volatility_surface_calculator import VolatilitySurfaceCalculator
 from coding.core.analytics.vrp_calculator import VRPCalculator
 from coding.core.database.repository import DatabaseRepository
@@ -106,34 +107,150 @@ class VolatilityReconstructionService:
             expiration=expiration,
         )
         surface_calc.set_vwap_iv_data(vwap_iv, mark_iv_avg)
+        # T4 (refactor_design_spec.md, compatibility-map consumer row #11):
+        # calculate() returns the typed VolSurfaceResult — attribute access.
         surface = surface_calc.calculate()
 
-        skew = surface["skew_25d"]
-        second_order = surface["second_order_greeks"]
-        pc_moneyness = surface["pc_by_moneyness"]
+        skew = surface.skew_25d
+        second_order = surface.second_order_greeks
+        pc_moneyness = surface.pc_by_moneyness
 
         vrp_metrics = self._reconstruct_vrp(currency, snapshot_hour, instruments, underlying_price)
         market_metrics = self._reconstruct_market_metrics(currency, snapshot_hour, underlying_price)
 
         metrics = {
-            "atm_iv": surface["atm_iv"],
-            "skew_25d": skew.get("skew"),
-            "put_25d_iv": skew.get("put_25d_iv"),
-            "call_25d_iv": skew.get("call_25d_iv"),
-            "net_vanna": second_order.get("net_vanna"),
-            "net_charm": second_order.get("net_charm"),
+            "atm_iv": surface.atm_iv,
+            # bugfix_spec.md Item 9: skew.skew is now a deprecated read-only
+            # alias for put_over_call_skew_25d (same value, same sign this
+            # backfill's own onchain_volatility_snapshots.skew_25d column
+            # has always held) -- kept deliberately (not switched to
+            # risk_reversal_25d) so this historical column's meaning does
+            # not change out from under already-written rows.
+            "skew_25d": skew.skew,
+            "put_25d_iv": skew.put_25d_iv,
+            "call_25d_iv": skew.call_25d_iv,
+            # bugfix_spec.md Item 8: second_order.net_vanna/net_charm
+            # renamed to vanna_exposure_holder/charm_exposure_holder (same
+            # values -- the holder-side raw sum). This service's own
+            # onchain_volatility_snapshots.net_vanna/net_charm DB columns
+            # are unchanged.
+            "net_vanna": second_order.vanna_exposure_holder,
+            "net_charm": second_order.charm_exposure_holder,
             "vwap_iv": vwap_iv,
             "mark_iv_avg": mark_iv_avg,
-            "pc_atm_ratio": self._sanitize_decimal(pc_moneyness.get("atm", {}).get("ratio")),
-            "pc_near_otm_ratio": self._sanitize_decimal(pc_moneyness.get("near_otm", {}).get("ratio")),
-            "pc_far_otm_ratio": self._sanitize_decimal(pc_moneyness.get("far_otm", {}).get("ratio")),
+            "pc_atm_ratio": self._sanitize_decimal(pc_moneyness.atm.ratio),
+            "pc_near_otm_ratio": self._sanitize_decimal(pc_moneyness.near_otm.ratio),
+            "pc_far_otm_ratio": self._sanitize_decimal(pc_moneyness.far_otm.ratio),
             "iv_percentile_expiry": None,  # filled in by pass 2
             **vrp_metrics,
             **market_metrics,
         }
 
+        # institutional_metrics_spec.md section 4 / Task C5: per-strike
+        # VEX/CEX aggregates (Migration 019's 6 new columns). Task C4's
+        # review lesson (Important #2) applied proactively here:
+        # _calculate_exposure_aggregates is isolated in its OWN try/except
+        # (never raises) and runs AFTER the pre-existing `metrics` dict
+        # above is already fully built -- a failure computing VEX/CEX can
+        # never suppress the atm_iv/net_vanna/VRP/market-metrics save this
+        # method already performs.
+        metrics.update(
+            self._calculate_exposure_aggregates(
+                currency, snapshot_hour, expiration, instruments, underlying_price,
+            )
+        )
+
         self.repo.save_volatility_snapshot(snapshot_hour, currency, expiration, metrics, underlying_price)
         return True
+
+    def _calculate_exposure_aggregates(
+        self,
+        currency: str,
+        snapshot_hour: datetime,
+        expiration: str,
+        instruments: List[Dict[str, Any]],
+        underlying_price: float,
+    ) -> Dict[str, Optional[float]]:
+        """
+        Per-expiry VEX/CEX aggregates (holder-side raw + assumed-dealer
+        view), persisted to the 6 columns Migration 019 added to
+        ``onchain_volatility_snapshots`` (institutional_metrics_spec.md
+        section 4, Task C5). Peak strikes use the HOLDER-side convention
+        (matching migration 019's own column comments).
+
+        Isolated in its own try/except (Task C4 review Important #2 lesson,
+        applied proactively): this computation must never prevent the
+        caller's pre-existing ``save_volatility_snapshot`` call (atm_iv,
+        net_vanna, VRP, market metrics) from running with the rest of the
+        row's fields. All 6 fields default to None on any failure -- every
+        column is nullable, so this degrades to a partial row, never a
+        dropped one.
+
+        Args:
+            currency: Currency symbol.
+            snapshot_hour: Naive-UTC hour this row is for -- used directly
+                as ``valuation_time_utc`` (ExposureProfileCalculator needs
+                naive-UTC to match BlackScholesCalculator.
+                parse_instrument_name's 08:00-UTC-naive expiry convention;
+                snapshot_hour already is naive-UTC throughout this pipeline).
+            expiration: Expiration date string, for logging only.
+            instruments: Same instrument list already fetched for this
+                (hour, expiration) slice and fed to VolatilitySurfaceCalculator
+                above -- no extra DB query.
+            underlying_price: Spot price anchor (S in the VEX/CEX formulas).
+
+        Returns:
+            Dict with vex_holder, cex_holder, vex_assumed_dealer,
+            cex_assumed_dealer, vex_peak_strike, cex_peak_strike -- all
+            None if the computation failed.
+        """
+        try:
+            calculator = ExposureProfileCalculator(
+                instruments=instruments,
+                spot_price=underlying_price,
+                valuation_time_utc=snapshot_hour,
+                currency=currency,
+            )
+            holder = calculator.calculate(side_convention="holder")
+            dealer = calculator.calculate(side_convention="assumed_dealer")
+
+            # Task C5 review fix (Important #2): skipped_instruments was
+            # computed by the calculator but silently discarded here -- a
+            # missing mark_iv, bad option_type, or unparseable instrument
+            # name all skipped with zero diagnostics, producing a
+            # plausible-looking "VEX = 0.00M" with no signal anything was
+            # wrong (the same M5 defect class already fixed once in
+            # VolatilitySurfaceCalculator._calculate_second_order_greeks).
+            # Both calls skip the same instruments (side_convention doesn't
+            # affect which instruments are skipped), so either count works;
+            # holder's is used for the log.
+            skipped = holder["skipped_instruments"]
+            if skipped > 0:
+                logger.warning(
+                    f"VEX/CEX exposure aggregates for {currency} {expiration} "
+                    f"at {snapshot_hour}: {skipped} instrument(s) skipped "
+                    "(missing/invalid strike, option_type, mark_iv, or "
+                    "unparseable instrument name)"
+                )
+
+            return {
+                "vex_holder": holder["total_vex"],
+                "cex_holder": holder["total_cex"],
+                "vex_assumed_dealer": dealer["total_vex"],
+                "cex_assumed_dealer": dealer["total_cex"],
+                "vex_peak_strike": holder["peak_vanna_strike"],
+                "cex_peak_strike": holder["peak_charm_strike"],
+            }
+        except Exception as e:
+            logger.warning(
+                f"Failed to compute VEX/CEX exposure aggregates for {currency} "
+                f"{expiration} at {snapshot_hour}: {e}"
+            )
+            return {
+                "vex_holder": None, "cex_holder": None,
+                "vex_assumed_dealer": None, "cex_assumed_dealer": None,
+                "vex_peak_strike": None, "cex_peak_strike": None,
+            }
 
     @staticmethod
     def _extract_underlying_price(instruments: List[Dict[str, Any]]) -> float:
@@ -156,10 +273,20 @@ class VolatilityReconstructionService:
         instruments: List[Dict[str, Any]]
     ) -> tuple:
         """
-        VWAP IV vs mark IV — mirrors OnChainAnalysisService._calculate_vwap_iv
-        (on_chain_analysis_service.py:446-481). Reimplemented here as plain
-        arithmetic (not a calculator class) because the live version is a
-        private instance method on a service tied to a live API session.
+        VWAP IV vs an UNWEIGHTED chain-average mark IV.
+
+        bugfix_spec.md Item 3 fixed the live path
+        (OnChainAnalysisService._calculate_vwap_iv) to compare VWAP against a
+        volume-weighted "matched baseline" over only the instruments that
+        traded. This reconstruction path deliberately still uses the old,
+        chain-wide average: DatabaseRepository.get_trades_for_hour_and_expiration
+        (repository.py) returns only ``{iv, amount}`` per historical trade —
+        no ``instrument_name`` — so there is no way to attribute a historical
+        trade to a specific instrument's mark_iv and compute the matched
+        baseline. This is a genuine historical-schema constraint (adding
+        instrument_name to that query is a separate, out-of-scope change),
+        not a shortcut: the persisted ``mark_iv_avg`` column for
+        reconstructed rows therefore keeps the pre-fix (biased) semantics.
         """
         weighted_iv_sum = 0.0
         total_volume = 0.0
@@ -186,10 +313,22 @@ class VolatilityReconstructionService:
         """
         VRP = IV - RV, reusing VRPCalculator as-is.
 
-        Passes reference_time=snapshot_hour so the RV lookback window anchors on
-        the historical hour rather than "now" (see vrp_calculator.py
-        calculate_realized_volatility — its date filter is `now`-relative by
-        default, which would silently filter out all historical price_history).
+        Passes reference_time=snapshot_hour (made timezone-aware -- see
+        below) so the RV lookback window anchors on the historical hour
+        rather than "now" (Task G2-C: vrp_calculator.py's
+        calculate_realized_volatility now REQUIRES an explicit,
+        timezone-aware reference_time -- it no longer defaults to a naive,
+        non-deterministic datetime.now()).
+
+        ``snapshot_hour`` arrives naive (``get_distinct_snapshot_hours_with_
+        expirations`` -- DatabaseRepository's naive-UTC-datetime convention:
+        the value IS UTC, it simply carries no tzinfo). ``.replace(tzinfo=
+        timezone.utc)`` attaches that timezone rather than reinterpreting
+        the value -- never call ``.timestamp()``/compare naively on it
+        directly, which would silently treat it as the machine's LOCAL
+        timezone instead (this method's own price_history construction
+        below had exactly that bug: ``row["date"].timestamp()`` on a
+        naive-UTC value, fixed the same way).
 
         Returns all-None when ohlcv_history has no coverage for the window
         (table starts 2026-03-14 — TASKS.md Track B verified facts) or when
@@ -198,16 +337,22 @@ class VolatilityReconstructionService:
         window_start = snapshot_hour - timedelta(days=self.VRP_LOOKBACK_DAYS + 5)
         ohlcv_rows = self.repo.get_ohlcv_by_date_range(currency, window_start, snapshot_hour)
         price_history = [
-            {"timestamp": row["date"].timestamp(), "close": row["close"]}
+            {"timestamp": row["date"].replace(tzinfo=timezone.utc).timestamp(), "close": row["close"]}
             for row in ohlcv_rows
         ]
 
         vrp_calc = VRPCalculator(currency=currency, lookback_days=self.VRP_LOOKBACK_DAYS)
         # VRPCalculator uses numpy internally (np.std/np.mean) -> np.float64 results.
         # psycopg2 can't adapt those directly, so cast to plain Python float at the boundary.
-        realized_vol = float(vrp_calc.calculate_realized_volatility(price_history, reference_time=snapshot_hour))
-        if realized_vol <= 0:
+        snapshot_hour_utc = snapshot_hour.replace(tzinfo=timezone.utc) if snapshot_hour.tzinfo is None else snapshot_hour
+        # Wave H Task H-D: calculate_realized_volatility now returns None
+        # (never a fabricated 0.0) on insufficient history -- the None
+        # check MUST happen before float(), which raises TypeError on
+        # None rather than the intended "insufficient data" outcome.
+        realized_vol_raw = vrp_calc.calculate_realized_volatility(price_history, reference_time=snapshot_hour_utc)
+        if realized_vol_raw is None or realized_vol_raw <= 0:
             return {"vrp_absolute": None, "vrp_percentage": None, "realized_vol": None}
+        realized_vol = float(realized_vol_raw)
 
         options_data = [
             {
@@ -218,11 +363,17 @@ class VolatilityReconstructionService:
             for i in instruments
             if i.get("mark_iv") is not None and i.get("strike") is not None
         ]
-        implied_vol = float(vrp_calc.calculate_average_iv(options_data))
-        if implied_vol <= 0:
+        # Same None-before-float ordering as realized_vol above --
+        # calculate_average_iv now returns None when nothing passes the
+        # moneyness filter, instead of a fabricated 0.0.
+        implied_vol_raw = vrp_calc.calculate_average_iv(options_data)
+        if implied_vol_raw is None or implied_vol_raw <= 0:
             return {"vrp_absolute": None, "vrp_percentage": None, "realized_vol": realized_vol}
+        implied_vol = float(implied_vol_raw)
 
         vrp_result = vrp_calc.calculate_vrp(implied_vol, realized_vol)
+        if vrp_result is None:
+            return {"vrp_absolute": None, "vrp_percentage": None, "realized_vol": realized_vol}
         return {
             "vrp_absolute": float(vrp_result["vrp_absolute"]),
             "vrp_percentage": float(vrp_result["vrp_percentage"]),

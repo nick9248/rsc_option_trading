@@ -29,9 +29,7 @@ from coding.core.analytics.chart_generator import (
     inject_hover_js,
     generate_flow_distribution_chart,
     generate_net_flow_chart,
-    generate_flow_trend_chart,
 )
-from coding.core.database.repository import DatabaseRepository
 from coding.gui.theme.colors import Colors
 from coding.service.on_chain.on_chain_analysis_service import OnChainAnalysisService
 
@@ -52,21 +50,30 @@ class FlowChartsWindow(QDialog):
     def __init__(
         self,
         currency: str,
-        repository: DatabaseRepository,
+        service: OnChainAnalysisService,
         parent: Optional[QWidget] = None
     ):
         """
         Initialize flow charts window.
 
+        H3 (refactor_design_spec.md section T9): takes an
+        ``OnChainAnalysisService`` instead of a raw ``DatabaseRepository`` --
+        every read this dialog needs (``get_flow_metrics``,
+        ``get_aggregated_flow_metrics``, ``get_filtered_aggregate_flow``,
+        ``get_active_expirations_with_flow``, and flow-trend chart
+        generation) goes through the injected service now (review fix,
+        task A6 Important #2: this dialog no longer reaches through to
+        ``service.repository`` directly for anything).
+
         Args:
             currency: Currency symbol (BTC, ETH).
-            repository: Database repository for querying flow metrics.
+            service: On-chain analysis service (owns the repository this
+                dialog reads flow data through).
             parent: Parent widget.
         """
         super().__init__(parent)
         self.currency = currency
-        self.repository = repository
-        self._flow_service = OnChainAnalysisService(repository=self.repository)
+        self.service = service
         self.current_expiration = None
         self.current_filter: str = "all"
         self._setup_ui()
@@ -234,7 +241,7 @@ class FlowChartsWindow(QDialog):
     def _load_expirations(self) -> None:
         """Load active expirations from database."""
         try:
-            expirations = self.repository.get_active_expirations_with_flow(self.currency)
+            expirations = self.service.get_active_expirations_with_flow(self.currency)
 
             self.expiration_combo.clear()
 
@@ -318,7 +325,7 @@ class FlowChartsWindow(QDialog):
         try:
             # Get metrics from database
             logger.info(f"Fetching flow metrics for {self.currency} {expiration}")
-            metrics = self.repository.get_flow_metrics(self.currency, expiration)
+            metrics = self.service.get_flow_metrics(self.currency, expiration)
 
             if not metrics or not metrics.get("flow_data"):
                 logger.warning(f"No flow data found for {self.currency} {expiration}")
@@ -351,8 +358,7 @@ class FlowChartsWindow(QDialog):
 
             # Chart C: Trend over time
             logger.info("Generating trend chart...")
-            fig_trend = generate_flow_trend_chart(
-                repository=self.repository,
+            fig_trend = self.service.generate_flow_trend_chart_figure(
                 currency=self.currency,
                 expiration=expiration,
                 lookback_days=7,
@@ -415,13 +421,13 @@ class FlowChartsWindow(QDialog):
             if self.current_filter == "all":
                 # Fast path: use pre-aggregated metrics table
                 logger.info(f"Fetching aggregated flow metrics for {self.currency}")
-                metrics = self.repository.get_aggregated_flow_metrics(self.currency)
+                metrics = self.service.get_aggregated_flow_metrics(self.currency)
             else:
                 # Filtered path: service layer aggregates per-expiration with block filter
                 logger.info(
                     f"Fetching per-expiration flow with filter={self.current_filter} for {self.currency}"
                 )
-                metrics = self._flow_service.get_filtered_aggregate_flow(
+                metrics = self.service.get_filtered_aggregate_flow(
                     self.currency, self.current_filter
                 )
 
@@ -444,8 +450,7 @@ class FlowChartsWindow(QDialog):
                 currency=self.currency,
                 expiration=label,
             )
-            fig_trend = generate_flow_trend_chart(
-                repository=self.repository,
+            fig_trend = self.service.generate_flow_trend_chart_figure(
                 currency=self.currency,
                 expiration=None,
                 lookback_days=7,

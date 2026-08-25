@@ -1,0 +1,368 @@
+"""
+Result models for GEX/DEX (gamma/delta exposure) analysis.
+
+Frozen dataclasses per refactor_design_spec.md section 2.2. Mirror the dict
+shape historically produced by ``GexDexCalculator.calculate()`` and
+``GexDexCalculator.aggregate_across_expirations()``.
+"""
+
+from dataclasses import dataclass, field
+from typing import Any, Dict, Optional, Tuple
+
+
+@dataclass(frozen=True)
+class GexDexStrikeRow:
+    """
+    Per-strike gamma/delta exposure and open interest.
+
+    ``net_gamma``, ``cumulative_gex``, ``cumulative_dex`` duplicate data also
+    held at the ``GexDexResult`` level (``cumulative_gex``/``cumulative_dex``
+    dicts) — this mirrors the legacy ``GexDexCalculator.strike_data`` shape
+    exactly (it stores the running cumulative sums back onto each strike's
+    own entry as it iterates), which the golden-master fixture depends on.
+
+    bugfix_spec.md Item 8: ``net_gex``/``net_dex`` are DEPRECATED names for
+    exactly one release -- ``net_gex`` is the ASSUMED-DEALER gamma exposure
+    (dealers long calls / short puts, the SqueezeMetrics heuristic; kept
+    unrenamed since it is the specific published convention this number
+    already means) and ``net_dex`` is the HOLDER-side (raw, no positioning
+    assumption) delta exposure. ``dealer_gamma_exposure``/
+    ``delta_exposure_holder`` are exact aliases of them (same value, the
+    correctly-labelled name); ``gamma_exposure_holder``/
+    ``dealer_delta_exposure`` are the previously-missing other half of each
+    pair. All four default from ``net_gex``/``net_dex``/``call_gamma``/
+    ``put_gamma`` via ``__post_init__`` when not given explicitly, so
+    existing construction sites (tests, ``GexDexCalculator``) that only set
+    the original fields keep working unchanged.
+    """
+
+    strike: float
+    call_gamma: float
+    put_gamma: float
+    call_delta: float
+    put_delta: float
+    call_oi: float
+    put_oi: float
+    net_gex: float
+    net_dex: float
+    net_gamma: float
+    cumulative_gex: float
+    cumulative_dex: float
+
+    # --- Additive fields (bugfix_spec.md Item 8) ---
+    gamma_exposure_holder: Optional[float] = None
+    """(call_gamma + put_gamma) * S^2 * 0.01 -- holder-side gamma exposure,
+    same units/scaling as net_gex/dealer_gamma_exposure (USD per 1% spot
+    move). This is what ``GexDexCalculator._calculate_gex_dex`` (the real
+    production construction path) computes and passes explicitly.
+
+    Task Wave-J-B Fix 2 (was bugfix_spec.md Item 8 fix-review Important #4):
+    the ``__post_init__`` fallback below -- used ONLY when a caller
+    constructs this row directly without passing the field (e.g. a test or
+    another producer that hasn't migrated) -- has no ``spot_price`` available
+    at the row level, so it CANNOT reproduce the USD-scaled formula above.
+    It previously defaulted to the RAW, UNSCALED ``call_gamma + put_gamma``
+    sum instead -- roughly 10 orders of magnitude smaller than a real
+    USD-scaled reading -- with nothing in the data itself distinguishing
+    which convention a given row held. Real consumers
+    (``levels_table_builder.py``'s ``net_gex_holder``, the GUI's on-chain
+    tab) read this field unconditionally and render it next to USD-scaled
+    fields at the same precision, so a wrong-unit fallback value was
+    silently indistinguishable from a real reading.
+
+    Resolved: the fallback now leaves this field ``None`` instead of
+    guessing in the wrong unit. Any caller that constructs a row directly
+    without passing ``gamma_exposure_holder`` gets ``None`` and must handle
+    "no valid holder gamma" explicitly rather than silently receiving a
+    number in the wrong unit. Only ``GexDexCalculator`` (which has
+    ``spot_price``) is a reliable source of a real, USD-scaled reading."""
+
+    delta_exposure_holder: Optional[float] = None
+    """Alias of ``net_dex`` (same value, correctly-labelled name)."""
+
+    dealer_gamma_exposure: Optional[float] = None
+    """Alias of ``net_gex`` (same value, correctly-labelled name)."""
+
+    dealer_delta_exposure: Optional[float] = None
+    """-net_dex, i.e. -(call_delta + put_delta) -- the assumed-dealer view:
+    dealers short whatever holders hold, per GexDexCalculator's own
+    canonical SIGN CONVENTION (its class docstring: the long-calls/
+    short-puts SPLIT applies to GAMMA ONLY; delta/vanna/charm are each
+    "short whatever customers hold", i.e. the negated holder sum).
+
+    Wave-H-A (reverting a regression, Task G2-D fix 2 / commit cb1770a):
+    that commit changed this field to ``call_delta - put_delta`` (the
+    gamma-style SPLIT applied to delta), reasoning it should match
+    ``dealer_gamma_exposure``'s own convention -- but the class docstring
+    it cited explicitly reserves the split for gamma. The split formula is
+    also algebraically guaranteed non-negative for any real book
+    (call_delta >= 0, put_delta <= 0), so it could never represent a
+    dealer net-short-delta book. Reverted to the negated-holder-sum
+    formula, which is genuinely two-sided."""
+
+    def __post_init__(self) -> None:
+        # Task Wave-J-B Fix 2: no ``spot_price`` is available at the row
+        # level, so this fallback cannot reconstruct the USD-scaled formula
+        # ``GexDexCalculator`` uses. Leave it None (an explicit "not
+        # computed") rather than defaulting to the raw, unscaled
+        # ``call_gamma + put_gamma`` sum, which silently carried the wrong
+        # unit convention with no way for a reader to tell the two apart.
+        if self.delta_exposure_holder is None:
+            object.__setattr__(self, "delta_exposure_holder", self.net_dex)
+        if self.dealer_gamma_exposure is None:
+            object.__setattr__(self, "dealer_gamma_exposure", self.net_gex)
+        if self.dealer_delta_exposure is None:
+            object.__setattr__(self, "dealer_delta_exposure", -self.net_dex)
+
+
+@dataclass(frozen=True)
+class GexDexLevel:
+    """A strike and its net GEX value (used for call resistance / put support)."""
+
+    strike: float
+    net_gex: float
+
+
+@dataclass(frozen=True)
+class GexDexKeyLevels:
+    """
+    Key trading levels detected from the GEX/DEX profile.
+
+    bugfix_spec.md Item 2 / task B1: ``hvl``/``gamma_flip`` are a strike-axis
+    cumulative-net-GEX sign-crossing artifact -- a property of how open
+    interest happens to be distributed along the strike axis, not of how
+    dealer gamma actually responds to the underlying moving. They were
+    historically mislabeled "Zero Gamma Level"; the correctly-labeled,
+    identical value is exposed as ``cumulative_gex_zero_strike`` below.
+    ``hvl``/``gamma_flip`` are kept (not renamed/deleted) because
+    ``repository.save_onchain_snapshot`` persists ``key_levels.hvl`` into the
+    LIVE ``hvl_level`` DB column read by the straddle regime gate and IC/BF
+    scanners, and ``synthesis.py`` (morning-note rendering) also reads
+    ``key_levels.hvl`` directly -- decision D3 (task-B1-brief.md) keeps both
+    that column and every attribute name any persistence/synthesis path
+    already reads unchanged in this task.
+
+    The actual re-priced dealer-gamma flip (SpotGamma's "Zero Gamma Level"
+    definition) is ``zero_gamma_level``, computed by
+    ``GammaProfileCalculator`` re-pricing Black-Scholes gamma across a grid
+    of hypothetical spot levels (sticky-strike). It is NOT wired into any
+    persisted/regime-gate-reading column in this task.
+    """
+
+    call_resistance: Optional[GexDexLevel]
+    put_support: Optional[GexDexLevel]
+    hvl: Optional[float]  # DEPRECATED name -- see cumulative_gex_zero_strike above
+    gamma_flip: Optional[float]  # DEPRECATED name -- historically always equal to hvl
+
+    # --- Additive fields (task B1 / bugfix_spec.md Item 2) ---
+    cumulative_gex_zero_strike: Optional[float] = None
+    """Renamed, correctly-documented alias of ``hvl``/``gamma_flip``: the
+    strike where CUMULATIVE net GEX (summed strike-by-strike) changes sign.
+    Same value as ``hvl``. NOT a re-priced gamma flip -- see
+    ``zero_gamma_level``."""
+
+    zero_gamma_level: Optional[float] = None
+    """NEW, correct: the hypothetical spot price at which re-priced total
+    dealer gamma changes sign (the actual gamma flip). ``None`` if the
+    re-priced profile never crosses zero within +-50% of spot, if the book
+    is FLAT (net dealer gamma identically zero), or if inputs were
+    insufficient (e.g. no legs, non-positive spot)."""
+
+    zero_gamma_crossings: Tuple[float, ...] = ()
+    """All zero-gamma crossings found on the re-pricing grid, ascending. A
+    book can legitimately have more than one; ``zero_gamma_level`` is
+    whichever of these sits nearest current spot."""
+
+    net_gex_at_spot: Optional[float] = None
+    """NetGEX(spot) from the re-priced profile (NOT the strike-axis
+    ``total_net_gex``, which can differ due to Deribit gamma rounding). This,
+    not the ZGL location, is what determines the current gamma regime."""
+
+    gamma_regime: Optional[str] = None
+    """"POSITIVE" | "NEGATIVE" | "FLAT" | "UNKNOWN" (re-priced profile)."""
+
+    legs_skipped: int = 0
+    """Legs excluded from the re-pricing grid (expiring within 1 hour, or
+    otherwise gated) -- see GammaProfileCalculator.calculate()."""
+
+
+@dataclass(frozen=True)
+class GexDexResult:
+    """
+    Full GEX/DEX result for one expiration (or the cross-expiry aggregate).
+
+    bugfix_spec.md Item 8: ``total_net_gex``/``total_net_dex`` are DEPRECATED
+    names for exactly one release -- see ``GexDexStrikeRow``'s docstring for
+    the same holder/dealer distinction at the total level.
+    ``dealer_gamma_exposure_total``/``delta_exposure_holder_total`` are exact
+    aliases (same value); ``gamma_exposure_holder_total``/
+    ``dealer_delta_exposure_total`` are the previously-missing other half.
+    All four default via ``__post_init__`` when not given explicitly (from
+    ``total_net_gex``/``total_net_dex``, or summed from ``strike_rows`` for
+    ``gamma_exposure_holder_total``), so existing construction sites keep
+    working unchanged.
+    """
+
+    strike_rows: Tuple[GexDexStrikeRow, ...]
+    cumulative_gex: Dict[float, float]
+    cumulative_dex: Dict[float, float]
+    key_levels: GexDexKeyLevels
+    spot_price: float
+    total_net_gex: float
+    total_net_dex: float
+    currency: str
+    expiration_count: Optional[int] = None  # set only on the AGGREGATE result
+
+    # --- Additive fields (bugfix_spec.md Item 8) ---
+    gamma_exposure_holder_total: Optional[float] = None
+    """Holder-side raw gamma exposure (>= 0 always) -- Sigma over
+    strike_rows.gamma_exposure_holder."""
+
+    delta_exposure_holder_total: Optional[float] = None
+    """Alias of ``total_net_dex`` (same value, correctly-labelled name)."""
+
+    dealer_gamma_exposure_total: Optional[float] = None
+    """Alias of ``total_net_gex`` (same value, correctly-labelled name)."""
+
+    dealer_delta_exposure_total: Optional[float] = None
+    """-total_net_dex -- the negated-holder-sum assumed-dealer view (dealers
+    short whatever holders hold for delta), per GexDexCalculator's
+    canonical SIGN CONVENTION. Sigma over strike_rows.dealer_delta_exposure,
+    each of which is -net_dex at that strike.
+
+    Wave-H-A (reverting Task G2-D fix 2 / commit cb1770a): that commit
+    replaced this with the call/put-SPLIT (call_delta - put_delta per
+    strike), reasoning it should match dealer_gamma_exposure_total's own
+    convention -- but the split is documented as gamma-only, and is
+    algebraically guaranteed non-negative for any real book (unlike this
+    negated-sum formula, which is genuinely two-sided)."""
+
+    # --- Additive fields (Task G2-A, Wave G fresh audit / bug 2) ---
+    instruments_missing_gamma: int = 0
+    """Count of instruments folded into ``strike_rows`` by
+    ``GexDexCalculator._aggregate_by_strike`` whose gamma OR delta was
+    null/missing (ticker fetch succeeded -- unlike a rate-limited/failed
+    fetch, which is correctly dropped before this point -- but the greek
+    itself came back empty, or this service's BS-gamma fallback could not
+    compute one). Their open_interest still counts toward the strike/
+    total OI (that OI is real and observed); their gamma/delta
+    CONTRIBUTION is 0.0, not "unknown" -- this field is what makes that
+    distinguishable from a strike that genuinely has zero exposure.
+    Mirrors ``GexDexKeyLevels.legs_skipped``'s naming convention for a
+    different failure mode (this is ``_aggregate_by_strike``'s own gate,
+    not ``GammaProfileCalculator``'s)."""
+
+    oi_missing_gamma: float = 0.0
+    """Sum of open_interest belonging to ``instruments_missing_gamma`` --
+    the OI-weighted magnitude of the completeness gap. A live audit found
+    one expiry lost 34.49% of its OI-weighted representation this way
+    while the report still claimed "OI/GEX from full book" -- this is the
+    figure that claim must be gated on
+    (report_formatter._GEX_DEX_MAX_MISSING_OI_PCT_FOR_FULL_BOOK_CLAIM)."""
+
+    def __post_init__(self) -> None:
+        if self.dealer_gamma_exposure_total is None:
+            object.__setattr__(self, "dealer_gamma_exposure_total", self.total_net_gex)
+        if self.delta_exposure_holder_total is None:
+            object.__setattr__(self, "delta_exposure_holder_total", self.total_net_dex)
+        if self.dealer_delta_exposure_total is None:
+            # Wave-H-A: -total_net_dex, the negated-holder-sum convention.
+            # Unlike the retired call/put-SPLIT formula, this CAN be
+            # derived directly from total_net_dex (call_delta + put_delta)
+            # -- no per-strike call/put split needed -- but summing
+            # strike_rows.dealer_delta_exposure (each already -net_dex at
+            # that strike) keeps this fallback consistent with
+            # gamma_exposure_holder_total's own summed-from-rows pattern
+            # just below, and matches exactly regardless of which path is
+            # used.
+            dealer_delta_total = (
+                sum(row.dealer_delta_exposure for row in self.strike_rows) if self.strike_rows else 0.0
+            )
+            object.__setattr__(self, "dealer_delta_exposure_total", dealer_delta_total)
+        if self.gamma_exposure_holder_total is None:
+            # Task Wave-J-B Fix 2: GexDexStrikeRow.gamma_exposure_holder can
+            # now be None (a row built directly, without spot_price, that
+            # hit that field's own __post_init__ fallback -- see that
+            # docstring). Summing None into a float would raise TypeError;
+            # silently treating it as 0.0 would understate the total without
+            # any signal that data is missing. If every row has a real
+            # value, sum them; if the book is non-empty but ANY row's value
+            # is unknown, the total is unknown too -- None, not a partial
+            # sum presented as complete.
+            if not self.strike_rows:
+                total: Optional[float] = 0.0
+            elif all(row.gamma_exposure_holder is not None for row in self.strike_rows):
+                total = sum(row.gamma_exposure_holder for row in self.strike_rows)
+            else:
+                total = None
+            object.__setattr__(self, "gamma_exposure_holder_total", total)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Reproduce the legacy ``GexDexCalculator.calculate()`` /
+        ``aggregate_across_expirations()`` dict shape. Consumed by
+        ``repository.save_onchain_snapshot`` and
+        ``scripts/backfill_gex_dex_history.py::_extract_update_values``.
+        """
+        strike_data: Dict[float, Dict[str, float]] = {
+            row.strike: {
+                "call_gamma": row.call_gamma,
+                "put_gamma": row.put_gamma,
+                "call_delta": row.call_delta,
+                "put_delta": row.put_delta,
+                "call_oi": row.call_oi,
+                "put_oi": row.put_oi,
+                "net_gex": row.net_gex,
+                "net_dex": row.net_dex,
+                "net_gamma": row.net_gamma,
+                "cumulative_gex": row.cumulative_gex,
+                "cumulative_dex": row.cumulative_dex,
+                # bugfix_spec.md Item 8 (additive):
+                "gamma_exposure_holder": row.gamma_exposure_holder,
+                "delta_exposure_holder": row.delta_exposure_holder,
+                "dealer_gamma_exposure": row.dealer_gamma_exposure,
+                "dealer_delta_exposure": row.dealer_delta_exposure,
+            }
+            for row in self.strike_rows
+        }
+
+        kl = self.key_levels
+        result: Dict[str, Any] = {
+            "strike_data": strike_data,
+            "cumulative_gex": dict(self.cumulative_gex),
+            "cumulative_dex": dict(self.cumulative_dex),
+            "key_levels": {
+                "call_resistance": (
+                    {"strike": kl.call_resistance.strike, "net_gex": kl.call_resistance.net_gex}
+                    if kl.call_resistance is not None
+                    else None
+                ),
+                "put_support": (
+                    {"strike": kl.put_support.strike, "net_gex": kl.put_support.net_gex}
+                    if kl.put_support is not None
+                    else None
+                ),
+                "hvl": kl.hvl,
+                "gamma_flip": kl.gamma_flip,
+                "cumulative_gex_zero_strike": kl.cumulative_gex_zero_strike,
+                "zero_gamma_level": kl.zero_gamma_level,
+                "zero_gamma_crossings": list(kl.zero_gamma_crossings),
+                "net_gex_at_spot": kl.net_gex_at_spot,
+                "gamma_regime": kl.gamma_regime,
+                "legs_skipped": kl.legs_skipped,
+            },
+            "spot_price": self.spot_price,
+            "total_net_gex": self.total_net_gex,
+            "total_net_dex": self.total_net_dex,
+            # bugfix_spec.md Item 8 (additive):
+            "gamma_exposure_holder_total": self.gamma_exposure_holder_total,
+            "delta_exposure_holder_total": self.delta_exposure_holder_total,
+            "dealer_gamma_exposure_total": self.dealer_gamma_exposure_total,
+            "dealer_delta_exposure_total": self.dealer_delta_exposure_total,
+            # Task G2-A (additive):
+            "instruments_missing_gamma": self.instruments_missing_gamma,
+            "oi_missing_gamma": self.oi_missing_gamma,
+        }
+        if self.expiration_count is not None:
+            result["expiration_count"] = self.expiration_count
+        return result

@@ -8,8 +8,12 @@ import json
 import logging
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
+from coding.core.analytics.market_wide_calculator import DERIBIT_SETTLEMENT_HOUR_UTC
+from coding.core.analytics.results.delta_flow_results import FlowBucket
+from coding.core.analytics.results.expiry_results import ExpirationAnalysisResult
+from coding.core.analytics.results.gex_dex_results import GexDexResult
 from coding.core.database.config import ConnectionPool, DatabaseConfig
 
 logger = logging.getLogger(__name__)
@@ -104,6 +108,11 @@ class DatabaseRepository:
         """
         Save raw snapshot data to the snapshots table.
 
+        Persists `mark_iv` from each book-summary item (institutional_metrics_spec.md
+        Migration M1 / Decision D11) -- the full-chain hourly capture historically
+        dropped it even though get_book_summary already returns it. NULL when the
+        item lacks the key (defensive; the live API always includes it for options).
+
         Args:
             currency: Currency symbol (ETH, BTC).
             data: List of book summary items.
@@ -115,7 +124,12 @@ class DatabaseRepository:
         if not data:
             return 0
 
-        captured_at = captured_at or datetime.now()
+        # Final verification sweep (post Wave J): naive-local datetime.now()
+        # into a `TIMESTAMP` (no time zone) column -- this codebase's
+        # established convention throughout is UTC-valued naive datetimes
+        # for every such column (see e.g. Wave-J-E's identical fix for
+        # hourly_snapshots.captured_at). Explicit UTC, then drop tzinfo.
+        captured_at = captured_at or datetime.now(timezone.utc).replace(tzinfo=None)
 
         try:
             with self._db_cursor() as cursor:
@@ -123,8 +137,8 @@ class DatabaseRepository:
                     INSERT INTO snapshots (
                         captured_at, currency, instrument_name, expiration,
                         strike, option_type, open_interest, volume, volume_usd,
-                        underlying_price, mark_price, bid_price, ask_price
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        underlying_price, mark_price, bid_price, ask_price, mark_iv
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """
 
                 rows = []
@@ -156,6 +170,7 @@ class DatabaseRepository:
                         item.get("mark_price"),
                         item.get("bid_price"),
                         item.get("ask_price"),
+                        item.get("mark_iv"),
                     ))
 
                 cursor.executemany(insert_sql, rows)
@@ -261,8 +276,15 @@ class DatabaseRepository:
         """
         Fetch trades for a specific hour bucket and expiration (for VWAP IV reconstruction).
 
-        Mirrors the {iv, amount} shape OnChainAnalysisService._calculate_vwap_iv
-        (on_chain_analysis_service.py:446) consumes for its VWAP leg.
+        Mirrors the {iv, amount} shape VolatilityReconstructionService._calculate_vwap_iv
+        consumes for its VWAP leg. Note: unlike
+        OnChainAnalysisService._calculate_vwap_iv (on_chain_analysis_service.py:461,
+        fixed per bugfix_spec.md Item 3 to use a volume-weighted "matched"
+        mark-IV baseline), this query does not select instrument_name, so
+        the reconstruction path cannot attribute a trade to a specific
+        instrument's mark_iv and still uses the older, unweighted chain
+        average as its second leg — see
+        VolatilityReconstructionService._calculate_vwap_iv's docstring.
 
         Args:
             currency: Currency symbol.
@@ -404,6 +426,395 @@ class DatabaseRepository:
             cursor.execute(query, params)
             return cursor.fetchall()
 
+    def get_signed_taker_flow_by_strike(
+        self,
+        currency: str,
+        expiration: str,
+        since_ts: int,
+    ) -> List[Dict[str, Any]]:
+        """
+        Signed cumulative taker flow per strike/option_type since ``since_ts``
+        (institutional_metrics_spec.md section 2 -- Glassnode taker-flow
+        method, task C3). Feeds ``DealerInventoryCalculator`` after negation
+        (``dealer_net = -taker_net``); this method returns the raw taker-side
+        signed sum, never flips it (``direction`` is the taker's side by
+        Deribit convention -- spec §2(c) edge cases).
+
+        ``AND direction IS NOT NULL`` is defensive, not dictated by the
+        spec's own SQL: current data is verified clean (0 nulls across
+        2.28M+ rows), but without this filter a future null direction would
+        silently fall into the CASE's ELSE branch and be counted as a sell,
+        corrupting the signed sum. Matches the filter already established at
+        this same table for the same purpose in
+        ``get_trades_for_flow_analysis``.
+
+        Args:
+            currency: Currency symbol (BTC or ETH).
+            expiration: Expiration date string (e.g., "27MAR26").
+            since_ts: Window start (T0), epoch milliseconds.
+
+        Returns:
+            List of dicts with keys: strike, option_type, taker_net,
+            gross_volume, trade_count, first_ts.
+        """
+        query = """
+            SELECT strike, option_type,
+                   SUM(CASE WHEN direction='buy' THEN amount ELSE -amount END) AS taker_net,
+                   SUM(amount) AS gross_volume,
+                   COUNT(*) AS trade_count,
+                   MIN(trade_timestamp) AS first_ts
+            FROM historical_trades
+            WHERE currency = %s
+                AND expiration = %s
+                AND trade_timestamp >= %s
+                AND strike IS NOT NULL
+                AND direction IS NOT NULL
+            GROUP BY strike, option_type
+        """
+
+        with self._db_cursor() as cursor:
+            cursor.execute(query, (currency, expiration, since_ts))
+
+            # strike/taker_net/gross_volume come back as Decimal (NUMERIC
+            # columns) -- cast to float at the repository boundary (matches
+            # the established get_previous_oi_snapshot convention). Left
+            # uncast, DealerInventoryCalculator's arithmetic against
+            # float-valued Greeks (dealer_net * gamma) would raise
+            # `TypeError: unsupported operand type(s) for *: 'decimal.
+            # Decimal' and 'float'` -- Decimal/float compare and hash equal
+            # (dict-key lookups by (strike, option_type) are unaffected),
+            # but Decimal/float arithmetic is not allowed.
+            return [
+                {
+                    "strike": float(row[0]),
+                    "option_type": row[1],
+                    "taker_net": float(row[2]),
+                    "gross_volume": float(row[3]),
+                    "trade_count": int(row[4]),
+                    "first_ts": int(row[5]) if row[5] is not None else None,
+                }
+                for row in cursor.fetchall()
+            ]
+
+    def get_trades_for_delta_flow(
+        self,
+        currency: str,
+        start_ts: int,
+        end_ts: int,
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch trades for signed delta-weighted flow computation
+        (institutional_metrics_spec.md section 6 / task C7 --
+        ``DeltaFlowCalculator.enrich_trade``/``compute_hourly_buckets``).
+
+        ``historical_trades`` has no delta column; the returned rows carry
+        every column ``DeltaFlowCalculator`` needs to recompute BS delta
+        itself (``iv``, ``strike``, ``index_price``, ``instrument_name`` for
+        its expiry) plus ``direction``/``amount`` for the signed-
+        contribution math and ``expiration`` as the per-expiry grouping
+        key. Raw types returned uncast (matches ``get_trades_for_flow_
+        analysis``'s convention at this same table) -- ``DeltaFlowCalculator.
+        enrich_trade`` does its own float casting.
+
+        ``AND direction IS NOT NULL AND strike IS NOT NULL`` mirrors the
+        established filter at this same table
+        (``get_signed_taker_flow_by_strike`` / ``get_trades_for_flow_
+        analysis``) -- defensive; current data is verified clean (0 nulls
+        over the last 7 days) but a future null direction must never
+        silently reach ``DeltaFlowCalculator``'s own direction check in a
+        way that's hard to attribute back to a query gap.
+
+        Args:
+            currency: Currency symbol (BTC or ETH).
+            start_ts: Window start (hour bucket start), epoch milliseconds,
+                inclusive.
+            end_ts: Window end (hour bucket end), epoch milliseconds,
+                exclusive.
+
+        Returns:
+            List of dicts with keys: trade_id, trade_timestamp,
+            instrument_name, expiration, strike, option_type, direction,
+            amount, price, index_price, iv.
+        """
+        query = """
+            SELECT
+                trade_id, trade_timestamp, instrument_name, expiration,
+                strike, option_type, direction, amount, price, index_price, iv
+            FROM historical_trades
+            WHERE currency = %s
+                AND trade_timestamp >= %s
+                AND trade_timestamp < %s
+                AND direction IS NOT NULL
+                AND strike IS NOT NULL
+            ORDER BY trade_timestamp ASC
+        """
+
+        with self._db_cursor() as cursor:
+            cursor.execute(query, (currency, start_ts, end_ts))
+
+            columns = [
+                "trade_id", "trade_timestamp", "instrument_name", "expiration",
+                "strike", "option_type", "direction", "amount", "price",
+                "index_price", "iv",
+            ]
+
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+    def save_delta_flow_hourly(
+        self,
+        currency: str,
+        snapshot_hour: datetime,
+        bucket: FlowBucket,
+    ) -> None:
+        """
+        Upsert one ``flow_delta_hourly`` row (institutional_metrics_spec.md
+        section 6 / infra_spec.md section 2 -- task C7). One row per
+        ``(snapshot_hour, currency, expiration)`` -- ``expiration == "ALL"``
+        is the currency-level rollup.
+
+        ``ON CONFLICT ... DO UPDATE`` (not ``DO NOTHING``) mirrors the
+        ``onchain_analysis_snapshots``/``hourly_snapshots`` convention at
+        this same ``(snapshot_hour, currency, expiration)`` unique key: a
+        daemon re-run for an hour that already has a row (crash/restart, or
+        trades that arrived late) must REFRESH the aggregate from the
+        latest trade data, not freeze at whatever partial data existed on
+        the first attempt.
+
+        Args:
+            currency: Currency symbol (BTC or ETH).
+            snapshot_hour: UTC hour bucket, already hour-aligned by the
+                caller -- matches the convention established for
+                ``hourly_snapshots``/``onchain_analysis_snapshots``.
+            bucket: ``FlowBucket`` to persist.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO flow_delta_hourly (
+                    snapshot_hour, currency, expiration,
+                    hiro_usd, premium_usd, gross_delta_usd,
+                    net_contracts, gross_contracts,
+                    trade_count, buy_count, sell_count, skipped_count
+                ) VALUES (
+                    %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s,
+                    %s, %s, %s, %s
+                )
+                ON CONFLICT (snapshot_hour, currency, expiration) DO UPDATE SET
+                    hiro_usd = EXCLUDED.hiro_usd,
+                    premium_usd = EXCLUDED.premium_usd,
+                    gross_delta_usd = EXCLUDED.gross_delta_usd,
+                    net_contracts = EXCLUDED.net_contracts,
+                    gross_contracts = EXCLUDED.gross_contracts,
+                    trade_count = EXCLUDED.trade_count,
+                    buy_count = EXCLUDED.buy_count,
+                    sell_count = EXCLUDED.sell_count,
+                    skipped_count = EXCLUDED.skipped_count
+            """, (
+                snapshot_hour, currency, bucket.expiration,
+                bucket.hiro_usd, bucket.premium_usd, bucket.gross_delta_usd,
+                bucket.net_contracts, bucket.gross_contracts,
+                bucket.trade_count, bucket.buy_count, bucket.sell_count, bucket.skipped_count,
+            ))
+
+    def get_delta_flow_summary(
+        self,
+        currency: str,
+        since: datetime,
+    ) -> List[Dict[str, Any]]:
+        """
+        Sum ``flow_delta_hourly`` rows since ``since``, grouped by
+        expiration (institutional_metrics_spec.md section 6 / task C7 --
+        the report's "DELTA-ADJUSTED FLOW (24h)" section reads this instead
+        of recomputing from raw trades at report time).
+
+        Returns ``[]`` when no rows exist in the window (e.g. the feature
+        just shipped, or the daemon hasn't run yet) -- never a fabricated
+        zero-valued summary row. A currency/hour that genuinely had zero
+        trades still has a real, persisted "ALL" row with trade_count == 0
+        (``ProspectiveCollector._persist_delta_flow`` writes it
+        explicitly) -- that is a legitimate SUM input, not degenerate.
+
+        Args:
+            currency: Currency symbol (BTC or ETH).
+            since: Window start (inclusive) -- report callers pass
+                ``now - timedelta(hours=24)``.
+
+        Returns:
+            List of dicts with keys: expiration, hiro_usd, premium_usd,
+            gross_delta_usd, net_contracts, gross_contracts, trade_count,
+            buy_count, sell_count, skipped_count.
+        """
+        query = """
+            SELECT
+                expiration,
+                SUM(hiro_usd), SUM(premium_usd), SUM(gross_delta_usd),
+                SUM(net_contracts), SUM(gross_contracts),
+                SUM(trade_count), SUM(buy_count), SUM(sell_count), SUM(skipped_count)
+            FROM flow_delta_hourly
+            WHERE currency = %s
+                AND snapshot_hour >= %s
+            GROUP BY expiration
+        """
+
+        _INT_COLUMNS = ("trade_count", "buy_count", "sell_count", "skipped_count")
+
+        with self._db_cursor() as cursor:
+            cursor.execute(query, (currency, since))
+
+            columns = [
+                "expiration", "hiro_usd", "premium_usd", "gross_delta_usd",
+                "net_contracts", "gross_contracts", "trade_count", "buy_count",
+                "sell_count", "skipped_count",
+            ]
+
+            results = []
+            for row in cursor.fetchall():
+                row_dict: Dict[str, Any] = {"expiration": row[0]}
+                for col, val in zip(columns[1:], row[1:]):
+                    row_dict[col] = int(val) if col in _INT_COLUMNS else float(val)
+                results.append(row_dict)
+            return results
+
+    def get_delta_flow_coverage(
+        self,
+        currency: str,
+        since: datetime,
+    ) -> Dict[str, Any]:
+        """
+        Coverage/recency signal for ``flow_delta_hourly`` (institutional_
+        metrics_spec.md section 6 / task C7 review fix, Important #4 --
+        task-C7-brief.md explicitly named "a currency with a stale/lagging
+        daemon" as a case to handle, and the original implementation
+        didn't). ``get_delta_flow_summary``'s SUMs alone cannot disclose a
+        gap: a daemon down for 12h still produces a confident-looking
+        total over whatever rows DID land, with the report header still
+        claiming the full lookback window.
+
+        Counts ONLY ``expiration == 'ALL'`` rows -- ``ProspectiveCollector.
+        _persist_delta_flow``'s always-write-ALL invariant guarantees
+        exactly one such row per hour the daemon actually ran, so this is
+        a clean "how many of the expected hours are present" signal.
+        Counting per-expiration rows too would overstate presence
+        (multiple rows can exist for the same hour, one per traded
+        expiration).
+
+        Args:
+            currency: Currency symbol (BTC or ETH).
+            since: Window start (inclusive) -- callers pass the SAME value
+                given to ``get_delta_flow_summary``, so both describe the
+                same window.
+
+        Returns:
+            Dict with ``hours_present`` (int, 0 if none) and
+            ``max_snapshot_hour`` (the most recently persisted hour, or
+            ``None`` if no rows at all since ``since``).
+        """
+        query = """
+            SELECT COUNT(*), MAX(snapshot_hour)
+            FROM flow_delta_hourly
+            WHERE currency = %s AND expiration = 'ALL' AND snapshot_hour >= %s
+        """
+
+        with self._db_cursor() as cursor:
+            cursor.execute(query, (currency, since))
+            row = cursor.fetchone()
+
+        hours_present = int(row[0]) if row and row[0] is not None else 0
+        max_snapshot_hour = row[1] if row else None
+        return {"hours_present": hours_present, "max_snapshot_hour": max_snapshot_hour}
+
+    def get_trade_hour_coverage(
+        self,
+        currency: str,
+        since_ts: int,
+    ) -> Tuple[int, int]:
+        """
+        Table-wide (currency-wide) trade-history hour coverage since
+        ``since_ts`` (institutional_metrics_spec.md section 2 / task C3 --
+        the trade-history half of decision D9's gate; the other half is
+        ``DealerInventoryCalculator.coverage_report``'s violation rate).
+
+        Deliberately NOT filtered by expiration (fix round, Important #2,
+        orchestrator ruling -- a deviation from the spec's own listed
+        3-argument signature, `get_trade_hour_coverage(currency, expiration,
+        since_ts)`, which this task's first pass implemented literally and
+        which turned out to measure the wrong thing). Section 2(a)'s own
+        empirical validation measured collector-wide completeness ("Trailing
+        90 days: 2,138 hours in range, 2,137 present") across ALL trades for
+        a currency, not one contract's own trading activity. Filtering by
+        expiration here measures that specific strike/expiry's LIQUIDITY (did
+        anyone trade THIS contract every hour) rather than whether the
+        collector was capturing trades AT ALL during that hour -- those are
+        different questions, and D9's gate needs the second one. The
+        per-expiry version inverted which expiries the spec's own violation-
+        rate study validated as trustworthy: short-dated, fully-covered
+        expiries (0% violations in that study) scored low on per-contract
+        hour presence and got permanently gated out, while only thin-volume,
+        high-open-interest long-dated contracts could ever pass.
+
+        ``AND direction IS NOT NULL AND strike IS NOT NULL`` mirrors
+        ``get_signed_taker_flow_by_strike``'s own filters (fix round, Minor
+        #1) -- without them this method could count an hour as "present"
+        from a row the flow query would exclude, overstating coverage in
+        exactly the direction the gate exists to guard against.
+
+        Args:
+            currency: Currency symbol (BTC or ETH).
+            since_ts: Window start (T0), epoch milliseconds.
+
+        Returns:
+            (present_hours, expected_hours) -- present_hours is the count of
+            distinct UTC hour buckets with at least one trade (for this
+            currency, any expiration) since since_ts; expected_hours is the
+            wall-clock hours between since_ts and now (0 if since_ts is in
+            the future / equal to now, never negative).
+        """
+        query = """
+            SELECT COUNT(DISTINCT DATE_TRUNC('hour', TO_TIMESTAMP(trade_timestamp / 1000)))
+            FROM historical_trades
+            WHERE currency = %s
+                AND trade_timestamp >= %s
+                AND direction IS NOT NULL
+                AND strike IS NOT NULL
+        """
+
+        with self._db_cursor() as cursor:
+            cursor.execute(query, (currency, since_ts))
+            row = cursor.fetchone()
+            present_hours = int(row[0]) if row and row[0] is not None else 0
+
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        expected_hours = max(0, (now_ms - since_ts) // (3600 * 1000))
+
+        return present_hours, expected_hours
+
+    def get_first_trade_timestamp(self, currency: str, expiration: str) -> Optional[int]:
+        """
+        Earliest trade ever recorded for this expiry (no ``since`` filter --
+        institutional_metrics_spec.md section 2 / task C3's T0 decision:
+        ``T0 = max(first_listing_seen, coverage_start)``). ``None`` when no
+        trades exist for this expiry at all (e.g. a brand-new listing, or an
+        expiry the collector never covered).
+
+        Args:
+            currency: Currency symbol (BTC or ETH).
+            expiration: Expiration date string.
+
+        Returns:
+            Earliest trade_timestamp (epoch milliseconds), or None.
+        """
+        query = """
+            SELECT MIN(trade_timestamp)
+            FROM historical_trades
+            WHERE currency = %s AND expiration = %s
+        """
+
+        with self._db_cursor() as cursor:
+            cursor.execute(query, (currency, expiration))
+            row = cursor.fetchone()
+            return int(row[0]) if row and row[0] is not None else None
+
     def get_onchain_snapshot_history(
         self,
         currency: str,
@@ -498,14 +909,16 @@ class DatabaseRepository:
                     snapshot_hour, captured_at, instrument_name, currency,
                     strike, expiration, option_type,
                     trade_count, total_volume, vwap,
-                    bid_price, ask_price, mark_price, mark_iv,
+                    bid_price, ask_price, bid_is_estimated, ask_is_estimated,
+                    mark_price, mark_iv,
                     open_interest, index_price, futures_price, basis,
                     avg_delta, avg_gamma, avg_theta, avg_vega
                 ) VALUES (
                     %(snapshot_hour)s, %(captured_at)s, %(instrument_name)s, %(currency)s,
                     %(strike)s, %(expiration)s, %(option_type)s,
                     %(trade_count)s, %(total_volume)s, %(vwap)s,
-                    %(bid_price)s, %(ask_price)s, %(mark_price)s, %(mark_iv)s,
+                    %(bid_price)s, %(ask_price)s, %(bid_is_estimated)s, %(ask_is_estimated)s,
+                    %(mark_price)s, %(mark_iv)s,
                     %(open_interest)s, %(index_price)s, %(futures_price)s, %(basis)s,
                     %(avg_delta)s, %(avg_gamma)s, %(avg_theta)s, %(avg_vega)s
                 )
@@ -517,10 +930,14 @@ class DatabaseRepository:
                     vwap = EXCLUDED.vwap,
                     bid_price = EXCLUDED.bid_price,
                     ask_price = EXCLUDED.ask_price,
+                    bid_is_estimated = EXCLUDED.bid_is_estimated,
+                    ask_is_estimated = EXCLUDED.ask_is_estimated,
                     mark_price = EXCLUDED.mark_price,
                     mark_iv = EXCLUDED.mark_iv,
                     open_interest = EXCLUDED.open_interest,
                     index_price = EXCLUDED.index_price,
+                    futures_price = EXCLUDED.futures_price,
+                    basis = EXCLUDED.basis,
                     avg_delta = EXCLUDED.avg_delta,
                     avg_gamma = EXCLUDED.avg_gamma,
                     avg_theta = EXCLUDED.avg_theta,
@@ -562,7 +979,12 @@ class DatabaseRepository:
         if not flow_data:
             return 0
 
-        captured_at = captured_at or datetime.now()
+        # Final verification sweep (post Wave J): naive-local datetime.now()
+        # into a `TIMESTAMP` (no time zone) column -- this codebase's
+        # established convention throughout is UTC-valued naive datetimes
+        # for every such column (see e.g. Wave-J-E's identical fix for
+        # hourly_snapshots.captured_at). Explicit UTC, then drop tzinfo.
+        captured_at = captured_at or datetime.now(timezone.utc).replace(tzinfo=None)
 
         try:
             with self._db_cursor() as cursor:
@@ -814,12 +1236,28 @@ class DatabaseRepository:
         expiration: str,
         instruments: List[Dict[str, Any]],
         underlying_price: float,
-        snapshot_date: Optional[datetime] = None
+        snapshot_date: Optional[datetime] = None,
+        snapshot_hour_utc: int = DERIBIT_SETTLEMENT_HOUR_UTC,
     ) -> int:
         """
         Save daily OI snapshot for all instruments in an expiration.
 
-        Uses UPSERT to avoid duplicates within the same day.
+        Uses UPSERT to avoid duplicates within the same (date, hour).
+
+        institutional_metrics_spec.md section 7(c) Migration M8 (Task E4):
+        ``snapshot_hour_utc`` (migration 023) is now part of the conflict
+        key so ``ProspectiveCollector``'s daemon write at 08:00 UTC can
+        never be silently overwritten by a later GUI run
+        (``on_chain_analysis_service.py``, still calling this method with
+        no explicit hour, per its "harmless, upserts the same day" design)
+        at a DIFFERENT hour of the same day. The default here matches the
+        column's own DB default and Deribit's settlement hour, and is now
+        the single canonical constant
+        (``MarketWideCalculator.DERIBIT_SETTLEMENT_HOUR_UTC``, Wave-I-B) --
+        every other settlement-hour site in this module (including this
+        class's own ``_FIXED_STRIKE_VOL_ANCHOR_HOUR_UTC``) reuses the same
+        constant, so a caller that omits it (the GUI) still lands on the
+        same anchor hour the daemon uses.
 
         Args:
             currency: Currency symbol.
@@ -827,7 +1265,10 @@ class DatabaseRepository:
             instruments: List of enriched instrument dicts with strike, option_type,
                         open_interest, mark_iv.
             underlying_price: Current underlying price.
-            snapshot_date: Date for snapshot. Uses today if not provided.
+            snapshot_date: Date for snapshot. Uses today (UTC) if not provided.
+            snapshot_hour_utc: UTC hour this row anchors to. Defaults to
+                ``DERIBIT_SETTLEMENT_HOUR_UTC`` (Deribit settlement),
+                matching the column's DB default.
 
         Returns:
             Number of rows upserted.
@@ -835,19 +1276,38 @@ class DatabaseRepository:
         if not instruments:
             return 0
 
-        from datetime import date as date_type
-        snap_date = snapshot_date or datetime.now().date()
+        # Independent review (Task C8 fix round, Important #2): this
+        # method is called with no explicit snapshot_date from
+        # OnChainAnalysisService._calculate_oi_changes_and_iv_percentile,
+        # in the SAME analysis run that now also calls
+        # _calculate_fixed_strike_vol_matrix -- Task C8's new exact-date
+        # lookup (get_chain_iv_at) depends on this write's date label
+        # being correct. The old `datetime.now().date()` default is this
+        # (non-UTC) machine's LOCAL date -- on this UTC+2 machine, any run
+        # between 00:00-02:00 local time would label a row with the WRONG
+        # calendar day (a ~35-hour-old snapshot could be mislabelled as
+        # "yesterday"), exactly the failure mode spec section 7(c)'s edge
+        # cases forbid. UTC-explicit, matching every other day-boundary
+        # fix in this campaign (Tasks C4/C5/C7/C8).
+        snap_date = snapshot_date or datetime.now(timezone.utc).date()
         if isinstance(snap_date, datetime):
             snap_date = snap_date.date()
 
         try:
             with self._db_cursor() as cursor:
+                # institutional_metrics_spec.md section 7(c) Migration M8
+                # (Task E4): snapshot_hour_utc is now part of both the
+                # inserted columns AND the ON CONFLICT target (migration
+                # 023 widened the unique constraint to match) -- this is
+                # what actually prevents a later run at a different hour
+                # of the same day from overwriting the daemon's 08:00 UTC
+                # anchor row.
                 insert_sql = """
                     INSERT INTO daily_oi_snapshots (
-                        snapshot_date, currency, expiration, strike,
+                        snapshot_date, snapshot_hour_utc, currency, expiration, strike,
                         option_type, open_interest, mark_iv, underlying_price
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (snapshot_date, currency, expiration, strike, option_type)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (snapshot_date, snapshot_hour_utc, currency, expiration, strike, option_type)
                     DO UPDATE SET
                         open_interest = EXCLUDED.open_interest,
                         mark_iv = EXCLUDED.mark_iv,
@@ -858,6 +1318,7 @@ class DatabaseRepository:
                 for inst in instruments:
                     rows.append((
                         snap_date,
+                        snapshot_hour_utc,
                         currency,
                         expiration,
                         inst["strike"],
@@ -871,7 +1332,7 @@ class DatabaseRepository:
 
                 logger.info(
                     f"Saved {len(rows)} daily OI snapshots for "
-                    f"{currency} {expiration} ({snap_date})"
+                    f"{currency} {expiration} ({snap_date} {snapshot_hour_utc:02d}:00 UTC)"
                 )
                 return len(rows)
 
@@ -897,8 +1358,21 @@ class DatabaseRepository:
             Dict mapping (strike, option_type) -> open_interest.
         """
         from datetime import date as date_type, timedelta
+        # Fix round 2 (Important, "paired sibling" pattern this campaign
+        # has now hit in Tasks C3/C5/C7/C8): this method is this table's
+        # READER, called ~8 lines away from save_daily_oi_snapshot's
+        # WRITE in the same on_chain_analysis_service.py loop iteration.
+        # save_daily_oi_snapshot's default was fixed to
+        # datetime.now(timezone.utc).date() in the round-1 fix; leaving
+        # THIS default on naive-local datetime.now() desynced the pair --
+        # on this UTC+2 machine, a run during the UTC 22:00-24:00 window
+        # (local 00:00-02:00) would write a row dated "today UTC" via the
+        # sibling's now-correct default, then this method's still-local
+        # "yesterday" would resolve to that SAME UTC date, comparing a
+        # snapshot against itself and reporting ~zero OI change for every
+        # strike. UTC-explicit, matching the sibling.
         if before_date is None:
-            target_date = datetime.now().date() - timedelta(days=1)
+            target_date = datetime.now(timezone.utc).date() - timedelta(days=1)
         elif isinstance(before_date, datetime):
             target_date = before_date.date()
         else:
@@ -925,6 +1399,255 @@ class DatabaseRepository:
                 result[(float(strike), opt_type)] = float(oi)
 
             return result
+
+    # institutional_metrics_spec.md section 7(b): the snapshots fallback
+    # anchors to this UTC hour, matching Deribit's daily settlement
+    # convention -- the same anchor migration M8 would eventually pin
+    # daily_oi_snapshots to (not yet implemented; see get_chain_iv_at's
+    # docstring). Wave-I-B: bound to the single canonical constant
+    # (MarketWideCalculator.DERIBIT_SETTLEMENT_HOUR_UTC) instead of its own
+    # independent literal -- kept as a named class attribute since
+    # "anchor hour" reads more clearly than the raw constant at the three
+    # call sites below.
+    _FIXED_STRIKE_VOL_ANCHOR_HOUR_UTC = DERIBIT_SETTLEMENT_HOUR_UTC
+
+    # Independent review (Task C8 fix round, Minor #2): the nearest tick
+    # to 08:00 UTC on the requested date must be a genuine local read of
+    # that anchor, not "whatever tick happened to exist that day, however
+    # far away" -- a tick at 23:30 silently used as "the 08:00 anchor"
+    # with no warning would be exactly the kind of misleading-precision
+    # bug this campaign's exhaustive-gate standard exists to catch.
+    _FIXED_STRIKE_VOL_ANCHOR_TOLERANCE_HOURS = 3
+
+    def get_chain_iv_at(
+        self,
+        currency: str,
+        expiration: str,
+        snapshot_date,
+    ) -> Dict[str, Any]:
+        """
+        Fetch the full per-strike ``mark_iv`` chain for one (currency,
+        expiration) on EXACTLY ``snapshot_date`` (institutional_metrics_
+        spec.md section 7 / Task C8's fixed-strike vol change matrix).
+
+        Never substitutes the nearest available date -- that decision
+        belongs to the caller (``FixedStrikeVolCalculator``'s stale-prior
+        guard, T7.3), which needs to know the exact requested date came up
+        empty, not silently receive a plausible-looking older snapshot
+        mislabelled as "yesterday".
+
+        Reads ``daily_oi_snapshots`` first (real per-strike ``mark_iv``
+        history, though GUI-triggered and therefore sparse/irregular --
+        [verified 2026-08-01] 90 distinct dates all-time, non-consecutive,
+        most recent two entries 7 days apart). Falls back to ``snapshots``
+        (the daemon's full ~900-instrument hourly chain, ``mark_iv``
+        populated by migration 017 / Decision D11) only when
+        ``daily_oi_snapshots`` has no rows for this exact date -- picks the
+        hour closest to ``_FIXED_STRIKE_VOL_ANCHOR_HOUR_UTC`` (08:00 UTC).
+
+        [Verified 2026-08-01] As of this task, ``snapshots.mark_iv`` is
+        100% NULL across all 6.2M+ rows in the live database -- the write
+        path (``save_snapshot`` persisting ``item.get("mark_iv")``) exists
+        in code (this branch) but has not yet reached the deployed VPS
+        daemon, so this fallback is currently unreachable with real data.
+        Implemented anyway per institutional_metrics_spec.md section 11
+        judgment call #4: "ship the calculator + the stale-prior guard now
+        and let it light up as the daemon fills in."
+
+        ``snapshots.captured_at`` is written via naive ``datetime.now()``
+        by the VPS collector; the VPS OS/DB clock is confirmed UTC
+        elsewhere in this campaign (task-C7-report.md's Important #2), so
+        it is treated as a UTC-labeled timestamp here, consistent with that
+        established finding -- never re-derived from this (non-UTC) local
+        dev machine's clock.
+
+        Args:
+            currency: Currency symbol.
+            expiration: Expiration date string, e.g. "26MAR27".
+            snapshot_date: The exact calendar date (UTC) to fetch --
+                a ``datetime.date``.
+
+        Returns:
+            Dict with:
+            - "rows": list of ``{"strike": float, "option_type": str,
+              "mark_iv": float}``, empty if nothing found on either table
+              for this exact date.
+            - "underlying_price": float or None -- averaged across
+              whichever rows had a non-null value (neither table
+              guarantees exactly one distinct underlying_price per
+              snapshot); None if every row's underlying_price was null.
+            - "source": "daily_oi_snapshots" | "snapshots" | None.
+        """
+        rows, underlying_price = self._get_daily_oi_chain_iv(currency, expiration, snapshot_date)
+        if rows:
+            return {"rows": rows, "underlying_price": underlying_price, "source": "daily_oi_snapshots"}
+
+        rows, underlying_price = self._get_hourly_snapshot_chain_iv(currency, expiration, snapshot_date)
+        if rows:
+            return {"rows": rows, "underlying_price": underlying_price, "source": "snapshots"}
+
+        return {"rows": [], "underlying_price": None, "source": None}
+
+    def _get_daily_oi_chain_iv(
+        self, currency: str, expiration: str, snapshot_date,
+    ) -> tuple:
+        """Primary source for ``get_chain_iv_at`` -- see its docstring."""
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                SELECT strike, option_type, mark_iv, underlying_price
+                FROM daily_oi_snapshots
+                WHERE currency = %s
+                  AND expiration = %s
+                  AND snapshot_date = %s
+                  AND mark_iv IS NOT NULL
+                ORDER BY strike, option_type
+            """, (currency, expiration, snapshot_date))
+            return self._rows_and_avg_underlying_price(cursor.fetchall())
+
+    def _get_hourly_snapshot_chain_iv(
+        self, currency: str, expiration: str, snapshot_date,
+    ) -> tuple:
+        """
+        Fallback source for ``get_chain_iv_at`` -- see its docstring.
+
+        Independent review (Task C8 fix round, Minor #1/#2):
+        - The inner subquery (picking the nearest tick to the 08:00 UTC
+          anchor) now filters ``mark_iv IS NOT NULL`` and matches
+          ``expiration`` -- without these, a pre-deploy tick near 08:00
+          with a NULL ``mark_iv`` (or a tick that never even wrote this
+          expiration) could win the "nearest" pick and make the whole
+          lookup report "no data" even though a later same-day tick has
+          real IV for this expiration.
+        - The window is bounded to +/- ``_FIXED_STRIKE_VOL_ANCHOR_
+          TOLERANCE_HOURS`` around the anchor, not the whole calendar
+          day -- a tick that happens to be the day's ONLY one but sits
+          hours away from 08:00 (e.g. 23:30) is no longer silently
+          accepted as "the 08:00 anchor"; beyond tolerance, this returns
+          empty, same as no data at all.
+        """
+        anchor_ts = datetime(
+            snapshot_date.year, snapshot_date.month, snapshot_date.day,
+            self._FIXED_STRIKE_VOL_ANCHOR_HOUR_UTC, 0, 0,
+        )
+        tolerance = timedelta(hours=self._FIXED_STRIKE_VOL_ANCHOR_TOLERANCE_HOURS)
+        window_start = anchor_ts - tolerance
+        window_end = anchor_ts + tolerance
+
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                SELECT strike, option_type, mark_iv, underlying_price
+                FROM snapshots
+                WHERE currency = %s
+                  AND expiration = %s
+                  AND mark_iv IS NOT NULL
+                  AND captured_at = (
+                      SELECT captured_at
+                      FROM snapshots
+                      WHERE currency = %s
+                        AND expiration = %s
+                        AND mark_iv IS NOT NULL
+                        AND captured_at >= %s
+                        AND captured_at <= %s
+                      ORDER BY ABS(EXTRACT(EPOCH FROM (captured_at - %s)))
+                      LIMIT 1
+                  )
+                ORDER BY strike, option_type
+            """, (
+                currency, expiration, currency, expiration,
+                window_start, window_end, anchor_ts,
+            ))
+            return self._rows_and_avg_underlying_price(cursor.fetchall())
+
+    def get_latest_chain_iv_date(
+        self, currency: str, expiration: str, before_date,
+    ) -> Optional[Any]:
+        """
+        Find the most recent date <= ``before_date`` that has ANY chain
+        IV data for (currency, expiration), across both
+        ``daily_oi_snapshots`` and ``snapshots`` (independent review, Task
+        C8 fix round, Important #3).
+
+        Diagnostic-only -- used SOLELY to power the "insufficient history"
+        message's actual date (institutional_metrics_spec.md section 7(c):
+        "no comparable prior snapshot (last: 2026-07-20)"). Never used to
+        fetch data to compare against; ``get_chain_iv_at``'s exact-date-
+        only contract (never substitutes a different date) is unaffected
+        and unchanged by this method's existence.
+
+        Args:
+            currency: Currency symbol.
+            expiration: Expiration date string.
+            before_date: Upper bound (inclusive) on the date searched --
+                typically the requested "prior" date that came up empty.
+
+        Returns:
+            The latest matching ``date``, or ``None`` if neither table has
+            ANY row for this (currency, expiration) on or before
+            ``before_date``.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                SELECT MAX(snapshot_date)
+                FROM daily_oi_snapshots
+                WHERE currency = %s
+                  AND expiration = %s
+                  AND snapshot_date <= %s
+                  AND mark_iv IS NOT NULL
+            """, (currency, expiration, before_date))
+            daily_oi_date = cursor.fetchone()[0]
+
+        # Fix round 2 (Low #2): apply the SAME +/- anchor tolerance
+        # get_chain_iv_at's snapshots fallback enforces for the actual
+        # comparison -- without it, this diagnostic method could report
+        # a date as "having data" (e.g. a 14:00 UTC tick, hours from the
+        # 08:00 anchor) that get_chain_iv_at would then refuse to use,
+        # letting the two methods disagree about whether a given date
+        # "has data". Hour-of-day filtering is sufficient here (no
+        # per-day timestamp arithmetic needed) since the tolerance window
+        # (05:00-11:00 UTC) never wraps past a calendar-day boundary.
+        anchor_hour_low = (
+            self._FIXED_STRIKE_VOL_ANCHOR_HOUR_UTC
+            - self._FIXED_STRIKE_VOL_ANCHOR_TOLERANCE_HOURS
+        )
+        anchor_hour_high = (
+            self._FIXED_STRIKE_VOL_ANCHOR_HOUR_UTC
+            + self._FIXED_STRIKE_VOL_ANCHOR_TOLERANCE_HOURS
+        )
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                SELECT MAX(DATE(captured_at))
+                FROM snapshots
+                WHERE currency = %s
+                  AND expiration = %s
+                  AND DATE(captured_at) <= %s
+                  AND mark_iv IS NOT NULL
+                  AND EXTRACT(HOUR FROM captured_at) BETWEEN %s AND %s
+            """, (currency, expiration, before_date, anchor_hour_low, anchor_hour_high))
+            snapshots_date = cursor.fetchone()[0]
+
+        candidates = [d for d in (daily_oi_date, snapshots_date) if d is not None]
+        return max(candidates) if candidates else None
+
+    @staticmethod
+    def _rows_and_avg_underlying_price(fetched_rows) -> tuple:
+        """Shared shaping for both ``get_chain_iv_at`` sources: strike/
+        option_type/mark_iv rows plus the underlying_price averaged across
+        whichever rows had a non-null value."""
+        rows = []
+        underlying_prices = []
+        for strike, option_type, mark_iv, underlying_price in fetched_rows:
+            rows.append({
+                "strike": float(strike),
+                "option_type": option_type,
+                "mark_iv": float(mark_iv),
+            })
+            if underlying_price is not None:
+                underlying_prices.append(float(underlying_price))
+
+        avg_underlying = (
+            sum(underlying_prices) / len(underlying_prices) if underlying_prices else None
+        )
+        return rows, avg_underlying
 
     def save_funding_rate(
         self,
@@ -980,6 +1703,49 @@ class DatabaseRepository:
             """, (currency, index_name, timestamp, date, dvol))
             logger.info(f"Saved DVOL for {index_name}: {dvol:.2f}")
 
+    def save_dvol_history_row(
+        self,
+        currency: str,
+        timestamp: datetime,
+        dvol_value: float
+    ) -> int:
+        """
+        Persist one row to dvol_history (infra_spec.md section 1 / Task E3).
+
+        dvol_history is a SEPARATE table from volatility_index_history
+        (written by save_dvol above) -- it feeds iv_percentile_365d /
+        expected-move calculations that need >24h of history
+        (on_chain_analysis_service.py:244-250). Prior to this method it was
+        only ever written by the one-time scripts/backfill_dvol_history.py.
+
+        Architectural note: DVOLFetcher.save_to_db() (coding/service/deribit/
+        dvol_fetcher.py) already has an idempotent insert with this exact
+        ON CONFLICT clause, but it takes a raw psycopg2 connection and lives
+        in the Service layer. This repository (Core layer) must not import
+        a Service-layer class -- that would invert the project's Core ->
+        Service dependency direction. The insert SQL is therefore
+        re-declared here rather than reused; both call sites share the same
+        (asset, timestamp) idempotency key by convention, not shared code.
+
+        Args:
+            currency: Asset symbol (BTC or ETH) -- stored as `asset`.
+            timestamp: UTC-aware timestamp for this DVOL reading.
+            dvol_value: The DVOL index value.
+
+        Returns:
+            1 if a new row was inserted, 0 if (asset, timestamp) already
+            existed (ON CONFLICT DO NOTHING).
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO dvol_history (asset, timestamp, dvol_value)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (asset, timestamp) DO NOTHING
+            """, (currency, timestamp, dvol_value))
+            inserted = cursor.rowcount
+        logger.info(f"Saved dvol_history row for {currency}: {dvol_value} (inserted={inserted})")
+        return inserted
+
     def save_ohlcv(
         self,
         currency: str,
@@ -1017,84 +1783,77 @@ class DatabaseRepository:
                   open_price, high, low, close, volume))
             logger.debug(f"Saved OHLCV candle for {instrument_name} at {date}: close={close:.2f}")
 
-    def save_external_metrics(
-        self,
-        date,
-        fear_greed_value,
-        fear_greed_classification,
-        btc_dominance,
-        eth_dominance
-    ) -> None:
-        """
-        Save external sentiment metrics to the database.
-
-        Args:
-            date: Datetime for this snapshot.
-            fear_greed_value: Fear & Greed index value (0-100).
-            fear_greed_classification: Classification string (e.g., "Extreme Fear").
-            btc_dominance: BTC market dominance percentage.
-            eth_dominance: ETH market dominance percentage.
-        """
-        with self._db_cursor() as cursor:
-            cursor.execute("""
-                INSERT INTO external_metrics (
-                    date, fear_greed_value, fear_greed_classification,
-                    btc_dominance, eth_dominance
-                ) VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (date) DO UPDATE SET
-                    fear_greed_value = EXCLUDED.fear_greed_value,
-                    fear_greed_classification = EXCLUDED.fear_greed_classification,
-                    btc_dominance = EXCLUDED.btc_dominance,
-                    eth_dominance = EXCLUDED.eth_dominance
-            """, (date, fear_greed_value, fear_greed_classification, btc_dominance, eth_dominance))
-            logger.info(f"Saved external metrics: Fear&Greed={fear_greed_value}, BTC dom={btc_dominance}")
-
     def save_onchain_snapshot(
         self,
         snapshot_hour,
         currency: str,
         expiration: str,
-        analysis_data: Dict[str, Any],
-        gex_dex_data: Dict[str, Any],
-        underlying_price: float
+        analysis_data: ExpirationAnalysisResult,
+        gex_dex_data: GexDexResult,
+        underlying_price: float,
+        forward_price: Optional[float] = None,
     ) -> None:
         """
         Save on-chain analysis snapshot to the database.
+
+        refactor_design_spec.md section T10 (compatibility-map row #9):
+        ``analysis_data``/``gex_dex_data`` are the typed results now
+        (attribute access), not the legacy dicts (``.get()``) --
+        ``OnChainMetricsCalculator.analyze_expiration()`` and
+        ``GexDexCalculator.calculate()`` both return typed results
+        directly as of this same task. ``ProspectiveCollector`` (the only
+        production caller) updated in the same commit.
+
+        bugfix_spec.md Item 7 / F7.3.3: ``underlying_price`` is DEPRECATED as
+        a name -- new rows expect the INDEX price here (not the old
+        arbitrary highest-volume future), and it is now ALSO written into
+        the new ``index_price`` column for clarity. ``forward_price`` (this
+        expiration's own future price) is new -- used for
+        ``max_pain_distance_pct`` (a strike-vs-settlement, settlement-space
+        distance) and stored in its own new column. Falls back to
+        ``underlying_price`` when omitted so an un-migrated caller still
+        gets a value, just a less precise one.
 
         Args:
             snapshot_hour: Timestamp of the snapshot hour.
             currency: Currency symbol (e.g., "BTC", "ETH").
             expiration: Expiration date string (e.g., "27DEC24").
-            analysis_data: Output of OnChainAnalyzer.analyze_expiration().
+            analysis_data: Output of OnChainMetricsCalculator.analyze_expiration().
             gex_dex_data: Output of GexDexCalculator.calculate().
-            underlying_price: Current underlying asset price.
+            underlying_price: Current spot index price.
+            forward_price: This expiration's own future price. Defaults to
+                ``underlying_price`` when not given.
         """
-        max_pain = analysis_data.get("max_pain", {})
-        put_call = analysis_data.get("put_call_ratio", {})
-        volume_stats = analysis_data.get("volume_stats", {})
-        moneyness = analysis_data.get("moneyness", {})
-        support_resistance = analysis_data.get("support_resistance", {})
-        key_levels = gex_dex_data.get("key_levels", {})
+        if forward_price is None:
+            forward_price = underlying_price
 
-        max_pain_strike = max_pain.get("max_pain_strike")
+        max_pain = analysis_data.max_pain
+        put_call = analysis_data.put_call_ratio
+        volume_stats = analysis_data.volume_stats
+        moneyness = analysis_data.moneyness
+        support_resistance = analysis_data.support_resistance
+        key_levels = gex_dex_data.key_levels
+
+        max_pain_strike = max_pain.max_pain_strike
         max_pain_distance_pct = (
-            (max_pain_strike - underlying_price) / underlying_price * 100
-            if max_pain_strike and underlying_price
+            (max_pain_strike - forward_price) / forward_price * 100
+            if max_pain_strike and forward_price
             else None
         )
 
-        resistance_levels = support_resistance.get("resistance_levels", [])
-        support_levels = support_resistance.get("support_levels", [])
-        resistance_1 = resistance_levels[0] if resistance_levels else {}
-        support_1 = support_levels[0] if support_levels else {}
+        resistance_levels = support_resistance.resistance_levels
+        support_levels = support_resistance.support_levels
+        resistance_1 = resistance_levels[0] if resistance_levels else None
+        support_1 = support_levels[0] if support_levels else None
 
-        # key_levels call_resistance/put_support are dicts ({"strike", "net_gex"})
-        # when greeks are non-zero; the table stores only the strike scalar
-        call_resistance = key_levels.get("call_resistance") or {}
-        put_support = key_levels.get("put_support") or {}
+        # key_levels.call_resistance/put_support are GexDexLevel instances
+        # ({"strike", "net_gex"}) when greeks are non-zero, else None -- the
+        # table stores only the strike scalar.
+        call_resistance = key_levels.call_resistance
+        put_support = key_levels.put_support
 
-        volume_stats_call = volume_stats.get("total_call_volume", 0)
-        volume_stats_put = volume_stats.get("total_put_volume", 0)
+        volume_stats_call = volume_stats.total_call_volume
+        volume_stats_put = volume_stats.total_put_volume
         put_call_ratio_volume = (
             volume_stats_put / volume_stats_call if volume_stats_call > 0 else None
         )
@@ -1113,7 +1872,8 @@ class DatabaseRepository:
                     total_volume,
                     itm_call_oi_pct, otm_call_oi_pct,
                     itm_put_oi_pct, otm_put_oi_pct,
-                    underlying_price
+                    underlying_price,
+                    index_price, forward_price
                 ) VALUES (
                     %s, %s, %s,
                     %s, %s,
@@ -1126,7 +1886,8 @@ class DatabaseRepository:
                     %s,
                     %s, %s,
                     %s, %s,
-                    %s
+                    %s,
+                    %s, %s
                 )
                 ON CONFLICT (snapshot_hour, currency, expiration) DO UPDATE SET
                     max_pain_strike = EXCLUDED.max_pain_strike,
@@ -1149,22 +1910,30 @@ class DatabaseRepository:
                     otm_call_oi_pct = EXCLUDED.otm_call_oi_pct,
                     itm_put_oi_pct = EXCLUDED.itm_put_oi_pct,
                     otm_put_oi_pct = EXCLUDED.otm_put_oi_pct,
-                    underlying_price = EXCLUDED.underlying_price
+                    underlying_price = EXCLUDED.underlying_price,
+                    index_price = EXCLUDED.index_price,
+                    forward_price = EXCLUDED.forward_price
             """, (
                 snapshot_hour, currency, expiration,
                 max_pain_strike, max_pain_distance_pct,
-                put_call.get("ratio"), put_call_ratio_volume,
-                put_call.get("total_call_oi"), put_call.get("total_put_oi"),
-                gex_dex_data.get("total_net_gex"), gex_dex_data.get("total_net_dex"),
-                call_resistance.get("strike"), put_support.get("strike"), key_levels.get("hvl"),
-                resistance_1.get("strike"), resistance_1.get("call_oi"),
-                support_1.get("strike"), support_1.get("put_oi"),
-                volume_stats.get("total_volume"),
-                moneyness.get("calls", {}).get("itm_pct"),
-                moneyness.get("calls", {}).get("otm_pct"),
-                moneyness.get("puts", {}).get("itm_pct"),
-                moneyness.get("puts", {}).get("otm_pct"),
+                put_call.ratio, put_call_ratio_volume,
+                put_call.total_call_oi, put_call.total_put_oi,
+                gex_dex_data.total_net_gex, gex_dex_data.total_net_dex,
+                call_resistance.strike if call_resistance else None,
+                put_support.strike if put_support else None,
+                key_levels.hvl,
+                resistance_1.strike if resistance_1 else None,
+                resistance_1.open_interest if resistance_1 else None,
+                support_1.strike if support_1 else None,
+                support_1.open_interest if support_1 else None,
+                volume_stats.total_volume,
+                moneyness.calls.itm_pct,
+                moneyness.calls.otm_pct,
+                moneyness.puts.itm_pct,
+                moneyness.puts.otm_pct,
                 underlying_price,
+                underlying_price,
+                forward_price,
             ))
             logger.info(f"Saved on-chain snapshot for {currency} {expiration} at {snapshot_hour}")
 
@@ -1286,6 +2055,34 @@ class DatabaseRepository:
         Field renames: avg_delta->delta, avg_gamma->gamma, avg_theta->theta,
         avg_vega->vega (matching the live on-chain analysis input contract).
 
+        Task Wave-J-E Fix 1: bid_price/ask_price are now selected too.
+        VolatilitySurfaceCalculator._build_delta_points requires an instrument
+        to be "quoted" (bid_price > 0 or ask_price > 0) before it will trust
+        its delta for RR25/BF25 interpolation. Without these two columns in
+        this SELECT, every instrument dict this method returned was missing
+        both keys, so ``inst.get("bid_price") or 0`` / ``inst.get("ask_price")
+        or 0`` always evaluated to 0 -- the quoted filter failed for every
+        row unconditionally, and VolatilityReconstructionService silently
+        persisted skew_25d/put_25d_iv/call_25d_iv as None ("insufficient
+        chain") for every historical hour it ever processed, regardless of
+        the real market data underneath. hourly_snapshots.bid_price/
+        ask_price are populated (as trade-derived estimates -- see Task
+        Wave-J-E Fix 2 / bid_is_estimated, ask_is_estimated below) by
+        HourlyAggregationService._aggregate_instrument; they were simply
+        never read back out by this method.
+
+        Fix 2 (same task): bid_is_estimated/ask_is_estimated are also
+        selected. hourly_snapshots.bid_price/ask_price are ALWAYS derived
+        from trade prices (HourlyAggregationService), never a real
+        order-book quote -- these two flags disclose, per side, whether
+        that side's value is backed by an actual observed trade that hour
+        (False) or is the vwap+/-0.5% fallback used when no trade occurred
+        on that side (True). VolatilitySurfaceCalculator._build_delta_points
+        uses them to keep the "quoted" filter meaningful now that this
+        method actually returns bid/ask: a row where BOTH sides are pure
+        fallback (no real trade evidence at all) must not silently pass as
+        if it were a genuine quote.
+
         Args:
             currency: Currency symbol (e.g., "BTC", "ETH").
             hour: Snapshot hour (timezone-naive UTC).
@@ -1293,14 +2090,16 @@ class DatabaseRepository:
 
         Returns:
             List of instrument dicts with strike, option_type, mark_iv, delta,
-            gamma, theta, vega, open_interest, index_price.
+            gamma, theta, vega, open_interest, index_price, bid_price,
+            ask_price, bid_is_estimated, ask_is_estimated.
         """
         with self._db_cursor() as cursor:
             cursor.execute("""
                 SELECT
                     instrument_name, strike, option_type, mark_iv,
                     avg_delta, avg_gamma, avg_theta, avg_vega,
-                    open_interest, index_price
+                    open_interest, index_price,
+                    bid_price, ask_price, bid_is_estimated, ask_is_estimated
                 FROM hourly_snapshots
                 WHERE currency = %s
                   AND snapshot_hour = %s
@@ -1313,10 +2112,11 @@ class DatabaseRepository:
                 "instrument_name", "strike", "option_type", "mark_iv",
                 "delta", "gamma", "theta", "vega",
                 "open_interest", "index_price",
+                "bid_price", "ask_price", "bid_is_estimated", "ask_is_estimated",
             ]
             numeric_fields = {
                 "strike", "mark_iv", "delta", "gamma", "theta", "vega",
-                "open_interest", "index_price",
+                "open_interest", "index_price", "bid_price", "ask_price",
             }
             instruments = []
             for row in cursor.fetchall():
@@ -1329,6 +2129,12 @@ class DatabaseRepository:
                 # not None, or VolatilitySurfaceCalculator._calculate_pc_by_moneyness
                 # crashes on `buckets[bucket]["call_oi"] += oi`.
                 inst["open_interest"] = inst["open_interest"] or 0
+                # bid_is_estimated/ask_is_estimated are NULL for any row
+                # written before Task Wave-J-E's migration 025 (backfilled
+                # DEFAULT TRUE) -- coerce None to True (conservative: treat
+                # unknown provenance as estimated, matching the DEFAULT).
+                inst["bid_is_estimated"] = True if inst["bid_is_estimated"] is None else bool(inst["bid_is_estimated"])
+                inst["ask_is_estimated"] = True if inst["ask_is_estimated"] is None else bool(inst["ask_is_estimated"])
                 instruments.append(inst)
             return instruments
 
@@ -1359,6 +2165,14 @@ class DatabaseRepository:
             "iv_percentile_expiry", "iv_percentile_365d", "iv_rank_365d",
             "expected_daily_move", "expected_weekly_move", "expected_monthly_move",
             "pc_atm_ratio", "pc_near_otm_ratio", "pc_far_otm_ratio",
+            # institutional_metrics_spec.md section 4 / Task C5 (Migration
+            # 019's 6 new columns) -- per-expiry VEX/CEX aggregates. Legacy
+            # net_vanna/net_charm above are untouched (frozen, migration
+            # 019's own header comment) -- these are additive, not a
+            # replacement.
+            "vex_holder", "cex_holder",
+            "vex_assumed_dealer", "cex_assumed_dealer",
+            "vex_peak_strike", "cex_peak_strike",
         ]
         values = {field: metrics.get(field) for field in fields}
 
@@ -1373,6 +2187,9 @@ class DatabaseRepository:
                     iv_percentile_expiry, iv_percentile_365d, iv_rank_365d,
                     expected_daily_move, expected_weekly_move, expected_monthly_move,
                     pc_atm_ratio, pc_near_otm_ratio, pc_far_otm_ratio,
+                    vex_holder, cex_holder,
+                    vex_assumed_dealer, cex_assumed_dealer,
+                    vex_peak_strike, cex_peak_strike,
                     underlying_price
                 ) VALUES (
                     %(snapshot_hour)s, %(currency)s, %(expiration)s,
@@ -1383,6 +2200,9 @@ class DatabaseRepository:
                     %(iv_percentile_expiry)s, %(iv_percentile_365d)s, %(iv_rank_365d)s,
                     %(expected_daily_move)s, %(expected_weekly_move)s, %(expected_monthly_move)s,
                     %(pc_atm_ratio)s, %(pc_near_otm_ratio)s, %(pc_far_otm_ratio)s,
+                    %(vex_holder)s, %(cex_holder)s,
+                    %(vex_assumed_dealer)s, %(cex_assumed_dealer)s,
+                    %(vex_peak_strike)s, %(cex_peak_strike)s,
                     %(underlying_price)s
                 )
                 ON CONFLICT (snapshot_hour, currency, expiration) DO UPDATE SET
@@ -1406,6 +2226,12 @@ class DatabaseRepository:
                     pc_atm_ratio = EXCLUDED.pc_atm_ratio,
                     pc_near_otm_ratio = EXCLUDED.pc_near_otm_ratio,
                     pc_far_otm_ratio = EXCLUDED.pc_far_otm_ratio,
+                    vex_holder = EXCLUDED.vex_holder,
+                    cex_holder = EXCLUDED.cex_holder,
+                    vex_assumed_dealer = EXCLUDED.vex_assumed_dealer,
+                    cex_assumed_dealer = EXCLUDED.cex_assumed_dealer,
+                    vex_peak_strike = EXCLUDED.vex_peak_strike,
+                    cex_peak_strike = EXCLUDED.cex_peak_strike,
                     underlying_price = EXCLUDED.underlying_price
             """, {
                 "snapshot_hour": snapshot_hour,
@@ -1415,6 +2241,84 @@ class DatabaseRepository:
                 **values,
             })
             logger.info(f"Saved volatility snapshot for {currency} {expiration} at {snapshot_hour}")
+
+    def save_volatility_skew(
+        self,
+        snapshot_hour,
+        currency: str,
+        expiration: str,
+        dte_years: Optional[float],
+        skew: Dict[str, Any],
+    ) -> None:
+        """
+        Persist one delta-interpolated RR25/BF25 term-structure row to
+        ``volatility_skew_history`` (migration 018 /
+        institutional_metrics_spec.md Migration M3, section 3, Task C4).
+
+        Decision D10 (BINDING, migration 018's header): this table is a
+        fresh series, unrelated to and NOT backfilled from the degenerate
+        ``onchain_volatility_snapshots.skew_25d``/``call_25d_iv``/
+        ``put_25d_iv`` history -- that history is untouched.
+
+        Args:
+            snapshot_hour: Timestamp of the snapshot hour.
+            currency: Currency symbol (e.g., "BTC", "ETH").
+            expiration: Expiration date string (e.g., "25JUL26").
+            dte_years: Days-to-expiry in years, or None if it could not be
+                computed (never blocks the write -- the row is still
+                persisted with a NULL dte_years).
+            skew: The dict returned by ``VolatilitySurfaceCalculator.
+                calculate_risk_reversal_butterfly()`` -- rr_25d, bf_25d,
+                call_25d_iv, put_25d_iv, call_25d_strike, put_25d_strike,
+                atm_iv_interp, n_quotes_used, method. Any of the
+                interpolated values may be None (T3.2/T3.3: chain does not
+                bracket the target delta) -- written as SQL NULL, never
+                coerced to 0. ``call_bracket``/``put_bracket`` (also in the
+                dict) are not persisted -- the schema has no column for
+                them; they exist for report/debugging use only.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO volatility_skew_history (
+                    snapshot_hour, currency, expiration, dte_years,
+                    atm_iv_interp, call_25d_iv, put_25d_iv,
+                    call_25d_strike, put_25d_strike,
+                    rr_25d, bf_25d, n_quotes_used, interp_method
+                ) VALUES (
+                    %(snapshot_hour)s, %(currency)s, %(expiration)s, %(dte_years)s,
+                    %(atm_iv_interp)s, %(call_25d_iv)s, %(put_25d_iv)s,
+                    %(call_25d_strike)s, %(put_25d_strike)s,
+                    %(rr_25d)s, %(bf_25d)s, %(n_quotes_used)s, %(interp_method)s
+                )
+                ON CONFLICT (snapshot_hour, currency, expiration) DO UPDATE SET
+                    dte_years = EXCLUDED.dte_years,
+                    atm_iv_interp = EXCLUDED.atm_iv_interp,
+                    call_25d_iv = EXCLUDED.call_25d_iv,
+                    put_25d_iv = EXCLUDED.put_25d_iv,
+                    call_25d_strike = EXCLUDED.call_25d_strike,
+                    put_25d_strike = EXCLUDED.put_25d_strike,
+                    rr_25d = EXCLUDED.rr_25d,
+                    bf_25d = EXCLUDED.bf_25d,
+                    n_quotes_used = EXCLUDED.n_quotes_used,
+                    interp_method = EXCLUDED.interp_method
+            """, {
+                "snapshot_hour": snapshot_hour,
+                "currency": currency,
+                "expiration": expiration,
+                "dte_years": dte_years,
+                "atm_iv_interp": skew.get("atm_iv_interp"),
+                "call_25d_iv": skew.get("call_25d_iv"),
+                "put_25d_iv": skew.get("put_25d_iv"),
+                "call_25d_strike": skew.get("call_25d_strike"),
+                "put_25d_strike": skew.get("put_25d_strike"),
+                "rr_25d": skew.get("rr_25d"),
+                "bf_25d": skew.get("bf_25d"),
+                "n_quotes_used": skew.get("n_quotes_used"),
+                "interp_method": skew.get("method", "linear_delta"),
+            })
+            logger.info(
+                f"Saved volatility skew (RR25/BF25) for {currency} {expiration} at {snapshot_hour}"
+            )
 
     def get_volatility_snapshots_for_percentile_backfill(
         self,
@@ -2207,3 +3111,262 @@ class DatabaseRepository:
                 logger.warning("get_recent_onchain_history (vol) failed: %s", exc)
 
         return sorted(results.values(), key=lambda x: x["snapshot_hour"])
+
+    # institutional_metrics_spec.md section 1(c): whitelist of (table,
+    # column) pairs get_metric_history is allowed to read, plus the
+    # time_column each table uses for its trailing-window filter. Extends
+    # get_recent_onchain_history's existing whitelist pattern instead of
+    # inventing a second one -- one generic reader replaces ad-hoc
+    # per-metric SQL for every AVAILABLE metric in section 1(a): net GEX,
+    # PCR-OI (+ PCR-volume for bugfix_spec.md Item 10), total call/put OI,
+    # DVOL, VRP, funding.
+    _METRIC_HISTORY_WHITELIST = {
+        ("onchain_analysis_snapshots", "total_net_gex"): "snapshot_hour",
+        ("onchain_analysis_snapshots", "put_call_ratio_oi"): "snapshot_hour",
+        ("onchain_analysis_snapshots", "put_call_ratio_volume"): "snapshot_hour",
+        ("onchain_analysis_snapshots", "total_call_oi"): "snapshot_hour",
+        ("onchain_analysis_snapshots", "total_put_oi"): "snapshot_hour",
+        ("onchain_volatility_snapshots", "vrp_absolute"): "snapshot_hour",
+        ("volatility_index_history", "dvol"): "date",
+        ("funding_rate_history", "funding_rate"): "date",
+        # institutional_metrics_spec.md section 3(c) (Task C4): RR25/BF25
+        # term-structure percentile history.
+        ("volatility_skew_history", "rr_25d"): "snapshot_hour",
+        ("volatility_skew_history", "bf_25d"): "snapshot_hour",
+    }
+
+    # institutional_metrics_spec.md section 3(c): "so section 1 can filter
+    # thin rows out of the percentile window (WHERE n_quotes_used >= 8)".
+    # A per-table extra WHERE clause, not a second whitelist mechanism --
+    # get_metric_history appends this for the one table that needs it.
+    _METRIC_HISTORY_EXTRA_FILTER = {
+        "volatility_skew_history": "n_quotes_used >= 8",
+    }
+
+    def get_metric_history(
+        self,
+        table: str,
+        column: str,
+        currency: str,
+        lookback_hours: int,
+        expiration: Optional[str] = None,
+        time_column: Optional[str] = None,
+    ) -> List[float]:
+        """
+        Generic trailing-history reader for HistoricalNormalizer
+        (institutional_metrics_spec.md section 1(c)).
+
+        Args:
+            table: Source table. Must be one of the whitelisted tables.
+            column: Source column. Must be whitelisted for ``table``.
+            currency: Currency symbol.
+            lookback_hours: Trailing window size in hours (30d ~= 720,
+                90d ~= 2160).
+            expiration: When set, filters to one (currency, expiration)
+                series (onchain_analysis_snapshots / onchain_volatility_
+                snapshots). Market-wide tables (volatility_index_history,
+                funding_rate_history) have no expiration column -- omit it.
+            time_column: Overrides the whitelist's default time column.
+                Callers normally rely on the whitelist default; this exists
+                so tests/callers can be explicit without a second lookup.
+
+        Returns:
+            Plain floats, oldest-first, NULLs dropped, Decimal cast to
+            float at this boundary (never inside HistoricalNormalizer,
+            which must not know about psycopg2's Decimal type).
+
+        Raises:
+            ValueError: (table, column) is not in the whitelist.
+        """
+        key = (table, column)
+        if key not in self._METRIC_HISTORY_WHITELIST:
+            raise ValueError(
+                f"get_metric_history: ({table!r}, {column!r}) is not whitelisted. "
+                f"Allowed pairs: {sorted(self._METRIC_HISTORY_WHITELIST)}"
+            )
+        col = self._METRIC_HISTORY_WHITELIST[key] if time_column is None else time_column
+        extra_filter = self._METRIC_HISTORY_EXTRA_FILTER.get(table)
+        extra_clause = f" AND {extra_filter}" if extra_filter else ""
+
+        if expiration is not None:
+            sql = (
+                f"SELECT {column} FROM {table} "
+                f"WHERE currency = %s AND expiration = %s "
+                f"AND {col} >= NOW() - INTERVAL '1 hour' * %s"
+                f"{extra_clause} "
+                f"ORDER BY {col} ASC"
+            )
+            params = (currency, expiration, lookback_hours)
+        else:
+            sql = (
+                f"SELECT {column} FROM {table} "
+                f"WHERE currency = %s "
+                f"AND {col} >= NOW() - INTERVAL '1 hour' * %s"
+                f"{extra_clause} "
+                f"ORDER BY {col} ASC"
+            )
+            params = (currency, lookback_hours)
+
+        try:
+            with self._db_cursor() as cursor:
+                cursor.execute(sql, params)
+                rows = cursor.fetchall()
+        except Exception as exc:
+            logger.warning("get_metric_history(%s, %s) failed: %s", table, column, exc)
+            return []
+
+        return [float(row[0]) for row in rows if row[0] is not None]
+
+    def get_metric_history_oldest_timestamp(
+        self,
+        table: str,
+        column: str,
+        currency: str,
+        lookback_hours: int,
+        expiration: Optional[str] = None,
+        time_column: Optional[str] = None,
+    ) -> Optional[datetime]:
+        """
+        Timestamp of the oldest non-NULL observation ``get_metric_history``
+        (same args) would return for this exact same window (Task G2-E).
+
+        HistoricalNormalizer's 30d/90d sufficiency gate previously only
+        checked observation COUNT (n >= MIN_OBS). Confirmed bug: a
+        per-expiry series keyed to one specific expiration string (e.g. net
+        GEX for "8AUG26") can satisfy n >= MIN_OBS for BOTH the 30d and 90d
+        windows while spanning only a few calendar days -- a front-month
+        expiry, by definition, has not existed (and so has not been
+        observed by the hourly collector) 30 or 90 days before its own
+        expiration. The caller compares this timestamp's age against the
+        claimed window size to add a calendar-span requirement on top of
+        the count gate (see ``HistoricalNormalizer.has_sufficient_span``).
+
+        Filters identically to ``get_metric_history`` -- same whitelist,
+        same lookback/expiration predicate, and the same NULL-dropping
+        (``AND {column} IS NOT NULL``) -- so "how many observations" and
+        "how far back do they go" always describe the exact same row set.
+        Deliberately a separate query rather than folding a timestamp
+        column into ``get_metric_history``'s own SELECT: that method has
+        many other callers (PCR classification, RR/BF skew percentiles)
+        that don't need span data and whose existing ``List[float]``
+        return contract this task must not disturb.
+
+        Returns:
+            The oldest matching row's time-column value, or None if the
+            window has zero qualifying rows.
+
+        Raises:
+            ValueError: (table, column) is not in the whitelist -- same
+                whitelist, same "programming bug, not a data issue"
+                contract as ``get_metric_history``, so callers can apply
+                the identical except-ValueError-vs-except-Exception
+                handling to both calls.
+        """
+        key = (table, column)
+        if key not in self._METRIC_HISTORY_WHITELIST:
+            raise ValueError(
+                f"get_metric_history_oldest_timestamp: ({table!r}, {column!r}) is not "
+                f"whitelisted. Allowed pairs: {sorted(self._METRIC_HISTORY_WHITELIST)}"
+            )
+        col = self._METRIC_HISTORY_WHITELIST[key] if time_column is None else time_column
+        extra_filter = self._METRIC_HISTORY_EXTRA_FILTER.get(table)
+        extra_clause = f" AND {extra_filter}" if extra_filter else ""
+
+        if expiration is not None:
+            sql = (
+                f"SELECT MIN({col}) FROM {table} "
+                f"WHERE currency = %s AND expiration = %s "
+                f"AND {col} >= NOW() - INTERVAL '1 hour' * %s "
+                f"AND {column} IS NOT NULL"
+                f"{extra_clause}"
+            )
+            params = (currency, expiration, lookback_hours)
+        else:
+            sql = (
+                f"SELECT MIN({col}) FROM {table} "
+                f"WHERE currency = %s "
+                f"AND {col} >= NOW() - INTERVAL '1 hour' * %s "
+                f"AND {column} IS NOT NULL"
+                f"{extra_clause}"
+            )
+            params = (currency, lookback_hours)
+
+        try:
+            with self._db_cursor() as cursor:
+                cursor.execute(sql, params)
+                row = cursor.fetchone()
+        except Exception as exc:
+            logger.warning(
+                "get_metric_history_oldest_timestamp(%s, %s) failed: %s", table, column, exc,
+            )
+            return None
+
+        return row[0] if row and row[0] is not None else None
+
+    # institutional_metrics_spec.md section 1(c) / C1 review Important #4:
+    # "STALE: history ends {ts}" requires knowing how fresh the queried
+    # history actually is. Derived from the same table set
+    # _METRIC_HISTORY_WHITELIST already covers, keeping one time-column
+    # mapping instead of a second one that could drift out of sync (kept
+    # as an explicit dict, not a class-body comprehension over
+    # _METRIC_HISTORY_WHITELIST, to sidestep Python's class-body
+    # comprehension scoping rule).
+    _TABLE_TIME_COLUMNS = {
+        "onchain_analysis_snapshots": "snapshot_hour",
+        "onchain_volatility_snapshots": "snapshot_hour",
+        "volatility_index_history": "date",
+        "funding_rate_history": "date",
+        # Task C4 review Minor #2: was added to _METRIC_HISTORY_WHITELIST
+        # (get_metric_history) but not here, which meant the "STALE:
+        # history ends {ts}" mechanism could never cover this table.
+        "volatility_skew_history": "snapshot_hour",
+    }
+
+    def get_metric_freshness(
+        self,
+        table: str,
+        currency: str,
+        expiration: Optional[str] = None,
+        time_column: Optional[str] = None,
+    ) -> Optional[datetime]:
+        """
+        Most recent timestamp available for ``table`` (institutional_metrics
+        _spec.md section 1(c)'s staleness gate: "if max(snapshot_hour) <
+        now() - 3h, prefix the whole normalization block with STALE:
+        history ends {ts}").
+
+        Args:
+            table: Must be one of ``_TABLE_TIME_COLUMNS``'s keys (the same
+                tables ``get_metric_history`` is whitelisted against).
+            currency: Currency symbol.
+            expiration: When set, filters to one (currency, expiration)
+                series. Market-wide tables have no expiration column.
+            time_column: Overrides the table's default time column.
+
+        Returns:
+            The max timestamp, or ``None`` if the table has no rows for
+            this currency/expiration, the table is not whitelisted, or the
+            query failed (logged, not raised -- freshness is a display
+            nicety, not something that should crash analysis).
+        """
+        if table not in self._TABLE_TIME_COLUMNS:
+            logger.warning("get_metric_freshness: table %r is not whitelisted", table)
+            return None
+        col = self._TABLE_TIME_COLUMNS[table] if time_column is None else time_column
+
+        if expiration is not None:
+            sql = f"SELECT MAX({col}) FROM {table} WHERE currency = %s AND expiration = %s"
+            params = (currency, expiration)
+        else:
+            sql = f"SELECT MAX({col}) FROM {table} WHERE currency = %s"
+            params = (currency,)
+
+        try:
+            with self._db_cursor() as cursor:
+                cursor.execute(sql, params)
+                row = cursor.fetchone()
+        except Exception as exc:
+            logger.warning("get_metric_freshness(%s) failed: %s", table, exc)
+            return None
+
+        return row[0] if row and row[0] is not None else None

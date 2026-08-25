@@ -7,10 +7,23 @@ Used for historical data where exchange Greeks are not available.
 
 import logging
 import math
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 from datetime import datetime
 
+from coding.core.analytics.market_wide_calculator import DERIBIT_SETTLEMENT_HOUR_UTC
+
 logger = logging.getLogger(__name__)
+
+# Task Wave-J-A Fix 1/2 (moved here from on_chain_analysis_service.py's
+# private _MAX_SANE_MARK_IV_PCT, Task G2-A re-review): a single sane upper
+# ceiling on mark_iv, shared by every caller of calculate_greeks_safe below
+# so the daemon path (ProspectiveCollector._enrich_with_greeks) and the
+# report/GUI path (OnChainAnalysisService._compute_bs_gamma) can never
+# silently drift apart on what counts as "absurd" IV. 1000% annualized IV
+# is already far beyond anything Deribit's real book has shown even during
+# extreme crypto vol spikes (typical peak is low hundreds of percent) -- a
+# documented, generous ceiling, not a tuned statistical bound.
+MAX_SANE_MARK_IV_PCT = 1000.0
 
 
 class BlackScholesCalculator:
@@ -94,6 +107,71 @@ class BlackScholesCalculator:
                 "vega": 0.0,
                 "rho": 0.0
             }
+
+    def calculate_greeks_safe(
+        self,
+        item: Dict[str, Any],
+        mark_iv: Optional[float],
+        spot_price: Optional[float],
+        now_utc: datetime,
+        max_sane_mark_iv_pct: float = MAX_SANE_MARK_IV_PCT,
+    ) -> Optional[Dict[str, float]]:
+        """
+        Task Wave-J-A (Fix 1 / Fix 2): the single, shared, rigorously-
+        guarded entry point for computing Black-Scholes Greeks from
+        ``mark_iv`` -- extracted from ``OnChainAnalysisService.
+        _compute_bs_gamma`` (Task G2-A / Wave G re-review) so that method
+        and ``ProspectiveCollector._enrich_with_greeks`` (the daemon path)
+        share exactly one implementation of this guard logic instead of
+        two that can drift apart.
+
+        Every guard below is an explicit numeric range check (``is None or
+        <= 0``), never a bare truthiness check (``not x``) -- ``not
+        -50000`` is ``False`` in Python, so a truthiness guard would
+        silently let a negative strike/mark_iv straight through to
+        ``calculate_greeks``, whose blanket ``except Exception`` then
+        returns an all-zero-greeks dict that would look like "computed
+        successfully" to any caller that doesn't check for it.
+
+        Returns:
+            The full Greeks dict from ``calculate_greeks``, or ``None``
+            (never a fabricated 0.0 -- a real "could not compute" case,
+            not "zero exposure") if ``mark_iv``/``strike``/``spot_price``/
+            the instrument name are missing, non-positive, unparseable,
+            or outside a sane range (``max_sane_mark_iv_pct``), or the
+            option has already passed its 08:00 UTC settlement
+            (``time_to_expiry <= 0``). A ``None`` return is exactly the
+            "missing gamma"/"missing delta" case
+            ``GexDexCalculator._aggregate_by_strike``'s completeness
+            tracking (Task G2-A, bug 2) is built to detect.
+        """
+        if spot_price is None or spot_price <= 0:
+            return None
+
+        if mark_iv is None or mark_iv <= 0 or mark_iv > max_sane_mark_iv_pct:
+            return None
+
+        strike = item.get("strike")
+        name = item.get("instrument_name", "")
+        if strike is None or strike <= 0 or not name:
+            return None
+
+        parsed = self.parse_instrument_name(name)
+        if parsed is None:
+            return None
+
+        now_utc_naive = now_utc.replace(tzinfo=None) if now_utc.tzinfo is not None else now_utc
+        time_to_expiry = self.calculate_time_to_expiry(now_utc_naive, parsed["expiry_time"])
+        if time_to_expiry <= 0:
+            return None
+
+        return self.calculate_greeks(
+            spot_price=float(spot_price),
+            strike_price=float(strike),
+            time_to_expiry=time_to_expiry,
+            implied_volatility=float(mark_iv) / 100.0,
+            option_type=parsed["option_type"],
+        )
 
     def _calculate_d1(
         self,
@@ -249,10 +327,19 @@ class BlackScholesCalculator:
 
     def calculate_charm(self, d1: float, d2: float, time_to_expiry: float) -> float:
         """
-        Charm = ∂Δ/∂τ (rate of change of delta with respect to time-to-expiry).
+        bugfix_spec.md Item 12: the sign LABEL below was wrong; the
+        returned VALUE was always correct (verified by finite-difference
+        against real delta decay) -- documentation-only fix.
 
-        Closed-form BS (r=q=0): φ(d1) × d2 / (2τ)
-        Same for calls and puts.
+        Charm = ∂Δ/∂t -- the rate of change of delta with respect to
+        ELAPSING calendar time (equivalently −∂Δ/∂τ, where τ is time
+        REMAINING -- NOT ∂Δ/∂τ itself, which has the opposite sign).
+
+        Closed-form BS (r=q=0): +φ(d1) × d2 / (2τ)
+        Derivation: ∂d1/∂τ = −d2/(2τ)  ⇒  ∂Δ/∂τ = −φ(d1)·d2/(2τ)  ⇒
+        ∂Δ/∂t = +φ(d1)·d2/(2τ). Same for calls and puts.
+
+        Units: per YEAR. Divide by 365 for the per-day delta drift.
         """
         if time_to_expiry <= 0:
             return 0.0
@@ -340,7 +427,7 @@ class BlackScholesCalculator:
                 return None
 
             # Deribit options expire at 08:00 UTC
-            expiry_time = datetime(year, month, day, 8, 0, 0)
+            expiry_time = datetime(year, month, day, DERIBIT_SETTLEMENT_HOUR_UTC, 0, 0)
 
             return {
                 "currency": currency,

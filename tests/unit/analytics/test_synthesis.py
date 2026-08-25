@@ -2,9 +2,12 @@
 Unit tests for SynthesisMapper, ScoringEngine, and SynthesisEngine v2.0.
 """
 
+import re
+
 import pytest
-from unittest.mock import MagicMock
-from datetime import datetime, timedelta
+from typing import Optional
+from unittest.mock import MagicMock, patch
+from datetime import datetime, timedelta, timezone
 
 from coding.core.analytics.synthesis import (
     SynthesisEngine,
@@ -17,6 +20,42 @@ from coding.core.analytics.synthesis import (
     VolRegime,
     Signal,
     build_from_current_data,
+)
+from coding.core.analytics.results.analysis_result import (
+    ExpirationBundle,
+    MarketMetricsResult,
+    OnChainAnalysisResult,
+)
+from coding.core.analytics.results.expiry_results import (
+    ExpirationAnalysisResult,
+    MaxPainResult,
+    MoneynessLeg,
+    MoneynessResult,
+    PutCallRatioResult,
+    SupportResistanceResult,
+    VolumeStatsResult,
+)
+from coding.core.analytics.results.flow_results import FlowResult, FlowTotals
+from coding.core.analytics.results.gex_dex_results import GexDexKeyLevels, GexDexLevel, GexDexResult
+from coding.core.analytics.results.market_wide_results import (
+    Block,
+    BlockTrade,
+    BlockTradesResult,
+    CrossAssetCorrelationResult,
+    FuturesBasisResult,
+    MarketWideResult,
+    PerpetualFundingResult,
+    RealizedVolatilityResult,
+    TermStructureResult,
+    VarianceRiskPremiumResult,
+    VolatilityConeResult,
+)
+from coding.core.analytics.results.vol_surface_results import (
+    MoneynessBucket,
+    PutCallByMoneyness,
+    SecondOrderGreeks,
+    SkewResult,
+    VolSurfaceResult,
 )
 
 
@@ -33,6 +72,12 @@ def make_expiry_metrics(**overrides) -> ExpiryMetrics:
         notional=500_000_000,
         max_pain=70000,
         pc_ratio=0.80,
+        # Matches make_market_wide()'s default spot_price so every
+        # pre-existing test (which never overrides this) sees identical
+        # behavior to before the carried per-expiry underlying_price fix --
+        # tests that need to prove per-expiry sourcing pass a different
+        # value explicitly.
+        underlying_price=65000.0,
         total_gex=-5_000_000,
         total_dex=-200,
         gex_environment="Negative",
@@ -42,7 +87,7 @@ def make_expiry_metrics(**overrides) -> ExpiryMetrics:
         put_support_gex=-3_000_000,
         hvl_strike=67000,
         atm_iv=50.0,
-        skew_25d=8.0,
+        risk_reversal_25d=-8.0,
         put_25d_iv=56.0,
         call_25d_iv=48.0,
         pc_atm=1.2,
@@ -80,96 +125,181 @@ def make_market_wide(**overrides) -> MarketWideMetrics:
         perp_funding_trend="Stable",
         btc_eth_price_corr=0.90,
         btc_eth_dvol_corr=0.85,
-        block_trades=[],
+        large_prints=[],
+        blocks=[],
     )
     defaults.update(overrides)
     return MarketWideMetrics(**defaults)
 
 
-def make_analyzer_mock(expiration: str = "27MAR26") -> MagicMock:
-    """Create a mock OnChainAnalyzer with structured data populated."""
-    analyzer = MagicMock()
-    analyzer.underlying_price = 65000.0
-    analyzer.currency = "BTC"
-    analyzer.market_wide_structured = {
-        "spot_price": 65000.0,
-        "dvol": 52.0,
-        "iv_percentile_365d": 75.0,
-        "funding_rate": 0.000001,   # decimal: ×100 → 0.0001% in MarketWideMetrics
-        "funding_8h": -0.000015,    # decimal: ×100 → -0.0015% in MarketWideMetrics
-        "shape": "CONTANGO",
-        "spread": 5.0,
-        "iv_by_dte": {6: 49.0, 13: 49.5, 27: 49.2},
-        "rv_10d": 0.45,   # decimal: ×100 → 45.0% in MarketWideMetrics
-        "rv_20d": 0.42,   # decimal: ×100 → 42.0%
-        "rv_30d": 0.48,   # decimal: ×100 → 48.0%
-        "vrp": 4.0,
-        "cone_10d_pctile": 60.0,
-        "cone_20d_pctile": 55.0,
-        "cone_30d_pctile": 65.0,
-        "futures_basis": {"27MAR26": 1.5},
-        "perp_oi": 1_000_000_000,
-        "perp_funding_trend": "Stable",
-        "btc_eth_price_corr": 0.90,
-        "btc_eth_dvol_corr": 0.85,
-        "block_trades": [],
-    }
-    analyzer.gex_dex_structured = {
-        expiration: {
-            "total_net_gex": -5_000_000,
-            "total_net_dex": -200,
-            "key_levels": {
-                "call_resistance": {"strike": 75000, "net_gex": 2_000_000},
-                "put_support": {"strike": 60000, "net_gex": -3_000_000},
-                "hvl": 67000,
-                "gamma_flip": None,
-            },
-        }
-    }
-    analyzer.volatility_surface_structured = {
-        expiration: {
-            "atm_iv": 50.0,
-            "skew_25d": {
-                "skew": 8.0,
-                "put_25d_iv": 56.0,
-                "call_25d_iv": 48.0,
-            },
-            "pc_by_moneyness": {
-                "atm": {"ratio": 1.2},
-                "near_otm": {"ratio": 0.9},
-                "far_otm": {"ratio": 0.5},
-            },
-            "second_order_greeks": {
-                "net_vanna": 0.001,
-                "net_charm": 50.0,
-            },
-        }
-    }
-    analyzer.buy_sell_flow_structured = {
-        expiration: {
-            "bias_interpretation": "Moderate Buying",
-            "flow_trend": "Steady Buy Pressure",
-            "top_buy_strikes": [],
-            "top_sell_strikes": [],
-        }
-    }
-    analyzer.parsed_data = {
-        expiration: [
-            {"instrument_name": f"BTC-{expiration}-70000-C", "expiration": expiration,
-             "strike": 70000.0, "option_type": "C", "open_interest": 5000, "volume": 100},
-            {"instrument_name": f"BTC-{expiration}-70000-P", "expiration": expiration,
-             "strike": 70000.0, "option_type": "P", "open_interest": 4000, "volume": 80},
-        ]
-    }
-    analyzer.get_expirations.return_value = [expiration]
+_MONEYNESS_LEG = MoneynessLeg(
+    itm_oi=0.0, otm_oi=0.0, total_oi=0.0,
+    itm_notional=0.0, otm_notional=0.0, total_notional=0.0, itm_pct=0.0, otm_pct=0.0,
+)
 
-    analyzer.group_by_strike.return_value = {
-        70000.0: {"call_oi": 5000, "put_oi": 4000, "call_volume": 100, "put_volume": 80}
-    }
-    analyzer.calculate_max_pain.return_value = {"max_pain_strike": 70000.0}
-    analyzer.calculate_put_call_ratio.return_value = {"ratio": 0.80}
 
-    return analyzer
+def make_default_market_wide(underlying_price: float = 65000.0) -> MarketWideResult:
+    """Fully-populated MarketWideResult mirroring the old analyzer-mock's market_wide_structured."""
+    return MarketWideResult(
+        spot_price=underlying_price,
+        currency="BTC",
+        dvol=52.0,
+        iv_percentile_365d=75.0,
+        aggregate_gex_dex=None,
+        term_structure=TermStructureResult(
+            entries=(), shape="CONTANGO", spread=5.0, spread_signed=5.0,
+            iv_by_dte={6: 49.0, 13: 49.5, 27: 49.2},
+        ),
+        futures_basis=FuturesBasisResult(entries=(), futures_basis={"27MAR26": 1.5}),
+        realized_volatility=RealizedVolatilityResult(rv_by_window={10: 0.45, 20: 0.42, 30: 0.48}),
+        variance_risk_premium=VarianceRiskPremiumResult(
+            vrp=4.0, signal="FAIR", dvol=52.0, rv_30d=0.48,
+        ),
+        volatility_cone=None,
+        perpetual_funding=PerpetualFundingResult(
+            perp_open_interest=1_000_000_000, funding_rate=0.000001, funding_8h=-0.000015,
+            funding_trend="Stable", history_points=0,
+        ),
+        block_trades=BlockTradesResult(trades=(), notional_threshold=100_000.0, total_detected=0),
+        cross_asset_correlation=CrossAssetCorrelationResult(
+            other_currency="ETH", price_correlation=0.90, dvol_correlation=0.85, sample_size=30,
+        ),
+        failed_sections=(),
+    )
+
+
+def make_onchain_result(
+    expiration: str = "27MAR26",
+    *,
+    underlying_price: float = 65000.0,
+    include_gex_dex: bool = True,
+    include_flow: bool = True,
+    include_vol_surface: bool = True,
+    include_instruments: bool = True,
+    market_wide: Optional[MarketWideResult] = None,
+    max_pain_strike: Optional[float] = 70000.0,
+) -> OnChainAnalysisResult:
+    """
+    Create a minimal-but-typed OnChainAnalysisResult for testing SynthesisMapper
+    (refactor_design_spec.md section T7 — replaces the old MagicMock analyzer).
+    """
+    parsed_instruments = (
+        {
+            expiration: (
+                {"instrument_name": f"BTC-{expiration}-70000-C", "expiration": expiration,
+                 "strike": 70000.0, "option_type": "C", "open_interest": 5000, "volume": 100},
+                {"instrument_name": f"BTC-{expiration}-70000-P", "expiration": expiration,
+                 "strike": 70000.0, "option_type": "P", "open_interest": 4000, "volume": 80},
+            )
+        }
+        if include_instruments else {}
+    )
+
+    analysis = ExpirationAnalysisResult(
+        expiration=expiration, underlying_price=underlying_price,
+        total_instruments=2, call_count=1, put_count=1, strike_rows=(),
+        max_pain=MaxPainResult(max_pain_strike=max_pain_strike, pain_by_strike={}, min_pain_value=0.0),
+        put_call_ratio=PutCallRatioResult(
+            total_call_oi=5000.0, total_put_oi=4000.0, ratio=0.80, bias="Neutral",
+        ),
+        volume_stats=VolumeStatsResult(
+            total_call_volume=100.0, total_put_volume=80.0, total_volume=180.0, volume_ratio=1.25,
+        ),
+        moneyness=MoneynessResult(
+            calls=_MONEYNESS_LEG, puts=_MONEYNESS_LEG, totals=_MONEYNESS_LEG, oi_skew="Neutral",
+        ),
+        support_resistance=SupportResistanceResult(
+            resistance_levels=(), support_levels=(),
+            short_term_resistance=None, short_term_support=None,
+        ),
+    )
+
+    gex_dex = None
+    if include_gex_dex:
+        gex_dex = GexDexResult(
+            strike_rows=(), cumulative_gex={}, cumulative_dex={},
+            key_levels=GexDexKeyLevels(
+                call_resistance=GexDexLevel(strike=75000.0, net_gex=2_000_000.0),
+                put_support=GexDexLevel(strike=60000.0, net_gex=-3_000_000.0),
+                hvl=67000.0, gamma_flip=None,
+            ),
+            spot_price=underlying_price, total_net_gex=-5_000_000.0, total_net_dex=-200.0,
+            currency="BTC",
+        )
+
+    flow = None
+    if include_flow:
+        flow = FlowResult(
+            flow_data={},
+            expiration_totals=FlowTotals(
+                call_buy_volume=0.0, call_sell_volume=0.0, put_buy_volume=0.0, put_sell_volume=0.0,
+            ),
+            bias_interpretation="Moderate Buying", flow_trend="Steady Buy Pressure",
+            top_buy_strikes=(), top_sell_strikes=(), trade_count=50, spot_price=underlying_price,
+            window_start_ms=0, window_end_ms=86_400_000, lookback_hours=24.0,
+            sufficient_data=True, low_confidence=False,
+        )
+
+    vol_surface = None
+    if include_vol_surface:
+        bucket = lambda label, ratio: MoneynessBucket(
+            call_oi=0.0, put_oi=0.0, range_label=label, ratio=ratio, bias="Neutral",
+        )
+        vol_surface = VolSurfaceResult(
+            expiration=expiration, spot_price=underlying_price, iv_by_strike=(),
+            skew_25d=SkewResult(
+                put_25d_iv=56.0, call_25d_iv=48.0, put_25d_strike=None, call_25d_strike=None,
+                risk_reversal_25d=-8.0, interpretation="Put skew",
+            ),
+            pc_by_moneyness=PutCallByMoneyness(
+                atm=bucket("ATM", 1.2), near_otm=bucket("Near-OTM", 0.9), far_otm=bucket("Far-OTM", 0.5),
+            ),
+            second_order_greeks=SecondOrderGreeks(
+                vanna_exposure_holder=0.001, charm_exposure_holder=50.0, vanna_signal="N/A", charm_signal="N/A",
+                # Task C5 review fix round 2: dealer_vanna_exposure/
+                # dealer_charm_exposure are now REQUIRED (no default) --
+                # explicit values here, deliberately NOT the negation of
+                # the holder sum above, so this fixture cannot be mistaken
+                # for (or silently drift back to) the retired negation
+                # convention. These TestBuildExpiryMetrics tests exercise
+                # the MAPPING (ExpiryMetrics.net_vanna/net_charm sourced
+                # from these dealer_* fields), not the split derivation
+                # itself (test_volatility_surface_calculator.py's job).
+                dealer_vanna_exposure=0.002, dealer_charm_exposure=25.0,
+                skipped_instruments=0,
+            ),
+            atm_iv=50.0, vwap_iv=None, mark_iv_average=None, traded_instrument_count=0,
+        )
+
+    bundles = ()
+    if include_instruments:
+        bundles = (
+            ExpirationBundle(
+                expiration=expiration, analysis=analysis, gex_dex=gex_dex, flow=flow,
+                vol_surface=vol_surface, oi_changes=None, iv_percentile=None, trend=None,
+                flow_chart_paths={}, enriched_instruments=(),
+            ),
+        )
+
+    atm_iv_by_expiration = {expiration: 50.0} if (include_vol_surface and include_instruments) else {}
+
+    return OnChainAnalysisResult(
+        currency="BTC",
+        underlying_price=underlying_price,
+        # Task G2-C: build_expiry_metrics now computes DTE via
+        # MarketWideCalculator.calculate_dte(expiration, result.generated_at),
+        # which requires a timezone-aware now -- generated_at must be UTC-aware
+        # here, matching OnChainAnalysisBuilder.build()'s own fix.
+        generated_at=datetime.now(timezone.utc),
+        market_metrics=MarketMetricsResult(
+            dvol=52.0, iv_percentile=75.0, iv_rank=None, current_funding=None, funding_8h=None,
+        ),
+        expirations=bundles,
+        market_wide=market_wide if market_wide is not None else make_default_market_wide(underlying_price),
+        parsed_instruments=parsed_instruments,
+        atm_iv_by_expiration=atm_iv_by_expiration,
+        recent_trades=(),
+    )
 
 
 # =============================================================================
@@ -293,6 +423,24 @@ class TestScoreDEX:
         assert score == 1.0
         assert "DTE≤2" in reason
 
+    def test_invalid_spot_is_insufficient_data_not_fabricated_btc_price(self):
+        """
+        Task Wave-J-C Fix 5: spot<=0 used to silently substitute a
+        BTC-shaped 100000.0 and score a fabricated dex_norm as if it were
+        real -- badly wrong for ETH or any other asset. Must weight-zero
+        with an explicit disclosure instead, like every other
+        insufficient-data input in this scorer set.
+        """
+        score, weight, reason = ScoringEngine.score_dex(600, spot=0.0)
+        assert weight == 0.0
+        assert score == 0.0
+        assert "insufficient data" in reason.lower()
+
+    def test_negative_spot_is_also_insufficient_data(self):
+        score, weight, reason = ScoringEngine.score_dex(600, spot=-5.0)
+        assert weight == 0.0
+        assert "insufficient data" in reason.lower()
+
 
 # =============================================================================
 # TESTS: score_max_pain_gravity — DTE-scaled weight
@@ -316,6 +464,32 @@ class TestScoreMaxPainGravity:
         _, weight, _ = ScoringEngine.score_max_pain_gravity(
             max_pain=65500, spot=65000, dte=3)
         assert weight == 0.2
+
+    def test_insufficient_data_weight_zero_not_scored_as_near_spot(self):
+        """
+        Task Wave-H-B Fix 4: sufficient_data=False (the caller is passing
+        the spot-price display fallback for a max_pain that never
+        resolved) must score as insufficient data at weight zero -- NOT
+        fall through to the ordinary distance-based branches, which for
+        a fallback-to-spot value would compute distance_pct == 0.0 and
+        confidently report "Max pain $X is near spot (+0.0%)" (weight
+        0.2, a real non-zero-weight score) for a computation that never
+        ran.
+        """
+        score, weight, description = ScoringEngine.score_max_pain_gravity(
+            max_pain=65000, spot=65000, dte=3, sufficient_data=False)
+        assert score == 0.0
+        assert weight == 0.0
+        assert "insufficient data" in description.lower()
+        assert "near spot" not in description.lower()
+
+    def test_sufficient_data_default_true_unchanged_behavior(self):
+        """The new sufficient_data param defaults to True -- every
+        pre-existing call site (no keyword passed) must be unaffected."""
+        score, weight, description = ScoringEngine.score_max_pain_gravity(
+            max_pain=75000, spot=65000, dte=3)
+        assert weight == 0.5
+        assert "insufficient data" not in description.lower()
 
 
 # =============================================================================
@@ -393,10 +567,170 @@ class TestScoreVannaCharm:
             iv_pctile=70, gex_total=6_000_000, spot=100000)
         assert weight == 0.15
 
+    def test_none_iv_pctile_treated_as_mid_range_neutral(self):
+        """
+        Task G2-B: iv_pctile=None (unavailable) must not crash (the old
+        signature had no None handling and would raise on `iv_pctile >
+        60`) and must not fabricate a directional vanna signal -- it's
+        treated the same as the mid-range 40-60 band, which already
+        produces vanna_signal=0.0 with no fabricated direction.
+        """
+        score, _, _ = ScoringEngine.score_vanna_charm(
+            net_vanna=0.001, net_charm=0, iv_pctile=None)
+        assert score == 0.0
+
+    def test_none_net_vanna_weight_zero_insufficient_data(self):
+        """
+        Task G2-G: net_vanna=None (vol surface never computed for this
+        expiry) must NOT be treated the same as net_vanna==0 (a real
+        measurement of "no structural drift") -- the old signature had no
+        None handling and would crash on `net_vanna == 0` comparing None
+        with 0 (actually a silent False, no crash, but would then fall
+        into `net_vanna > 0` -> TypeError). A neutral score at zero
+        weight with an explicit disclosure is the correct behavior,
+        matching score_iv_percentile's/score_skew's None branches.
+        """
+        score, weight, reason = ScoringEngine.score_vanna_charm(
+            net_vanna=None, net_charm=50.0, iv_pctile=70)
+        assert score == 0.0
+        assert weight == 0.0
+        assert "insufficient data" in reason.lower()
+
+    def test_none_net_charm_weight_zero_insufficient_data(self):
+        score, weight, reason = ScoringEngine.score_vanna_charm(
+            net_vanna=0.001, net_charm=None, iv_pctile=70)
+        assert score == 0.0
+        assert weight == 0.0
+        assert "insufficient data" in reason.lower()
+
+    def test_none_net_vanna_distinct_from_measured_zero(self):
+        """A genuinely-measured net_vanna=0 must keep its own "zero"
+        signal text, not the None-branch's "insufficient data" text."""
+        _, _, zero_reason = ScoringEngine.score_vanna_charm(net_vanna=0.0, net_charm=0.0)
+        _, _, none_reason = ScoringEngine.score_vanna_charm(net_vanna=None, net_charm=None)
+        assert zero_reason != none_reason
+        assert "insufficient data" not in zero_reason.lower()
+
+    def test_invalid_spot_keeps_real_signal_but_defaults_weight(self):
+        """
+        Task Wave-J-C Fix 5: spot<=0 used to silently substitute a
+        BTC-shaped 100000.0 to force a gamma-adjusted weight band out of
+        an invalid price. Unlike net_vanna/net_charm=None, an invalid
+        spot doesn't invalidate the vanna/charm SIGNAL itself (that's
+        independent of spot) -- only the GEX-based weight adjustment, so
+        the real signal is preserved and the weight falls back to this
+        function's own default/neutral band (0.3) rather than a
+        fabricated-price-derived band.
+        """
+        score, weight, _ = ScoringEngine.score_vanna_charm(
+            net_vanna=0.001, net_charm=50, iv_pctile=70,
+            gex_total=-6_000_000, spot=0.0)
+        assert score > 0  # real signal preserved
+        assert weight == 0.3  # neutral/default band, not gex-derived 0.4/0.15
+
 
 # =============================================================================
 # TESTS: score_futures_basis — no basis_back
 # =============================================================================
+
+class TestScoreSkew:
+    """
+    bugfix_spec.md Item 9 / Decision D6 acceptance test (T9.4 verbatim):
+    score_skew is re-signed to the market risk-reversal convention -- the
+    highest-risk part of this item, tested explicitly rather than assumed.
+    """
+
+    def test_t9_4_negative_risk_reversal_scores_bearish(self):
+        """A NEGATIVE risk reversal (puts richer) must score bearish."""
+        score, _, _ = ScoringEngine.score_skew(risk_reversal_25d=-4.37)
+        assert score < 0
+
+    def test_t9_4_positive_risk_reversal_scores_bullish(self):
+        score, _, _ = ScoringEngine.score_skew(risk_reversal_25d=4.37)
+        assert score > 0
+
+    def test_balanced_near_zero(self):
+        score, _, description = ScoringEngine.score_skew(risk_reversal_25d=0.5)
+        assert score == 0.0
+        assert "Normal" in description
+
+    def test_extreme_put_demand(self):
+        score, _, description = ScoringEngine.score_skew(risk_reversal_25d=-6.0)
+        assert score == -2.0
+        assert "Extreme put demand" in description
+
+    def test_extreme_call_demand(self):
+        score, _, description = ScoringEngine.score_skew(risk_reversal_25d=6.0)
+        assert score == 2.0
+        assert "Calls much richer" in description.lower() or "unusual" in description.lower()
+
+    def test_none_weight_zero_insufficient_data(self):
+        """
+        Task G2-G: risk_reversal_25d=None (vol surface never computed for
+        this expiry) must NOT fall through to the ``<= MILD_POINTS``
+        branch (the old signature had no None handling and a bare
+        comparison ``None < -RISK_REVERSAL_STRONG_POINTS`` raises
+        TypeError in Python 3) -- and, if it somehow avoided crashing,
+        must never render as "RR25 +0.0%: Normal", a specific, confident
+        reading for a metric that was never measured.
+        """
+        score, weight, description = ScoringEngine.score_skew(risk_reversal_25d=None)
+        assert score == 0.0
+        assert weight == 0.0
+        assert "insufficient data" in description.lower()
+        assert "normal" not in description.lower()
+
+
+class TestScoreTermStructure:
+    """
+    Task Wave-H-B Fix 2: score_term_structure never had a None branch --
+    the mapper used to fabricate a confident "CONTANGO" for every
+    missing-data case (ts is None, shape=="FLAT", or a genuine small
+    backwardated tilt) and this scorer scored it as a real reading.
+    """
+
+    def test_none_shape_weight_zero_insufficient_data(self):
+        score, weight, description = ScoringEngine.score_term_structure(
+            shape=None, spread=None, iv_by_dte={})
+        assert score == 0.0
+        assert weight == 0.0
+        assert "insufficient data" in description.lower()
+
+    def test_none_spread_weight_zero_insufficient_data(self):
+        """Defensive: shape and spread should be None together (both
+        come from the same Optional TermStructureResult), but the guard
+        must not crash if only one is somehow None."""
+        score, weight, description = ScoringEngine.score_term_structure(
+            shape="CONTANGO", spread=None, iv_by_dte={})
+        assert score == 0.0
+        assert weight == 0.0
+        assert "insufficient data" in description.lower()
+
+    def test_flat_shape_neutral_not_backwardation(self):
+        """
+        A real "FLAT" shape must get its own neutral reading, not fall
+        into the old bare ``else`` branch (which treated anything not
+        literally "CONTANGO" as backwardation and would have printed
+        "Backwardation -0pts: Mild" for a flat market).
+        """
+        score, weight, description = ScoringEngine.score_term_structure(
+            shape="FLAT", spread=0.3, iv_by_dte={})
+        assert score == 0.0
+        assert "backwardation" not in description.lower()
+        assert "flat" in description.lower()
+
+    def test_strong_contango_scores_bullish_for_selling_back_months(self):
+        score, _, description = ScoringEngine.score_term_structure(
+            shape="CONTANGO", spread=15.0, iv_by_dte={})
+        assert score == 2.0
+        assert "contango" in description.lower()
+
+    def test_strong_backwardation_scores_extreme_fear(self):
+        score, _, description = ScoringEngine.score_term_structure(
+            shape="BACKWARDATION", spread=15.0, iv_by_dte={})
+        assert score == -2.0
+        assert "backwardation" in description.lower()
+
 
 class TestScoreFuturesBasis:
     def test_signature_no_basis_back(self):
@@ -430,6 +764,50 @@ class TestScoreVRP:
         assert "abnormally quiet" in reason
         # Score should be based on raw VRP (8.0) → between 5 and 10 → score 1.0
         assert score == 1.0
+
+    def test_cone_high_with_missing_rv_windows_skips_correction(self):
+        """cone > 85 but rv_10d/rv_20d unavailable: the forward-VRP
+        correction must be skipped (disclosed), not computed from a
+        fabricated 0.0."""
+        score, _, reason = ScoringEngine.score_vrp(
+            vrp=8.0, rv_10d=None, rv_20d=None, rv_30d=50.0, cone_30d_pctile=90,
+        )
+        assert "forward-VRP correction skipped" in reason
+        assert "Forward VRP" not in reason
+        assert score == 1.0
+
+    def test_missing_rv_windows_produce_a_materially_different_score_than_fabricated_zero_would(self):
+        """
+        Task Wave-J-D Fix 1 verification: this proves the audit's claim
+        that a fabricated ``0.0`` RV (the pre-fix
+        RealizedVolatilityResult.rv_10d/rv_20d behavior when a window was
+        never computed) actually changes the resulting score here, not
+        just the narrative text.
+
+        Pre-fix (fabricated 0.0): rv_10d=rv_20d=0.0 -> forward_rv =
+        (0.0+0.0)/2 = 0.0 -> forward_vrp = (vrp + rv_30d) - forward_rv =
+        58.0 -> effective_vrp=58.0 -> score 2.0 ("extremely rich").
+
+        Post-fix (genuine None -- what the mapper now actually produces
+        for an omitted window): the "correction skipped" branch fires,
+        effective_vrp stays the raw vrp=8.0 -> score 1.0 ("moderate
+        sell-vol edge"). A materially different score (2.0 vs 1.0), not a
+        cosmetic difference in wording alone -- this is exactly why
+        Wave-H-D's per-window None needed to survive the property/mapper
+        layer intact.
+        """
+        score_none, _, reason_none = ScoringEngine.score_vrp(
+            vrp=8.0, rv_10d=None, rv_20d=None, rv_30d=50.0, cone_30d_pctile=90,
+        )
+        score_fabricated, _, reason_fabricated = ScoringEngine.score_vrp(
+            vrp=8.0, rv_10d=0.0, rv_20d=0.0, rv_30d=50.0, cone_30d_pctile=90,
+        )
+
+        assert score_none == 1.0
+        assert "forward-VRP correction skipped" in reason_none
+        assert score_fabricated == 2.0
+        assert "Forward VRP" in reason_fabricated
+        assert score_none != score_fabricated
 
 
 # =============================================================================
@@ -482,6 +860,134 @@ class TestFragilityDetection:
         mult, level = ScoringEngine.detect_fragility(scores, funding_8h=0.02)
         assert mult == 0.7  # MODERATE
 
+    def test_none_funding_8h_no_crash_returns_none_level(self):
+        """
+        Task G2-B: funding_8h=None must not crash (the old code computed
+        `funding_8h * 3 * 365` unconditionally) and must not claim a
+        fragility verdict it has no data to support.
+        """
+        scores = [(2.0, 0.8, "DEX strong bullish"), (1.5, 0.7, "P/C bullish")]
+        mult, level = ScoringEngine.detect_fragility(scores, funding_8h=None)
+        assert mult == 1.0
+        assert level == "NONE"
+
+
+# =============================================================================
+# TESTS: classify_direction confidence -- data-coverage factor
+# (Task Wave-I-A Fix 2)
+# =============================================================================
+
+class TestClassifyDirectionConfidence:
+    """
+    Before the fix, ``confidence = abs(avg_score) / 2.0`` alone --
+    zero-weight "insufficient data" entries contribute exactly 0 to both
+    ``weighted_sum`` and ``total_weight``, a complete no-op in the
+    weighted average. That meant turning a real, weakly-disagreeing
+    measurement into a weight-zero "insufficient data" entry (same score,
+    weight 1.0 -> 0.0) RAISED the reported confidence, because the
+    diluting entry was dropped from the average instead of correctly
+    signaling "we know less than before". The fix multiplies the tilt
+    magnitude by a data-coverage factor (fraction of scores that actually
+    carried weight).
+    """
+
+    def test_confidence_unaffected_when_all_inputs_carry_weight(self):
+        """Coverage == 1.0 (the common case) must be numerically
+        identical to the old formula: abs(avg_score) / 2.0."""
+        scores = [
+            (1.0, 1.0, "signal 1"),
+            (1.0, 1.0, "signal 2"),
+        ]
+        _, confidence, _ = RegimeClassifier.classify_direction(scores)
+        assert confidence == pytest.approx(0.5)
+
+    def test_more_insufficient_data_entries_lowers_confidence(self):
+        """
+        The clean, deterministic reproduction: under the OLD formula,
+        appending more zero-weight "insufficient data" placeholders to an
+        otherwise-unchanged score list could never move ``confidence`` at
+        all -- ``s * 0`` and ``+ 0`` are no-ops in both the numerator and
+        denominator of the weighted average, so a run where only 2 of 5
+        attempted signals resolved reported the IDENTICAL confidence as a
+        run where those same 2 were the only signals ever attempted. That
+        is the core defect: the number carries zero information about how
+        much of the attempted data actually came back. The fix's coverage
+        factor (fraction of scores that carried weight) must now respond
+        to this directly.
+        """
+        base = [(1.0, 1.0, "signal 1"), (1.0, 1.0, "signal 2")]
+        _, confidence_full_coverage, _ = RegimeClassifier.classify_direction(base)
+        assert confidence_full_coverage == pytest.approx(0.5)
+
+        with_gaps = base + [
+            (0.0, 0.0, "insufficient A - weight zero"),
+            (0.0, 0.0, "insufficient B - weight zero"),
+            (0.0, 0.0, "insufficient C - weight zero"),
+        ]
+        _, confidence_with_gaps, _ = RegimeClassifier.classify_direction(with_gaps)
+        # Old (buggy) formula: identical 0.5 regardless -- zero-weight
+        # entries are a complete no-op in classify_direction's weighted
+        # average, so it could not distinguish "2 of 2 attempted signals
+        # resolved" from "2 of 5 attempted signals resolved". The fix
+        # must make these differ: coverage = 2/5 = 0.4 -> 0.5 * 0.4 = 0.2.
+        assert confidence_with_gaps < confidence_full_coverage
+        assert confidence_with_gaps == pytest.approx(0.2)
+
+    def test_downgrading_a_real_signal_to_insufficient_data_reduces_confidence_vs_old_formula(self):
+        """
+        The audit finding's literal reproduction: three real (weight=1.0)
+        signals -- two strongly agreeing, one weak/disagreeing -- give
+        confidence 0.267 under both the old and new formula (coverage ==
+        1.0 here, so they agree). Turning ONLY the third into a
+        weight-zero "insufficient data" entry (same score, weight
+        1.0 -> 0.0) used to RAISE confidence to 0.5 under the OLD formula
+        (``abs(avg_score) / 2.0`` alone) -- strictly less real information
+        producing a HIGHER number. The new coverage-weighted formula must
+        report a lower number for that same "data went missing" case than
+        the old formula did (0.333 < 0.5): the diluting entry's removal
+        still concentrates the surviving average (avg_score rises from
+        0.533 to 1.0, an intrinsic property of a weighted mean this fix
+        does not try to suppress), but the coverage penalty (2 of 3
+        inputs) now visibly pulls the number back down from what an
+        uncorrected removal would report.
+        """
+        run_with_real_weak_signal = [
+            (1.0, 1.0, "signal 1: strong bullish"),
+            (1.0, 1.0, "signal 2: strong bullish"),
+            (-0.4, 1.0, "signal 3: mild bearish (a real, if weak, measurement)"),
+        ]
+        _, confidence_full_data, _ = RegimeClassifier.classify_direction(run_with_real_weak_signal)
+        # avg_score = (1.0 + 1.0 - 0.4) / 3 = 0.5333.., confidence = /2 = 0.2667
+        assert confidence_full_data == pytest.approx(1.6 / 3.0 / 2.0)
+
+        run_with_signal_downgraded_to_insufficient = [
+            (1.0, 1.0, "signal 1: strong bullish"),
+            (1.0, 1.0, "signal 2: strong bullish"),
+            (-0.4, 0.0, "signal 3: insufficient data - weight zero"),
+        ]
+        _, confidence_less_data, _ = RegimeClassifier.classify_direction(
+            run_with_signal_downgraded_to_insufficient)
+
+        OLD_FORMULA_VALUE_FOR_THIS_CASE = 0.5  # abs(avg_score) / 2.0 alone, avg_score = 1.0
+        assert confidence_less_data < OLD_FORMULA_VALUE_FOR_THIS_CASE
+        # Coverage-adjusted: avg_score is 1.0 (weighted over the 2
+        # weight-bearing entries), tilt magnitude 0.5, times coverage
+        # 2/3 (2 of 3 scores handed in carried weight) = 1/3.
+        assert confidence_less_data == pytest.approx(1.0 / 3.0)
+
+    def test_confidence_zero_when_no_scores(self):
+        _, confidence, reasons = RegimeClassifier.classify_direction([])
+        assert confidence == 0.0
+        assert reasons == ["No directional data"]
+
+    def test_confidence_zero_when_total_weight_zero(self):
+        """All-insufficient-data input (every score weight-zero) must
+        still short-circuit to confidence 0.0, not divide by zero."""
+        scores = [(1.0, 0.0, "insufficient"), (-1.0, 0.0, "insufficient")]
+        _, confidence, reasons = RegimeClassifier.classify_direction(scores)
+        assert confidence == 0.0
+        assert reasons == ["No weighted data"]
+
 
 # =============================================================================
 # TESTS: classify_vol_regime — spot-normalized GEX + term structure
@@ -489,12 +995,35 @@ class TestFragilityDetection:
 
 class TestClassifyVolRegime:
     def test_suppressed_with_normalized_gex(self):
-        """GEX/spot > 20 + low IV → SUPPRESSED."""
+        """
+        GEX/spot > GEX_NORMALIZED_REGIME_THRESHOLD + low IV → SUPPRESSED.
+
+        Task Wave-I-A Fix 3: the threshold moved from a bare 20 to
+        GEX_NORMALIZED_REGIME_THRESHOLD (1000.0, see thresholds.py for
+        the fixture evidence) -- at real BTC spot/GEX magnitudes, +-20
+        was effectively a pure sign check. 150M / 100k = 1500, comfortably
+        above the new threshold (was already far above the old one too).
+        """
+        regime, _ = RegimeClassifier.classify_vol_regime(
+            gex_total=150_000_000, iv_pctile_score=0, vrp_score=0,
+            skew_score=0, spot=100000)
+        assert regime == VolRegime.SUPPRESSED
+
+    def test_not_suppressed_when_gex_below_regime_threshold(self):
+        """
+        Task Wave-I-A Fix 3 regression test: GEX/spot that would have
+        fired the old bare-20 threshold (2.5M / 100k = 25 > 20) must NOT
+        classify SUPPRESSED now that the threshold reflects real GEX
+        magnitudes -- 25 is far below GEX_NORMALIZED_REGIME_THRESHOLD
+        (1000.0). This is the exact "almost always fires" failure mode
+        the fix closes: a small, not-actually-large GEX reading no
+        longer masquerades as a genuine "dampening" signal.
+        """
         regime, _ = RegimeClassifier.classify_vol_regime(
             gex_total=2_500_000, iv_pctile_score=0, vrp_score=0,
             skew_score=0, spot=100000)
-        # 2.5M / 100k = 25 > 20
-        assert regime == VolRegime.SUPPRESSED
+        assert regime != VolRegime.SUPPRESSED
+        assert regime == VolRegime.NORMAL
 
     def test_elevated_with_vrp_confirmation(self):
         """High IV + VRP confirms → ELEVATED."""
@@ -511,6 +1040,74 @@ class TestClassifyVolRegime:
             skew_score=0, spot=100000, term_structure_score=-1)
         assert regime == VolRegime.ELEVATED
         assert "term structure stressed" in reasons[0]
+
+    def test_explosive_with_negative_gex_high_iv_and_put_side_skew(self):
+        """
+        bugfix_spec.md Item 9 fix-review Critical #1 regression test:
+        negative GEX + high IV + a NEGATIVE skew_score (puts richer, the
+        crash-correlated side under score_skew's re-signed risk-reversal
+        convention) must classify EXPLOSIVE. Before this fix, the EXPLOSIVE
+        branch still checked `skew_score >= 1` (the pre-Item-9 condition,
+        never re-signed alongside score_skew) -- a negative skew_score
+        could never satisfy it, making EXPLOSIVE unreachable on real data
+        (every expiry in the golden fixture scores skew_score <= -1, i.e.
+        puts richer, which is the empirically crash-correlated side).
+        """
+        regime, reasons = RegimeClassifier.classify_vol_regime(
+            gex_total=-150_000_000, iv_pctile_score=1, vrp_score=0,
+            skew_score=-1, spot=100000)
+        # Task Wave-I-A Fix 3: -150M / 100k = -1500, below
+        # -GEX_NORMALIZED_REGIME_THRESHOLD (was a bare -20 -- see
+        # thresholds.py for the fixture evidence behind the new value).
+        assert regime == VolRegime.EXPLOSIVE
+        assert "Explosive regime" in reasons[0]
+
+    def test_not_explosive_when_skew_score_is_call_side(self):
+        """
+        The old (buggy, pre-fix) condition `skew_score >= 1` fired on
+        extreme CALL-side risk reversal -- the wrong side. After the fix,
+        a positive skew_score (calls richer) must NOT trigger EXPLOSIVE
+        even with negative GEX + high IV; it falls through to ELEVATED
+        (mixed confirmation, since vrp_score/term_structure_score are 0).
+        """
+        regime, _ = RegimeClassifier.classify_vol_regime(
+            gex_total=-3_000_000, iv_pctile_score=1, vrp_score=0,
+            skew_score=1, spot=100000)
+        assert regime != VolRegime.EXPLOSIVE
+        assert regime == VolRegime.ELEVATED
+
+    def test_not_explosive_when_skew_score_neutral(self):
+        """skew_score == 0 (Normal/Balanced) must not trigger EXPLOSIVE either."""
+        regime, _ = RegimeClassifier.classify_vol_regime(
+            gex_total=-3_000_000, iv_pctile_score=1, vrp_score=0,
+            skew_score=0, spot=100000)
+        assert regime != VolRegime.EXPLOSIVE
+
+    def test_invalid_spot_skips_gex_checks_falls_through_to_iv_based(self):
+        """
+        Task Wave-J-C Fix 5: spot<=0 used to silently substitute a
+        BTC-shaped 100000.0 and keep classifying SUPPRESSED/EXPLOSIVE off
+        a fabricated gex_normalized -- badly wrong for ETH or any other
+        asset. GEX-based checks must be skipped (never fire SUPPRESSED/
+        EXPLOSIVE off an invalid spot), classification falls through to
+        the IV-only checks, and the skip is disclosed in reasons.
+        """
+        # Would classify SUPPRESSED at a real spot (same GEX as
+        # test_suppressed_with_normalized_gex above).
+        regime, reasons = RegimeClassifier.classify_vol_regime(
+            gex_total=150_000_000, iv_pctile_score=0, vrp_score=0,
+            skew_score=0, spot=0.0)
+        assert regime != VolRegime.SUPPRESSED
+        assert regime == VolRegime.NORMAL
+        assert any("spot" in r.lower() for r in reasons)
+
+    def test_invalid_spot_does_not_fire_explosive_either(self):
+        # Would classify EXPLOSIVE at a real spot (same inputs as
+        # test_explosive_with_negative_gex_high_iv_and_put_side_skew).
+        regime, _ = RegimeClassifier.classify_vol_regime(
+            gex_total=-150_000_000, iv_pctile_score=1, vrp_score=0,
+            skew_score=-1, spot=-1.0)
+        assert regime != VolRegime.EXPLOSIVE
 
 
 # =============================================================================
@@ -580,7 +1177,7 @@ class TestTradeRecommendations:
                        MarketRegime.RANGE_BOUND_BEARISH]:
             result = NarrativeGenerator.generate_trade_recommendations(
                 regime=regime, vol_regime=VolRegime.NORMAL,
-                iv_pctile=80, skew=15.0, gex_total=-5_000_000,
+                iv_pctile=80, risk_reversal_25d=-15.0, gex_total=-5_000_000,
                 near_term_expiry="6MAR26", far_term_expiry="27MAR26",
                 skew_expiry="27MAR26")
             assert "Risk Reversal" not in result, f"Risk Reversal should be excluded in {regime}"
@@ -589,7 +1186,7 @@ class TestTradeRecommendations:
         from coding.core.analytics.synthesis import NarrativeGenerator
         result = NarrativeGenerator.generate_trade_recommendations(
             regime=MarketRegime.RANGE_BOUND_NEUTRAL, vol_regime=VolRegime.NORMAL,
-            iv_pctile=80, skew=10.0, gex_total=0,
+            iv_pctile=80, risk_reversal_25d=-10.0, gex_total=0,
             near_term_expiry="6MAR26", far_term_expiry="27MAR26")
         assert "short put at 25-delta" in result
 
@@ -597,9 +1194,428 @@ class TestTradeRecommendations:
         from coding.core.analytics.synthesis import NarrativeGenerator
         result = NarrativeGenerator.generate_trade_recommendations(
             regime=MarketRegime.RANGE_BOUND_NEUTRAL, vol_regime=VolRegime.NORMAL,
-            iv_pctile=80, skew=1.0, gex_total=0,
+            iv_pctile=80, risk_reversal_25d=-1.0, gex_total=0,
             near_term_expiry="6MAR26", far_term_expiry="27MAR26")
         assert "short call at 25-delta" in result
+
+    def test_none_risk_reversal_ic_still_recommended_with_insufficient_data_note(self):
+        """
+        Task G2-G: risk_reversal_25d=None must not crash the IC
+        skew-adjustment comparison (the old signature had no None
+        handling: `None < -8` raises TypeError in Python 3), and the IC
+        recommendation itself (justified by iv_pctile/regime/vol_regime,
+        independent of RR25) must still be produced -- only its
+        skew-adjustment sub-clause degrades to a disclosure.
+        """
+        from coding.core.analytics.synthesis import NarrativeGenerator
+        result = NarrativeGenerator.generate_trade_recommendations(
+            regime=MarketRegime.RANGE_BOUND_NEUTRAL, vol_regime=VolRegime.NORMAL,
+            iv_pctile=80, risk_reversal_25d=None, gex_total=0,
+            near_term_expiry="6MAR26", far_term_expiry="27MAR26")
+        assert "Short Iron Condor" in result
+        assert "insufficient data" in result.lower()
+
+    def test_none_risk_reversal_skips_risk_reversal_strategy(self):
+        """
+        Task G2-G: Strategy 4 (Risk Reversal) is gated ON
+        risk_reversal_25d itself (a specific "< -10%" threshold trigger)
+        -- a missing reading cannot satisfy that threshold, so the whole
+        recommendation must be skipped, not fabricated from a None
+        comparison.
+        """
+        from coding.core.analytics.synthesis import NarrativeGenerator
+        result = NarrativeGenerator.generate_trade_recommendations(
+            regime=MarketRegime.RANGE_BOUND_NEUTRAL, vol_regime=VolRegime.NORMAL,
+            iv_pctile=None, risk_reversal_25d=None, gex_total=0,
+            near_term_expiry="6MAR26", far_term_expiry="27MAR26")
+        assert "Risk Reversal" not in result
+
+    def test_none_risk_reversal_directional_strategy_discloses_insufficient_data(self):
+        """
+        Task G2-G: Strategy 3 (directional spreads) is triggered by
+        ``regime`` alone -- a missing RR25 must not block or crash the
+        recommendation the regime already justifies, and must render an
+        honest "insufficient data" annotation instead of a fabricated
+        "+0.0%".
+        """
+        from coding.core.analytics.synthesis import NarrativeGenerator
+        result = NarrativeGenerator.generate_trade_recommendations(
+            regime=MarketRegime.TRENDING_UP, vol_regime=VolRegime.NORMAL,
+            iv_pctile=50, risk_reversal_25d=None, gex_total=0,
+            near_term_expiry="6MAR26", far_term_expiry="27MAR26")
+        assert "Bull Call Spread" in result
+        assert "insufficient data" in result.lower()
+        assert "+0.0%" not in result
+
+    def test_vrp_sell_edge_demotes_cheap_iv_long_vol_from_primary(self):
+        """
+        Task Wave-H-B Fix 3 (golden-fixture reproduction): iv_pctile=20
+        (< 30, "cheap") triggers Strategy 2's long-vol recommendation on
+        its own, but vrp=+10.4 says implied vol is still rich vs.
+        realized -- the same disagreement that used to produce "Sell
+        premium..." in the vol narrative and "PRIMARY -- Long
+        Straddle/Strangle... Cheap IV favors owning volatility" in trade
+        recommendations, both with top billing, in the same report. The
+        long-vol idea must be demoted off PRIMARY and the conflict must
+        be disclosed in the text.
+        """
+        from coding.core.analytics.synthesis import NarrativeGenerator
+        result = NarrativeGenerator.generate_trade_recommendations(
+            regime=MarketRegime.TRANSITION, vol_regime=VolRegime.NORMAL,
+            iv_pctile=20, risk_reversal_25d=-3.6, gex_total=0,
+            near_term_expiry="6MAR26", far_term_expiry="25SEP26",
+            vrp=10.4,
+        )
+        assert "PRIMARY — Long Straddle/Strangle" not in result
+        assert "Long Straddle/Strangle" in result
+        assert "signals disagree" in result.lower()
+        assert "reduced confidence" in result.lower()
+
+    def test_vrp_none_cheap_iv_long_vol_stays_primary(self):
+        """A missing VRP cannot disagree with anything -- Strategy 2 must
+        fall back to its original iv_pctile-only PRIMARY behavior."""
+        from coding.core.analytics.synthesis import NarrativeGenerator
+        result = NarrativeGenerator.generate_trade_recommendations(
+            regime=MarketRegime.TRANSITION, vol_regime=VolRegime.NORMAL,
+            iv_pctile=20, risk_reversal_25d=-3.6, gex_total=0,
+            near_term_expiry="6MAR26", far_term_expiry="25SEP26",
+            vrp=None,
+        )
+        assert "PRIMARY — Long Straddle/Strangle" in result
+        assert "signals disagree" not in result.lower()
+
+    def test_vrp_agrees_with_cheap_iv_long_vol_stays_primary(self):
+        """VRP confirming the buy-vol read (vrp <= 5, no sell-edge
+        signal) must not trigger the disagreement branch."""
+        from coding.core.analytics.synthesis import NarrativeGenerator
+        result = NarrativeGenerator.generate_trade_recommendations(
+            regime=MarketRegime.TRANSITION, vol_regime=VolRegime.NORMAL,
+            iv_pctile=20, risk_reversal_25d=-3.6, gex_total=0,
+            near_term_expiry="6MAR26", far_term_expiry="25SEP26",
+            vrp=-8.0,
+        )
+        assert "PRIMARY — Long Straddle/Strangle" in result
+        assert "signals disagree" not in result.lower()
+
+    def test_explosive_regime_long_vol_not_demoted_even_if_vrp_disagrees(self):
+        """
+        Strategy 2's EXPLOSIVE-gamma-regime trigger is a completely
+        different justification from the iv_pctile<30 trigger -- it must
+        stay PRIMARY regardless of VRP (an explosive gamma regime is a
+        real reason to own vol on its own, independent of the vol
+        pricing debate the iv_pctile/VRP conflict is about).
+        """
+        from coding.core.analytics.synthesis import NarrativeGenerator
+        result = NarrativeGenerator.generate_trade_recommendations(
+            regime=MarketRegime.TRANSITION, vol_regime=VolRegime.EXPLOSIVE,
+            iv_pctile=80, risk_reversal_25d=-3.6, gex_total=0,
+            near_term_expiry="6MAR26", far_term_expiry="25SEP26",
+            vrp=15.0,
+        )
+        assert "PRIMARY — Long Straddle/Strangle" in result
+        assert "Explosive gamma regime" in result
+
+    def test_vrp_buy_edge_demotes_expensive_iv_short_ic_from_primary(self):
+        """
+        Symmetric case to the golden-fixture reproduction above: an
+        expensive iv_pctile (>70) triggers Strategy 1's short-IC
+        recommendation on its own, but a strongly negative VRP says
+        implied vol is actually cheap vs. realized -- the same defect
+        class in the opposite direction. Must be demoted off PRIMARY
+        with the conflict disclosed.
+        """
+        from coding.core.analytics.synthesis import NarrativeGenerator
+        result = NarrativeGenerator.generate_trade_recommendations(
+            regime=MarketRegime.RANGE_BOUND_NEUTRAL, vol_regime=VolRegime.NORMAL,
+            iv_pctile=80, risk_reversal_25d=-3.6, gex_total=0,
+            near_term_expiry="6MAR26", far_term_expiry="25SEP26",
+            vrp=-12.0,
+        )
+        assert "PRIMARY — Short Iron Condor" not in result
+        assert "Short Iron Condor" in result
+        assert "signals disagree" in result.lower()
+        assert "reduced confidence" in result.lower()
+
+
+# =============================================================================
+# TESTS: NarrativeGenerator None-handling (Task G2-G)
+# =============================================================================
+
+class TestGenerateRegimeNarrativeNoneLevels:
+    def test_none_put_support_call_resistance_discloses_insufficient_data(self):
+        """
+        Task G2-G: put_support/call_resistance=None (no identified GEX
+        level in this expiry's strike range) must render as an explicit
+        disclosure, not crash on a bare ``:,.0f`` format spec applied to
+        None, and not silently print "$0" -- a specific, wrong level.
+        """
+        from coding.core.analytics.synthesis import NarrativeGenerator
+        result = NarrativeGenerator.generate_regime_narrative(
+            regime=MarketRegime.RANGE_BOUND_NEUTRAL, spot=65000.0,
+            put_support=None, call_resistance=None, max_pain=65000.0,
+            gex_total=1_000_000,
+        )
+        assert "insufficient data" in result.lower()
+        assert "$0" not in result
+
+    def test_real_levels_still_render_dollar_formatted(self):
+        from coding.core.analytics.synthesis import NarrativeGenerator
+        result = NarrativeGenerator.generate_regime_narrative(
+            regime=MarketRegime.RANGE_BOUND_NEUTRAL, spot=65000.0,
+            put_support=60000.0, call_resistance=75000.0, max_pain=65000.0,
+            gex_total=1_000_000,
+        )
+        assert "$60,000" in result
+        assert "$75,000" in result
+
+
+class TestGenerateVolNarrativeNoneRiskReversal:
+    def test_none_risk_reversal_and_sell_iv_no_crash_discloses(self):
+        """
+        Task G2-G: risk_reversal_25d/sell_iv=None must not raise
+        TypeError on a direct ``:+.1f``/``:.1f`` format spec (the old
+        signature had no None handling), and must render an honest
+        disclosure rather than a fabricated reading.
+        """
+        from coding.core.analytics.synthesis import NarrativeGenerator
+        result = NarrativeGenerator.generate_vol_narrative(
+            iv_pctile=85, vrp=12.0, vrp_adjustment="30d RV within normal range.",
+            risk_reversal_25d=None, sell_expiry="6MAR26", sell_iv=None,
+            buy_expiry="27MAR26",
+        )
+        assert "insufficient data" in result.lower()
+
+    def test_real_risk_reversal_still_renders_numeric(self):
+        from coding.core.analytics.synthesis import NarrativeGenerator
+        result = NarrativeGenerator.generate_vol_narrative(
+            iv_pctile=85, vrp=12.0, vrp_adjustment="30d RV within normal range.",
+            risk_reversal_25d=-8.0, sell_expiry="6MAR26", sell_iv=49.0,
+            buy_expiry="27MAR26",
+        )
+        assert "-8.0%" in result
+        assert "49.0%" in result
+
+
+class TestGenerateVolNarrativeRichCheapSide:
+    """
+    Task Wave-J-C Fix 2: risk_reversal_25d = call IV - put IV (score_skew's
+    docstring). ANY negative RR25 means puts are richer than calls, however
+    close to zero. The old tri-branch (< -8 "puts rich" / <= -4 "normal,
+    no clear side" / else "puts cheap") inverted the entire -4..0 sub-range
+    (including this campaign's real fixture value, -3.6): puts are still
+    richer there, just not extremely, yet the "else" branch told a reader
+    to favor buying puts -- the MORE expensive side -- as "cheap". These
+    tests pin the corrected mapping across the whole real number line,
+    using ``sell_strong`` (vrp=12.0 > 10) so {rich_side} is live, and
+    ``buy_moderate`` (vrp=-8.0, between -5 and -10) so {cheap_side} is live.
+    """
+
+    @staticmethod
+    def _sell_strong(risk_reversal_25d):
+        from coding.core.analytics.synthesis import NarrativeGenerator
+        return NarrativeGenerator.generate_vol_narrative(
+            iv_pctile=85, vrp=12.0, vrp_adjustment="30d RV within normal range.",
+            risk_reversal_25d=risk_reversal_25d, sell_expiry="6MAR26", sell_iv=49.0,
+            buy_expiry="27MAR26",
+        )
+
+    @staticmethod
+    def _buy_moderate(risk_reversal_25d):
+        from coding.core.analytics.synthesis import NarrativeGenerator
+        return NarrativeGenerator.generate_vol_narrative(
+            iv_pctile=15, vrp=-8.0, vrp_adjustment="30d RV within normal range.",
+            risk_reversal_25d=risk_reversal_25d, sell_expiry="6MAR26", sell_iv=49.0,
+            buy_expiry="27MAR26",
+        )
+
+    def test_extreme_negative_rr25_favors_puts_as_rich_side(self):
+        result = self._sell_strong(-8.0)
+        assert "makes puts the higher-edge side to sell" in result
+
+    def test_mild_negative_rr25_this_campaigns_real_fixture_value_still_favors_puts(self):
+        """
+        risk_reversal_25d=-3.6 is the real value from this campaign's BTC
+        golden fixture (tests/golden/onchain_synthesis_BTC.txt, "RR25
+        -3.6%"). This is the exact sub-range the old code got backwards.
+        """
+        result = self._sell_strong(-3.6)
+        assert "makes puts the higher-edge side to sell" in result
+        assert "makes calls" not in result
+
+    def test_rr25_near_zero_has_no_clear_rich_side(self):
+        from coding.core.analytics.thresholds import RISK_REVERSAL_MILD_POINTS
+        result = self._sell_strong(RISK_REVERSAL_MILD_POINTS)  # boundary, inclusive
+        assert "makes neither side the higher-edge side to sell" in result
+
+    def test_positive_rr25_favors_calls_as_rich_side(self):
+        result = self._sell_strong(6.0)
+        assert "makes calls the higher-edge side to sell" in result
+
+    def test_none_rr25_has_no_clear_rich_side_and_no_crash(self):
+        result = self._sell_strong(None)
+        assert "makes neither side the higher-edge side to sell" in result
+
+    def test_extreme_negative_rr25_favors_calls_as_cheap_side(self):
+        result = self._buy_moderate(-8.0)
+        assert "edge toward calls" in result
+
+    def test_mild_negative_rr25_this_campaigns_real_fixture_value_still_favors_calls_as_cheap(self):
+        """Puts are still the RICHER side at -3.6 -- calls, not puts, are cheap."""
+        result = self._buy_moderate(-3.6)
+        assert "edge toward calls" in result
+        assert "edge toward puts" not in result
+
+    def test_rr25_near_zero_has_no_clear_cheap_side(self):
+        from coding.core.analytics.thresholds import RISK_REVERSAL_MILD_POINTS
+        result = self._buy_moderate(-RISK_REVERSAL_MILD_POINTS)  # boundary, inclusive
+        assert "edge toward neither side" in result
+
+    def test_positive_rr25_favors_puts_as_cheap_side(self):
+        result = self._buy_moderate(6.0)
+        assert "edge toward puts" in result
+
+    def test_no_double_word_or_broken_grammar_across_all_bands(self):
+        """
+        The old template had a literal hardcoded "puts" after {rich_side}
+        ("... makes {rich_side} puts the higher-edge side to sell."), so a
+        rich_side value of "OTM puts are rich..." rendered "puts puts" and
+        a full clause where a noun was expected. Guard against any
+        regression to double words for every band.
+        """
+        for rr25 in (-8.0, -3.6, 0.0, 6.0, None):
+            result = self._sell_strong(rr25)
+            assert "puts puts" not in result
+            assert "calls calls" not in result
+            assert "side side" not in result
+
+
+class TestGenerateRiskFactorsNoneRiskReversal:
+    def test_none_risk_reversal_skips_extreme_rr25_check_no_crash(self):
+        """
+        Task G2-G: risk_reversal_25d=None must not raise on the direct
+        ``< -12`` comparison (the old signature had no None handling),
+        and a missing reading is not itself a "risk factor" to disclose
+        here (matches the pre-existing cone_30d_pctile/funding_8h None
+        pattern in this same function) -- the run-level DATA QUALITY
+        section is where its absence is disclosed.
+        """
+        from coding.core.analytics.synthesis import NarrativeGenerator
+        result = NarrativeGenerator.generate_risk_factors(
+            cone_30d_pctile=50.0, gex_total=1_000_000, gamma_rolloff=None,
+            funding_8h=0.0, risk_reversal_25d=None,
+        )
+        assert "Extreme RR25" not in result
+
+
+# =============================================================================
+# TESTS: generate_risk_factors -- invalid spot (Task Wave-J-C Fix 5)
+# =============================================================================
+
+class TestGenerateRiskFactorsInvalidSpot:
+    """
+    spot<=0 used to silently substitute a BTC-shaped 100000.0 and keep
+    computing gex_norm as if that were a real price -- badly wrong for
+    ETH or any other asset. An invalid spot means GEX cannot be honestly
+    normalized -- matches the pre-existing cone_30d_pctile/funding_8h
+    "missing input is not a risk factor" convention in this same function.
+    """
+
+    def test_invalid_spot_skips_gex_risk_factor_not_fabricated(self):
+        from coding.core.analytics.synthesis import NarrativeGenerator
+        # Would report "Deeply negative GEX" at a real spot (-150M / 100k
+        # = -1500, well past the -50 threshold).
+        result = NarrativeGenerator.generate_risk_factors(
+            cone_30d_pctile=50.0, gex_total=-150_000_000, gamma_rolloff=None,
+            funding_8h=0.0, risk_reversal_25d=0.0, spot=0.0,
+        )
+        assert "Deeply negative GEX" not in result
+
+    def test_valid_spot_still_reports_deeply_negative_gex(self):
+        """Sanity check: the check itself still fires for a real spot."""
+        from coding.core.analytics.synthesis import NarrativeGenerator
+        result = NarrativeGenerator.generate_risk_factors(
+            cone_30d_pctile=50.0, gex_total=-150_000_000, gamma_rolloff=None,
+            funding_8h=0.0, risk_reversal_25d=0.0, spot=100000.0,
+        )
+        assert "Deeply negative GEX" in result
+
+
+# =============================================================================
+# TESTS: generate_risk_factors -- GAMMA CLIFF trigger (Task Wave-I-A Fix 1)
+# =============================================================================
+
+class TestGenerateRiskFactorsGammaCliff:
+    """
+    Task Wave-I-A Fix 1: the old trigger was ``largest_expiry_dte <= 3``,
+    where ``largest_expiry`` = ``max(expiries, key=lambda e: e.total_oi)``.
+    For BTC the largest-OI expiry is essentially always a far-dated
+    quarterly, so that trigger could never fire even when a genuinely
+    near-dated expiry carried a large share of the book's gamma (real pin
+    risk). The fix reuses GexDexCalculator.calculate_rolloff_profile's own
+    "GAMMA CLIFF" flag (``gamma_cliff_7d``, >30% of gamma mass within 7
+    DTE) via the new ``gamma_rolloff`` parameter instead.
+    """
+
+    @staticmethod
+    def _rolloff(cliff: bool, cum_share_7d: float = 40.0, rows=None):
+        from coding.core.analytics.results.market_wide_results import (
+            GammaRolloffResult, GammaRolloffRow,
+        )
+        if rows is None:
+            rows = (
+                GammaRolloffRow(
+                    expiration="26JUL26", dte_days=1.0, net_gex=50_000_000.0,
+                    share_pct=cum_share_7d, cum_share_pct=cum_share_7d, cum_net_gex=50_000_000.0,
+                ),
+            )
+        return GammaRolloffResult(
+            rows=tuple(rows), gamma_cliff_7d=cliff, cum_share_7d=cum_share_7d,
+            cum_share_30d=cum_share_7d, gross_total=100_000_000.0,
+        )
+
+    def test_no_gamma_rolloff_data_no_cliff_risk(self):
+        """gamma_rolloff=None (roll-off computation never ran) must not
+        raise and must not report a GAMMA CLIFF -- matches the existing
+        cone_30d_pctile/funding_8h "missing input is not a risk factor"
+        convention in this same function."""
+        from coding.core.analytics.synthesis import NarrativeGenerator
+        result = NarrativeGenerator.generate_risk_factors(
+            cone_30d_pctile=50.0, gex_total=1_000_000, gamma_rolloff=None,
+            funding_8h=0.0, risk_reversal_25d=0.0,
+        )
+        assert "GAMMA CLIFF" not in result
+        assert "No elevated risk factors detected" in result
+
+    def test_gamma_rolloff_present_but_not_cliff_no_risk(self):
+        """gamma_cliff_7d=False (real data, just below the 30% threshold)
+        must not report a GAMMA CLIFF either."""
+        from coding.core.analytics.synthesis import NarrativeGenerator
+        result = NarrativeGenerator.generate_risk_factors(
+            cone_30d_pctile=50.0, gex_total=1_000_000,
+            gamma_rolloff=self._rolloff(cliff=False, cum_share_7d=12.0),
+            funding_8h=0.0, risk_reversal_25d=0.0,
+        )
+        assert "GAMMA CLIFF" not in result
+
+    def test_gamma_cliff_fires_regardless_of_largest_oi_expiry_dte(self):
+        """
+        The core reproduction: gamma_cliff_7d=True must fire the risk
+        factor -- this is decoupled from ``largest_expiry_dte`` entirely
+        now (the parameter doesn't even exist anymore), so it fires
+        exactly when there IS genuine near-term gamma concentration,
+        independent of which expiry happens to hold the most open
+        interest.
+        """
+        from coding.core.analytics.synthesis import NarrativeGenerator
+        result = NarrativeGenerator.generate_risk_factors(
+            cone_30d_pctile=50.0, gex_total=1_000_000,
+            gamma_rolloff=self._rolloff(cliff=True, cum_share_7d=63.0),
+            funding_8h=0.0, risk_reversal_25d=0.0,
+        )
+        assert "GAMMA CLIFF" in result
+        assert "63%" in result
+        assert "26JUL26" in result
+        assert "pin risk" in result
 
 
 # =============================================================================
@@ -608,53 +1624,272 @@ class TestTradeRecommendations:
 
 class TestBuildMarketWide:
     def test_returns_market_wide_metrics(self):
-        analyzer = make_analyzer_mock()
-        result = SynthesisMapper.build_market_wide(analyzer)
+        result = make_onchain_result()
+        market = SynthesisMapper.build_market_wide(result)
 
-        assert isinstance(result, MarketWideMetrics)
-        assert result.spot_price == 65000.0
-        assert result.dvol == 52.0
-        assert result.iv_percentile_365d == 75.0
-        assert result.funding_8h == -0.0015
-        assert result.term_structure_shape == "CONTANGO"
-        assert result.rv_10d == 45.0
-        assert result.vrp == 4.0
-        assert result.futures_basis == {"27MAR26": 1.5}
+        assert isinstance(market, MarketWideMetrics)
+        assert market.spot_price == 65000.0
+        assert market.dvol == 52.0
+        assert market.iv_percentile_365d == 75.0
+        assert market.funding_8h == -0.0015
+        assert market.term_structure_shape == "CONTANGO"
+        assert market.rv_10d == 45.0
+        assert market.vrp == 4.0
+        assert market.futures_basis == {"27MAR26": 1.5}
 
-    def test_empty_structured_returns_defaults(self):
-        analyzer = MagicMock()
-        analyzer.underlying_price = 50000.0
-        analyzer.market_wide_structured = {}
+    def test_empty_structured_preserves_none_not_fabricated_zero(self):
+        """
+        Task G2-B (Wave G fresh audit, BLOCKER): this test used to assert
+        ``market.dvol == 0.0`` as the CORRECT behavior for genuinely-
+        missing data -- that was itself the bug. A ``None`` from every
+        Optional section of ``MarketWideResult`` must reach
+        ``MarketWideMetrics`` as ``None``, never a fabricated ``0.0`` --
+        a fabricated zero is indistinguishable from a real measurement
+        and gets scored as one.
+        """
+        empty_mw = MarketWideResult(
+            spot_price=50000.0, currency="BTC", dvol=None, iv_percentile_365d=None,
+            aggregate_gex_dex=None, term_structure=None, futures_basis=None,
+            realized_volatility=None, variance_risk_premium=None, volatility_cone=None,
+            perpetual_funding=None, block_trades=None, cross_asset_correlation=None,
+            failed_sections=(),
+        )
+        result = make_onchain_result(underlying_price=50000.0, market_wide=empty_mw)
 
-        result = SynthesisMapper.build_market_wide(analyzer)
-        assert result.spot_price == 50000.0
-        assert result.dvol == 0.0
-        # Empty shape normalizes to CONTANGO with spread=0 per v2.0 spec
-        assert result.term_structure_shape == "CONTANGO"
-        assert result.term_structure_spread == 0.0
-        assert result.futures_basis == {}
+        market = SynthesisMapper.build_market_wide(result)
+        assert market.spot_price == 50000.0
+        assert market.dvol is None
+        assert market.iv_percentile_365d is None
+        assert market.funding_rate is None
+        assert market.funding_8h is None
+        assert market.rv_10d is None
+        assert market.rv_20d is None
+        assert market.rv_30d is None
+        assert market.vrp is None
+        assert market.cone_10d_pctile is None
+        assert market.cone_20d_pctile is None
+        assert market.cone_30d_pctile is None
+        assert market.perp_oi is None
+        assert market.btc_eth_price_corr is None
+        assert market.btc_eth_dvol_corr is None
+        assert market.failed_sections == ()
+        # Task Wave-H-B Fix 2: term_structure=None (fewer than 2 usable
+        # per-expiry ATM IVs) must preserve None -- the old "empty shape
+        # normalizes to CONTANGO with spread=0" behavior asserted here
+        # WAS the bug (same defect class as every other assertion this
+        # test corrected: a fabricated confident reading standing in for
+        # missing data).
+        assert market.term_structure_shape is None
+        assert market.term_structure_spread is None
+        assert market.term_structure_spread_signed is None
+        assert market.futures_basis == {}
+        # Final verification sweep (post Wave J): aggregate_gex_dex=None
+        # (the whole aggregate-GEX/DEX computation never ran) must reach
+        # MarketWideMetrics as aggregate_total_gex/dex=None, never a
+        # fabricated 0.0 -- the old fabrication made a genuinely-missing
+        # aggregate indistinguishable from a real, measured gamma-neutral
+        # book at the SynthesisEngine.run() regime-selection fallback
+        # (see test_run_real_zero_aggregate_gex_not_swapped_for_largest_expiry).
+        assert market.aggregate_total_gex is None
+        assert market.aggregate_total_dex is None
 
-    def test_flat_shape_normalized_to_contango(self):
-        """Non-standard shape values must be normalized."""
-        analyzer = MagicMock()
-        analyzer.underlying_price = 65000.0
-        analyzer.market_wide_structured = {
-            "shape": "FLAT",  # invalid per spec
-            "spread": 0.3,   # < 0.5
-        }
-        result = SynthesisMapper.build_market_wide(analyzer)
-        assert result.term_structure_shape == "CONTANGO"
-        assert result.term_structure_spread == 0.0
+    def test_partial_rv_and_cone_windows_stay_none_not_fabricated_zero(self):
+        """
+        Task Wave-J-D Fix 1: RealizedVolatilityResult/VolatilityConeResult
+        can be PRESENT (not None) while one specific window is missing
+        (Wave-H-D's deliberate per-window omission from rv_by_window /
+        percentile_by_window when that window's RV/percentile couldn't be
+        computed). The old rv_Xd/cone_Xd_pctile properties fabricated a
+        0.0 for the missing window via `.get(window, 0.0)`, and the
+        mapper's `rv is not None` guard alone couldn't catch that -- only
+        the coarser "whole section missing" case. Only the 30d window is
+        present here; 10d/20d must reach MarketWideMetrics as None.
+        """
+        mw = MarketWideResult(
+            spot_price=65000.0, currency="BTC", dvol=None, iv_percentile_365d=None,
+            aggregate_gex_dex=None, term_structure=None, futures_basis=None,
+            realized_volatility=RealizedVolatilityResult(rv_by_window={30: 0.271}),
+            variance_risk_premium=None,
+            volatility_cone=VolatilityConeResult(percentile_by_window={30: 92.0}),
+            perpetual_funding=None, block_trades=None, cross_asset_correlation=None,
+            failed_sections=(),
+        )
+        result = make_onchain_result(market_wide=mw)
+        market = SynthesisMapper.build_market_wide(result)
+
+        assert market.rv_10d is None
+        assert market.rv_20d is None
+        assert market.rv_30d == pytest.approx(27.1)
+        assert market.cone_10d_pctile is None
+        assert market.cone_20d_pctile is None
+        assert market.cone_30d_pctile == pytest.approx(92.0)
+
+    def test_present_but_null_funding_fields_stay_none_not_zero(self):
+        """
+        PerpetualFundingResult.funding_rate/funding_8h are independently
+        Optional[float] even when the ``funding`` object itself exists.
+        Must still surface as None, not 0.0.
+        """
+        mw = MarketWideResult(
+            spot_price=65000.0, currency="BTC", dvol=None, iv_percentile_365d=None,
+            aggregate_gex_dex=None, term_structure=None, futures_basis=None,
+            realized_volatility=None, variance_risk_premium=None, volatility_cone=None,
+            perpetual_funding=PerpetualFundingResult(
+                perp_open_interest=500_000.0, funding_rate=None, funding_8h=None,
+                funding_trend="Stable", history_points=0,
+            ),
+            block_trades=None, cross_asset_correlation=None, failed_sections=(),
+        )
+        result = make_onchain_result(market_wide=mw)
+        market = SynthesisMapper.build_market_wide(result)
+        assert market.funding_rate is None
+        assert market.funding_8h is None
+        assert market.perp_oi == 500_000.0
+
+    def test_failed_sections_threaded_through_to_metrics(self):
+        """Task G2-B Finding 3: MarketWideResult.failed_sections must
+        reach MarketWideMetrics.failed_sections unchanged."""
+        mw = MarketWideResult(
+            spot_price=65000.0, currency="BTC", dvol=None, iv_percentile_365d=None,
+            aggregate_gex_dex=None, term_structure=None, futures_basis=None,
+            realized_volatility=None, variance_risk_premium=None, volatility_cone=None,
+            perpetual_funding=None, block_trades=None, cross_asset_correlation=None,
+            failed_sections=("futures_basis", "perpetual_funding"),
+        )
+        result = make_onchain_result(market_wide=mw)
+        market = SynthesisMapper.build_market_wide(result)
+        assert market.failed_sections == ("futures_basis", "perpetual_funding")
+
+    def test_flat_shape_passes_through_unchanged(self):
+        """
+        Task Wave-H-B Fix 2: "FLAT" is a real, computed, non-CONTANGO/
+        BACKWARDATION shape (the calculator's own third value, emitted
+        when |back - front| <= 2pts) -- it must pass through as "FLAT",
+        not get relabelled "CONTANGO". The old normalize-to-CONTANGO
+        logic asserted here WAS the bug: it collapsed a genuine FLAT
+        reading (and the real signed spread that goes with it) into a
+        fabricated CONTANGO label.
+        """
+        mw = MarketWideResult(
+            spot_price=65000.0, currency="BTC", dvol=None, iv_percentile_365d=None,
+            aggregate_gex_dex=None,
+            term_structure=TermStructureResult(
+                entries=(), shape="FLAT", spread=0.3, spread_signed=0.3, iv_by_dte={},
+            ),
+            futures_basis=None, realized_volatility=None, variance_risk_premium=None,
+            volatility_cone=None, perpetual_funding=None, block_trades=None,
+            cross_asset_correlation=None, failed_sections=(),
+        )
+        result = make_onchain_result(market_wide=mw)
+        market = SynthesisMapper.build_market_wide(result)
+        assert market.term_structure_shape == "FLAT"
+        assert market.term_structure_spread == 0.3
+        assert market.term_structure_spread_signed == 0.3
+
+    def test_flat_shape_with_negative_signed_spread_not_mislabeled_contango(self):
+        """
+        Task Wave-H-B Fix 2 case (c): a genuine backwardated tilt too
+        small to cross the calculator's +/-2pt threshold (e.g. signed
+        diff -1.8) is classified "FLAT" by the calculator, spread=1.8
+        (abs), spread_signed=-1.8. The old mapper logic forced this to
+        "CONTANGO" with the real negative signed spread still attached,
+        rendering the self-contradictory "CONTANGO (-1.8pts)" in the
+        report header. Must now pass through as "FLAT" with the true
+        signed spread intact.
+        """
+        mw = MarketWideResult(
+            spot_price=65000.0, currency="BTC", dvol=None, iv_percentile_365d=None,
+            aggregate_gex_dex=None,
+            term_structure=TermStructureResult(
+                entries=(), shape="FLAT", spread=1.8, spread_signed=-1.8, iv_by_dte={},
+            ),
+            futures_basis=None, realized_volatility=None, variance_risk_premium=None,
+            volatility_cone=None, perpetual_funding=None, block_trades=None,
+            cross_asset_correlation=None, failed_sections=(),
+        )
+        result = make_onchain_result(market_wide=mw)
+        market = SynthesisMapper.build_market_wide(result)
+        assert market.term_structure_shape == "FLAT"
+        assert market.term_structure_spread == 1.8
+        assert market.term_structure_spread_signed == -1.8
 
     def test_valid_shapes_pass_through(self):
         """CONTANGO and BACKWARDATION pass through unchanged."""
         for shape in ("CONTANGO", "BACKWARDATION"):
-            analyzer = MagicMock()
-            analyzer.underlying_price = 65000.0
-            analyzer.market_wide_structured = {"shape": shape, "spread": 5.0}
-            result = SynthesisMapper.build_market_wide(analyzer)
-            assert result.term_structure_shape == shape
-            assert result.term_structure_spread == 5.0
+            mw = MarketWideResult(
+                spot_price=65000.0, currency="BTC", dvol=None, iv_percentile_365d=None,
+                aggregate_gex_dex=None,
+                term_structure=TermStructureResult(
+                    entries=(), shape=shape, spread=5.0, spread_signed=5.0, iv_by_dte={},
+                ),
+                futures_basis=None, realized_volatility=None, variance_risk_premium=None,
+                volatility_cone=None, perpetual_funding=None, block_trades=None,
+                cross_asset_correlation=None, failed_sections=(),
+            )
+            result = make_onchain_result(market_wide=mw)
+            market = SynthesisMapper.build_market_wide(result)
+            assert market.term_structure_shape == shape
+            assert market.term_structure_spread == 5.0
+
+    def test_blocks_and_large_prints_are_wired_separately(self):
+        """Independent review round 2 (Important #3): real blocks
+        (block_trade_id grouping, institutional_metrics_spec.md section 9)
+        must reach MarketWideMetrics.blocks; the pre-existing notional-
+        filter list must reach large_prints -- NOT the same field, and
+        neither list's content leaks into the other."""
+        mw = MarketWideResult(
+            spot_price=65000.0, currency="BTC", dvol=None, iv_percentile_365d=None,
+            aggregate_gex_dex=None, term_structure=None, futures_basis=None,
+            realized_volatility=None, variance_risk_premium=None, volatility_cone=None,
+            perpetual_funding=None,
+            block_trades=BlockTradesResult(
+                trades=(
+                    BlockTrade(
+                        timestamp=1700000000000, instrument_name="BTC-28FEB26-100000-C",
+                        amount=5.0, direction="buy", notional=500_000.0, implied_volatility=70.0,
+                    ),
+                ),
+                notional_threshold=100_000.0, total_detected=1,
+                blocks=(
+                    Block(
+                        block_trade_id="BLOCK-281688", leg_count=3, observed_leg_count=3,
+                        combo_id="BTC-STRD-31JUL26-63000", combined_premium_usd=12345.0,
+                        total_amount=37.5,
+                        instruments=("A", "B", "C"), timestamp=1700000001000,
+                    ),
+                ),
+                tracked_since="2026-08-02",
+            ),
+            cross_asset_correlation=None, failed_sections=(),
+        )
+        result = make_onchain_result(market_wide=mw)
+        market = SynthesisMapper.build_market_wide(result)
+
+        assert len(market.blocks) == 1
+        assert market.blocks[0]["block_trade_id"] == "BLOCK-281688"
+        assert market.blocks[0]["combined_premium_usd"] == 12345.0
+        assert market.blocks[0]["combo_id"] == "BTC-STRD-31JUL26-63000"
+
+        assert len(market.large_prints) == 1
+        assert market.large_prints[0]["instrument"] == "BTC-28FEB26-100000-C"
+
+        # no conflation: block fields never appear on a large-print entry
+        # and vice versa.
+        assert "block_trade_id" not in market.large_prints[0]
+        assert "instrument" not in market.blocks[0]
+
+    def test_empty_block_trades_result_gives_empty_blocks_and_large_prints(self):
+        empty_mw = MarketWideResult(
+            spot_price=50000.0, currency="BTC", dvol=None, iv_percentile_365d=None,
+            aggregate_gex_dex=None, term_structure=None, futures_basis=None,
+            realized_volatility=None, variance_risk_premium=None, volatility_cone=None,
+            perpetual_funding=None, block_trades=None, cross_asset_correlation=None,
+            failed_sections=(),
+        )
+        result = make_onchain_result(underlying_price=50000.0, market_wide=empty_mw)
+        market = SynthesisMapper.build_market_wide(result)
+        assert market.blocks == []
+        assert market.large_prints == []
 
 
 # =============================================================================
@@ -663,8 +1898,8 @@ class TestBuildMarketWide:
 
 class TestBuildExpiryMetrics:
     def test_complete_data_returns_expiry_metrics(self):
-        analyzer = make_analyzer_mock("27MAR26")
-        result = SynthesisMapper.build_expiry_metrics(analyzer, "27MAR26")
+        onchain_result = make_onchain_result("27MAR26")
+        result = SynthesisMapper.build_expiry_metrics(onchain_result, "27MAR26")
 
         assert result is not None
         assert isinstance(result, ExpiryMetrics)
@@ -675,52 +1910,307 @@ class TestBuildExpiryMetrics:
         assert result.call_resistance_strike == 75000
         assert result.put_support_strike == 60000
         assert result.atm_iv == 50.0
-        assert result.skew_25d == 8.0
+        # bugfix_spec.md Item 9: risk_reversal_25d (call - put) = -8.0,
+        # the sign-flip of the fixture's put_over_call_skew_25d = 8.0.
+        assert result.risk_reversal_25d == -8.0
         assert result.flow_bias == "Moderate Buying"
         assert result.pc_ratio == 0.80
+        assert result.flow_sufficient_data is True
 
     def test_total_volume_calculated(self):
         """total_volume should sum volume from all instruments."""
-        analyzer = make_analyzer_mock("27MAR26")
-        result = SynthesisMapper.build_expiry_metrics(analyzer, "27MAR26")
-        # Mock has volume=100 (call) + volume=80 (put) = 180
+        onchain_result = make_onchain_result("27MAR26")
+        result = SynthesisMapper.build_expiry_metrics(onchain_result, "27MAR26")
+        # Fixture has volume=100 (call) + volume=80 (put) = 180
         assert result.total_volume == 180
 
     def test_no_removed_fields_in_result(self):
         """Removed fields should not be on the result."""
-        analyzer = make_analyzer_mock("27MAR26")
-        result = SynthesisMapper.build_expiry_metrics(analyzer, "27MAR26")
+        onchain_result = make_onchain_result("27MAR26")
+        result = SynthesisMapper.build_expiry_metrics(onchain_result, "27MAR26")
         assert not hasattr(result, "volume_pc_ratio")
         assert not hasattr(result, "vwap_iv")
         assert not hasattr(result, "mark_iv")
 
     def test_missing_gex_data_returns_none(self):
-        analyzer = make_analyzer_mock("27MAR26")
-        analyzer.gex_dex_structured = {}
-        result = SynthesisMapper.build_expiry_metrics(analyzer, "27MAR26")
+        onchain_result = make_onchain_result("27MAR26", include_gex_dex=False)
+        result = SynthesisMapper.build_expiry_metrics(onchain_result, "27MAR26")
         assert result is None
 
     def test_missing_instruments_returns_none(self):
-        analyzer = make_analyzer_mock("27MAR26")
-        analyzer.parsed_data = {}
-        result = SynthesisMapper.build_expiry_metrics(analyzer, "27MAR26")
+        onchain_result = make_onchain_result("27MAR26", include_instruments=False)
+        result = SynthesisMapper.build_expiry_metrics(onchain_result, "27MAR26")
         assert result is None
 
     def test_missing_flow_data_uses_defaults(self):
-        analyzer = make_analyzer_mock("27MAR26")
-        analyzer.buy_sell_flow_structured = {}
-        result = SynthesisMapper.build_expiry_metrics(analyzer, "27MAR26")
+        """
+        Task Wave-J-C Fix 4: the flow analyzer never having run for this
+        expiry used to fall back to the literal "Mixed/Neutral" -- a
+        RECOGNIZED key in score_flow's bias_map, indistinguishable from a
+        genuinely-measured balanced book. Must use the SAME honest
+        "Insufficient flow data" sentinel buy_sell_flow_analyzer already
+        uses for its own insufficiency cases.
+        """
+        onchain_result = make_onchain_result("27MAR26", include_flow=False)
+        result = SynthesisMapper.build_expiry_metrics(onchain_result, "27MAR26")
         assert result is not None
-        assert result.flow_bias == "Mixed/Neutral"
-        assert result.flow_trend == "Mixed/Neutral Flow"
+        assert result.flow_bias == "Insufficient flow data"
+        assert result.flow_trend == "Insufficient flow data"
+        assert result.flow_bias != "Mixed/Neutral"
+        assert result.flow_sufficient_data is False
 
-    def test_missing_vol_surface_uses_defaults(self):
-        analyzer = make_analyzer_mock("27MAR26")
-        analyzer.volatility_surface_structured = {}
-        result = SynthesisMapper.build_expiry_metrics(analyzer, "27MAR26")
+    def test_real_max_pain_flagged_sufficient(self):
+        """The ordinary case (calculate_max_pain resolved a real strike)
+        must flag max_pain_sufficient_data True."""
+        onchain_result = make_onchain_result("27MAR26", max_pain_strike=70000.0)
+        result = SynthesisMapper.build_expiry_metrics(onchain_result, "27MAR26")
         assert result is not None
-        assert result.atm_iv == 0.0
-        assert result.skew_25d == 0.0
+        assert result.max_pain == 70000.0
+        assert result.max_pain_sufficient_data is True
+
+    def test_none_max_pain_falls_back_to_spot_but_flagged_insufficient(self):
+        """
+        Task Wave-H-B Fix 4: calculate_max_pain returned None (nothing to
+        compute from). The spot-price fallback stays for DISPLAY (so the
+        report's max-pain-distance line still shows a value), but
+        max_pain_sufficient_data must be False so score_max_pain_gravity
+        does not score this fallback as if it were a genuine measurement.
+        """
+        onchain_result = make_onchain_result(
+            "27MAR26", underlying_price=65000.0, max_pain_strike=None)
+        result = SynthesisMapper.build_expiry_metrics(onchain_result, "27MAR26")
+        assert result is not None
+        assert result.max_pain == 65000.0  # display fallback preserved
+        assert result.max_pain_sufficient_data is False
+
+    def test_missing_vol_surface_preserves_none(self):
+        """
+        Task G2-G: a missing vol surface (vol_surface=None for this
+        expiration) must leave every vol-surface-derived ExpiryMetrics
+        field as genuine None, not collapse to a fabricated 0.0 -- the
+        same defect class Task G2-B fixed for MarketWideMetrics. A
+        fabricated 0.0 here would previously score as "RR25 +0.0%:
+        Normal" (score_skew) and "Vanna zero + Charm zero" (a real,
+        confident "no structural drift" claim, score_vanna_charm) for a
+        metric that was never measured.
+        """
+        onchain_result = make_onchain_result("27MAR26", include_vol_surface=False)
+        result = SynthesisMapper.build_expiry_metrics(onchain_result, "27MAR26")
+        assert result is not None
+        assert result.atm_iv is None
+        assert result.risk_reversal_25d is None
+        assert result.put_25d_iv is None
+        assert result.call_25d_iv is None
+        assert result.net_vanna is None
+        assert result.net_charm is None
+        # Wave-H-A (Task 5): pc_atm/pc_near_otm/pc_far_otm are now genuine
+        # None too when the vol surface is missing -- corrects the prior
+        # "DELIBERATELY left as 0.0-when-undefined" belief, which was
+        # itself the moneyness-bucket fabrication bug (see ExpiryMetrics'
+        # docstring).
+        assert result.pc_atm is None
+        assert result.pc_near_otm is None
+        assert result.pc_far_otm is None
+
+    def test_missing_gex_key_levels_preserves_none(self):
+        """
+        Task G2-G: GexDexKeyLevels.call_resistance/put_support/hvl are
+        genuinely Optional (no identified level in this expiry's strike
+        range) -- must reach ExpiryMetrics as None, not a strike/GEX of
+        0.0 (which reads as a specific, wrong price level).
+        """
+        onchain_result = make_onchain_result("27MAR26")
+        bundle = onchain_result.bundle("27MAR26")
+        no_levels_gex = GexDexResult(
+            strike_rows=(), cumulative_gex={}, cumulative_dex={},
+            key_levels=GexDexKeyLevels(
+                call_resistance=None, put_support=None, hvl=None, gamma_flip=None,
+            ),
+            spot_price=bundle.gex_dex.spot_price,
+            total_net_gex=bundle.gex_dex.total_net_gex, total_net_dex=bundle.gex_dex.total_net_dex,
+            currency="BTC",
+        )
+        no_levels_bundle = ExpirationBundle(
+            expiration=bundle.expiration, analysis=bundle.analysis, gex_dex=no_levels_gex,
+            flow=bundle.flow, vol_surface=bundle.vol_surface, oi_changes=None,
+            iv_percentile=None, trend=None, flow_chart_paths={}, enriched_instruments=(),
+        )
+        no_levels_result = OnChainAnalysisResult(
+            currency=onchain_result.currency, underlying_price=onchain_result.underlying_price,
+            generated_at=onchain_result.generated_at, market_metrics=onchain_result.market_metrics,
+            expirations=(no_levels_bundle,), market_wide=onchain_result.market_wide,
+            parsed_instruments=onchain_result.parsed_instruments,
+            atm_iv_by_expiration=onchain_result.atm_iv_by_expiration,
+            recent_trades=onchain_result.recent_trades,
+        )
+
+        result = SynthesisMapper.build_expiry_metrics(no_levels_result, "27MAR26")
+
+        assert result is not None
+        assert result.call_resistance_strike is None
+        assert result.call_resistance_gex is None
+        assert result.put_support_strike is None
+        assert result.put_support_gex is None
+        assert result.hvl_strike is None
+
+    def test_underlying_price_sourced_from_own_expiration_not_global_result(self):
+        """
+        CARRIED FINDING (B2 review, task C1): ExpiryMetrics.underlying_price
+        must come from bundle.analysis.underlying_price (this expiration's
+        own forward price), not result.underlying_price (the single global
+        index shared across every expiration) -- same defect class
+        bugfix_spec.md Item 7 already fixed at the report/formatter layer.
+        """
+        onchain_result = make_onchain_result("27MAR26", underlying_price=65000.0)
+        bundle = onchain_result.bundle("27MAR26")
+        # This expiration's own forward price genuinely differs from the
+        # global result.underlying_price.
+        different_analysis = ExpirationAnalysisResult(
+            expiration=bundle.analysis.expiration, underlying_price=65500.0,
+            total_instruments=bundle.analysis.total_instruments,
+            call_count=bundle.analysis.call_count, put_count=bundle.analysis.put_count,
+            strike_rows=bundle.analysis.strike_rows, max_pain=bundle.analysis.max_pain,
+            put_call_ratio=bundle.analysis.put_call_ratio,
+            volume_stats=bundle.analysis.volume_stats, moneyness=bundle.analysis.moneyness,
+            support_resistance=bundle.analysis.support_resistance,
+        )
+        skewed_bundle = ExpirationBundle(
+            expiration=bundle.expiration, analysis=different_analysis, gex_dex=bundle.gex_dex,
+            flow=bundle.flow, vol_surface=bundle.vol_surface, oi_changes=None,
+            iv_percentile=None, trend=None, flow_chart_paths={}, enriched_instruments=(),
+        )
+        skewed_result = OnChainAnalysisResult(
+            currency=onchain_result.currency, underlying_price=onchain_result.underlying_price,
+            generated_at=onchain_result.generated_at, market_metrics=onchain_result.market_metrics,
+            expirations=(skewed_bundle,), market_wide=onchain_result.market_wide,
+            parsed_instruments=onchain_result.parsed_instruments,
+            atm_iv_by_expiration=onchain_result.atm_iv_by_expiration,
+            recent_trades=onchain_result.recent_trades,
+        )
+
+        result = SynthesisMapper.build_expiry_metrics(skewed_result, "27MAR26")
+
+        assert result.underlying_price == 65500.0
+        assert result.underlying_price != skewed_result.underlying_price
+
+    def test_insufficient_flow_data_propagates_gate(self):
+        """bugfix_spec.md Item 6 / F6.3.4 (carried from A4 review): the
+        FlowResult's sufficient_data flag must reach ExpiryMetrics so the
+        scoring engine can force weight 0."""
+        onchain_result = make_onchain_result("27MAR26")
+        bundle = onchain_result.bundle("27MAR26")
+        gated_flow = FlowResult(
+            flow_data={}, expiration_totals=bundle.flow.expiration_totals,
+            bias_interpretation="Insufficient flow data", flow_trend="Insufficient flow data",
+            top_buy_strikes=(), top_sell_strikes=(), trade_count=3,
+            spot_price=65000.0, window_start_ms=0, window_end_ms=86_400_000,
+            lookback_hours=24.0, sufficient_data=False, low_confidence=False,
+        )
+        gated_bundle = ExpirationBundle(
+            expiration=bundle.expiration, analysis=bundle.analysis, gex_dex=bundle.gex_dex,
+            flow=gated_flow, vol_surface=bundle.vol_surface, oi_changes=None,
+            iv_percentile=None, trend=None, flow_chart_paths={}, enriched_instruments=(),
+        )
+        gated_result = OnChainAnalysisResult(
+            currency=onchain_result.currency, underlying_price=onchain_result.underlying_price,
+            generated_at=onchain_result.generated_at, market_metrics=onchain_result.market_metrics,
+            expirations=(gated_bundle,), market_wide=onchain_result.market_wide,
+            parsed_instruments=onchain_result.parsed_instruments,
+            atm_iv_by_expiration=onchain_result.atm_iv_by_expiration,
+            recent_trades=onchain_result.recent_trades,
+        )
+        result = SynthesisMapper.build_expiry_metrics(gated_result, "27MAR26")
+        assert result.flow_bias == "Insufficient flow data"
+        assert result.flow_sufficient_data is False
+
+    def test_unparseable_expiration_skips_instead_of_fabricating_dte_zero(self):
+        """
+        Task Wave-I-A Fix 5: the old code was
+        ``MarketWideCalculator.calculate_dte(expiration, result.generated_at)
+        or 0`` -- collapsing a real ``None`` (calculate_dte's own signal
+        that ``expiration`` didn't parse as "DDMONYY") into the exact same
+        ``0`` a genuine same-day expiry produces. Downstream logic (e.g.
+        score_pc_ratio's DTE<=2 settlement-day clamp) cannot tell "expires
+        today" from "we don't know when this expires" once collapsed.
+
+        "NOTADATE" is a valid dict key (instruments/bundle resolve fine,
+        the same way any expiration string would) but fails
+        ``datetime.strptime(..., "%d%b%y")`` -- reproducing the exact
+        "every other per-expiry computation already worked off this key,
+        only calculate_dte rejects it" scenario the fix's docstring
+        describes. Must now return None (skip this expiration) instead of
+        fabricating ExpiryMetrics(dte=0, ...).
+        """
+        onchain_result = make_onchain_result("NOTADATE")
+        result = SynthesisMapper.build_expiry_metrics(onchain_result, "NOTADATE")
+        assert result is None
+
+    def test_real_same_day_expiry_still_gets_dte_zero(self):
+        """
+        Regression guard for Fix 5: a GENUINE same-day expiry (a real,
+        parseable "DDMONYY" label whose settlement has already passed
+        today) must still produce ``dte == 0`` -- Fix 5 must not turn a
+        real 0-DTE reading into a skip too. Uses an expiration far enough
+        in the past that calculate_dte's clamp-to-0-for-past-expirations
+        branch fires (a real DTE=0, not a parse failure).
+        """
+        past_expiration = "01JAN20"  # long past its 08:00 UTC settlement
+        onchain_result = make_onchain_result(past_expiration)
+        result = SynthesisMapper.build_expiry_metrics(onchain_result, past_expiration)
+        assert result is not None
+        assert result.dte == 0
+
+
+# =============================================================================
+# TESTS: _estimate_transition_window -- must not depend on input order
+# (Task Wave-I-A Fix 4)
+# =============================================================================
+
+class TestEstimateTransitionWindowSortsByDte:
+    """
+    ``SynthesisEngine.run`` already passes its own DTE-sorted
+    ``expiries_sorted`` to ``_estimate_transition_window`` -- no live call
+    site was reachable with unsorted input -- but the function itself had
+    no such precondition documented or enforced, so walking a
+    differently-ordered list of the SAME expiries silently reported a
+    sign flip at a FARTHER expiry as if it were the nearest one.
+    """
+
+    def _expiries(self):
+        return [
+            make_expiry_metrics(expiry="05SEP26", dte=5, total_oi=1000, total_gex=5_000_000),
+            make_expiry_metrics(expiry="10SEP26", dte=10, total_oi=1000, total_gex=-3_000_000),
+            make_expiry_metrics(expiry="20SEP26", dte=20, total_oi=1000, total_gex=-2_000_000),
+            make_expiry_metrics(expiry="30SEP26", dte=30, total_oi=1000, total_gex=4_000_000),
+        ]
+
+    def test_dte_sorted_input_finds_nearest_flip(self):
+        engine = SynthesisEngine()
+        result = engine._estimate_transition_window(self._expiries())
+        assert "10 days" in result
+        assert "10SEP26" in result
+
+    def test_out_of_order_input_still_finds_nearest_flip(self):
+        """
+        The core reproduction: the identical 4 expiries, handed in in a
+        DIFFERENT order (e.g. OI order, or any upstream ordering other
+        than DTE-ascending), must report the SAME nearest transition
+        (10 days at 10SEP26) -- not whichever sign flip happens to
+        iterate first in the given order (which, unsorted, was 20 days at
+        20SEP26 before this fix).
+        """
+        engine = SynthesisEngine()
+        expiries = self._expiries()
+        out_of_order = [expiries[3], expiries[0], expiries[2], expiries[1]]
+        result = engine._estimate_transition_window(out_of_order)
+        assert "10 days" in result
+        assert "10SEP26" in result
+
+    def test_insufficient_oi_still_returns_unclear(self):
+        engine = SynthesisEngine()
+        expiries = [make_expiry_metrics(expiry="05SEP26", dte=5, total_oi=10, total_gex=1.0)]
+        result = engine._estimate_transition_window(expiries)
+        assert "insufficient OI data" in result
 
 
 # =============================================================================
@@ -729,17 +2219,16 @@ class TestBuildExpiryMetrics:
 
 class TestBuildAll:
     def test_returns_market_and_expiries(self):
-        analyzer = make_analyzer_mock("27MAR26")
-        market, expiries = SynthesisMapper.build_all(analyzer)
+        onchain_result = make_onchain_result("27MAR26")
+        market, expiries = SynthesisMapper.build_all(onchain_result)
 
         assert isinstance(market, MarketWideMetrics)
         assert len(expiries) == 1
         assert expiries[0].expiry == "27MAR26"
 
     def test_skips_expiries_with_missing_gex(self):
-        analyzer = make_analyzer_mock("27MAR26")
-        analyzer.gex_dex_structured = {}
-        market, expiries = SynthesisMapper.build_all(analyzer)
+        onchain_result = make_onchain_result("27MAR26", include_gex_dex=False)
+        market, expiries = SynthesisMapper.build_all(onchain_result)
         assert len(expiries) == 0
 
 
@@ -752,12 +2241,15 @@ class TestSynthesisEngineRun:
         result = build_from_current_data()
         assert isinstance(result, str)
         assert len(result) > 100
-        # Must contain a v2.0 regime classification
-        assert any(regime in result for regime in [
-            "RANGE_BOUND_NEUTRAL", "RANGE_BOUND_BULLISH", "RANGE_BOUND_BEARISH",
-            "RANGE_BOUND_ELEVATED", "TRENDING_UP", "TRENDING_DOWN",
-            "VOLATILE_BULLISH", "VOLATILE_BEARISH", "TRANSITION",
-        ])
+        # Must contain a v2.0 regime classification. bugfix_spec.md Item 9
+        # (Decision D6): score_skew's re-sign changes which regime this
+        # hardcoded example data classifies as (an accepted, documented
+        # consequence -- see score_skew's own docstring) -- check against
+        # the actual "Market Regime: <value>" line's rendering (lowercase,
+        # underscored, MarketRegime's own .value strings) rather than one
+        # specific hardcoded regime name, so this stays a genuine smoke
+        # test of "some valid regime was classified", not a pin on which one.
+        assert any(regime.value in result for regime in MarketRegime)
 
     def test_run_returns_regime_label(self):
         engine = SynthesisEngine()
@@ -766,6 +2258,25 @@ class TestSynthesisEngineRun:
         result = engine.run(market, [expiry])
         assert isinstance(result, str)
         assert "Regime:" in result
+
+    def test_run_header_generated_timestamp_is_utc_and_labeled(self, frozen_clock):
+        """
+        Task G2-C: the header's "Generated:" timestamp used to come from
+        naive-local datetime.now() -- switched to datetime.now(timezone.
+        utc), labeled "UTC" in the output. Frozen clock proves the value is
+        the correct UTC representation of the frozen instant, not a
+        local-timezone-shifted one (this module is in tests/conftest.py's
+        frozen-clock list).
+        """
+        anchor_utc = datetime(2026, 7, 25, 8, 0, 0, tzinfo=timezone.utc)
+        frozen_clock(anchor_utc.timestamp())
+
+        engine = SynthesisEngine()
+        market = make_market_wide()
+        expiry = make_expiry_metrics()
+        result = engine.run(market, [expiry])
+
+        assert "Generated: 2026-07-25 08:00:00 UTC" in result
 
     def test_run_contains_trade_recommendations(self):
         engine = SynthesisEngine()
@@ -785,6 +2296,272 @@ class TestSynthesisEngineRun:
         assert "Vol Regime:" in result
         assert "Fragility:" in result
 
+    def test_run_missing_market_data_discloses_insufficient_data_not_fabricated_extremes(self):
+        """
+        Task G2-B (BLOCKER), end-to-end: every field that can genuinely
+        be missing is None. The output must not crash, must not contain
+        the fabricated-extreme text a 0.0 stand-in used to produce (e.g.
+        "Extremely cheap — strong buy-vol" for IV percentile, or "Neutral
+        leverage" for funding), and must visibly disclose the gaps in a
+        DATA QUALITY section.
+        """
+        engine = SynthesisEngine()
+        market = make_market_wide(
+            dvol=None, iv_percentile_365d=None, funding_rate=None, funding_8h=None,
+            rv_10d=None, rv_20d=None, rv_30d=None, vrp=None,
+            cone_10d_pctile=None, cone_20d_pctile=None, cone_30d_pctile=None,
+            perp_oi=None, btc_eth_price_corr=None, btc_eth_dvol_corr=None,
+        )
+        expiry = make_expiry_metrics()
+        result = engine.run(market, [expiry])
+
+        assert isinstance(result, str)
+        assert "DATA QUALITY" in result
+        assert "insufficient data" in result.lower()
+        # The old fabricated-zero failure mode: missing IV percentile
+        # scored as the single most extreme, most confident signal.
+        assert "extremely cheap" not in result.lower()
+        assert "strong buy-vol" not in result.lower()
+        # The old fabricated-zero failure mode for funding: "Neutral
+        # leverage" is a real claim about a real (if unremarkable) reading.
+        assert "Neutral leverage" not in result
+
+    def test_run_missing_term_structure_shows_na_not_fabricated_contango(self):
+        """
+        Task Wave-H-B Fix 2, end-to-end: term_structure_shape/spread=None
+        (fewer than 2 usable per-expiry ATM IVs) must render "N/A" in the
+        report header, never the old fabricated "CONTANGO (+0.0pts)" --
+        a confident, specific reading for a computation that never ran.
+        """
+        engine = SynthesisEngine()
+        market = make_market_wide(
+            term_structure_shape=None, term_structure_spread=None,
+            term_structure_spread_signed=None,
+        )
+        expiry = make_expiry_metrics()
+        result = engine.run(market, [expiry])
+        assert "CONTANGO (+0.0pts)" not in result
+        assert "Term Structure: N/A" in result
+
+    def test_run_vrp_iv_pctile_disagreement_no_contradictory_top_billing(self):
+        """
+        Task Wave-H-B Fix 3, end-to-end (golden-fixture reproduction):
+        iv_pctile=20 (cheap) and vrp=+10.4 (sell-vol edge) disagree. The
+        old behavior produced "VOL ASSESSMENT: ... Sell premium..." AND
+        "TRADE RECOMMENDATIONS: PRIMARY -- Long Straddle/Strangle...
+        Cheap IV favors owning volatility" in the same report -- opposite
+        advice, both top-priority, no arbitration. Must no longer happen.
+        """
+        engine = SynthesisEngine()
+        market = make_market_wide(iv_percentile_365d=20.0, vrp=10.4)
+        expiry = make_expiry_metrics()
+        result = engine.run(market, [expiry])
+
+        assert "Sell premium" in result  # vol narrative still drives off VRP
+        assert "PRIMARY — Long Straddle/Strangle" not in result
+        assert "signals disagree" in result.lower()
+
+    def test_run_fabricated_max_pain_does_not_pull_direction_confidence(self):
+        """
+        Task Wave-H-B Fix 4, end-to-end: a max_pain value that would
+        otherwise produce a real, non-zero-weight directional score (here
+        $100,000 max pain vs. $65,000 spot -- a strong upward pull) must
+        NOT contribute to the direction confidence when
+        max_pain_sufficient_data=False (the value is the spot-price
+        display fallback for a max-pain calculation that never
+        resolved). Compares the same fabricated-looking value with the
+        flag True vs. False -- confidence must drop when the flag says
+        this reading isn't real, proving the fallback no longer reaches
+        scoring as if it were a genuine measurement.
+        """
+        engine = SynthesisEngine()
+        market = make_market_wide()
+
+        expiry_real = make_expiry_metrics(max_pain=100000, max_pain_sufficient_data=True)
+        expiry_fabricated = make_expiry_metrics(max_pain=100000, max_pain_sufficient_data=False)
+
+        result_real = engine.run(market, [expiry_real])
+        result_fabricated = engine.run(market, [expiry_fabricated])
+
+        conf_real = int(re.search(r"confidence: (\d+)%", result_real).group(1))
+        conf_fabricated = int(re.search(r"confidence: (\d+)%", result_fabricated).group(1))
+        assert conf_fabricated < conf_real
+
+    def test_run_missing_expiry_vol_surface_and_gex_levels_no_crash_discloses(self):
+        """
+        Task G2-G, end-to-end: an expiry whose vol surface AND GEX key
+        levels never computed (every field this task made Optional is
+        None) must run through the full pipeline -- scorers, regime
+        narrative, vol narrative, risk factors, trade recommendations,
+        the per-expiry timeframe one-liner, and the final SCORING DETAIL
+        RR25 line -- without raising ``TypeError`` on a bare numeric
+        format spec or ``float(None)``, and must render "insufficient
+        data"/"N/A" disclosures rather than fabricated zeros (e.g. never
+        "RR25 +0.0%: Normal" for a metric that was never measured).
+        """
+        engine = SynthesisEngine()
+        market = make_market_wide()
+        expiry = make_expiry_metrics(
+            atm_iv=None, risk_reversal_25d=None, put_25d_iv=None, call_25d_iv=None,
+            net_vanna=None, net_charm=None,
+            call_resistance_strike=None, call_resistance_gex=None,
+            put_support_strike=None, put_support_gex=None, hvl_strike=None,
+        )
+        result = engine.run(market, [expiry])
+
+        assert isinstance(result, str)
+        assert "insufficient data" in result.lower() or "N/A" in result
+        # RR25 +0.0% is the exact fabricated-extreme text score_skew's old
+        # fall-through produced for a missing reading.
+        assert "RR25 +0.0%: Normal" not in result
+        assert "RR25 +0.0%" not in result
+
+    def test_run_failed_sections_disclosed_in_data_quality(self):
+        """Task G2-B Finding 3: a non-empty failed_sections must surface
+        in the assembled output, distinct from ordinary insufficient-data
+        gaps."""
+        engine = SynthesisEngine()
+        market = make_market_wide(failed_sections=("futures_basis", "perpetual_funding"))
+        expiry = make_expiry_metrics()
+        result = engine.run(market, [expiry])
+        assert "DATA QUALITY" in result
+        assert "futures_basis" in result
+        assert "perpetual_funding" in result
+
+    def test_run_all_expiries_flow_insufficient_disclosed_in_data_quality(self):
+        """
+        Wave H follow-up (institutional-benchmark audit P0-4): the old
+        DATA QUALITY block only inspected iv_pctile/vrp/funding plus
+        failed_sections -- it would print "All market-wide sections
+        computed successfully" even when every single expiry had zero
+        qualifying flow trades. Must now disclose this.
+        """
+        engine = SynthesisEngine()
+        market = make_market_wide()
+        expiries = [
+            make_expiry_metrics(expiry="26JUL26", flow_sufficient_data=False),
+            make_expiry_metrics(expiry="31JUL26", flow_sufficient_data=False),
+        ]
+        result = engine.run(market, expiries)
+        assert "All market-wide sections computed successfully" not in result
+        assert "Order flow: insufficient data for all 2 expiries" in result
+
+    def test_run_all_expiries_max_pain_insufficient_disclosed_in_data_quality(self):
+        """Wave H follow-up (P0-4): same broadening for max_pain."""
+        engine = SynthesisEngine()
+        market = make_market_wide()
+        expiries = [
+            make_expiry_metrics(expiry="26JUL26", max_pain_sufficient_data=False),
+        ]
+        result = engine.run(market, expiries)
+        assert "All market-wide sections computed successfully" not in result
+        assert "Max pain: did not resolve for any of 1 expiries" in result
+
+    def test_run_partial_flow_insufficient_disclosed_in_data_quality(self):
+        """
+        Task Wave-J-C Fix 4: the previous fix only handled the case where
+        EVERY expiry failed (``all(...)``) -- a single failing expiry
+        among several passing ones was completely silent. 1 of 3 expiries
+        insufficient must now be disclosed too, distinctly worded from the
+        "all N" case.
+        """
+        engine = SynthesisEngine()
+        market = make_market_wide()
+        expiries = [
+            make_expiry_metrics(expiry="26JUL26", flow_sufficient_data=False),
+            make_expiry_metrics(expiry="31JUL26", flow_sufficient_data=True),
+            make_expiry_metrics(expiry="7AUG26", flow_sufficient_data=True),
+        ]
+        result = engine.run(market, expiries)
+        assert "All market-wide sections computed successfully" not in result
+        assert "Order flow: insufficient data for 1 of 3 expiries" in result
+        assert "insufficient data for all 3 expiries" not in result
+
+    def test_run_partial_max_pain_insufficient_disclosed_in_data_quality(self):
+        """Same partial-failure broadening for max_pain."""
+        engine = SynthesisEngine()
+        market = make_market_wide()
+        expiries = [
+            make_expiry_metrics(expiry="26JUL26", max_pain_sufficient_data=False),
+            make_expiry_metrics(expiry="31JUL26", max_pain_sufficient_data=True),
+        ]
+        result = engine.run(market, expiries)
+        assert "All market-wide sections computed successfully" not in result
+        assert "Max pain: did not resolve for 1 of 2 expiries" in result
+        assert "did not resolve for any of 2 expiries" not in result
+
+    def test_run_missing_term_structure_disclosed_in_data_quality(self):
+        """Wave H follow-up (P0-4): a None term structure must be listed
+        in DATA QUALITY, not just silently rendered as N/A in the header."""
+        engine = SynthesisEngine()
+        market = make_market_wide(
+            term_structure_shape=None, term_structure_spread=None,
+            term_structure_spread_signed=None,
+        )
+        expiry = make_expiry_metrics()
+        result = engine.run(market, [expiry])
+        assert "All market-wide sections computed successfully" not in result
+        assert "Term structure: insufficient data" in result
+
+    def test_run_all_data_present_still_shows_all_clear(self):
+        """Sanity check: when flow/max_pain/term-structure are all genuinely
+        sufficient, the DATA QUALITY block must still show the all-clear
+        message -- the broadening must not manufacture false negatives."""
+        engine = SynthesisEngine()
+        market = make_market_wide()
+        expiry = make_expiry_metrics(flow_sufficient_data=True, max_pain_sufficient_data=True)
+        result = engine.run(market, [expiry])
+        assert "All market-wide sections computed successfully" in result
+
+    def test_run_regime_narrative_gex_matches_scorer_gex_not_largest_expiry(self):
+        """
+        Task G2-B Finding 2: the regime narrative's "+X.XM GEX" figure
+        must describe the SAME value the vol-regime scorer used (the
+        market-wide aggregate, when available) -- not the largest-OI
+        expiry's own GEX. Confirmed live case: narrative said "+13.7M
+        GEX" while the true aggregate was "+86.8M" (6.3x off). Reproduced
+        here with the same order of magnitude.
+        """
+        engine = SynthesisEngine()
+        market = make_market_wide(aggregate_total_gex=86_800_000.0)
+        expiry = make_expiry_metrics(total_gex=13_700_000.0)
+        result = engine.run(market, [expiry])
+        assert "86.8M GEX" in result
+        assert "13.7M GEX" not in result
+
+    def test_run_real_zero_aggregate_gex_not_swapped_for_largest_expiry(self):
+        """
+        Final verification sweep (post Wave J): a REAL, measured
+        aggregate_total_gex of exactly 0.0 (a genuinely gamma-neutral
+        book) must NOT be treated the same as a missing aggregate and
+        silently swapped for largest_expiry.total_gex -- the old
+        `gex_for_regime = aggregate_total_gex if aggregate_total_gex !=
+        0.0 else largest_expiry.total_gex` sentinel check did exactly
+        that (0.0, whether genuinely measured or fabricated for a
+        missing computation, always failed `!= 0.0` and triggered the
+        swap). Reproduced with a real aggregate of 0.0 alongside a
+        large, easily-distinguished largest_expiry.total_gex (13.7M) --
+        the regime narrative must describe the real 0.0 aggregate, not
+        the swapped-in per-expiry value.
+        """
+        engine = SynthesisEngine()
+        market = make_market_wide(aggregate_total_gex=0.0)
+        expiry = make_expiry_metrics(total_gex=13_700_000.0)
+        result = engine.run(market, [expiry])
+        assert "13.7M GEX" not in result
+        assert "0.0M GEX" in result
+
+    def test_run_missing_aggregate_gex_still_falls_back_to_largest_expiry(self):
+        """Sanity check: a GENUINELY missing aggregate (None, not a real
+        0.0) must still fall back to largest_expiry.total_gex -- only the
+        sentinel comparison changed (`is not None` instead of `!= 0.0`),
+        not the fallback behavior itself for the actually-missing case."""
+        engine = SynthesisEngine()
+        market = make_market_wide(aggregate_total_gex=None)
+        expiry = make_expiry_metrics(total_gex=13_700_000.0)
+        result = engine.run(market, [expiry])
+        assert "13.7M GEX" in result
+
     def test_run_with_minimal_expiries(self):
         engine = SynthesisEngine()
         market = make_market_wide(iv_by_dte={30: 50.0})
@@ -793,11 +2570,145 @@ class TestSynthesisEngineRun:
         assert isinstance(result, str)
 
     def test_run_empty_iv_by_dte_no_crash(self):
+        """
+        Task Wave-J-C Fix 3: an empty iv_by_dte (market-wide term-structure
+        phase failed entirely) used to silently fall back to 0.0, which
+        rendered as a real, confident-looking "~0.0%" measurement --
+        directly violating _generate_header's own stated contract ("never
+        ... silently substituting 0.0"). Must render "N/A" instead, matching
+        every sibling field on the same line (dvol_str, iv_pctile_str, etc).
+        """
         engine = SynthesisEngine()
         market = make_market_wide(iv_by_dte={})
         expiry = make_expiry_metrics()
         result = engine.run(market, [expiry])
-        assert "ATM IV (front): ~0.0%" in result
+        assert "ATM IV (front): ~0.0%" not in result
+        assert "ATM IV (front): N/A" in result
+
+    def test_run_nonempty_iv_by_dte_still_renders_numeric_front_iv(self):
+        """Real iv_by_dte data must still render the actual front IV, not N/A."""
+        engine = SynthesisEngine()
+        market = make_market_wide(iv_by_dte={6: 49.0, 13: 49.5})
+        expiry = make_expiry_metrics()
+        result = engine.run(market, [expiry])
+        assert "ATM IV (front): ~49.0%" in result
+
+    def test_run_narrates_real_blocks_not_large_prints(self):
+        """Independent review round 2 (Important #3): real blocks
+        (block_trade_id grouping) must reach the narrative under
+        "Block Trades"; the notional-filter list, if narrated at all,
+        must be separately labelled as screen prints -- never conflated."""
+        engine = SynthesisEngine()
+        market = make_market_wide(
+            blocks=[
+                {
+                    "block_trade_id": "BLOCK-281688", "leg_count": 3,
+                    "observed_leg_count": 3, "combo_id": "BTC-STRD-31JUL26-63000",
+                    "combined_premium_usd": 2_500_000.0, "total_amount": 37.5,
+                    "instruments": ("A", "B", "C"), "timestamp": 1700000000000,
+                },
+            ],
+            large_prints=[
+                {
+                    "timestamp": 1700000000000, "instrument": "BTC-28FEB26-100000-C",
+                    "size": 5.0, "amount": 5.0, "direction": "buy",
+                    "notional": 500_000.0, "iv": 70.0,
+                },
+            ],
+        )
+        expiry = make_expiry_metrics()
+        result = engine.run(market, [expiry])
+
+        assert "Block Trades" in result
+        assert "BLOCK-281688" in result
+        assert "BTC-STRD-31JUL26-63000" in result
+
+        # if the large-prints list is narrated, it must be separately
+        # labelled as screen prints, not conflated into "Block Trades".
+        if "BTC-28FEB26-100000-C" in result:
+            assert "screen print" in result.lower()
+
+    def test_run_large_print_none_iv_does_not_crash(self):
+        """Fix 1 (Wave H-B): MarketWideTrade.implied_volatility is
+        Optional -- a large print with iv=None is a present-but-None
+        dict key, so `.get('iv', 0)` never applies its default and
+        f"{None:.1f}%" raises TypeError. One thinly-traded large print
+        with no IV must not take down the entire morning note."""
+        engine = SynthesisEngine()
+        market = make_market_wide(
+            blocks=[],
+            large_prints=[
+                {
+                    "timestamp": 1700000000000, "instrument": "BTC-28FEB26-100000-C",
+                    "size": 5.0, "amount": 5.0, "direction": "buy",
+                    "notional": 500_000.0, "iv": None,
+                },
+            ],
+        )
+        expiry = make_expiry_metrics()
+        result = engine.run(market, [expiry])  # must not raise TypeError
+        assert "N/A" in result
+
+    def test_run_no_blocks_states_none_detected_not_silence(self):
+        engine = SynthesisEngine()
+        market = make_market_wide(blocks=[], large_prints=[])
+        expiry = make_expiry_metrics()
+        result = engine.run(market, [expiry])
+        assert "Block Trades" in result
+        assert "none detected" in result.lower() or "no block" in result.lower()
+
+    def test_timeframe_max_pain_distance_uses_own_expiry_price_not_global_spot(self):
+        """
+        CARRIED FINDING (B2 review, task C1): the "MaxPain $X (Y%)" line's
+        distance-from-current percentage must be computed against this
+        expiry's own underlying_price, not market.spot_price -- same
+        defect class bugfix_spec.md Item 7 already fixed at the report/
+        formatter layer.
+        """
+        engine = SynthesisEngine()
+        market = make_market_wide(spot_price=65000.0)
+        # This expiry's own forward price (70000) genuinely differs from
+        # market.spot_price (65000) -- max_pain=70000 sits exactly AT its
+        # own forward (0.0% distance) but far from the global spot
+        # ((70000-65000)/65000*100 = +7.69%). Only the per-expiry-correct
+        # 0.0% figure may appear.
+        expiry = make_expiry_metrics(
+            expiry="27MAR26", dte=27, total_oi=50000,
+            max_pain=70000, underlying_price=70000.0,
+        )
+        result = engine.run(market, [expiry])
+        assert "MaxPain $70,000 (+0.0%)" in result
+        assert "+7.7%" not in result
+        assert "(+7.69%)" not in result
+
+    def test_score_max_pain_gravity_called_with_own_expiry_price_not_global_spot(self):
+        """
+        CARRIED FINDING (B2 review, task C1): all three
+        score_max_pain_gravity call sites (top/near/far-term scoring
+        loops) must pass this expiry's own underlying_price, never the
+        single global market.spot_price -- same defect class
+        bugfix_spec.md Item 7 already fixed at the report/formatter layer.
+        """
+        engine = SynthesisEngine()
+        market = make_market_wide(spot_price=65000.0)
+        expiry = make_expiry_metrics(
+            expiry="27MAR26", dte=27, total_oi=50000, underlying_price=70000.0,
+        )
+
+        with patch.object(
+            ScoringEngine, "score_max_pain_gravity",
+            wraps=ScoringEngine.score_max_pain_gravity,
+        ) as spy:
+            engine.run(market, [expiry])
+
+        assert spy.call_count >= 1
+        for call in spy.call_args_list:
+            args = call.args
+            spot_arg = args[1] if len(args) > 1 else call.kwargs.get("spot")
+            assert spot_arg == 70000.0, (
+                f"score_max_pain_gravity called with spot={spot_arg}, expected "
+                f"the expiry's own underlying_price (70000.0), not market.spot_price (65000.0)"
+            )
 
     def test_dte_zero_excluded_from_top_expiries(self):
         """Expiries with DTE=0 should be excluded from directional scoring."""

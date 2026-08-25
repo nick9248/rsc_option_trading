@@ -2,8 +2,151 @@
 Pytest configuration and fixtures.
 """
 
+import importlib
 import sys
+from datetime import datetime as _real_datetime
 from pathlib import Path
+from typing import Callable
+
+import pytest
 
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
+
+
+def pytest_addoption(parser):
+    """
+    ``--update-golden`` rewrites tests/golden/** from the current pipeline output
+    instead of asserting against it. Used by the on-chain characterization suite
+    (tests/characterization/) — see refactor_design_spec.md section 7.4.
+
+    CI/pre-commit must reject a commit that touches tests/golden/** without a
+    diff summary in the message (enforced by process/review, not by this flag).
+    """
+    parser.addoption(
+        "--update-golden",
+        action="store_true",
+        default=False,
+        help="Rewrite characterization-test golden files instead of asserting against them.",
+    )
+
+
+@pytest.fixture
+def update_golden(request) -> bool:
+    """True when the suite was invoked with --update-golden."""
+    return request.config.getoption("--update-golden")
+
+
+# Modules where the on-chain pipeline reads "now" (see refactor_design_spec.md
+# section 7.3 "Determinism", items 1-4, plus synthesis.py's report-header
+# timestamp and DTE calc — a nondeterminism source the spec's list omitted,
+# patched here per Task A2's brief: "if any nondeterminism source is NOT
+# covered by the spec, patch it via injectable clock/parameters in the test
+# fakes ... do NOT modify production behavior").
+_FROZEN_CLOCK_MODULES = (
+    # T10 (refactor_design_spec.md): on_chain_analyzer.py's own datetime.now()
+    # call (inside generate_report()) is gone along with the method itself --
+    # OnChainMetricsCalculator (the narrowed, renamed class) does no
+    # date/time-dependent calculation. analysis_builder.py (below) is the
+    # sole remaining source of the report header's "now" (OnChainAnalysisResult
+    # .generated_at), so removing this entry is not a coverage gap.
+    #
+    # Task A7 (carried finding #1): coding.core.analytics.buy_sell_flow_
+    # analyzer's own entry is removed here for the same reason --
+    # generate_report_section() (its last datetime.fromtimestamp() call
+    # site, formatting the window start/end for display) was deleted as
+    # dead code (zero production callers; format_flow_section -- and, as
+    # of institutional_metrics_spec.md section 9(b) Task D2 review, its
+    # successor delta_flow_formatter.format_delta_adjusted_flow_section --
+    # take pre-formatted ms timestamps, no datetime import). The module
+    # has carried no time.time() call since T5 (the window is injected by
+    # the caller). Not a coverage gap: nothing left in this module reads
+    # "now".
+    "coding.core.analytics.market_wide_calculator",
+    "coding.service.on_chain.on_chain_analysis_service",
+    # T11 (refactor_design_spec.md): the term-structure DTE calc's
+    # datetime.now(timezone.utc) call and the price-history/cross-asset-
+    # correlation phases' time.time() calls moved out of
+    # on_chain_analysis_service.py into MarketWideOrchestrator when
+    # _calculate_market_wide_metrics was split into 8 named phase methods.
+    "coding.service.on_chain.market_wide_orchestrator",
+    "coding.core.analytics.synthesis",
+    # vrp_calculator.calculate_realized_volatility defaults reference_time to
+    # datetime.now() when the caller doesn't pass one
+    # (MarketWideCalculator.calculate_realized_volatility_multi_window doesn't) —
+    # an undocumented nondeterminism source discovered during Task A4: the
+    # golden master silently drifted (RV window boundaries shift) as real wall
+    # clock time moved away from the fixture's recorded_at_epoch. Same remedy
+    # this list already documents for the other 5 modules.
+    "coding.core.analytics.vrp_calculator",
+    # OnChainAnalysisBuilder.build() stamps OnChainAnalysisResult.generated_at
+    # via its own datetime.now() call (T6) — a second, independently-computed
+    # "now" alongside OnChainAnalyzer.generate_report()'s, discovered via the
+    # T8 per-expiration-file characterization test failing on a timestamp
+    # mismatch. Same remedy as the other entries in this list.
+    "coding.service.on_chain.analysis_builder",
+    # bugfix_spec.md Item 2 / task B1: GexDexCalculator._build_gamma_legs()
+    # calls datetime.now(timezone.utc) to compute each leg's time-to-expiry
+    # for GammaProfileCalculator's grid re-pricing. Same nondeterminism class
+    # as vrp_calculator above, discovered the same way: the golden master
+    # silently drifted (an expiration whose 08:00 UTC settlement is between
+    # the fixture's recorded_at_epoch and real wall-clock "now" flips from a
+    # priceable book to every leg gated as "already expired", changing
+    # zero_gamma_level/regime for that expiration from run to run depending
+    # on which day the suite executes). Same remedy as the other entries.
+    "coding.core.analytics.gex_dex_calculator",
+)
+
+
+def apply_frozen_clock(monkeypatch_obj, epoch: float) -> _real_datetime:
+    """
+    Freeze ``datetime.now()`` (in the modules listed in _FROZEN_CLOCK_MODULES)
+    and the global ``time.time()`` to a fixed epoch, using any monkeypatch-like
+    object with a ``setattr(target, name, value)`` method — plain function
+    (not a fixture) so both the function-scoped ``frozen_clock`` fixture below
+    and characterization tests that need a module-scoped freeze (one pipeline
+    run reused across several assertions) can share the exact same logic.
+
+    Pass the exact epoch ``scripts/record_onchain_fixture.py`` anchored the
+    fixture to, so every relative time window the pipeline recomputes at test
+    time (24h flow lookback, 35d/180d/365d chart windows) is byte-identical
+    to what was recorded — required for the fakes' exact-kwargs dict lookup
+    to match.
+
+    Returns the frozen ``datetime`` instance for convenience.
+    """
+    frozen_dt = _real_datetime.fromtimestamp(epoch)
+
+    class _FrozenDateTime(_real_datetime):
+        @classmethod
+        def now(cls, tz=None):
+            # bugfix_spec.md Item 5 (F5.3.1) has production code call
+            # datetime.now(timezone.utc) explicitly. Honor a requested tz by
+            # returning the correct aware instant for the same epoch, rather
+            # than silently handing back the naive local frozen_dt (which
+            # would crash any tz-aware-minus-naive subtraction downstream).
+            if tz is not None:
+                return _real_datetime.fromtimestamp(epoch, tz=tz)
+            return frozen_dt
+
+    for module_name in _FROZEN_CLOCK_MODULES:
+        module = importlib.import_module(module_name)
+        monkeypatch_obj.setattr(module, "datetime", _FrozenDateTime)
+
+    # on_chain_analysis_service does `import time; time.time()` — patching
+    # the real `time` module's `time` attribute affects every consumer
+    # globally for the patch's duration (monkeypatch reverts automatically).
+    time_module = importlib.import_module("time")
+    monkeypatch_obj.setattr(time_module, "time", lambda: epoch)
+
+    return frozen_dt
+
+
+@pytest.fixture
+def frozen_clock(monkeypatch) -> Callable[[float], _real_datetime]:
+    """Function-scoped ``frozen_clock(epoch)`` fixture wrapping ``apply_frozen_clock``."""
+
+    def _freeze(epoch: float) -> _real_datetime:
+        return apply_frozen_clock(monkeypatch, epoch)
+
+    return _freeze

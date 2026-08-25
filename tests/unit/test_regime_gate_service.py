@@ -4,9 +4,10 @@ motivated definition (net_gex>0 AND rv_ratio<1) -- do not change this
 definition based on the 2026-07-20 16-sample backtest, which found it
 backwards; see docs/superpowers/specs/2026-07-20-defined-risk-scanner-design.md.
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+import coding.service.scanner.regime_gate_service as regime_gate_service_module
 from coding.service.scanner.regime_gate_service import RegimeGateService
 
 
@@ -95,3 +96,48 @@ class TestCompute:
         assert result["rv_30d"] is None
         assert result["rv_ratio"] is None
         assert result["gate_pass"] is False
+
+    def test_default_as_of_is_utc_correct_not_local_and_naive(self, monkeypatch):
+        """
+        Task G2-C: datetime.utcnow() (deprecated, naive) is replaced with
+        datetime.now(timezone.utc).replace(tzinfo=None) -- must produce the
+        exact same naive-but-UTC-valued datetime datetime.utcnow() used to
+        (this module's DB-facing convention: onchain_analysis_snapshots.
+        snapshot_hour is naive-UTC, and _compute_net_gex compares as_of
+        against it directly, so a tz-aware as_of would silently mis-compare
+        or error). Proven with a fake `datetime` whose now(tz) return value
+        depends on tz, the same failure mode a naive-local
+        datetime.now()-without-tz call would have produced.
+        """
+        fixed_utc_instant = datetime(2026, 7, 20, 14, 30, 0, tzinfo=timezone.utc)
+
+        class _FakeDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                if tz is not None:
+                    return fixed_utc_instant
+                # A naive-local call (the pre-fix code path) would return a
+                # DIFFERENT wall-clock value than the correct UTC instant --
+                # simulated here as a deliberately wrong sentinel so the
+                # test fails loudly if production code ever reverts to
+                # calling datetime.now() without an explicit tz again.
+                return datetime(1999, 1, 1)
+
+        monkeypatch.setattr(regime_gate_service_module, "datetime", _FakeDatetime)
+
+        repo = FakeRepo({}, gex_hour_row=None, gex_sum_row=None)
+        service = RegimeGateService(repository=repo)
+        captured_as_of = {}
+        original_compute_net_gex = RegimeGateService._compute_net_gex
+
+        def _spy(self, currency, as_of):
+            captured_as_of["value"] = as_of
+            return original_compute_net_gex(self, currency, as_of)
+
+        monkeypatch.setattr(RegimeGateService, "_compute_net_gex", _spy)
+
+        service.compute("BTC")
+
+        resolved_as_of = captured_as_of["value"]
+        assert resolved_as_of.tzinfo is None
+        assert resolved_as_of == fixed_utc_instant.replace(tzinfo=None)

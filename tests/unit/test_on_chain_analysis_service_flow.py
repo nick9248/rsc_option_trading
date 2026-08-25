@@ -3,6 +3,11 @@ Unit tests for OnChainAnalysisService.get_filtered_aggregate_flow.
 
 Tests the filtered aggregation path that re-runs BuySellFlowAnalyzer per expiration
 instead of using the pre-aggregated table (which lacks raw amount/index_price columns).
+
+T5 (refactor_design_spec.md, compatibility-map consumer row #16): this service
+method now owns the DB fetch (repository.get_trades_for_flow_analysis) and
+injects trades + an explicit window into BuySellFlowAnalyzer — the analyzer's
+constructor no longer takes a repository or trade_filter.
 """
 
 import pytest
@@ -48,6 +53,15 @@ def _flow_data(buy_vol=10.0, sell_vol=5.0):
     }
 
 
+def _mock_analyzer_instance(flow_data_dict):
+    """A MagicMock standing in for a BuySellFlowAnalyzer instance whose
+    .calculate() returns a typed-result stand-in — .to_dict() is what the
+    service actually calls."""
+    instance = MagicMock()
+    instance.calculate.return_value.to_dict.return_value = {"flow_data": flow_data_dict}
+    return instance
+
+
 # ---------------------------------------------------------------------------
 # Early-exit paths
 # ---------------------------------------------------------------------------
@@ -74,9 +88,7 @@ class TestGetFilteredAggregateFlowEarlyExit:
         with patch(
             "coding.service.on_chain.on_chain_analysis_service.BuySellFlowAnalyzer"
         ) as MockAnalyzer:
-            mock_instance = MagicMock()
-            mock_instance.calculate.return_value = {"flow_data": {}}
-            MockAnalyzer.return_value = mock_instance
+            MockAnalyzer.return_value = _mock_analyzer_instance({})
 
             result = service.get_filtered_aggregate_flow("BTC", "block")
 
@@ -90,9 +102,7 @@ class TestGetFilteredAggregateFlowEarlyExit:
         with patch(
             "coding.service.on_chain.on_chain_analysis_service.BuySellFlowAnalyzer"
         ) as MockAnalyzer:
-            mock_instance = MagicMock()
-            mock_instance.calculate.return_value = {"flow_data": {}}
-            MockAnalyzer.return_value = mock_instance
+            MockAnalyzer.return_value = _mock_analyzer_instance({})
 
             result = service.get_filtered_aggregate_flow("BTC", "block")
 
@@ -116,10 +126,8 @@ class TestGetFilteredAggregateFlowAggregation:
         with patch(
             "coding.service.on_chain.on_chain_analysis_service.BuySellFlowAnalyzer"
         ) as MockAnalyzer:
-            mock_instance = MagicMock()
             # Both expirations return the same flow_data (10 buy, 5 sell)
-            mock_instance.calculate.return_value = {"flow_data": _flow_data()}
-            MockAnalyzer.return_value = mock_instance
+            MockAnalyzer.return_value = _mock_analyzer_instance(_flow_data())
 
             result = service.get_filtered_aggregate_flow("BTC", "non_block")
 
@@ -136,9 +144,7 @@ class TestGetFilteredAggregateFlowAggregation:
         with patch(
             "coding.service.on_chain.on_chain_analysis_service.BuySellFlowAnalyzer"
         ) as MockAnalyzer:
-            mock_instance = MagicMock()
-            mock_instance.calculate.return_value = {"flow_data": _flow_data(buy_vol=10.0, sell_vol=4.0)}
-            MockAnalyzer.return_value = mock_instance
+            MockAnalyzer.return_value = _mock_analyzer_instance(_flow_data(buy_vol=10.0, sell_vol=4.0))
 
             result = service.get_filtered_aggregate_flow("BTC", "block")
 
@@ -152,9 +158,7 @@ class TestGetFilteredAggregateFlowAggregation:
         with patch(
             "coding.service.on_chain.on_chain_analysis_service.BuySellFlowAnalyzer"
         ) as MockAnalyzer:
-            mock_instance = MagicMock()
-            mock_instance.calculate.return_value = {"flow_data": _flow_data(buy_vol=8.0, sell_vol=4.0)}
-            MockAnalyzer.return_value = mock_instance
+            MockAnalyzer.return_value = _mock_analyzer_instance(_flow_data(buy_vol=8.0, sell_vol=4.0))
 
             result = service.get_filtered_aggregate_flow("BTC", "block")
 
@@ -168,9 +172,7 @@ class TestGetFilteredAggregateFlowAggregation:
         with patch(
             "coding.service.on_chain.on_chain_analysis_service.BuySellFlowAnalyzer"
         ) as MockAnalyzer:
-            mock_instance = MagicMock()
-            mock_instance.calculate.return_value = {"flow_data": _flow_data(buy_vol=5.0, sell_vol=0.0)}
-            MockAnalyzer.return_value = mock_instance
+            MockAnalyzer.return_value = _mock_analyzer_instance(_flow_data(buy_vol=5.0, sell_vol=0.0))
 
             result = service.get_filtered_aggregate_flow("BTC", "block")
 
@@ -190,12 +192,11 @@ class TestGetFilteredAggregateFlowAggregation:
         def side_effect(**kwargs):
             nonlocal call_count
             call_count += 1
-            m = MagicMock()
             if call_count == 1:
+                m = MagicMock()
                 m.calculate.side_effect = RuntimeError("DB error")
-            else:
-                m.calculate.return_value = {"flow_data": _flow_data()}
-            return m
+                return m
+            return _mock_analyzer_instance(_flow_data())
 
         with patch(
             "coding.service.on_chain.on_chain_analysis_service.BuySellFlowAnalyzer",
@@ -208,19 +209,139 @@ class TestGetFilteredAggregateFlowAggregation:
         c_data = result["flow_data"][85000]["C"]
         assert c_data["buy_volume"] == pytest.approx(10.0)
 
-    def test_trade_filter_passed_to_analyzer(self, service, mock_repo):
+    def test_trade_filter_and_window_passed_to_repository_fetch(self, service, mock_repo):
+        """T5: trade_filter and the explicit window go to the repository
+        fetch, not to the BuySellFlowAnalyzer constructor (which no longer
+        accepts either)."""
         mock_repo.get_active_expirations_with_flow.return_value = [_exp_info("28MAR26")]
         mock_repo.get_flow_metrics.return_value = {"spot_price": 85000.0}
+        mock_repo.get_trades_for_flow_analysis.return_value = []
 
         with patch(
             "coding.service.on_chain.on_chain_analysis_service.BuySellFlowAnalyzer"
         ) as MockAnalyzer:
-            mock_instance = MagicMock()
-            mock_instance.calculate.return_value = {"flow_data": {}}
-            MockAnalyzer.return_value = mock_instance
+            MockAnalyzer.return_value = _mock_analyzer_instance({})
 
             service.get_filtered_aggregate_flow("ETH", "non_block")
 
-        _, kwargs = MockAnalyzer.call_args
-        assert kwargs["trade_filter"] == "non_block"
-        assert kwargs["currency"] == "ETH"
+        _, fetch_kwargs = mock_repo.get_trades_for_flow_analysis.call_args
+        assert fetch_kwargs["trade_filter"] == "non_block"
+        assert fetch_kwargs["currency"] == "ETH"
+        assert fetch_kwargs["expiration"] == "28MAR26"
+        assert isinstance(fetch_kwargs["start_ts"], int)
+        assert isinstance(fetch_kwargs["end_ts"], int)
+        assert fetch_kwargs["start_ts"] < fetch_kwargs["end_ts"]
+
+        _, analyzer_kwargs = MockAnalyzer.call_args
+        assert "trade_filter" not in analyzer_kwargs
+        assert "repository" not in analyzer_kwargs
+        assert analyzer_kwargs["currency"] == "ETH"
+        assert analyzer_kwargs["window_start_ms"] == fetch_kwargs["start_ts"]
+        assert analyzer_kwargs["window_end_ms"] == fetch_kwargs["end_ts"]
+
+
+# ---------------------------------------------------------------------------
+# Single-fetch guarantee for the main per-expiration flow phase
+# ---------------------------------------------------------------------------
+
+class TestCalculateBuySellFlowSingleFetch:
+    """bugfix_spec.md Item 6a: exactly one DB fetch, one calculate() call,
+    per expiration in the main analysis pipeline."""
+
+    def _make_analyzer(self, currency="BTC", expirations=("27MAR26",)):
+        from coding.core.analytics.on_chain_analyzer import OnChainAnalyzer
+
+        analyzer = OnChainAnalyzer([], currency)
+        analyzer.parsed_data = {exp: [] for exp in expirations}
+        # bugfix_spec.md Item 7: underlying_price is now a read-only
+        # deprecated alias for index_price -- set it via set_index_price().
+        analyzer.set_index_price(64_000.0)
+        return analyzer
+
+    def test_one_repository_fetch_and_one_calculate_call_per_expiration(self, service, mock_repo):
+        mock_repo.get_trades_for_flow_analysis.return_value = []
+        analyzer = self._make_analyzer()
+
+        with patch(
+            "coding.service.on_chain.on_chain_analysis_service.BuySellFlowAnalyzer"
+        ) as MockAnalyzer, patch(
+            "coding.service.on_chain.on_chain_analysis_service.generate_flow_distribution_chart"
+        ), patch(
+            "coding.service.on_chain.on_chain_analysis_service.generate_net_flow_chart"
+        ), patch(
+            "coding.service.on_chain.on_chain_analysis_service.generate_flow_trend_chart"
+        ), patch(
+            "coding.service.on_chain.on_chain_analysis_service.save_chart", return_value=""
+        ), patch(
+            "coding.service.on_chain.on_chain_analysis_service.inject_hover_js"
+        ):
+            instance = MagicMock()
+            instance.calculate.return_value.to_dict.return_value = {"flow_data": {}}
+            MockAnalyzer.return_value = instance
+
+            service._calculate_buy_sell_flow(analyzer, progress_callback=lambda msg: None)
+
+        assert mock_repo.get_trades_for_flow_analysis.call_count == 1
+        # T10 (refactor_design_spec.md): generate_report_section() is no
+        # longer called at all -- rendering operates on the typed result
+        # the builder receives (as of institutional_metrics_spec.md
+        # section 9(b) Task D2 review, via delta_flow_formatter.
+        # format_delta_adjusted_flow_section, not format_flow_section --
+        # see that module's docstring). The "one fetch, one calculate"
+        # invariant this test exists to pin is still exactly what's
+        # asserted here.
+        assert instance.calculate.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# T9 (refactor_design_spec.md): get_flow_metrics / get_aggregated_flow_metrics
+# passthroughs -- so GUI callers (FlowChartsWindow) go through the service
+# instead of holding a raw DatabaseRepository reference directly.
+# ---------------------------------------------------------------------------
+
+
+def test_get_flow_metrics_delegates_to_repository(service, mock_repo):
+    mock_repo.get_flow_metrics.return_value = {"flow_data": {"x": 1}, "spot_price": 90000.0}
+
+    result = service.get_flow_metrics("BTC", "28MAR26")
+
+    mock_repo.get_flow_metrics.assert_called_once_with("BTC", "28MAR26")
+    assert result == {"flow_data": {"x": 1}, "spot_price": 90000.0}
+
+
+def test_get_flow_metrics_without_repository_returns_empty_shape():
+    service = OnChainAnalysisService(repository=None)
+    assert service.get_flow_metrics("BTC", "28MAR26") == {"flow_data": {}, "spot_price": 0.0}
+
+
+def test_get_aggregated_flow_metrics_delegates_to_repository(service, mock_repo):
+    mock_repo.get_aggregated_flow_metrics.return_value = {"flow_data": {"y": 2}, "spot_price": 91000.0}
+
+    result = service.get_aggregated_flow_metrics("BTC")
+
+    mock_repo.get_aggregated_flow_metrics.assert_called_once_with("BTC")
+    assert result == {"flow_data": {"y": 2}, "spot_price": 91000.0}
+
+
+def test_get_aggregated_flow_metrics_without_repository_returns_empty_shape():
+    service = OnChainAnalysisService(repository=None)
+    assert service.get_aggregated_flow_metrics("BTC") == {"flow_data": {}, "spot_price": 0.0}
+
+
+# ---------------------------------------------------------------------------
+# Review fix (task A6): OnChainAnalysisService.create_default() -- the
+# service-layer factory GUI callers use instead of constructing
+# DatabaseRepository themselves (the review bar: "zero business logic,
+# zero direct repository/API access" in GUI modules).
+# ---------------------------------------------------------------------------
+
+
+def test_create_default_constructs_its_own_repository():
+    with patch(
+        "coding.service.on_chain.on_chain_analysis_service.DatabaseRepository"
+    ) as mock_repo_cls:
+        service = OnChainAnalysisService.create_default()
+
+    mock_repo_cls.assert_called_once_with()
+    assert service.repository is mock_repo_cls.return_value
+    assert service.api is None

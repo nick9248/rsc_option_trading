@@ -1,0 +1,866 @@
+"""
+Unit tests for the on-chain analysis result models
+(refactor_design_spec.md section T2 / section 2).
+
+Covers construction, frozen-ness (immutability), and ``to_dict()`` /
+``to_flat_dict()`` round-trips against the exact legacy dict shapes
+documented in the spec's Result-model definitions section.
+
+Purely additive: these tests exercise only the new ``results`` package.
+No production wiring is touched (that is T3+).
+"""
+
+import dataclasses
+
+import pytest
+
+from coding.core.analytics.results import (
+    Block,
+    BlockTrade,
+    BlockTradesResult,
+    CrossAssetCorrelationResult,
+    ExpirationAnalysisResult,
+    ExpirationBundle,
+    FlowResult,
+    FlowTotals,
+    FuturesBasisEntry,
+    FuturesBasisResult,
+    GexDexKeyLevels,
+    GexDexLevel,
+    GexDexResult,
+    GexDexStrikeRow,
+    IvByStrikeRow,
+    IvPercentileResult,
+    LevelRef,
+    MarketMetricsResult,
+    MarketWideResult,
+    MaxPainResult,
+    MoneynessBucket,
+    MoneynessLeg,
+    MoneynessResult,
+    OiChangeRow,
+    OiChangesResult,
+    OnChainAnalysisResult,
+    PerpetualFundingResult,
+    PutCallByMoneyness,
+    PutCallRatioResult,
+    RealizedVolatilityResult,
+    SecondOrderGreeks,
+    SkewResult,
+    StrikeFlowEntry,
+    StrikeOiRow,
+    SupportResistanceResult,
+    TermStructureEntry,
+    TermStructureResult,
+    TopStrikeEntry,
+    TrendSnapshot,
+    VarianceRiskPremiumResult,
+    VolatilityConeResult,
+    VolSurfaceResult,
+    VolumeStatsResult,
+)
+
+
+# ---------------------------------------------------------------------------
+# Frozen-ness (every model must be immutable)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "cls",
+    [
+        StrikeOiRow,
+        MaxPainResult,
+        PutCallRatioResult,
+        VolumeStatsResult,
+        MoneynessLeg,
+        MoneynessResult,
+        LevelRef,
+        SupportResistanceResult,
+        ExpirationAnalysisResult,
+        GexDexStrikeRow,
+        GexDexLevel,
+        GexDexKeyLevels,
+        GexDexResult,
+        StrikeFlowEntry,
+        FlowTotals,
+        TopStrikeEntry,
+        FlowResult,
+        IvByStrikeRow,
+        SkewResult,
+        MoneynessBucket,
+        PutCallByMoneyness,
+        SecondOrderGreeks,
+        VolSurfaceResult,
+        TermStructureEntry,
+        TermStructureResult,
+        FuturesBasisEntry,
+        FuturesBasisResult,
+        RealizedVolatilityResult,
+        VarianceRiskPremiumResult,
+        VolatilityConeResult,
+        PerpetualFundingResult,
+        BlockTrade,
+        BlockTradesResult,
+        CrossAssetCorrelationResult,
+        MarketWideResult,
+        MarketMetricsResult,
+        TrendSnapshot,
+        OiChangeRow,
+        OiChangesResult,
+        IvPercentileResult,
+        ExpirationBundle,
+        OnChainAnalysisResult,
+    ],
+)
+def test_model_is_frozen_dataclass(cls):
+    """Every result model is a frozen dataclass (Decision D1)."""
+    assert dataclasses.is_dataclass(cls)
+    assert cls.__dataclass_params__.frozen is True
+
+
+def test_frozen_dataclass_rejects_mutation():
+    """Attempting to set a field on a frozen instance raises FrozenInstanceError."""
+    row = StrikeOiRow(strike=100.0, call_oi=1.0, put_oi=2.0, call_volume=3.0, put_volume=4.0)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        row.strike = 200.0  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# expiry_results — ExpirationAnalysisResult.to_dict()
+# ---------------------------------------------------------------------------
+
+def _make_expiration_analysis_result() -> ExpirationAnalysisResult:
+    return ExpirationAnalysisResult(
+        expiration="10MAR26",
+        underlying_price=1900.0,
+        total_instruments=3,
+        call_count=1,
+        put_count=2,
+        strike_rows=(
+            StrikeOiRow(strike=1800.0, call_oi=0.0, put_oi=300.0, call_volume=0.0, put_volume=50.0),
+            StrikeOiRow(strike=2000.0, call_oi=500.0, put_oi=800.0, call_volume=100.0, put_volume=150.0),
+        ),
+        max_pain=MaxPainResult(
+            max_pain_strike=2000.0,
+            pain_by_strike={1800.0: 500.0, 2000.0: 0.0},
+            min_pain_value=0.0,
+        ),
+        put_call_ratio=PutCallRatioResult(
+            total_call_oi=500.0, total_put_oi=1100.0, ratio=2.2, bias="Strong Bearish"
+        ),
+        volume_stats=VolumeStatsResult(
+            total_call_volume=100.0, total_put_volume=200.0, total_volume=300.0, volume_ratio=2.0
+        ),
+        moneyness=MoneynessResult(
+            calls=MoneynessLeg(
+                itm_oi=0.0, otm_oi=500.0, total_oi=500.0,
+                itm_notional=0.0, otm_notional=950000.0, total_notional=950000.0,
+                itm_pct=0.0, otm_pct=100.0,
+            ),
+            puts=MoneynessLeg(
+                itm_oi=800.0, otm_oi=300.0, total_oi=1100.0,
+                itm_notional=1520000.0, otm_notional=570000.0, total_notional=2090000.0,
+                itm_pct=72.73, otm_pct=27.27,
+            ),
+            totals=MoneynessLeg(
+                itm_oi=800.0, otm_oi=800.0, total_oi=1600.0,
+                itm_notional=1520000.0, otm_notional=1520000.0, total_notional=3040000.0,
+                itm_pct=50.0, otm_pct=50.0,
+            ),
+            oi_skew="Balanced",
+        ),
+        support_resistance=SupportResistanceResult(
+            resistance_levels=(LevelRef(strike=2000.0, open_interest=500.0),),
+            support_levels=(LevelRef(strike=2000.0, open_interest=800.0),),
+            short_term_resistance=LevelRef(strike=2000.0, open_interest=500.0),
+            short_term_support=LevelRef(strike=1800.0, open_interest=300.0),
+        ),
+    )
+
+
+def test_expiration_analysis_result_to_dict_matches_legacy_shape():
+    result = _make_expiration_analysis_result()
+    d = result.to_dict()
+
+    assert d["expiration"] == "10MAR26"
+    assert d["underlying_price"] == 1900.0
+    assert d["total_instruments"] == 3
+    assert d["call_count"] == 1
+    assert d["put_count"] == 2
+
+    assert d["strike_data"] == {
+        1800.0: {"call_oi": 0.0, "put_oi": 300.0, "call_volume": 0.0, "put_volume": 50.0},
+        2000.0: {"call_oi": 500.0, "put_oi": 800.0, "call_volume": 100.0, "put_volume": 150.0},
+    }
+
+    assert d["max_pain"] == {
+        "max_pain_strike": 2000.0,
+        "pain_by_strike": {1800.0: 500.0, 2000.0: 0.0},
+        "min_pain_value": 0.0,
+    }
+
+    assert d["put_call_ratio"] == {
+        "total_call_oi": 500.0,
+        "total_put_oi": 1100.0,
+        "ratio": 2.2,
+        "bias": "Strong Bearish",
+    }
+
+    assert d["volume_stats"] == {
+        "total_call_volume": 100.0,
+        "total_put_volume": 200.0,
+        "total_volume": 300.0,
+        "volume_ratio": 2.0,
+    }
+
+    assert d["moneyness"]["calls"]["itm_oi"] == 0.0
+    assert d["moneyness"]["puts"]["itm_pct"] == 72.73
+    assert d["moneyness"]["totals"]["total_oi"] == 1600.0
+    assert d["moneyness"]["oi_skew"] == "Balanced"
+
+    assert d["support_resistance"] == {
+        "resistance_levels": [{"strike": 2000.0, "call_oi": 500.0}],
+        "support_levels": [{"strike": 2000.0, "put_oi": 800.0}],
+        "short_term_resistance": {"strike": 2000.0, "call_oi": 500.0},
+        "short_term_support": {"strike": 1800.0, "put_oi": 300.0},
+    }
+
+
+def test_expiration_analysis_result_to_dict_none_short_term_levels():
+    """short_term_resistance/support are None when there is no such level (legacy semantics)."""
+    result = dataclasses.replace(
+        _make_expiration_analysis_result(),
+        support_resistance=SupportResistanceResult(
+            resistance_levels=(),
+            support_levels=(),
+            short_term_resistance=None,
+            short_term_support=None,
+        ),
+    )
+    d = result.to_dict()
+    assert d["support_resistance"]["short_term_resistance"] is None
+    assert d["support_resistance"]["short_term_support"] is None
+    assert d["support_resistance"]["resistance_levels"] == []
+    assert d["support_resistance"]["support_levels"] == []
+
+
+# ---------------------------------------------------------------------------
+# gex_dex_results — GexDexStrikeRow.__post_init__ gamma_exposure_holder
+# fallback (Task Wave-J-B Fix 2)
+# ---------------------------------------------------------------------------
+
+def _make_gex_dex_strike_row(**overrides) -> GexDexStrikeRow:
+    defaults = dict(
+        strike=95000.0, call_gamma=1.5, put_gamma=0.5, call_delta=0.6, put_delta=-0.4,
+        call_oi=100.0, put_oi=50.0, net_gex=1_000_000.0, net_dex=0.2,
+        net_gamma=1.0, cumulative_gex=1_000_000.0, cumulative_dex=0.2,
+    )
+    defaults.update(overrides)
+    return GexDexStrikeRow(**defaults)
+
+
+def test_gex_dex_strike_row_gamma_exposure_holder_fallback_is_none_when_not_passed():
+    """
+    Task Wave-J-B Fix 2: constructing a GexDexStrikeRow directly without
+    passing gamma_exposure_holder -- e.g. a test, or a producer other than
+    GexDexCalculator._calculate_gex_dex -- used to silently default to the
+    RAW, UNSCALED call_gamma+put_gamma sum (2.0 for this fixture), roughly
+    10 orders of magnitude smaller than a real USD-scaled reading, with
+    nothing in the row itself distinguishing the wrong-unit fallback from a
+    real value. There is no spot_price available at the row level to
+    reproduce GexDexCalculator's (call_gamma+put_gamma)*spot^2*0.01
+    formula, so the fallback is now an explicit None instead of a
+    wrong-unit guess.
+    """
+    row = _make_gex_dex_strike_row()
+
+    assert row.gamma_exposure_holder is None
+    # Confirms the fallback isn't just "None" by coincidence of some other
+    # default -- the unscaled sum it used to return is a real, different
+    # number from None, so this pins down the deliberate behavior change.
+    assert row.call_gamma + row.put_gamma == 2.0
+
+
+def test_gex_dex_strike_row_gamma_exposure_holder_explicit_value_is_preserved():
+    """The real production path (GexDexCalculator._calculate_gex_dex) always
+    passes gamma_exposure_holder explicitly, USD-scaled by spot^2 -- that
+    explicit value must pass through __post_init__ untouched."""
+    row = _make_gex_dex_strike_row(gamma_exposure_holder=1_500_000.0)
+
+    assert row.gamma_exposure_holder == 1_500_000.0
+
+
+# ---------------------------------------------------------------------------
+# gex_dex_results — GexDexResult.to_dict()
+# ---------------------------------------------------------------------------
+
+def _make_gex_dex_result(expiration_count=None) -> GexDexResult:
+    return GexDexResult(
+        strike_rows=(
+            GexDexStrikeRow(
+                strike=95000.0, call_gamma=1.5, put_gamma=0.5, call_delta=0.6, put_delta=-0.4,
+                call_oi=100.0, put_oi=50.0, net_gex=1_000_000.0, net_dex=0.2,
+                net_gamma=1.0, cumulative_gex=1_000_000.0, cumulative_dex=0.2,
+            ),
+        ),
+        cumulative_gex={95000.0: 1_000_000.0},
+        cumulative_dex={95000.0: 0.2},
+        key_levels=GexDexKeyLevels(
+            call_resistance=GexDexLevel(strike=95000.0, net_gex=1_000_000.0),
+            put_support=None,
+            hvl=94000.0,
+            gamma_flip=94000.0,
+        ),
+        spot_price=94500.0,
+        total_net_gex=1_000_000.0,
+        total_net_dex=0.2,
+        currency="BTC",
+        expiration_count=expiration_count,
+    )
+
+
+def test_gex_dex_result_to_dict_matches_legacy_shape():
+    result = _make_gex_dex_result()
+    d = result.to_dict()
+
+    assert d["strike_data"] == {
+        95000.0: {
+            "call_gamma": 1.5, "put_gamma": 0.5, "call_delta": 0.6, "put_delta": -0.4,
+            "call_oi": 100.0, "put_oi": 50.0, "net_gex": 1_000_000.0, "net_dex": 0.2,
+            "net_gamma": 1.0, "cumulative_gex": 1_000_000.0, "cumulative_dex": 0.2,
+            # bugfix_spec.md Item 8 (additive): dealer_gamma_exposure/
+            # delta_exposure_holder alias net_gex/net_dex. Wave-H-A
+            # (reverting Task G2-D fix 2 / commit cb1770a): dealer_delta_
+            # exposure is -net_dex = -0.2 (dealers short whatever holders
+            # hold), per GexDexCalculator's canonical SIGN CONVENTION --
+            # NOT call_delta - put_delta (1.0, cb1770a's regression: the
+            # gamma-style split applied to delta, which cb1770a claimed
+            # matched dealer_gamma_exposure's convention but which the
+            # class docstring reserves for gamma only).
+            #
+            # Task Wave-J-B Fix 2: gamma_exposure_holder used to default to
+            # the raw, unscaled call_gamma+put_gamma sum (2.0) here -- this
+            # fixture constructs GexDexStrikeRow directly, not through
+            # GexDexCalculator (the only path with spot_price available to
+            # scale it by S^2*0.01) -- silently presenting a ~10-orders-of-
+            # magnitude-wrong number as if it were a real USD reading. The
+            # fallback is now None: an explicit "not computed" instead of a
+            # wrong-unit guess.
+            "gamma_exposure_holder": None,
+            "delta_exposure_holder": 0.2,
+            "dealer_gamma_exposure": 1_000_000.0,
+            "dealer_delta_exposure": -0.2,
+        }
+    }
+    assert d["cumulative_gex"] == {95000.0: 1_000_000.0}
+    assert d["cumulative_dex"] == {95000.0: 0.2}
+    assert d["key_levels"] == {
+        "call_resistance": {"strike": 95000.0, "net_gex": 1_000_000.0},
+        "put_support": None,
+        "hvl": 94000.0,
+        "gamma_flip": 94000.0,
+        "cumulative_gex_zero_strike": None,
+        "zero_gamma_level": None,
+        "zero_gamma_crossings": [],
+        "net_gex_at_spot": None,
+        "gamma_regime": None,
+        "legs_skipped": 0,
+    }
+    assert d["spot_price"] == 94500.0
+    assert d["total_net_gex"] == 1_000_000.0
+    assert d["total_net_dex"] == 0.2
+    # bugfix_spec.md Item 8 (additive): totals default from
+    # total_net_gex/total_net_dex (dealer aliases) and summed strike_rows
+    # (gamma_exposure_holder_total). Wave-H-A: dealer_delta_exposure_total
+    # sums from strike_rows (each row's dealer_delta_exposure = -net_dex
+    # at that strike = -0.2 for this single row) -- matches -total_net_dex
+    # exactly now that the canonical negation convention is restored.
+    #
+    # Task Wave-J-B Fix 2: gamma_exposure_holder_total can no longer sum
+    # this fixture's single row (its own gamma_exposure_holder is now None,
+    # not the old unscaled 2.0 fallback) -- summing a None into a float
+    # would raise, so the total is None too, matching the per-row value's
+    # own "unknown, not fabricated" semantics rather than crashing or
+    # silently reporting a partial/wrong-unit sum.
+    assert d["gamma_exposure_holder_total"] is None
+    assert d["delta_exposure_holder_total"] == 0.2
+    assert d["dealer_gamma_exposure_total"] == 1_000_000.0
+    assert d["dealer_delta_exposure_total"] == -0.2
+    assert "expiration_count" not in d
+
+
+def test_gex_dex_result_to_dict_includes_expiration_count_when_aggregate():
+    """Legacy per-expiry calculate() omits expiration_count; only
+    aggregate_across_expirations() sets it. to_dict() must reproduce both shapes."""
+    result = _make_gex_dex_result(expiration_count=5)
+    d = result.to_dict()
+    assert d["expiration_count"] == 5
+
+
+def _make_gex_dex_result_with_rows(*rows: GexDexStrikeRow) -> GexDexResult:
+    cumulative_gex = {row.strike: row.cumulative_gex for row in rows}
+    cumulative_dex = {row.strike: row.cumulative_dex for row in rows}
+    return GexDexResult(
+        strike_rows=rows,
+        cumulative_gex=cumulative_gex,
+        cumulative_dex=cumulative_dex,
+        key_levels=GexDexKeyLevels(call_resistance=None, put_support=None, hvl=None, gamma_flip=None),
+        spot_price=95000.0,
+        total_net_gex=sum(row.net_gex for row in rows),
+        total_net_dex=sum(row.net_dex for row in rows),
+        currency="BTC",
+    )
+
+
+class TestGammaExposureHolderTotalAggregation:
+    """
+    Task Wave-J-B Fix 2: GexDexResult.gamma_exposure_holder_total's own
+    __post_init__ fallback sums strike_rows.gamma_exposure_holder. Now that
+    a row's own value can be None (this field's __post_init__ fallback,
+    used when a row is built directly without spot_price), that sum must
+    not silently treat a missing value as 0 (understating the total with no
+    signal anything is missing) or crash with TypeError -- it must resolve
+    to None whenever ANY row's contribution is unknown, matching that
+    per-row field's own "unknown, not fabricated" semantics.
+    """
+
+    def test_all_rows_have_real_values_sums_normally(self):
+        result = _make_gex_dex_result_with_rows(
+            _make_gex_dex_strike_row(strike=95000.0, gamma_exposure_holder=1_500_000.0),
+            _make_gex_dex_strike_row(strike=90000.0, gamma_exposure_holder=1_700_000.0),
+        )
+        assert result.gamma_exposure_holder_total == 3_200_000.0
+
+    def test_one_row_missing_value_makes_total_none_not_a_partial_sum(self):
+        result = _make_gex_dex_result_with_rows(
+            _make_gex_dex_strike_row(strike=95000.0, gamma_exposure_holder=1_500_000.0),
+            _make_gex_dex_strike_row(strike=90000.0),  # fallback -> None
+        )
+        assert result.gamma_exposure_holder_total is None
+
+    def test_empty_strike_rows_gives_zero_not_none(self):
+        result = _make_gex_dex_result_with_rows()
+        assert result.gamma_exposure_holder_total == 0.0
+
+
+# ---------------------------------------------------------------------------
+# flow_results — FlowResult.to_dict()
+# ---------------------------------------------------------------------------
+
+def _make_flow_result() -> FlowResult:
+    return FlowResult(
+        flow_data={
+            95000.0: {
+                "C": StrikeFlowEntry(
+                    buy_count=3.0, sell_count=1.0, buy_volume=10.0, sell_volume=2.0,
+                    buy_notional=950_000.0, sell_notional=190_000.0, net_flow=8.0,
+                    buy_sell_ratio=5.0,
+                ),
+                "P": StrikeFlowEntry(
+                    buy_count=0.0, sell_count=2.0, buy_volume=0.0, sell_volume=5.0,
+                    buy_notional=0.0, sell_notional=475_000.0, net_flow=-5.0,
+                    buy_sell_ratio=None,
+                ),
+            }
+        },
+        expiration_totals=FlowTotals(
+            call_buy_volume=10.0, call_sell_volume=2.0, put_buy_volume=0.0, put_sell_volume=5.0
+        ),
+        bias_interpretation="Heavy Buying",
+        flow_trend="Steady Buy Pressure",
+        top_buy_strikes=(
+            TopStrikeEntry(strike=95000.0, option_type="C", net_flow=8.0, volume=10.0, notional=950_000.0),
+        ),
+        top_sell_strikes=(
+            TopStrikeEntry(strike=95000.0, option_type="P", net_flow=-5.0, volume=5.0, notional=475_000.0),
+        ),
+        trade_count=6,
+        spot_price=95000.0,
+        window_start_ms=1_000,
+        window_end_ms=1_000_000,
+        lookback_hours=24.0,
+        sufficient_data=False,
+        low_confidence=False,
+    )
+
+
+def test_flow_result_to_dict_flow_data_matches_legacy_shape():
+    result = _make_flow_result()
+    d = result.to_dict()
+
+    assert d["flow_data"] == {
+        95000.0: {
+            "C": {
+                "buy_count": 3.0, "sell_count": 1.0, "buy_volume": 10.0, "sell_volume": 2.0,
+                "buy_notional": 950_000.0, "sell_notional": 190_000.0, "net_flow": 8.0,
+                "buy_sell_ratio": 5.0,
+            },
+            "P": {
+                "buy_count": 0.0, "sell_count": 2.0, "buy_volume": 0.0, "sell_volume": 5.0,
+                "buy_notional": 0.0, "sell_notional": 475_000.0, "net_flow": -5.0,
+                "buy_sell_ratio": None,
+            },
+        }
+    }
+
+
+def test_flow_result_to_dict_top_strikes_use_directional_key_names():
+    """top_buy_strikes uses buy_volume/buy_notional; top_sell_strikes uses
+    sell_volume/sell_notional — matching the pre-refactor analyzer output
+    (TopStrikeEntry.volume/notional are generic; to_dict() must translate)."""
+    result = _make_flow_result()
+    d = result.to_dict()
+
+    assert d["top_buy_strikes"] == [
+        {"strike": 95000.0, "option_type": "C", "net_flow": 8.0, "buy_volume": 10.0, "buy_notional": 950_000.0}
+    ]
+    assert d["top_sell_strikes"] == [
+        {"strike": 95000.0, "option_type": "P", "net_flow": -5.0, "sell_volume": 5.0, "sell_notional": 475_000.0}
+    ]
+    assert d["trade_count"] == 6
+    assert d["spot_price"] == 95000.0
+    assert d["expiration_totals"] == {
+        "call_buy_volume": 10.0, "call_sell_volume": 2.0, "put_buy_volume": 0.0, "put_sell_volume": 5.0,
+    }
+
+
+# ---------------------------------------------------------------------------
+# vol_surface_results — VolSurfaceResult.to_dict()
+# ---------------------------------------------------------------------------
+
+def _make_vol_surface_result() -> VolSurfaceResult:
+    return VolSurfaceResult(
+        expiration="10MAR26",
+        spot_price=1900.0,
+        iv_by_strike=(
+            IvByStrikeRow(strike=1900.0, option_type="C", mark_iv=80.0, delta=0.5, moneyness_pct=0.0),
+            IvByStrikeRow(strike=1900.0, option_type="P", mark_iv=82.0, delta=-0.5, moneyness_pct=0.0),
+        ),
+        skew_25d=SkewResult(
+            put_25d_iv=85.0, call_25d_iv=78.0, put_25d_strike=1800.0, call_25d_strike=2000.0,
+            risk_reversal_25d=-7.0, interpretation="Puts Richer - Downside Hedging Demand",
+        ),
+        pc_by_moneyness=PutCallByMoneyness(
+            atm=MoneynessBucket(call_oi=100.0, put_oi=150.0, range_label="±5%", ratio=1.5, bias="Slightly Bearish"),
+            near_otm=MoneynessBucket(call_oi=50.0, put_oi=20.0, range_label="5-15%", ratio=0.4, bias="Bullish"),
+            far_otm=MoneynessBucket(call_oi=0.0, put_oi=0.0, range_label="15%+", ratio=0.0, bias="N/A"),
+        ),
+        second_order_greeks=SecondOrderGreeks(
+            vanna_exposure_holder=0.001234, charm_exposure_holder=-0.005678,
+            # dealer_vanna_exposure/dealer_charm_exposure are REQUIRED (no
+            # default on this dataclass) -- explicit values here, this
+            # test only checks to_dict() pass-through fidelity, not that
+            # these equal any particular derivation of the holder sum
+            # above (that arithmetic is VolatilitySurfaceCalculator's
+            # responsibility, exercised separately in
+            # test_volatility_surface_calculator.py).
+            dealer_vanna_exposure=0.002468, dealer_charm_exposure=-0.003456,
+            vanna_signal="IV drop → dealers buy underlying (bullish)",
+            charm_signal="Time decay pushing delta negative (bearish drift)",
+            skipped_instruments=2,
+        ),
+        atm_iv=81.5,
+        vwap_iv=82.0,
+        mark_iv_average=81.0,
+        traded_instrument_count=2,
+    )
+
+
+def test_vol_surface_result_merged_iv_by_strike_groups_call_and_put():
+    """Carried A3-review finding: the calculator/model layer owns the
+    per-strike {call_iv, put_iv} merge, not the formatter."""
+    result = _make_vol_surface_result()
+    merged = result.merged_iv_by_strike()
+    assert merged == {1900.0: {"call_iv": 80.0, "put_iv": 82.0}}
+
+
+def test_vol_surface_result_to_dict_matches_legacy_reader_keys():
+    """volatility_reconstruction_service reads skew_25d, second_order_greeks,
+    pc_by_moneyness, atm_iv — these must match the legacy nested shape exactly.
+    to_dict() must also reproduce iv_by_strike merged (legacy shape) and must
+    NOT leak the typed-only fields (vwap_iv, mark_iv_average, expiration,
+    spot_price, skipped_instruments) that the legacy calculate() dict never had."""
+    result = _make_vol_surface_result()
+    d = result.to_dict()
+
+    assert d["iv_by_strike"] == [{"strike": 1900.0, "call_iv": 80.0, "put_iv": 82.0}]
+    assert "vwap_iv" not in d
+    assert "mark_iv_average" not in d
+    assert "expiration" not in d
+    assert "spot_price" not in d
+    assert "skipped_instruments" not in d["second_order_greeks"]
+
+    assert d["skew_25d"] == {
+        "put_25d_iv": 85.0, "call_25d_iv": 78.0, "put_25d_strike": 1800.0, "call_25d_strike": 2000.0,
+        "risk_reversal_25d": -7.0, "put_over_call_skew_25d": 7.0,
+        "interpretation": "Puts Richer - Downside Hedging Demand",
+    }
+    assert d["atm_iv"] == 81.5
+    # bugfix_spec.md Item 8: net_vanna/net_charm renamed to
+    # vanna_exposure_holder/charm_exposure_holder; dealer_* added.
+    assert d["second_order_greeks"]["vanna_exposure_holder"] == 0.001234
+    assert d["second_order_greeks"]["charm_exposure_holder"] == -0.005678
+    assert d["second_order_greeks"]["dealer_vanna_exposure"] == 0.002468
+    assert d["second_order_greeks"]["dealer_charm_exposure"] == -0.003456
+    assert d["second_order_greeks"]["vanna_signal"] == "IV drop → dealers buy underlying (bullish)"
+
+    pc = d["pc_by_moneyness"]
+    assert pc["atm"] == {"call_oi": 100.0, "put_oi": 150.0, "range": "±5%", "ratio": 1.5, "bias": "Slightly Bearish"}
+    assert pc["near_otm"]["range"] == "5-15%"
+    assert pc["far_otm"]["ratio"] == 0.0
+    assert pc["far_otm"]["bias"] == "N/A"
+
+
+# ---------------------------------------------------------------------------
+# market_wide_results — properties + MarketWideResult.to_flat_dict()
+# ---------------------------------------------------------------------------
+
+def test_realized_volatility_result_properties():
+    rv = RealizedVolatilityResult(rv_by_window={10: 0.40, 20: 0.45, 30: 0.50})
+    assert rv.rv_10d == 0.40
+    assert rv.rv_20d == 0.45
+    assert rv.rv_30d == 0.50
+
+
+def test_realized_volatility_result_missing_window_is_none_not_zero():
+    """
+    Task Wave-J-D Fix 1: calculate_realized_volatility_multi_window
+    (market_wide_calculator.py, Wave-H-D) deliberately OMITS a window key
+    from rv_by_window when that window's RV couldn't be computed --
+    "missing means missing", never a fabricated 0.0. These properties used
+    to convert that omission right back into a fabricated 0.0 via
+    `.get(window, 0.0)`, silently undoing the Wave-H-D fix one layer up.
+    A missing window must read as None (insufficient data), never as a
+    measured "zero realized volatility".
+    """
+    rv = RealizedVolatilityResult(rv_by_window={30: 0.271})
+    assert rv.rv_10d is None
+    assert rv.rv_20d is None
+    assert rv.rv_30d == pytest.approx(0.271)
+
+
+def test_volatility_cone_result_properties():
+    cone = VolatilityConeResult(percentile_by_window={10: 25.0, 20: 50.0, 30: 75.0})
+    assert cone.cone_10d_pctile == 25.0
+    assert cone.cone_20d_pctile == 50.0
+    assert cone.cone_30d_pctile == 75.0
+
+
+def test_volatility_cone_result_missing_window_is_none_not_zero():
+    """Same fabrication bug class as RealizedVolatilityResult above, for
+    the volatility cone's per-window percentile properties (Task
+    Wave-J-D Fix 1)."""
+    cone = VolatilityConeResult(percentile_by_window={30: 92.0})
+    assert cone.cone_10d_pctile is None
+    assert cone.cone_20d_pctile is None
+    assert cone.cone_30d_pctile == pytest.approx(92.0)
+
+
+def _make_market_wide_result(**overrides) -> MarketWideResult:
+    defaults = dict(
+        spot_price=95000.0,
+        currency="BTC",
+        dvol=65.0,
+        iv_percentile_365d=50.0,
+        aggregate_gex_dex=None,
+        term_structure=TermStructureResult(
+            entries=(TermStructureEntry(expiration="28FEB26", dte=30, atm_iv=70.0),),
+            shape="CONTANGO", spread=5.0, spread_signed=5.0, iv_by_dte={30: 70.0},
+        ),
+        futures_basis=FuturesBasisResult(
+            entries=(FuturesBasisEntry(
+                instrument_name="BTC-28FEB26", dte=30, mark_price=96000.0,
+                index_price=95000.0, annualized_premium_pct=12.5,
+            ),),
+            futures_basis={"28FEB26": 12.5},
+        ),
+        realized_volatility=RealizedVolatilityResult(rv_by_window={10: 0.4, 20: 0.45, 30: 0.5}),
+        variance_risk_premium=VarianceRiskPremiumResult(vrp=15.0, signal="RICH", dvol=65.0, rv_30d=0.5),
+        volatility_cone=VolatilityConeResult(percentile_by_window={10: 25.0, 20: 50.0, 30: 75.0}),
+        perpetual_funding=PerpetualFundingResult(
+            perp_open_interest=1_000_000.0, funding_rate=0.0001, funding_8h=0.0001,
+            funding_trend="Rising", history_points=10,
+        ),
+        block_trades=BlockTradesResult(
+            trades=(BlockTrade(
+                timestamp=1234567890, instrument_name="BTC-28FEB26-100000-C",
+                amount=5.0, direction="buy", notional=500_000.0, implied_volatility=70.0,
+            ),),
+            notional_threshold=100_000.0, total_detected=1,
+            blocks=(Block(
+                block_trade_id="BLOCK-281688", leg_count=3, observed_leg_count=3,
+                combo_id="BTC-STRD-31JUL26-63000", combined_premium_usd=12345.0,
+                total_amount=37.5, instruments=("A", "B", "C"), timestamp=1234567891,
+            ),),
+            tracked_since="2026-08-02",
+        ),
+        cross_asset_correlation=CrossAssetCorrelationResult(
+            other_currency="ETH", price_correlation=0.85, dvol_correlation=0.6, sample_size=30,
+        ),
+        failed_sections=(),
+    )
+    defaults.update(overrides)
+    return MarketWideResult(**defaults)
+
+
+def test_market_wide_result_to_flat_dict_full():
+    mw = _make_market_wide_result()
+    flat = mw.to_flat_dict()
+
+    assert flat["shape"] == "CONTANGO"
+    assert flat["spread"] == 5.0
+    assert flat["spread_signed"] == 5.0
+    assert flat["iv_by_dte"] == {30: 70.0}
+    assert flat["futures_basis"] == {"28FEB26": 12.5}
+    assert flat["rv_10d"] == 0.4
+    assert flat["rv_20d"] == 0.45
+    assert flat["rv_30d"] == 0.5
+    assert flat["vrp"] == 15.0
+    assert flat["signal"] == "RICH"
+    assert flat["cone_10d_pctile"] == 25.0
+    assert flat["cone_20d_pctile"] == 50.0
+    assert flat["cone_30d_pctile"] == 75.0
+    assert flat["perp_oi"] == 1_000_000.0
+    assert flat["perp_funding_trend"] == "Rising"
+    assert flat["funding_rate"] == 0.0001
+    assert flat["funding_8h"] == 0.0001
+    # institutional_metrics_spec.md section 9 / Migration M2 (Task D1
+    # review round 2, Important #3): the large-prints (screen-print) list
+    # and the real block-trade_id groups are exported under separate keys
+    # -- never conflated under one "block_trades" name.
+    assert flat["large_prints"] == [
+        {
+            "timestamp": 1234567890, "instrument": "BTC-28FEB26-100000-C", "size": 5.0,
+            "amount": 5.0, "direction": "buy", "notional": 500_000.0, "iv": 70.0,
+        }
+    ]
+    assert flat["blocks"] == [
+        {
+            "block_trade_id": "BLOCK-281688", "leg_count": 3, "observed_leg_count": 3,
+            "combo_id": "BTC-STRD-31JUL26-63000", "combined_premium_usd": 12345.0,
+            "total_amount": 37.5, "instruments": ("A", "B", "C"), "timestamp": 1234567891,
+        }
+    ]
+    assert flat["btc_eth_price_corr"] == 0.85
+    assert flat["btc_eth_dvol_corr"] == 0.6
+    assert flat["spot_price"] == 95000.0
+    assert flat["dvol"] == 65.0
+    assert flat["iv_percentile_365d"] == 50.0
+
+
+def test_market_wide_result_to_flat_dict_omits_keys_for_none_sections():
+    """When a sub-result failed/was skipped (None), its flat keys are absent —
+    downstream readers already do mw.get(key) or default (see synthesis.py)."""
+    mw = _make_market_wide_result(
+        term_structure=None,
+        futures_basis=None,
+        realized_volatility=None,
+        variance_risk_premium=None,
+        volatility_cone=None,
+        perpetual_funding=None,
+        block_trades=None,
+        cross_asset_correlation=None,
+        failed_sections=("term_structure", "futures_basis"),
+    )
+    flat = mw.to_flat_dict()
+
+    for key in (
+        "shape", "spread", "spread_signed", "iv_by_dte", "futures_basis",
+        "rv_10d", "rv_20d", "rv_30d", "vrp", "signal",
+        "cone_10d_pctile", "cone_20d_pctile", "cone_30d_pctile",
+        "perp_oi", "perp_funding_trend", "funding_rate", "funding_8h",
+        # independent review round 3 (Minor): "block_trades" is a key that
+        # can never exist post-rename (institutional_metrics_spec.md
+        # section 9 / Migration M2, Task D1 review round 2) -- assert its
+        # two replacements are absent instead, so this still provides real
+        # coverage of the None-section-omits-its-keys contract.
+        "large_prints", "blocks",
+        "btc_eth_price_corr", "btc_eth_dvol_corr",
+    ):
+        assert key not in flat
+
+    # Always-present top-level fields remain.
+    assert flat["spot_price"] == 95000.0
+    assert flat["dvol"] == 65.0
+    assert flat["iv_percentile_365d"] == 50.0
+
+
+def test_market_wide_result_to_flat_dict_preserves_none_for_missing_window():
+    """
+    Task Wave-J-D Fix 1: a sub-result can be present (not None) while one
+    of its per-window values is genuinely missing -- to_flat_dict() must
+    not re-fabricate a 0.0 for that window on the way out. `None` is still
+    consistent with this method's own "downstream readers already use
+    mw.get(key) or default" contract (None is falsy).
+    """
+    mw = _make_market_wide_result(
+        realized_volatility=RealizedVolatilityResult(rv_by_window={30: 0.271}),
+        volatility_cone=VolatilityConeResult(percentile_by_window={30: 92.0}),
+    )
+    flat = mw.to_flat_dict()
+
+    assert flat["rv_10d"] is None
+    assert flat["rv_20d"] is None
+    assert flat["rv_30d"] == pytest.approx(0.271)
+    assert flat["cone_10d_pctile"] is None
+    assert flat["cone_20d_pctile"] is None
+    assert flat["cone_30d_pctile"] == pytest.approx(92.0)
+
+
+# ---------------------------------------------------------------------------
+# analysis_result — OnChainAnalysisResult.bundle() / expiration_names()
+# ---------------------------------------------------------------------------
+
+def _make_expiration_bundle(expiration: str) -> ExpirationBundle:
+    return ExpirationBundle(
+        expiration=expiration,
+        analysis=_make_expiration_analysis_result(),
+        gex_dex=None,
+        flow=None,
+        vol_surface=None,
+        oi_changes=None,
+        iv_percentile=None,
+        trend=None,
+        flow_chart_paths={},
+        enriched_instruments=(),
+    )
+
+
+def test_on_chain_analysis_result_bundle_found():
+    import datetime as dt
+
+    bundle_a = _make_expiration_bundle("10MAR26")
+    bundle_b = _make_expiration_bundle("28MAR26")
+    result = OnChainAnalysisResult(
+        currency="BTC",
+        underlying_price=95000.0,
+        generated_at=dt.datetime(2026, 7, 25, 12, 0, 0),
+        market_metrics=MarketMetricsResult(
+            dvol=65.0, iv_percentile=50.0, iv_rank=40.0, current_funding=0.0001, funding_8h=0.0001
+        ),
+        expirations=(bundle_a, bundle_b),
+        market_wide=_make_market_wide_result(),
+        parsed_instruments={},
+        atm_iv_by_expiration={"10MAR26": 80.0},
+        recent_trades=(),
+    )
+
+    assert result.bundle("10MAR26") is bundle_a
+    assert result.bundle("28MAR26") is bundle_b
+    assert result.bundle("does-not-exist") is None
+    assert result.expiration_names() == ("10MAR26", "28MAR26")
+
+
+def test_oi_changes_result_construction():
+    rows = (
+        OiChangeRow(strike=95000.0, option_type="C", previous_oi=100.0, current_oi=150.0, change=50.0, change_pct=50.0),
+    )
+    result = OiChangesResult(rows=rows, total_significant=1, has_previous_snapshot=True)
+    assert result.rows == rows
+    assert result.total_significant == 1
+    assert result.has_previous_snapshot is True
+
+
+def test_iv_percentile_result_construction():
+    result = IvPercentileResult(atm_strike=95000.0, current_iv=80.0, percentile=65.0, history_days=180)
+    assert result.percentile == 65.0

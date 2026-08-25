@@ -1,0 +1,221 @@
+"""
+Unit tests for coding.core.analytics.reporting.historical_context_formatter
+(institutional_metrics_spec.md section 1(c) report format).
+"""
+
+from datetime import datetime
+
+from coding.core.analytics.historical_normalizer import NormalizedMetric
+from coding.core.analytics.reporting.historical_context_formatter import (
+    format_historical_context_section,
+)
+
+
+def _metric(name, value, unit, percentile_30d=61.0, z_30d=0.35, percentile_90d=44.0,
+            z_90d=-0.12, regime_30d="ELEVATED", n_30d=720, n_90d=2160, sufficient=True,
+            span_days_30d=None, span_days_90d=None):
+    return NormalizedMetric(
+        name=name, value=value,
+        percentile_30d=percentile_30d, z_30d=z_30d,
+        percentile_90d=percentile_90d, z_90d=z_90d,
+        regime_30d=regime_30d, n_30d=n_30d, n_90d=n_90d,
+        sufficient=sufficient, unit=unit,
+        span_days_30d=span_days_30d, span_days_90d=span_days_90d,
+    )
+
+
+def test_empty_dict_returns_empty_string():
+    assert format_historical_context_section({}) == ""
+
+
+def test_net_gex_line_format():
+    metrics = {"net_gex": _metric("net_gex", 22_700_000.0, "USD")}
+    text = format_historical_context_section(metrics)
+    assert "Net GEX" in text
+    assert "22.70M USD" in text
+    assert "30d: p61" in text
+    assert "z+0.35" in text
+    assert "ELEVATED" in text
+    assert "90d: p44" in text
+    assert "z-0.12" in text
+    assert "NORMAL" in text  # regime_90d recomputed from percentile_90d=44 -> NORMAL
+
+
+def test_pcr_oi_ratio_formatting():
+    metrics = {"pcr_oi": _metric("pcr_oi", 0.135, "ratio", percentile_30d=18.0, regime_30d="LOW")}
+    text = format_historical_context_section(metrics)
+    assert "PCR (OI)" in text
+    assert "0.135" in text
+    assert "p18" in text
+    assert "LOW" in text
+
+
+def test_dvol_and_funding_formatting():
+    metrics = {
+        "dvol": _metric("dvol", 37.69, "vol pts"),
+        "funding": _metric("funding", 0.0007, "%"),
+    }
+    text = format_historical_context_section(metrics)
+    assert "DVOL" in text
+    assert "37.69" in text
+    assert "Funding (8h)" in text
+    assert "0.0700%" in text  # 0.0007 as a fraction -> 0.0700% displayed
+
+
+def test_total_oi_formatting():
+    metrics = {"total_oi": _metric("total_oi", 92345.0, "coins")}
+    text = format_historical_context_section(metrics)
+    assert "Total OI" in text
+    assert "92,345" in text
+
+
+def test_insufficient_history_renders_n_a():
+    metrics = {
+        "net_gex": _metric(
+            "net_gex", 100.0, "USD",
+            percentile_30d=None, z_30d=None, percentile_90d=None, z_90d=None,
+            regime_30d=None, n_30d=18, n_90d=18, sufficient=False,
+        )
+    }
+    text = format_historical_context_section(metrics)
+    assert "30d: n/a (18 obs)" in text
+    assert "90d: n/a (18 obs)" in text
+
+
+def test_zero_variance_z_is_n_a():
+    metrics = {
+        "dvol": _metric(
+            "dvol", 40.0, "vol pts",
+            z_30d=None, z_90d=None, percentile_30d=50.0, percentile_90d=50.0,
+            regime_30d="NORMAL",
+        )
+    }
+    text = format_historical_context_section(metrics)
+    assert "z n/a" in text
+
+
+def test_negative_net_gex_shows_sign():
+    metrics = {"net_gex": _metric("net_gex", -8_431_002.0, "USD")}
+    text = format_historical_context_section(metrics)
+    assert "-8.43M USD" in text
+
+
+def test_fixed_metric_order_regardless_of_dict_insertion_order():
+    metrics = {
+        "funding": _metric("funding", 0.0007, "%"),
+        "net_gex": _metric("net_gex", 22_700_000.0, "USD"),
+        "dvol": _metric("dvol", 37.69, "vol pts"),
+    }
+    text = format_historical_context_section(metrics)
+    net_gex_pos = text.index("Net GEX")
+    dvol_pos = text.index("DVOL")
+    funding_pos = text.index("Funding")
+    assert net_gex_pos < dvol_pos < funding_pos
+
+
+def test_header_title_present():
+    metrics = {"dvol": _metric("dvol", 37.69, "vol pts")}
+    text = format_historical_context_section(metrics)
+    assert "HISTORICAL CONTEXT" in text
+
+
+def test_front_month_expiration_printed_in_header():
+    """C1 review Important #1: a reader must be able to tell which
+    expiration the per-expiry metrics (net GEX, PCR-OI, total OI) describe."""
+    metrics = {"net_gex": _metric("net_gex", 22_700_000.0, "USD")}
+    text = format_historical_context_section(metrics, front_month_expiration="26JUL26")
+    assert "HISTORICAL CONTEXT (front-month: 26JUL26)" in text
+
+
+def test_no_front_month_expiration_omits_the_suffix():
+    metrics = {"dvol": _metric("dvol", 37.69, "vol pts")}
+    text = format_historical_context_section(metrics, front_month_expiration=None)
+    first_line = text.splitlines()[0]
+    assert first_line == "HISTORICAL CONTEXT"
+
+
+def test_stale_prefix_rendered_when_stale_since_given():
+    """C1 review Important #4: institutional_metrics_spec.md section 1(c)'s
+    "STALE: history ends {ts}" line, printed right after the header."""
+    metrics = {"dvol": _metric("dvol", 37.69, "vol pts")}
+    stale_ts = datetime(2026, 7, 26, 15, 0)
+    text = format_historical_context_section(metrics, stale_since=stale_ts)
+    lines = text.splitlines()
+    assert lines[0] == "HISTORICAL CONTEXT"
+    assert lines[2] == "STALE: history ends 2026-07-26 15:00"
+
+
+def test_no_stale_prefix_when_stale_since_is_none():
+    metrics = {"dvol": _metric("dvol", 37.69, "vol pts")}
+    text = format_historical_context_section(metrics, stale_since=None)
+    assert "STALE" not in text
+
+
+def test_sample_size_n_disclosed_on_successful_percentile():
+    """
+    Task G2-E: previously n was only printed on the refusal path
+    ("n/a (18 obs)") -- a reader could see WHY a value was withheld but not
+    how much (or how little) data backs a value that IS shown. n must now
+    be visible on the success path too.
+    """
+    metrics = {"net_gex": _metric("net_gex", 22_700_000.0, "USD", n_30d=720, n_90d=2160)}
+    text = format_historical_context_section(metrics)
+    assert "30d: p61" in text
+    assert "720 obs" in text
+    assert "90d: p44" in text
+    assert "2160 obs" in text
+
+
+def test_span_days_disclosed_on_successful_percentile_when_known():
+    metrics = {
+        "net_gex": _metric(
+            "net_gex", 22_700_000.0, "USD",
+            span_days_30d=30.4, span_days_90d=91.2,
+        )
+    }
+    text = format_historical_context_section(metrics)
+    assert "30.4d" in text
+    assert "91.2d" in text
+
+
+def test_g2e_high_count_short_span_renders_as_insufficient_90d():
+    """
+    Task G2-E confirmed case reproduced at the formatter level: a 90d
+    window with n=89 (>= MIN_OBS) but only a 3.75-day span must render the
+    SAME "n/a (N obs)" fallback the count-insufficient case already uses --
+    not a silently-relabeled window, and not the old bug's confident
+    "p97 z+2.49 EXTREME HIGH".
+    """
+    metrics = {
+        "net_gex": _metric(
+            "net_gex", 22_700_000.0, "USD",
+            percentile_30d=None, z_30d=None, percentile_90d=None, z_90d=None,
+            regime_30d=None, n_30d=89, n_90d=89, sufficient=False,
+            span_days_30d=3.75, span_days_90d=3.75,
+        )
+    }
+    text = format_historical_context_section(metrics)
+    assert "30d: n/a (89 obs" in text
+    assert "90d: n/a (89 obs" in text
+    assert "EXTREME HIGH" not in text
+    assert "p97" not in text
+
+
+def test_90d_window_gated_on_span_even_when_n_is_sufficient():
+    """
+    The formatter recomputes 90d sufficiency at render time (regime_90d is
+    not stored on NormalizedMetric). That recompute must now also check
+    span_days_90d, not just n_90d >= MIN_OBS -- otherwise a metric with
+    n_90d=2160 but a short span_days_90d would still render a (wrong)
+    percentile via the "or percentile is None" short-circuit only by
+    accident of normalize() already having gated it upstream; the
+    formatter's own sufficiency recompute must independently agree.
+    """
+    metrics = {
+        "net_gex": _metric(
+            "net_gex", 22_700_000.0, "USD",
+            n_90d=2160, span_days_90d=10.0,  # n passes, span fails (10 < 72)
+        )
+    }
+    text = format_historical_context_section(metrics)
+    assert "90d: n/a (2160 obs" in text

@@ -7,12 +7,14 @@ on the expiry's calendar date (08:00 UTC = Deribit's daily settlement instant).
 from datetime import datetime, timezone
 from typing import Optional
 
+from coding.core.analytics.market_wide_calculator import DERIBIT_SETTLEMENT_HOUR_UTC
+
 
 def parse_expiry_settlement(expiry: str) -> Optional[datetime]:
     """Deribit expiration string ('25SEP26') -> settlement datetime (08:00 UTC)."""
     try:
         expiry_date = datetime.strptime(expiry, "%d%b%y")
-        return expiry_date.replace(hour=8, tzinfo=timezone.utc)
+        return expiry_date.replace(hour=DERIBIT_SETTLEMENT_HOUR_UTC, tzinfo=timezone.utc)
     except ValueError:
         return None
 
