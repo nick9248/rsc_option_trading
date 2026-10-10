@@ -15,7 +15,7 @@ import logging
 import os
 import sys
 import argparse
-from datetime import datetime, timezone
+from datetime import datetime
 
 # ── Path setup ────────────────────────────────────────────────────────────────
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -51,13 +51,11 @@ def backfill_asset(asset: str, months: int = 40) -> int:
         logger.error("No data returned for %s — aborting", asset)
         return 0
 
-    # The candle still forming has a provisional close: never store it.
-    current_hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
-    completed = [row for row in rows if row[0] < current_hour]
-    logger.info("Received %d rows for %s (%d completed candles)", len(rows), asset, len(completed))
+    logger.info("Received %d rows for %s", len(rows), asset)
 
-    changed = DatabaseRepository().save_dvol_candles(asset, completed)
-    logger.info("%s: %d rows inserted or corrected, %d unchanged", asset, changed, len(completed) - changed)
+    # save_dvol_candles drops the candle still forming (its close is provisional).
+    changed = DatabaseRepository().save_dvol_candles(asset, rows)
+    logger.info("%s: %d rows inserted or corrected", asset, changed)
     return changed
 
 

@@ -77,6 +77,10 @@ def source_and_copy():
                 "CREATE TABLE scans (id serial PRIMARY KEY, currency text, scan_time bigint, "
                 "resolved_at bigint, pnl numeric, UNIQUE (currency, scan_time))"
             )
+            cursor.execute(
+                "CREATE TABLE candles (id serial PRIMARY KEY, asset text, bucket timestamptz, "
+                "close numeric, UNIQUE (asset, bucket))"
+            )
         connection.commit()
     try:
         yield source, copy
@@ -208,3 +212,70 @@ def test_rows_updated_on_the_source_after_the_first_sync_reach_the_copy(source_a
     assert all(row[2] is None for row in copied if row[1] > 5)
 
     assert sync_table(source, copy, MUTABLE_TABLE) == (0, "up to date (52 rows checked)")
+
+
+LOOKBACK_TABLE = {
+    "name": "candles",
+    "watermark_col": "bucket",
+    "watermark_type": "timestamp",
+    "conflict_target": None,
+    "upsert_key": ["asset", "bucket"],
+    "lookback_hours": 6,
+}
+
+
+def test_lookback_window_refreshes_recent_rows_and_leaves_older_history_alone(source_and_copy):
+    """Corrections only ever touch the last hours, so only that window is re-read: a
+    recent correction reaches the copy, an old value is NOT overwritten (this is what
+    protects a repaired local history from an unrepaired source)."""
+    from datetime import datetime, timedelta, timezone
+
+    source, copy = source_and_copy
+    start = datetime(2026, 10, 1, 0, 0, tzinfo=timezone.utc)
+    hours = [start + timedelta(hours=offset) for offset in range(48)]
+    with source.cursor() as cursor:
+        cursor.executemany("INSERT INTO candles (asset, bucket, close) VALUES ('BTC', %s, 30)", [(h,) for h in hours])
+    sync_table(source, copy, LOOKBACK_TABLE)
+
+    with source.cursor() as cursor:
+        cursor.execute("UPDATE candles SET close = 99 WHERE bucket = %s", (hours[2],))   # old: outside the window
+        cursor.execute("UPDATE candles SET close = 77 WHERE bucket = %s", (hours[-2],))  # recent: inside the window
+    count, message = sync_table(source, copy, LOOKBACK_TABLE)
+
+    with copy.cursor() as cursor:
+        cursor.execute("SELECT bucket, close FROM candles")
+        copied = dict(cursor.fetchall())
+    assert copied[hours[-2]] == 77, "a recent correction must reach the copy"
+    assert copied[hours[2]] == 30, "history older than the window must not be overwritten"
+    assert count == 1
+    assert "6 rows checked" in message  # the 6 hours after (newest - 6 h)
+
+
+def test_migration_027_guard_ignores_the_hour_still_forming_but_blocks_real_gaps(source_and_copy):
+    """Migration 027 drops volatility_index_history only if every COMPLETED hour of it
+    is in dvol_history. The hour still forming is ignored."""
+    from datetime import datetime, timedelta, timezone
+    from pathlib import Path
+
+    _, scratch = source_and_copy
+    migration = (Path(__file__).parents[2] / "migrations" / "027_drop_volatility_index_history.sql").read_text(encoding="utf8")
+    current_hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    done_hour = current_hour - timedelta(hours=3)
+    scratch.autocommit = True
+    with scratch.cursor() as cursor:
+        cursor.execute("CREATE TABLE dvol_history (id serial primary key, asset text, timestamp timestamptz, dvol_value numeric)")
+        cursor.execute("CREATE TABLE volatility_index_history (id serial primary key, currency text, date timestamp, dvol numeric)")
+        cursor.execute("INSERT INTO volatility_index_history (currency, date, dvol) VALUES ('BTC', %s, 30), ('BTC', %s, 31)",
+                       (done_hour.replace(tzinfo=None), current_hour.replace(tzinfo=None)))
+
+        # a completed hour is missing from dvol_history -> abort, nothing dropped
+        with pytest.raises(psycopg2.Error, match="Migration 027 aborted"):
+            cursor.execute(migration)
+        cursor.execute("SELECT to_regclass('public.volatility_index_history') IS NOT NULL")
+        assert cursor.fetchone()[0] is True
+
+        # the completed hour is now present; the forming hour is still absent -> allowed
+        cursor.execute("INSERT INTO dvol_history (asset, timestamp, dvol_value) VALUES ('BTC', %s, 30)", (done_hour,))
+        cursor.execute(migration)
+        cursor.execute("SELECT to_regclass('public.volatility_index_history') IS NULL")
+        assert cursor.fetchone()[0] is True

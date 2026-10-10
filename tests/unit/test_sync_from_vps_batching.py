@@ -10,6 +10,7 @@ No database or SSH tunnel is used: the VPS is an in-memory fake that understands
 the three query shapes iter_new_row_batches issues.
 """
 
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import psycopg2
@@ -273,6 +274,35 @@ class TestSyncTable:
         assert all(999 not in (params or ()) for _, params in page_queries), "the local watermark leaked into a query"
         assert count > 0
         assert "new or updated (12 rows checked)" in message
+
+    def test_lookback_table_re_reads_only_the_window_before_the_newest_local_row(self, monkeypatch):
+        newest_local = datetime(2026, 10, 10, 20, 0, tzinfo=timezone.utc)
+        table = dict(MUTABLE_TABLE, lookback_hours=72)
+        vps = FakeVpsConnection(_rows_with_ties([2, 2]))
+        local = self._local_conn()
+        local.cursor.return_value.fetchone.return_value = (newest_local,)
+        monkeypatch.setattr(sync_from_vps, "FETCH_BATCH_SIZE", 10)
+
+        with patch.object(sync_from_vps, "execute_values", return_value=[]):
+            sync_table(vps, local, table)
+
+        page_queries = [(query, params) for query, params in vps.queries if "information_schema" not in query]
+        first_query, first_params = page_queries[0]
+        assert "captured_at > %s" in first_query
+        assert first_params[0] == newest_local - timedelta(hours=72)
+
+    def test_lookback_table_with_an_empty_local_table_reads_everything(self, monkeypatch):
+        table = dict(MUTABLE_TABLE, lookback_hours=72)
+        vps = FakeVpsConnection(_rows_with_ties([2, 2]))
+        local = self._local_conn()  # MAX() returns None: nothing copied yet
+        monkeypatch.setattr(sync_from_vps, "FETCH_BATCH_SIZE", 10)
+
+        with patch.object(sync_from_vps, "execute_values", return_value=[(1,)] * 4):
+            count, _ = sync_table(vps, local, table)
+
+        first_query, _ = [(q, p) for q, p in vps.queries if "information_schema" not in q][0]
+        assert "captured_at > %s" not in first_query
+        assert count > 0
 
     def test_mutable_table_with_no_changes_reports_up_to_date_with_the_rows_checked(self, monkeypatch):
         vps = FakeVpsConnection(_rows_with_ties([4, 4, 4]))

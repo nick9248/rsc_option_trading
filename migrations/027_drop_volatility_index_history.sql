@@ -8,8 +8,9 @@
 -- full history from Deribit, fills that hole and corrects provisional values, so
 -- dvol_history now holds the final close of every completed hourly candle.
 --
--- Guard: the migration aborts, dropping nothing, if any hour that exists in
--- volatility_index_history is still missing from dvol_history.
+-- Guard: the migration aborts, dropping nothing, if any COMPLETED hour that exists in
+-- volatility_index_history is still missing from dvol_history. The hour still forming
+-- is ignored: dvol_history only stores completed candles.
 --
 -- Backups: scratch_backups/volatility_index_history_backup_<date>.csv (gitignored).
 -- The migration must be applied on the VPS at deployment, after running the refresh
@@ -24,7 +25,8 @@ BEGIN
     IF to_regclass('public.volatility_index_history') IS NOT NULL THEN
         SELECT count(*) INTO missing_hours
         FROM volatility_index_history v
-        WHERE NOT EXISTS (
+        WHERE v.date < date_trunc('hour', now() AT TIME ZONE 'UTC')
+          AND NOT EXISTS (
             SELECT 1 FROM dvol_history d
             WHERE d.asset = v.currency AND d.timestamp = v.date AT TIME ZONE 'UTC'
         );

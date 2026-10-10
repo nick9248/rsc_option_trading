@@ -18,7 +18,7 @@ import sys
 import time
 import logging
 import subprocess
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import psycopg2
 from psycopg2.extras import execute_values
@@ -70,6 +70,10 @@ TUNNEL_WAIT_SEC = 3          # Seconds to wait for tunnel to establish
 #                  insertion: the unique key columns. The whole table is re-read
 #                  each sync and local rows that differ from the VPS are updated.
 #                  conflict_target is not used for these tables.
+# lookback_hours : optional, upsert tables only. Re-read only the last N hours before
+#                  the newest local watermark instead of the whole table. Use it when
+#                  rows are only ever changed shortly after insertion. Timestamp
+#                  watermarks only.
 # ─────────────────────────────────────────────
 SYNC_TABLES = [
     {
@@ -165,15 +169,19 @@ SYNC_TABLES = [
         "watermark_type": "timestamp",
         "conflict_target": None,
         "upsert_key": ["snapshot_date", "snapshot_hour_utc", "currency", "expiration", "strike", "option_type"],
+        "lookback_hours": 6,  # rewritten only while the same (date, hour) is re-analysed
     },
     {
         # Hourly DVOL candle closes. The daemon re-checks the last 48 hours every
-        # cycle and corrects values that were captured while a candle was forming.
+        # cycle and corrects values that were captured while a candle was forming,
+        # so only the last 72 hours are re-read (older history never changes, and
+        # a repaired local history must not be overwritten by an unrepaired VPS).
         "name": "dvol_history",
         "watermark_col": "timestamp",
         "watermark_type": "timestamp",
         "conflict_target": None,
         "upsert_key": ["asset", "timestamp"],
+        "lookback_hours": 72,
     },
     {
         # Recomputed in place within the same hour (ON CONFLICT ... DO UPDATE).
@@ -182,6 +190,7 @@ SYNC_TABLES = [
         "watermark_type": "timestamp",
         "conflict_target": None,
         "upsert_key": ["snapshot_hour", "currency", "expiration"],
+        "lookback_hours": 6,  # recomputed only within its own hour
     },
     {
         # Alert flags and expiry settlement results are written after insertion.
@@ -364,9 +373,10 @@ def sync_table(vps_conn, local_conn, table: dict) -> tuple[int, str]:
     run resumes after it.
 
     Tables with an "upsert_key" (rows are updated on the VPS after insertion):
-    the whole table is re-read every run, in the same batches, and only rows
-    that differ from the local copy are written. Nothing is resumed; each run
-    starts from the beginning. The local database is a read-only mirror: rows
+    the whole table (or, with "lookback_hours", the last N hours before the newest
+    local watermark) is re-read every run, in the same batches, and only rows that
+    differ from the local copy are written. Nothing is resumed; each run starts
+    from the beginning of that range. The local database is a read-only mirror: rows
     deleted on the VPS are not removed locally.
     """
     vps_cur = None
@@ -386,6 +396,11 @@ def sync_table(vps_conn, local_conn, table: dict) -> tuple[int, str]:
         is_upsert_table = bool(table.get("upsert_key"))
         if is_upsert_table:
             local_max = None
+            lookback_hours = table.get("lookback_hours")
+            if lookback_hours:
+                newest_local = get_local_watermark(local_cur, table)
+                if newest_local is not None:
+                    local_max = newest_local - timedelta(hours=lookback_hours)
             write_rows = upsert_rows
         else:
             local_max = get_local_watermark(local_cur, table)

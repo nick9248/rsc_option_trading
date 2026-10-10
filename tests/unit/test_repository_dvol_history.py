@@ -64,3 +64,26 @@ def test_no_candles_means_no_database_call():
 
     assert result == 0
     mock_execute_values.assert_not_called()
+
+
+def test_the_candle_still_forming_is_never_stored():
+    repo = _make_repo()
+    current_hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    completed = (datetime(2026, 10, 10, 21, 0, tzinfo=timezone.utc), 36.76)
+    forming = (current_hour, 40.0)
+
+    result, mock_execute_values = _save(repo, "BTC", [completed, forming], returned_rows=[(1,)])
+
+    stored_rows = mock_execute_values.call_args.args[2]
+    assert stored_rows == [("BTC", completed[0], completed[1])]
+    assert result == 1
+
+
+def test_only_a_forming_candle_means_no_database_call():
+    repo = _make_repo()
+    current_hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+
+    result, mock_execute_values = _save(repo, "BTC", [(current_hour, 40.0)], returned_rows=[])
+
+    assert result == 0
+    mock_execute_values.assert_not_called()

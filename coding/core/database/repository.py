@@ -1688,9 +1688,8 @@ class DatabaseRepository:
         is corrected when its value differs (this repairs values captured while
         a candle was still forming); identical rows are left untouched.
 
-        Architectural note: DVOLFetcher.save_to_db() (Service layer) takes a raw
-        connection; this Core-layer method must not import it, so the SQL lives
-        here, with the same (asset, timestamp) key.
+        The candle still forming (start >= the current UTC hour) is never stored: its
+        close is provisional. It is dropped here so no caller can write it by mistake.
 
         Args:
             asset: Asset symbol (BTC or ETH).
@@ -1699,6 +1698,8 @@ class DatabaseRepository:
         Returns:
             Number of rows inserted or corrected.
         """
+        current_hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+        candles = [candle for candle in candles if candle[0] < current_hour]
         if not candles:
             return 0
         with self._db_cursor() as cursor:

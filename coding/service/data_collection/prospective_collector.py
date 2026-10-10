@@ -378,7 +378,7 @@ class ProspectiveCollector:
         try:
             self._sync_dvol_history(currency)
         except Exception as e:
-            logger.error(f"    Error syncing DVOL history: {e}")
+            logger.error(f"    Error syncing DVOL history: {e}", exc_info=True)
 
         # 5. Fetch and store funding rate data
         logger.info(f"  Fetching {currency} funding rate...")
