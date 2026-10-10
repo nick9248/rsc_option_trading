@@ -89,19 +89,22 @@ class TestQueryShape:
         ctx, mock_cursor = _patched(repo, [])
         try:
             repo.get_metric_history(
-                table="volatility_index_history",
-                column="dvol",
+                table="dvol_history",
+                column="dvol_value",
                 currency="BTC",
                 lookback_hours=2160,
-                time_column="date",
+                time_column="timestamp",
             )
         finally:
             ctx.stop()
 
         sql, params = mock_cursor.execute.call_args[0]
-        assert "dvol" in sql
+        assert "dvol_value" in sql
         assert "expiration" not in sql
-        assert "date" in sql
+        assert "timestamp" in sql
+        # dvol_history names its currency column "asset", not "currency"
+        assert "WHERE asset = %s" in sql
+        assert "currency" not in sql
 
 
 class TestResultShape:
@@ -220,12 +223,13 @@ class TestGetMetricFreshness:
         ts = datetime(2026, 7, 26, 0, 0)
         ctx, mock_cursor = _patched_one(repo, (ts,))
         try:
-            result = repo.get_metric_freshness(table="volatility_index_history", currency="BTC")
+            result = repo.get_metric_freshness(table="dvol_history", currency="BTC")
         finally:
             ctx.stop()
         assert result == ts
         sql, params = mock_cursor.execute.call_args[0]
-        assert "MAX(date)" in sql
+        assert "MAX(timestamp)" in sql
+        assert "WHERE asset = %s" in sql
         assert "expiration" not in sql
         assert params == ("BTC",)
 
@@ -299,14 +303,15 @@ class TestGetMetricHistoryOldestTimestamp:
         ctx, mock_cursor = _patched_one(repo, (ts,))
         try:
             result = repo.get_metric_history_oldest_timestamp(
-                table="volatility_index_history", column="dvol",
-                currency="BTC", lookback_hours=2160, time_column="date",
+                table="dvol_history", column="dvol_value",
+                currency="BTC", lookback_hours=2160, time_column="timestamp",
             )
         finally:
             ctx.stop()
         assert result == ts
         sql, params = mock_cursor.execute.call_args[0]
-        assert "MIN(date)" in sql
+        assert "MIN(timestamp)" in sql
+        assert "WHERE asset = %s" in sql
         assert "expiration" not in sql
         assert params == ("BTC", 2160)
 

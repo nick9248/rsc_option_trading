@@ -1,18 +1,21 @@
 #!/usr/bin/env python
 """
-One-time backfill: fetch full DVOL history from Deribit and store in dvol_history table.
+Refresh the whole DVOL history from Deribit into dvol_history.
+
+dvol_history holds one row per (asset, hour): the candle's start (UTC) and its
+FINAL close. This script refetches the full history, inserts hours that are
+missing and corrects rows whose value differs (for example values captured while
+a candle was still forming). Only completed candles are written. Safe to re-run.
 
 Usage:
     python scripts/backfill_dvol_history.py
     python scripts/backfill_dvol_history.py --assets BTC   (BTC only)
-
-Skips rows that already exist (ON CONFLICT DO NOTHING).
 """
 import logging
 import os
 import sys
 import argparse
-from datetime import datetime
+from datetime import datetime, timezone
 
 # ── Path setup ────────────────────────────────────────────────────────────────
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -25,6 +28,7 @@ init_logging(level="INFO")
 
 import psycopg2
 from coding.core.database.config import DatabaseConfig
+from coding.core.database.repository import DatabaseRepository
 from coding.service.deribit.dvol_fetcher import DVOLFetcher
 
 logger = logging.getLogger(__name__)
@@ -39,7 +43,7 @@ def get_connection():
 
 
 def backfill_asset(asset: str, months: int = 40) -> int:
-    """Fetch and store DVOL history for one asset. Returns rows inserted."""
+    """Refetch and store DVOL history for one asset. Returns rows inserted or corrected."""
     fetcher = DVOLFetcher()
     logger.info("Fetching %d months of DVOL history for %s...", months, asset)
     rows = fetcher.fetch_history(asset, months=months)
@@ -47,33 +51,18 @@ def backfill_asset(asset: str, months: int = 40) -> int:
         logger.error("No data returned for %s — aborting", asset)
         return 0
 
-    logger.info("Received %d rows for %s", len(rows), asset)
+    # The candle still forming has a provisional close: never store it.
+    current_hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    completed = [row for row in rows if row[0] < current_hour]
+    logger.info("Received %d rows for %s (%d completed candles)", len(rows), asset, len(completed))
 
-    conn = get_connection()
-    inserted = 0
-    try:
-        with conn:
-            with conn.cursor() as cur:
-                for ts, value in rows:
-                    cur.execute(
-                        """
-                        INSERT INTO dvol_history (asset, timestamp, dvol_value)
-                        VALUES (%s, %s, %s)
-                        ON CONFLICT (asset, timestamp) DO NOTHING
-                        """,
-                        (asset, ts, value),
-                    )
-                    inserted += cur.rowcount
-        logger.info("Inserted %d new rows for %s (%d already existed)",
-                    inserted, asset, len(rows) - inserted)
-    finally:
-        conn.close()
-
-    return inserted
+    changed = DatabaseRepository().save_dvol_candles(asset, completed)
+    logger.info("%s: %d rows inserted or corrected, %d unchanged", asset, changed, len(completed) - changed)
+    return changed
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Backfill DVOL history from Deribit")
+    parser = argparse.ArgumentParser(description="Refresh DVOL history from Deribit")
     parser.add_argument("--assets", nargs="+", choices=["BTC", "ETH"],
                         default=["BTC", "ETH"])
     args = parser.parse_args()
@@ -82,7 +71,7 @@ def main():
     for asset in args.assets:
         total += backfill_asset(asset)
 
-    logger.info("Backfill complete. Total rows inserted: %d", total)
+    logger.info("Refresh complete. Total rows inserted or corrected: %d", total)
 
     # Verification
     conn = get_connection()

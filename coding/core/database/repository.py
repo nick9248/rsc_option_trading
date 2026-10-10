@@ -10,6 +10,8 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+from psycopg2.extras import execute_values
+
 from coding.core.analytics.market_wide_calculator import DERIBIT_SETTLEMENT_HOUR_UTC
 from coding.core.analytics.results.delta_flow_results import FlowBucket
 from coding.core.analytics.results.expiry_results import ExpirationAnalysisResult
@@ -1676,75 +1678,44 @@ class DatabaseRepository:
             """, (currency, instrument_name, timestamp, date, funding_rate))
             logger.info(f"Saved funding rate for {instrument_name}: {funding_rate:.8f}")
 
-    def save_dvol(
-        self,
-        currency: str,
-        index_name: str,
-        timestamp: int,
-        date,
-        dvol: float
-    ) -> None:
+    def save_dvol_candles(self, asset: str, candles: List[Tuple[datetime, float]]) -> int:
         """
-        Save DVOL (Deribit Volatility Index) value to the database.
+        Upsert hourly DVOL candle closes into dvol_history.
+
+        ``dvol_history`` is the single DVOL table: one row per (asset, hour),
+        ``timestamp`` = the candle's start (UTC), ``dvol_value`` = the candle's
+        FINAL close. Callers must pass completed candles only. An existing row
+        is corrected when its value differs (this repairs values captured while
+        a candle was still forming); identical rows are left untouched.
+
+        Architectural note: DVOLFetcher.save_to_db() (Service layer) takes a raw
+        connection; this Core-layer method must not import it, so the SQL lives
+        here, with the same (asset, timestamp) key.
 
         Args:
-            currency: Currency symbol (e.g., "BTC", "ETH").
-            index_name: Index name (e.g., "BTCDVOL").
-            timestamp: Unix timestamp in milliseconds.
-            date: Datetime object for this entry.
-            dvol: DVOL value.
-        """
-        with self._db_cursor() as cursor:
-            cursor.execute("""
-                INSERT INTO volatility_index_history (
-                    currency, index_name, timestamp, date, dvol
-                ) VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (index_name, timestamp) DO NOTHING
-            """, (currency, index_name, timestamp, date, dvol))
-            logger.info(f"Saved DVOL for {index_name}: {dvol:.2f}")
-
-    def save_dvol_history_row(
-        self,
-        currency: str,
-        timestamp: datetime,
-        dvol_value: float
-    ) -> int:
-        """
-        Persist one row to dvol_history (infra_spec.md section 1 / Task E3).
-
-        dvol_history is a SEPARATE table from volatility_index_history
-        (written by save_dvol above) -- it feeds iv_percentile_365d /
-        expected-move calculations that need >24h of history
-        (on_chain_analysis_service.py:244-250). Prior to this method it was
-        only ever written by the one-time scripts/backfill_dvol_history.py.
-
-        Architectural note: DVOLFetcher.save_to_db() (coding/service/deribit/
-        dvol_fetcher.py) already has an idempotent insert with this exact
-        ON CONFLICT clause, but it takes a raw psycopg2 connection and lives
-        in the Service layer. This repository (Core layer) must not import
-        a Service-layer class -- that would invert the project's Core ->
-        Service dependency direction. The insert SQL is therefore
-        re-declared here rather than reused; both call sites share the same
-        (asset, timestamp) idempotency key by convention, not shared code.
-
-        Args:
-            currency: Asset symbol (BTC or ETH) -- stored as `asset`.
-            timestamp: UTC-aware timestamp for this DVOL reading.
-            dvol_value: The DVOL index value.
+            asset: Asset symbol (BTC or ETH).
+            candles: (candle start as UTC-aware datetime, close value) pairs.
 
         Returns:
-            1 if a new row was inserted, 0 if (asset, timestamp) already
-            existed (ON CONFLICT DO NOTHING).
+            Number of rows inserted or corrected.
         """
+        if not candles:
+            return 0
         with self._db_cursor() as cursor:
-            cursor.execute("""
-                INSERT INTO dvol_history (asset, timestamp, dvol_value)
-                VALUES (%s, %s, %s)
-                ON CONFLICT (asset, timestamp) DO NOTHING
-            """, (currency, timestamp, dvol_value))
-            inserted = cursor.rowcount
-        logger.info(f"Saved dvol_history row for {currency}: {dvol_value} (inserted={inserted})")
-        return inserted
+            changed = execute_values(
+                cursor,
+                """
+                INSERT INTO dvol_history AS t (asset, timestamp, dvol_value)
+                VALUES %s
+                ON CONFLICT (asset, timestamp) DO UPDATE SET dvol_value = EXCLUDED.dvol_value
+                WHERE t.dvol_value IS DISTINCT FROM EXCLUDED.dvol_value
+                RETURNING 1
+                """,
+                [(asset, timestamp, value) for timestamp, value in candles],
+                fetch=True,
+            )
+        logger.info(f"dvol_history: {asset} {len(changed)} of {len(candles)} candles inserted or corrected")
+        return len(changed)
 
     def save_ohlcv(
         self,
@@ -3127,7 +3098,7 @@ class DatabaseRepository:
         ("onchain_analysis_snapshots", "total_call_oi"): "snapshot_hour",
         ("onchain_analysis_snapshots", "total_put_oi"): "snapshot_hour",
         ("onchain_volatility_snapshots", "vrp_absolute"): "snapshot_hour",
-        ("volatility_index_history", "dvol"): "date",
+        ("dvol_history", "dvol_value"): "timestamp",
         ("funding_rate_history", "funding_rate"): "date",
         # institutional_metrics_spec.md section 3(c) (Task C4): RR25/BF25
         # term-structure percentile history.
@@ -3142,6 +3113,10 @@ class DatabaseRepository:
     _METRIC_HISTORY_EXTRA_FILTER = {
         "volatility_skew_history": "n_quotes_used >= 8",
     }
+
+    # Column that holds the currency in each metric-history table. Most use
+    # "currency"; dvol_history (DVOL, hourly) calls it "asset".
+    _TABLE_CURRENCY_COLUMNS = {"dvol_history": "asset"}
 
     def get_metric_history(
         self,
@@ -3164,7 +3139,7 @@ class DatabaseRepository:
                 90d ~= 2160).
             expiration: When set, filters to one (currency, expiration)
                 series (onchain_analysis_snapshots / onchain_volatility_
-                snapshots). Market-wide tables (volatility_index_history,
+                snapshots). Market-wide tables (dvol_history,
                 funding_rate_history) have no expiration column -- omit it.
             time_column: Overrides the whitelist's default time column.
                 Callers normally rely on the whitelist default; this exists
@@ -3185,13 +3160,14 @@ class DatabaseRepository:
                 f"Allowed pairs: {sorted(self._METRIC_HISTORY_WHITELIST)}"
             )
         col = self._METRIC_HISTORY_WHITELIST[key] if time_column is None else time_column
+        currency_column = self._TABLE_CURRENCY_COLUMNS.get(table, "currency")
         extra_filter = self._METRIC_HISTORY_EXTRA_FILTER.get(table)
         extra_clause = f" AND {extra_filter}" if extra_filter else ""
 
         if expiration is not None:
             sql = (
                 f"SELECT {column} FROM {table} "
-                f"WHERE currency = %s AND expiration = %s "
+                f"WHERE {currency_column} = %s AND expiration = %s "
                 f"AND {col} >= NOW() - INTERVAL '1 hour' * %s"
                 f"{extra_clause} "
                 f"ORDER BY {col} ASC"
@@ -3200,7 +3176,7 @@ class DatabaseRepository:
         else:
             sql = (
                 f"SELECT {column} FROM {table} "
-                f"WHERE currency = %s "
+                f"WHERE {currency_column} = %s "
                 f"AND {col} >= NOW() - INTERVAL '1 hour' * %s"
                 f"{extra_clause} "
                 f"ORDER BY {col} ASC"
@@ -3269,13 +3245,14 @@ class DatabaseRepository:
                 f"whitelisted. Allowed pairs: {sorted(self._METRIC_HISTORY_WHITELIST)}"
             )
         col = self._METRIC_HISTORY_WHITELIST[key] if time_column is None else time_column
+        currency_column = self._TABLE_CURRENCY_COLUMNS.get(table, "currency")
         extra_filter = self._METRIC_HISTORY_EXTRA_FILTER.get(table)
         extra_clause = f" AND {extra_filter}" if extra_filter else ""
 
         if expiration is not None:
             sql = (
                 f"SELECT MIN({col}) FROM {table} "
-                f"WHERE currency = %s AND expiration = %s "
+                f"WHERE {currency_column} = %s AND expiration = %s "
                 f"AND {col} >= NOW() - INTERVAL '1 hour' * %s "
                 f"AND {column} IS NOT NULL"
                 f"{extra_clause}"
@@ -3284,7 +3261,7 @@ class DatabaseRepository:
         else:
             sql = (
                 f"SELECT MIN({col}) FROM {table} "
-                f"WHERE currency = %s "
+                f"WHERE {currency_column} = %s "
                 f"AND {col} >= NOW() - INTERVAL '1 hour' * %s "
                 f"AND {column} IS NOT NULL"
                 f"{extra_clause}"
@@ -3314,7 +3291,7 @@ class DatabaseRepository:
     _TABLE_TIME_COLUMNS = {
         "onchain_analysis_snapshots": "snapshot_hour",
         "onchain_volatility_snapshots": "snapshot_hour",
-        "volatility_index_history": "date",
+        "dvol_history": "timestamp",
         "funding_rate_history": "date",
         # Task C4 review Minor #2: was added to _METRIC_HISTORY_WHITELIST
         # (get_metric_history) but not here, which meant the "STALE:
@@ -3353,12 +3330,13 @@ class DatabaseRepository:
             logger.warning("get_metric_freshness: table %r is not whitelisted", table)
             return None
         col = self._TABLE_TIME_COLUMNS[table] if time_column is None else time_column
+        currency_column = self._TABLE_CURRENCY_COLUMNS.get(table, "currency")
 
         if expiration is not None:
-            sql = f"SELECT MAX({col}) FROM {table} WHERE currency = %s AND expiration = %s"
+            sql = f"SELECT MAX({col}) FROM {table} WHERE {currency_column} = %s AND expiration = %s"
             params = (currency, expiration)
         else:
-            sql = f"SELECT MAX({col}) FROM {table} WHERE currency = %s"
+            sql = f"SELECT MAX({col}) FROM {table} WHERE {currency_column} = %s"
             params = (currency,)
 
         try:

@@ -69,12 +69,10 @@ class ProspectiveCollector:
         self.api = api_service or DeribitApiService()
         self.repo = repository or DatabaseRepository()
         self.aggregation_service = HourlyAggregationService(repository=self.repo)
-        # infra_spec.md section 1 / Task E3: dvol_history is a separate
-        # table from volatility_index_history (_fetch_dvol below) -- was
-        # only ever written by the one-time scripts/backfill_dvol_history.py
-        # before this. DVOLFetcher has no api/repository dependency of its
-        # own (calls the Deribit REST endpoint directly), so it's just
-        # instantiated once here for reuse across cycles.
+        # DVOL history (dvol_history) is repaired from Deribit's hourly candles on
+        # every cycle. DVOLFetcher has no api/repository dependency of its own
+        # (calls the Deribit REST endpoint directly), so it is instantiated once
+        # here for reuse across cycles.
         self._dvol_fetcher = DVOLFetcher()
         self._forward_harness = ForwardTestingHarness(repository=self.repo)
         self._volatility_reconstruction = VolatilityReconstructionService(repository=self.repo)
@@ -375,24 +373,12 @@ class ProspectiveCollector:
             except Exception as e:
                 logger.error(f"    Error in on-chain analysis: {e}", exc_info=True)
 
-        # 4. Fetch and store DVOL data
-        logger.info(f"  Fetching {currency} DVOL data...")
+        # 4. DVOL: store the final closes of the last 48 hourly candles
+        logger.info(f"  Syncing {currency} DVOL history...")
         try:
-            self._fetch_dvol(currency)
+            self._sync_dvol_history(currency)
         except Exception as e:
-            logger.error(f"    Error fetching DVOL: {e}")
-
-        # 4b. Fetch and store dvol_history row (infra_spec.md section 1 /
-        # Task E3). A SEPARATE table from volatility_index_history above --
-        # feeds iv_percentile_365d / expected-move calcs that need >24h of
-        # history (on_chain_analysis_service.py:244-250). Own try/except,
-        # isolated from step 4's _fetch_dvol -- a failure in one must never
-        # suppress, or be suppressed by, the other.
-        logger.info(f"  Fetching {currency} dvol_history row...")
-        try:
-            self._fetch_dvol_history_row(currency)
-        except Exception as e:
-            logger.error(f"    Error fetching dvol_history row: {e}")
+            logger.error(f"    Error syncing DVOL history: {e}")
 
         # 5. Fetch and store funding rate data
         logger.info(f"  Fetching {currency} funding rate...")
@@ -429,7 +415,7 @@ class ProspectiveCollector:
         # internally to fire only when the real UTC clock's hour is
         # exactly Deribit's 08:00 settlement hour (own try/except,
         # isolated from steps 1-7 above, same isolation pattern as
-        # _fetch_dvol_history_row above). Reuses this cycle's already-
+        # _sync_dvol_history above). Reuses this cycle's already-
         # fetched book-summary instrument list (step 2) -- no extra API
         # call, no dependency on step 3's on-chain analysis internals.
         if book_result and book_result.get("instruments"):
@@ -497,7 +483,7 @@ class ProspectiveCollector:
             Dict with ``expirations_written``, ``total_trade_count``,
             ``total_skipped_count`` -- for the caller's logging/result dict
             (not currently surfaced in ``collect_hour``'s result, matching
-            ``_fetch_dvol``/``_fetch_funding_rate``'s existing "log only"
+            ``_sync_dvol_history``/``_fetch_funding_rate``'s existing "log only"
             convention for this class of per-currency step).
         """
         target_hour = self._resolve_delta_flow_target_hour(hour)
@@ -1344,113 +1330,28 @@ class ProspectiveCollector:
 
         return enriched
 
-    def _fetch_dvol(self, currency: str) -> None:
+    def _sync_dvol_history(self, currency: str, hours: int = 48) -> None:
         """
-        Fetch DVOL (Deribit Volatility Index) and save to database.
+        Store the final closes of the last `hours` hourly DVOL candles in dvol_history.
+
+        dvol_history is the only DVOL table: one row per (asset, hour), stamped with
+        the candle's start (UTC), holding the candle's final close. Only completed
+        candles are stored (the one still forming is skipped), and existing rows
+        whose value differs are corrected, so a missed cycle, a restart or a value
+        captured too early repairs itself on the next run.
 
         Args:
             currency: Currency symbol (BTC, ETH).
+            hours: How many hours back to re-check.
+
+        Raises:
+            RuntimeError: The Deribit fetch failed.
         """
-        try:
-            dvol_result = self.api.get_volatility_index_data(
-                currency=currency,
-                resolution=3600,  # 1 hour resolution
-                start_timestamp=None,
-                end_timestamp=None
-            )
-
-            if dvol_result and "data" in dvol_result and dvol_result["data"]:
-                # Get latest DVOL value
-                latest_dvol = dvol_result["data"][-1]
-                if len(latest_dvol) >= 5:
-                    dvol_timestamp = latest_dvol[0]
-                    dvol_value = latest_dvol[4]  # Close price
-
-                    # Save to database. UTC-valued naive datetime -- this
-                    # `date` column is what HistoricalNormalizer/repository.py
-                    # (_METRIC_HISTORY_WHITELIST / _TABLE_TIME_COLUMNS) reads
-                    # for percentile/z-score trailing windows and staleness
-                    # gates (Wave H fresh-audit finding, Task Wave-H-C).
-                    # Plain datetime.fromtimestamp() without tz=timezone.utc
-                    # converts the epoch to the HOST's local wall-clock time,
-                    # so on a non-UTC host every reading captured in the last
-                    # few hours of the UTC calendar day gets filed under the
-                    # FOLLOWING calendar day. See collect_hour's default-hour
-                    # fix (line ~138) for this codebase's established
-                    # convention.
-                    self.repo.save_dvol(
-                        currency=currency,
-                        index_name=f"{currency}DVOL",
-                        timestamp=dvol_timestamp,
-                        date=datetime.fromtimestamp(
-                            dvol_timestamp / 1000, tz=timezone.utc
-                        ).replace(tzinfo=None),
-                        dvol=dvol_value
-                    )
-
-                    logger.info(f"    Saved DVOL: {dvol_value:.2f}")
-                else:
-                    logger.warning(f"    DVOL data incomplete: {latest_dvol}")
-            else:
-                logger.warning(f"    No DVOL data returned for {currency}")
-
-        except Exception as e:
-            logger.error(f"    Failed to fetch/save DVOL: {e}")
-            raise
-
-    def _fetch_dvol_history_row(self, currency: str) -> None:
-        """
-        Fetch the latest DVOL value and persist it to dvol_history
-        (infra_spec.md section 1 / Task E3).
-
-        This is a SEPARATE table from volatility_index_history (written by
-        `_fetch_dvol` above) -- dvol_history feeds iv_percentile_365d /
-        expected-move calculations that need >24h of history
-        (on_chain_analysis_service.py:244-250, VolatilityReconstructionService,
-        market_wide_calculator.py), which volatility_index_history alone
-        can't serve. Before this method existed, dvol_history was only ever
-        written by the one-time scripts/backfill_dvol_history.py (its own
-        docstring says "one-time backfill") -- it fed data through
-        2026-07-16 and then went silently stale, undetected for 9 days
-        because the health check monitoring it was LOCAL-only (see Task E3
-        Part 2 / database_local_checker.py).
-
-        `DVOLFetcher.fetch_latest()` returns only the latest DVOL value (a
-        float, or None on any fetch error) -- it does not expose the
-        underlying candle's own timestamp. This method pairs that value
-        with the current UTC hour (truncated to the top of the hour, not
-        `datetime.now()` at full precision) before persisting, so repeated
-        daemon runs within the same hour (e.g. after a crash/restart, since
-        this cycle runs every 30 minutes per unified_scheduler.py) dedup
-        correctly against dvol_history's `UNIQUE (asset, timestamp)`
-        constraint via `save_dvol_history_row`'s `ON CONFLICT DO NOTHING`.
-
-        Persists via `DatabaseRepository.save_dvol_history_row` -- never a
-        raw connection directly from this collector, matching every other
-        daemon writer in this class.
-
-        Args:
-            currency: Currency symbol (BTC, ETH).
-        """
-        try:
-            dvol_value = self._dvol_fetcher.fetch_latest(currency)
-
-            if dvol_value is None:
-                logger.warning(f"    No dvol_history value returned for {currency}")
-                return
-
-            snapshot_hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
-            self.repo.save_dvol_history_row(
-                currency=currency,
-                timestamp=snapshot_hour,
-                dvol_value=dvol_value,
-            )
-
-            logger.info(f"    Saved dvol_history row: {dvol_value:.2f}")
-
-        except Exception as e:
-            logger.error(f"    Failed to fetch/save dvol_history row: {e}")
-            raise
+        candles = self._dvol_fetcher.fetch_recent_completed_candles(currency, hours=hours)
+        if candles is None:
+            raise RuntimeError(f"DVOL candle fetch failed for {currency}")
+        changed = self.repo.save_dvol_candles(currency, candles)
+        logger.info(f"    dvol_history: {changed} of {len(candles)} candles inserted or corrected")
 
     def _fetch_funding_rate(self, currency: str) -> None:
         """
@@ -1469,8 +1370,8 @@ class ProspectiveCollector:
 
                 if funding_8h is not None:
                     # Save to database (already in decimal form). UTC-valued
-                    # naive datetime -- same rationale as `_fetch_dvol`'s
-                    # `date` column above (Wave H fresh-audit finding, Task
+                    # naive datetime -- UTC-valued so late-UTC-day readings
+                    # are not misfiled (Wave H fresh-audit finding, Task
                     # Wave-H-C): this `date` field feeds the same
                     # percentile/z-score trailing-window reads, and a
                     # naive-local conversion would misfile late-UTC-day

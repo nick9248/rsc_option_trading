@@ -245,7 +245,7 @@ class TestCollectCurrencyWiring:
         collector._fetch_trades = MagicMock(return_value={"count": 5})
         collector._fetch_book_summary = MagicMock(return_value={"count": 10, "instruments": []})
         collector._run_onchain_analysis = MagicMock()
-        collector._fetch_dvol = MagicMock()
+        collector._sync_dvol_history = MagicMock()
         collector._fetch_funding_rate = MagicMock()
         collector._fetch_ohlcv = MagicMock()
         collector._persist_delta_flow = MagicMock()
@@ -264,7 +264,7 @@ class TestCollectCurrencyWiring:
         collector._fetch_trades = MagicMock(return_value={"count": 5})
         collector._fetch_book_summary = MagicMock(return_value={"count": 10, "instruments": []})
         collector._run_onchain_analysis = MagicMock()
-        collector._fetch_dvol = MagicMock()
+        collector._sync_dvol_history = MagicMock()
         collector._fetch_funding_rate = MagicMock()
         collector._fetch_ohlcv = MagicMock()
         collector._persist_delta_flow = MagicMock(side_effect=Exception("boom"))
@@ -272,18 +272,18 @@ class TestCollectCurrencyWiring:
         result = collector._collect_currency("BTC", datetime(2026, 3, 14))  # must not raise
 
         assert result["trades"] == 5
-        collector._fetch_dvol.assert_called_once()
+        collector._sync_dvol_history.assert_called_once()
         collector._fetch_ohlcv.assert_called_once()
 
     def test_other_step_failure_does_not_skip_persist_delta_flow(self):
         """The isolation cuts both ways: an earlier step's failure (e.g.
-        _fetch_dvol) must not prevent _persist_delta_flow from still
+        _sync_dvol_history) must not prevent _persist_delta_flow from still
         running for this currency."""
         collector = _make_collector()
         collector._fetch_trades = MagicMock(return_value={"count": 5})
         collector._fetch_book_summary = MagicMock(return_value={"count": 10, "instruments": []})
         collector._run_onchain_analysis = MagicMock()
-        collector._fetch_dvol = MagicMock(side_effect=Exception("dvol boom"))
+        collector._sync_dvol_history = MagicMock(side_effect=Exception("dvol boom"))
         collector._fetch_funding_rate = MagicMock()
         collector._fetch_ohlcv = MagicMock()
         collector._persist_delta_flow = MagicMock()

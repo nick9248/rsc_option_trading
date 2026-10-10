@@ -1,5 +1,5 @@
 """
-Regression test for ProspectiveCollector._fetch_dvol / _fetch_funding_rate's
+Regression test for ProspectiveCollector._fetch_funding_rate's
 `date` column conversion (Wave H fresh-audit finding, Task Wave-H-C).
 
 `date` is not decorative -- it's the time column HistoricalNormalizer /
@@ -7,14 +7,14 @@ repository.py (`_METRIC_HISTORY_WHITELIST` / `_TABLE_TIME_COLUMNS`) reads
 for percentile/z-score trailing-window and staleness-gate queries.
 `datetime.fromtimestamp()` WITHOUT `tz=timezone.utc` converts the epoch to
 the HOST's local wall-clock time, not UTC -- so on a non-UTC host, every
-DVOL/funding reading captured in the last few hours of the UTC calendar
+funding reading captured in the last few hours of the UTC calendar
 day gets filed under the FOLLOWING calendar day.
 
 These tests simulate a host whose local clock reads 5 hours ahead of UTC
 (entirely synthetic -- deliberately NOT the real host offset, so the test
 is host-independent per the task's instruction to "freeze/mock the
 conversion, don't rely on the actual host's offset") and assert both
-sites still produce the correct UTC calendar date for a timestamp minutes
+site still produces the correct UTC calendar date for a timestamp minutes
 before UTC midnight.
 """
 from datetime import datetime, timedelta, timezone
@@ -51,28 +51,6 @@ class _HostOffsetDateTime(datetime):
 _NEAR_MIDNIGHT_UTC = datetime(2026, 8, 8, 23, 45, 0, tzinfo=timezone.utc)
 _TIMESTAMP_MS = int(_NEAR_MIDNIGHT_UTC.timestamp() * 1000)
 _EXPECTED_DATE = datetime(2026, 8, 8, 23, 45, 0)
-
-
-def test_fetch_dvol_date_uses_utc_calendar_day_not_host_local():
-    collector = _make_collector()
-    collector.api.get_volatility_index_data.return_value = {
-        "data": [[_TIMESTAMP_MS, 50.0, 51.0, 49.0, 50.5]]
-    }
-
-    with patch(
-        "coding.service.data_collection.prospective_collector.datetime",
-        _HostOffsetDateTime,
-    ):
-        collector._fetch_dvol("BTC")
-
-    collector.repo.save_dvol.assert_called_once()
-    saved_date = collector.repo.save_dvol.call_args.kwargs["date"]
-    assert saved_date == _EXPECTED_DATE, (
-        f"expected UTC calendar date {_EXPECTED_DATE}, got {saved_date} -- "
-        "_fetch_dvol is converting the DVOL timestamp on the host's local "
-        "clock instead of UTC"
-    )
-    assert saved_date.day == 8, "leaked into the following UTC calendar day"
 
 
 def test_fetch_funding_rate_date_uses_utc_calendar_day_not_host_local():

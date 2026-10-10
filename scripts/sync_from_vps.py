@@ -117,12 +117,6 @@ SYNC_TABLES = [
         "conflict_target": "(instrument_name, timestamp) DO NOTHING",
     },
     {
-        "name": "volatility_index_history",
-        "watermark_col": "date",
-        "watermark_type": "timestamp",
-        "conflict_target": "(index_name, timestamp) DO NOTHING",
-    },
-    {
         "name": "ohlcv_history",
         "watermark_col": "date",
         "watermark_type": "timestamp",
@@ -173,10 +167,13 @@ SYNC_TABLES = [
         "upsert_key": ["snapshot_date", "snapshot_hour_utc", "currency", "expiration", "strike", "option_type"],
     },
     {
+        # Hourly DVOL candle closes. The daemon re-checks the last 48 hours every
+        # cycle and corrects values that were captured while a candle was forming.
         "name": "dvol_history",
         "watermark_col": "timestamp",
         "watermark_type": "timestamp",
-        "conflict_target": '(asset, "timestamp") DO NOTHING',
+        "conflict_target": None,
+        "upsert_key": ["asset", "timestamp"],
     },
     {
         # Recomputed in place within the same hour (ON CONFLICT ... DO UPDATE).

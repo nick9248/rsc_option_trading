@@ -1,12 +1,11 @@
-"""Tests for wiring dvol_history collection into ProspectiveCollector's
-hourly cycle (infra_spec.md section 1 / Task E3).
+"""Tests for the DVOL step of ProspectiveCollector's cycle.
 
-dvol_history is a SEPARATE table from volatility_index_history (already
-written every hour by ``_fetch_dvol``). Prior to this task, dvol_history was
-only written by a one-time backfill script and had been stale for weeks.
+dvol_history is the single DVOL table. Every cycle the collector re-checks the last
+48 hours of hourly candles and stores the final close of each completed candle,
+correcting rows that were captured while a candle was still forming.
 """
-from unittest.mock import MagicMock
 from datetime import datetime, timezone
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -22,114 +21,60 @@ def _make_collector():
     return collector
 
 
-def test_fetch_dvol_history_row_persists_via_repository():
-    """_fetch_dvol_history_row calls DVOLFetcher.fetch_latest and persists
-    the result via the repository -- never a raw connection directly."""
+def _candles():
+    return [
+        (datetime(2026, 10, 10, 20, 0, tzinfo=timezone.utc), 36.9),
+        (datetime(2026, 10, 10, 21, 0, tzinfo=timezone.utc), 36.76),
+    ]
+
+
+def test_sync_dvol_history_stores_completed_candles_via_the_repository():
     collector = _make_collector()
-    collector._dvol_fetcher.fetch_latest.return_value = 62.5
+    collector._dvol_fetcher.fetch_recent_completed_candles.return_value = _candles()
+    collector.repo.save_dvol_candles.return_value = 2
 
-    collector._fetch_dvol_history_row("BTC")
+    collector._sync_dvol_history("BTC")
 
-    collector._dvol_fetcher.fetch_latest.assert_called_once_with("BTC")
-    collector.repo.save_dvol_history_row.assert_called_once()
-    call_kwargs = collector.repo.save_dvol_history_row.call_args[1]
-    assert call_kwargs["currency"] == "BTC"
-    assert call_kwargs["dvol_value"] == 62.5
-    assert isinstance(call_kwargs["timestamp"], datetime)
-    assert call_kwargs["timestamp"].tzinfo == timezone.utc
+    collector._dvol_fetcher.fetch_recent_completed_candles.assert_called_once_with("BTC", hours=48)
+    collector.repo.save_dvol_candles.assert_called_once_with("BTC", _candles())
 
 
-def test_fetch_dvol_history_row_hour_aligned_timestamp():
-    """The persisted timestamp is truncated to the top of the UTC hour --
-    matches the ON CONFLICT (asset, timestamp) dedup key's intended
-    granularity (one row per asset per hour, not per collection cycle)."""
+def test_sync_dvol_history_raises_when_the_fetch_fails():
+    """None means the Deribit fetch failed: surface it so the cycle logs the error."""
     collector = _make_collector()
-    collector._dvol_fetcher.fetch_latest.return_value = 50.0
+    collector._dvol_fetcher.fetch_recent_completed_candles.return_value = None
 
-    collector._fetch_dvol_history_row("ETH")
+    with pytest.raises(RuntimeError, match="DVOL candle fetch failed for ETH"):
+        collector._sync_dvol_history("ETH")
 
-    ts = collector.repo.save_dvol_history_row.call_args[1]["timestamp"]
-    assert ts.minute == 0
-    assert ts.second == 0
-    assert ts.microsecond == 0
+    collector.repo.save_dvol_candles.assert_not_called()
 
 
-def test_fetch_dvol_history_row_skips_persist_when_none():
-    """When DVOLFetcher.fetch_latest returns None (API failure, per its own
-    documented contract), no row is persisted and no exception is raised."""
-    collector = _make_collector()
-    collector._dvol_fetcher.fetch_latest.return_value = None
-
-    collector._fetch_dvol_history_row("BTC")  # must not raise
-
-    collector.repo.save_dvol_history_row.assert_not_called()
-
-
-def test_fetch_dvol_history_row_raises_on_fetch_error():
-    """Isolation contract: an exception raised while fetching/persisting
-    propagates out of _fetch_dvol_history_row (matches _fetch_dvol's
-    existing raise-on-error convention) -- _collect_currency's own
-    try/except decides whether it's fatal to the cycle, not this method."""
-    collector = _make_collector()
-    collector._dvol_fetcher.fetch_latest.side_effect = RuntimeError("boom")
-
-    with pytest.raises(RuntimeError):
-        collector._fetch_dvol_history_row("BTC")
-
-
-def test_collect_currency_calls_fetch_dvol_history_row_once_per_currency():
-    """_collect_currency calls the new step exactly once per currency,
-    independently of _fetch_dvol (the volatility_index_history writer)."""
-    collector = _make_collector()
+def _collect_with_stubbed_steps(collector):
     collector._fetch_trades = MagicMock(return_value={"count": 5})
     collector._fetch_book_summary = MagicMock(return_value={"count": 10, "instruments": []})
     collector._run_onchain_analysis = MagicMock()
-    collector._fetch_dvol = MagicMock()
-    collector._fetch_dvol_history_row = MagicMock()
     collector._fetch_funding_rate = MagicMock()
     collector._fetch_ohlcv = MagicMock()
     collector._persist_delta_flow = MagicMock()
-
     collector._collect_currency("BTC", datetime(2026, 3, 14))
 
-    collector._fetch_dvol_history_row.assert_called_once_with("BTC")
 
-
-def test_collect_currency_isolates_dvol_history_failure_from_other_steps():
-    """A failure in _fetch_dvol_history_row must not prevent _fetch_dvol (or
-    any other per-currency step) from running, and must not propagate out
-    of _collect_currency -- same per-step isolation pattern used throughout
-    this collector (each step has its own try/except)."""
+def test_collect_currency_runs_the_dvol_step_once_per_currency():
     collector = _make_collector()
-    collector._fetch_trades = MagicMock(return_value={"count": 5})
-    collector._fetch_book_summary = MagicMock(return_value={"count": 10, "instruments": []})
-    collector._run_onchain_analysis = MagicMock()
-    collector._fetch_dvol = MagicMock()
-    collector._fetch_dvol_history_row = MagicMock(side_effect=RuntimeError("dvol_history down"))
-    collector._fetch_funding_rate = MagicMock()
-    collector._fetch_ohlcv = MagicMock()
-    collector._persist_delta_flow = MagicMock()
+    collector._sync_dvol_history = MagicMock()
 
-    collector._collect_currency("BTC", datetime(2026, 3, 14))  # must not raise
+    _collect_with_stubbed_steps(collector)
 
-    collector._fetch_dvol.assert_called_once_with("BTC")
+    collector._sync_dvol_history.assert_called_once_with("BTC")
+
+
+def test_collect_currency_isolates_a_dvol_failure_from_the_other_steps():
+    """A DVOL failure must not stop the funding-rate step or propagate out of
+    _collect_currency (every step has its own try/except)."""
+    collector = _make_collector()
+    collector._sync_dvol_history = MagicMock(side_effect=RuntimeError("dvol down"))
+
+    _collect_with_stubbed_steps(collector)  # must not raise
+
     collector._fetch_funding_rate.assert_called_once_with("BTC")
-
-
-def test_collect_currency_isolates_dvol_failure_from_dvol_history():
-    """Symmetric isolation check: a failure in _fetch_dvol (the existing,
-    unrelated writer) must not prevent the new _fetch_dvol_history_row step
-    from running."""
-    collector = _make_collector()
-    collector._fetch_trades = MagicMock(return_value={"count": 5})
-    collector._fetch_book_summary = MagicMock(return_value={"count": 10, "instruments": []})
-    collector._run_onchain_analysis = MagicMock()
-    collector._fetch_dvol = MagicMock(side_effect=RuntimeError("dvol down"))
-    collector._fetch_dvol_history_row = MagicMock()
-    collector._fetch_funding_rate = MagicMock()
-    collector._fetch_ohlcv = MagicMock()
-    collector._persist_delta_flow = MagicMock()
-
-    collector._collect_currency("BTC", datetime(2026, 3, 14))  # must not raise
-
-    collector._fetch_dvol_history_row.assert_called_once_with("BTC")

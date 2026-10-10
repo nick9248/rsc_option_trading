@@ -67,6 +67,43 @@ class DVOLFetcher:
             logger.error("DVOLFetcher.fetch_latest error for %s: %s", asset, exc)
             return None
 
+    def fetch_recent_completed_candles(
+        self, asset: str, hours: int = 48, now: Optional[datetime] = None
+    ) -> Optional[List[Tuple[datetime, float]]]:
+        """
+        Final closes of the hourly DVOL candles that finished within the last `hours` hours.
+
+        The candle still forming (its start is the current UTC hour) is dropped:
+        its close keeps changing until the hour ends, so storing it would put a
+        provisional value in the history. Each returned pair is (candle start,
+        UTC-aware; close).
+
+        Args:
+            asset: "BTC" or "ETH".
+            hours: How far back to look. The daemon asks for 48 h every cycle, so a
+                missed cycle or a restart repairs itself.
+            now: Override for tests.
+
+        Returns:
+            Oldest-first list (may be empty), or None on any fetch error.
+        """
+        current = now or datetime.now(timezone.utc)
+        current_hour = current.replace(minute=0, second=0, microsecond=0)
+        end_ms = int(current.timestamp() * 1000)
+        start_ms = int((current_hour - timedelta(hours=hours)).timestamp() * 1000)
+        try:
+            resp = requests.get(self._build_url(asset, start_ms, end_ms), timeout=_TIMEOUT_SEC)
+            if resp.status_code != 200:
+                logger.warning("DVOL candle fetch failed for %s: HTTP %s", asset, resp.status_code)
+                return None
+            candles = self._parse_response(resp.json())
+        except Exception as exc:
+            logger.error("DVOLFetcher.fetch_recent_completed_candles error for %s: %s", asset, exc)
+            return None
+        return sorted(
+            (candle for candle in candles if candle[0] < current_hour), key=lambda candle: candle[0]
+        )
+
     def fetch_history(
         self, asset: str, months: int = 36
     ) -> List[Tuple[datetime, float]]:

@@ -188,8 +188,7 @@ class TestCollectCurrencyWiring:
             return_value={"count": 2, "instruments": _SAMPLE_INSTRUMENTS}
         )
         collector._run_onchain_analysis = MagicMock()
-        collector._fetch_dvol = MagicMock()
-        collector._fetch_dvol_history_row = MagicMock()
+        collector._sync_dvol_history = MagicMock()
         collector._fetch_funding_rate = MagicMock()
         collector._fetch_ohlcv = MagicMock()
         collector._persist_delta_flow = MagicMock()
@@ -210,8 +209,7 @@ class TestCollectCurrencyWiring:
             return_value={"count": 2, "instruments": _SAMPLE_INSTRUMENTS}
         )
         collector._run_onchain_analysis = MagicMock()
-        collector._fetch_dvol = MagicMock()
-        collector._fetch_dvol_history_row = MagicMock()
+        collector._sync_dvol_history = MagicMock()
         collector._fetch_funding_rate = MagicMock()
         collector._fetch_ohlcv = MagicMock()
         collector._persist_delta_flow = MagicMock()
@@ -219,7 +217,7 @@ class TestCollectCurrencyWiring:
 
         collector._collect_currency("BTC", datetime(2026, 3, 14))  # must not raise
 
-        collector._fetch_dvol.assert_called_once_with("BTC")
+        collector._sync_dvol_history.assert_called_once_with("BTC")
         collector._fetch_funding_rate.assert_called_once_with("BTC")
 
     def test_collect_currency_skips_anchor_when_no_instruments(self):
@@ -227,8 +225,7 @@ class TestCollectCurrencyWiring:
         collector._fetch_trades = MagicMock(return_value={"count": 5})
         collector._fetch_book_summary = MagicMock(return_value={"count": 0, "instruments": []})
         collector._run_onchain_analysis = MagicMock()
-        collector._fetch_dvol = MagicMock()
-        collector._fetch_dvol_history_row = MagicMock()
+        collector._sync_dvol_history = MagicMock()
         collector._fetch_funding_rate = MagicMock()
         collector._fetch_ohlcv = MagicMock()
         collector._persist_delta_flow = MagicMock()
