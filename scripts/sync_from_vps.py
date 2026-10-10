@@ -54,6 +54,7 @@ VPS_TUNNEL_CONN = {
     "password": os.getenv("DB_PASSWORD"),
 }
 
+FETCH_BATCH_SIZE = 50_000    # Rows read from the VPS per batch (bounds memory use)
 SSH_HOST = "option-server"   # Matches C:\Users\Nick\.ssh\config
 TUNNEL_WAIT_SEC = 3          # Seconds to wait for tunnel to establish
 
@@ -173,20 +174,41 @@ def get_local_watermark(cur, table: dict):
     return result
 
 
-def fetch_new_rows(vps_cur, table: dict, columns: list, local_max) -> list:
-    """Fetch rows from VPS newer than local_max."""
+def iter_new_row_batches(vps_conn, table: dict, columns: list, local_max, batch_size: int):
+    """
+    Yield lists of rows from the VPS newer than local_max, batch_size at a time.
+
+    Reads through a server-side (named) cursor so the whole result set is never
+    held in memory: a 16M-row table would need roughly 19 GB as Python objects.
+    A named cursor only works inside a transaction, so autocommit is switched
+    off for the read and restored afterwards.
+    """
     col_list = ", ".join(columns)
     watermark_col = table["watermark_col"]
 
     if local_max is None:
-        vps_cur.execute(f"SELECT {col_list} FROM {table['name']} ORDER BY {watermark_col}")
+        query = f"SELECT {col_list} FROM {table['name']} ORDER BY {watermark_col}"
+        params = None
     else:
-        vps_cur.execute(
-            f"SELECT {col_list} FROM {table['name']} WHERE {watermark_col} > %s ORDER BY {watermark_col}",
-            (local_max,)
+        query = (
+            f"SELECT {col_list} FROM {table['name']} "
+            f"WHERE {watermark_col} > %s ORDER BY {watermark_col}"
         )
+        params = (local_max,)
 
-    return vps_cur.fetchall()
+    was_autocommit = vps_conn.autocommit
+    vps_conn.autocommit = False
+    try:
+        with vps_conn.cursor(name=f"sync_{table['name']}") as cursor:
+            cursor.execute(query, params)
+            while True:
+                rows = cursor.fetchmany(batch_size)
+                if not rows:
+                    break
+                yield rows
+    finally:
+        vps_conn.rollback()
+        vps_conn.autocommit = was_autocommit
 
 
 def insert_rows(local_cur, table: dict, columns: list, rows: list) -> int:
@@ -210,6 +232,11 @@ def sync_table(vps_conn, local_conn, table: dict) -> tuple[int, str]:
     """
     Sync one table from VPS to local.
     Returns (rows_synced, status_message).
+
+    Rows are streamed in batches, but the table is still written in a single
+    local transaction: it is committed once at the end, or rolled back on any
+    error. Committing per batch could skip rows on resume, because rows from
+    one capture share the same watermark value.
     """
     try:
         vps_cur = vps_conn.cursor()
@@ -217,23 +244,26 @@ def sync_table(vps_conn, local_conn, table: dict) -> tuple[int, str]:
 
         # Get columns from VPS (source of truth — avoids local schema drift)
         columns = get_columns(vps_cur, table["name"])
+        vps_cur.close()
 
         # Find local watermark
         local_max = get_local_watermark(local_cur, table)
 
-        # Fetch new rows from VPS
-        rows = fetch_new_rows(vps_cur, table, columns, local_max)
+        # Stream new rows from VPS into the local transaction
+        count = 0
+        batches = iter_new_row_batches(vps_conn, table, columns, local_max, FETCH_BATCH_SIZE)
+        try:
+            for rows in batches:
+                count += insert_rows(local_cur, table, columns, rows)
+                logger.info(f"      {table['name']}: {count:,} rows staged (commit at end of table)")
+        finally:
+            batches.close()
 
-        if not rows:
-            vps_cur.close()
+        if count == 0:
             local_cur.close()
             return 0, "up to date"
 
-        # Insert into local
-        count = insert_rows(local_cur, table, columns, rows)
         local_conn.commit()
-
-        vps_cur.close()
         local_cur.close()
         return count, f"+{count} rows"
 
