@@ -49,12 +49,15 @@ class TestFlowDeltaHourlySyncEntry:
 class TestLiveTablesAreSynced:
     """Five live tables were missing from the sync list (found 2026-10-11)."""
 
-    APPEND_ONLY = ("daily_oi_snapshots", "dvol_history", "volatility_skew_history")
+    APPEND_ONLY = ("dvol_history",)
     MUTABLE = {
         # Rows are updated on the VPS after insertion (alerts, settlement results).
         "forward_test_predictions": ["currency", "snapshot_hour"],
         "straddle_scan_history": ["currency", "expiration", "scan_time"],
         "defined_risk_scan_history": ["currency", "expiration", "structure_type", "scan_time"],
+        # Rewritten in place on the VPS (ON CONFLICT ... DO UPDATE) when recomputed.
+        "daily_oi_snapshots": ["snapshot_date", "snapshot_hour_utc", "currency", "expiration", "strike", "option_type"],
+        "volatility_skew_history": ["snapshot_hour", "currency", "expiration"],
     }
 
     def test_append_only_tables_are_present_with_a_do_nothing_conflict_target(self):

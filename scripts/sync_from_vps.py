@@ -163,10 +163,14 @@ SYNC_TABLES = [
         "upsert_key": ["currency", "snapshot_hour"],
     },
     {
+        # The VPS rewrites open_interest/mark_iv/underlying_price in place when the
+        # same (date, hour) is analysed again (ON CONFLICT ... DO UPDATE), and an
+        # update does not change created_at, so a watermark would never see it.
         "name": "daily_oi_snapshots",
         "watermark_col": "created_at",
         "watermark_type": "timestamp",
-        "conflict_target": "(snapshot_date, snapshot_hour_utc, currency, expiration, strike, option_type) DO NOTHING",
+        "conflict_target": None,
+        "upsert_key": ["snapshot_date", "snapshot_hour_utc", "currency", "expiration", "strike", "option_type"],
     },
     {
         "name": "dvol_history",
@@ -175,10 +179,12 @@ SYNC_TABLES = [
         "conflict_target": '(asset, "timestamp") DO NOTHING',
     },
     {
+        # Recomputed in place within the same hour (ON CONFLICT ... DO UPDATE).
         "name": "volatility_skew_history",
         "watermark_col": "snapshot_hour",
         "watermark_type": "timestamp",
-        "conflict_target": "(snapshot_hour, currency, expiration) DO NOTHING",
+        "conflict_target": None,
+        "upsert_key": ["snapshot_hour", "currency", "expiration"],
     },
     {
         # Alert flags and expiry settlement results are written after insertion.
@@ -256,8 +262,11 @@ def iter_new_row_batches(vps_conn, table: dict, columns: list, local_max, batch_
     The VPS connection is expected to be in autocommit mode (both callers set it).
 
     Assumptions (checked against the VPS on 2026-10-11):
-      * every table has an index starting with its watermark column, so each page
-        is an index range scan (the five small tables without one hold <32k rows);
+      * the large incremental tables have an index starting with their watermark
+        column, so each page is an index range scan. Upsert tables are re-read in
+        full and some have no such index (scan histories, daily_oi_snapshots,
+        volatility_skew_history: <100k rows each at the time of writing), so each
+        page costs a scan; revisit if they grow into the millions;
       * a single watermark value holds few rows (largest recent group: 960); a group
         that fills a whole page is read in one go, capped at
         MAX_WATERMARK_GROUP_ROWS (the sync stops with an error above that);
@@ -350,11 +359,16 @@ def sync_table(vps_conn, local_conn, table: dict) -> tuple[int, str]:
     Sync one table from VPS to local.
     Returns (rows_synced, status_message).
 
-    The VPS is read in batches that never split a group of rows sharing a
-    watermark value, and each batch is committed locally as soon as it is
-    inserted. Tables with an "upsert_key" (rows updated on the VPS after
-    insertion) are re-read in full each time and only changed rows are written. If a run is interrupted, everything committed so far is a complete
-    prefix of the table, and the next run resumes after it.
+    Incremental tables: the VPS is read in batches that never split a group of
+    rows sharing a watermark value, and each batch is committed locally as soon
+    as it is inserted. An interrupted run leaves a gap-free prefix and the next
+    run resumes after it.
+
+    Tables with an "upsert_key" (rows are updated on the VPS after insertion):
+    the whole table is re-read every run, in the same batches, and only rows
+    that differ from the local copy are written. Nothing is resumed; each run
+    starts from the beginning. The local database is a read-only mirror: rows
+    deleted on the VPS are not removed locally.
     """
     vps_cur = None
     local_cur = None

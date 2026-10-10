@@ -28,6 +28,24 @@
 --
 -- Idempotent (IF EXISTS). No down-migration (house convention has none).
 
+-- Safety guard: refuse to drop a table that has gained rows since it was checked.
+DO $$
+DECLARE
+    table_name text;
+    row_count bigint;
+BEGIN
+    FOREACH table_name IN ARRAY ARRAY['calculated_greeks', 'data_quality_checks', 'collection_logs']
+    LOOP
+        IF to_regclass('public.' || table_name) IS NOT NULL THEN
+            EXECUTE format('SELECT count(*) FROM %I', table_name) INTO row_count;
+            IF row_count > 0 THEN
+                RAISE EXCEPTION 'Migration 026 aborted: % has % rows; refusing to drop it', table_name, row_count;
+            END IF;
+        END IF;
+    END LOOP;
+END
+$$;
+
 DROP VIEW IF EXISTS collection_completeness;
 DROP VIEW IF EXISTS hourly_trade_volume;
 DROP VIEW IF EXISTS latest_hourly_snapshots;
