@@ -1,5 +1,5 @@
 """
-DVOLFetcher — fetches Deribit DVOL index history and latest value.
+DVOLFetcher — fetches Deribit DVOL index history and recent completed candles.
 
 Deribit endpoint: /public/get_volatility_index_data
 Returns OHLC data (open, high, low, close) for DVOL index.
@@ -18,12 +18,9 @@ _TIMEOUT_SEC = 15
 
 
 class DVOLFetcher:
-    """Fetches DVOL index values from Deribit and persists them to dvol_history.
-
-    Used by scripts/backfill_dvol_history.py (backfill) and indirectly by
-    IV percentile / expected-move calculations that read dvol_history via
-    DatabaseRepository.get_dvol_history / get_dvol_history_before.
-    """
+    """Fetches hourly DVOL candles from Deribit. It never writes to the database:
+    the callers (ProspectiveCollector, scripts/backfill_dvol_history.py) store the
+    result through DatabaseRepository.save_dvol_candles."""
 
     def _build_url(self, asset: str, start_ms: int, end_ms: int) -> str:
         if asset not in ("BTC", "ETH"):
@@ -44,28 +41,42 @@ class DVOLFetcher:
             for row in rows
         ]
 
-    def fetch_latest(self, asset: str) -> Optional[float]:
+    def fetch_recent_completed_candles(
+        self, asset: str, hours: int = 48, now: Optional[datetime] = None
+    ) -> Optional[List[Tuple[datetime, float]]]:
         """
-        Fetch the most recent DVOL value for the given asset.
+        Final closes of the hourly DVOL candles that finished within the last `hours` hours.
 
-        Returns None on any error — callers should treat None as unavailable.
+        The candle still forming (its start is the current UTC hour) is dropped:
+        its close keeps changing until the hour ends, so storing it would put a
+        provisional value in the history. Each returned pair is (candle start,
+        UTC-aware; close).
+
+        Args:
+            asset: "BTC" or "ETH".
+            hours: How far back to look. The daemon asks for 48 h every cycle, so a
+                missed cycle or a restart repairs itself.
+            now: Override for tests.
+
+        Returns:
+            Oldest-first list (may be empty), or None on any fetch error.
         """
-        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-        start_ms = now_ms - 2 * 24 * 3600 * 1000  # 2 days back to ensure at least 1 row
+        current = now or datetime.now(timezone.utc)
+        current_hour = current.replace(minute=0, second=0, microsecond=0)
+        end_ms = int(current.timestamp() * 1000)
+        start_ms = int((current_hour - timedelta(hours=hours)).timestamp() * 1000)
         try:
-            url = self._build_url(asset, start_ms, now_ms)
-            resp = requests.get(url, timeout=_TIMEOUT_SEC)
+            resp = requests.get(self._build_url(asset, start_ms, end_ms), timeout=_TIMEOUT_SEC)
             if resp.status_code != 200:
-                logger.warning("DVOL fetch failed for %s: HTTP %s", asset, resp.status_code)
+                logger.warning("DVOL candle fetch failed for %s: HTTP %s", asset, resp.status_code)
                 return None
-            rows = self._parse_response(resp.json())
-            if not rows:
-                logger.warning("DVOL fetch returned empty data for %s", asset)
-                return None
-            return rows[-1][1]  # most recent
+            candles = self._parse_response(resp.json())
         except Exception as exc:
-            logger.error("DVOLFetcher.fetch_latest error for %s: %s", asset, exc)
+            logger.error("DVOLFetcher.fetch_recent_completed_candles error for %s: %s", asset, exc)
             return None
+        return sorted(
+            (candle for candle in candles if candle[0] < current_hour), key=lambda candle: candle[0]
+        )
 
     def fetch_history(
         self, asset: str, months: int = 36
@@ -125,30 +136,3 @@ class DVOLFetcher:
         except Exception as exc:
             logger.error("DVOLFetcher.fetch_history error for %s: %s", asset, exc)
             return []
-
-    def save_to_db(self, rows: List[Tuple[datetime, float]], asset: str, conn) -> int:
-        """
-        Upsert DVOL rows into dvol_history table.
-
-        Args:
-            rows: list of (datetime, dvol_value) tuples.
-            asset: "BTC" or "ETH".
-            conn: open psycopg2 connection (caller manages lifecycle and MUST call conn.commit() after).
-
-        Returns:
-            Number of new rows inserted (existing rows skipped via ON CONFLICT DO NOTHING).
-        """
-        inserted = 0
-        with conn.cursor() as cur:
-            for ts, value in rows:
-                cur.execute(
-                    """
-                    INSERT INTO dvol_history (asset, timestamp, dvol_value)
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT (asset, timestamp) DO NOTHING
-                    """,
-                    (asset, ts, value),
-                )
-                inserted += cur.rowcount
-        logger.debug("DVOLFetcher.save_to_db: %d new rows for %s", inserted, asset)
-        return inserted

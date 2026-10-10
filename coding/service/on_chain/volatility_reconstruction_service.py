@@ -394,8 +394,8 @@ class VolatilityReconstructionService:
 
         iv_rank_365d is intentionally always None here — see
         DatabaseRepository.get_dvol_history_before for why: the live formula
-        needs daily high/low (true range), and neither dvol_history nor
-        volatility_index_history ever persisted those — only a single daily
+        needs daily high/low (true range), and dvol_history never
+        persisted those — only a single daily
         close-equivalent value. That input does not exist historically, so
         this one metric is genuinely not reconstructable (not a bug to fix —
         a data gap from before this table existed).

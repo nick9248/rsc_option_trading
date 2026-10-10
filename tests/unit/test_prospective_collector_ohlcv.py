@@ -64,7 +64,7 @@ def test_collect_currency_calls_fetch_ohlcv():
     collector._fetch_trades = MagicMock(return_value={"count": 5})
     collector._fetch_book_summary = MagicMock(return_value={"count": 10, "instruments": []})
     collector._run_onchain_analysis = MagicMock()
-    collector._fetch_dvol = MagicMock()
+    collector._sync_dvol_history = MagicMock()
     collector._fetch_funding_rate = MagicMock()
     collector._fetch_ohlcv = MagicMock()
 

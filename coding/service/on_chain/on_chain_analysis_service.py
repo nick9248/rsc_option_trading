@@ -616,7 +616,7 @@ class OnChainAnalysisService:
         Args:
             tables_used: (table, expiration_or_None) pairs actually queried
                 -- e.g. [("onchain_analysis_snapshots", front_month),
-                ("volatility_index_history", None)]. Deduplicated
+                ("dvol_history", None)]. Deduplicated
                 internally so a table isn't queried twice for the same
                 staleness check.
         """
@@ -920,24 +920,24 @@ class OnChainAnalysisService:
                 specs.append(MetricSpec(
                     name="dvol", value=float(dvol),
                     history_30d=self.repository.get_metric_history(
-                        table="volatility_index_history", column="dvol",
-                        currency=currency, lookback_hours=lookback_30d, time_column="date",
+                        table="dvol_history", column="dvol_value",
+                        currency=currency, lookback_hours=lookback_30d, time_column="timestamp",
                     ),
                     history_90d=self.repository.get_metric_history(
-                        table="volatility_index_history", column="dvol",
-                        currency=currency, lookback_hours=lookback_90d, time_column="date",
+                        table="dvol_history", column="dvol_value",
+                        currency=currency, lookback_hours=lookback_90d, time_column="timestamp",
                     ),
                     unit="vol pts",
                     oldest_age_days_30d=self._oldest_observation_age_days(
-                        table="volatility_index_history", column="dvol",
-                        currency=currency, lookback_hours=lookback_30d, time_column="date",
+                        table="dvol_history", column="dvol_value",
+                        currency=currency, lookback_hours=lookback_30d, time_column="timestamp",
                     ),
                     oldest_age_days_90d=self._oldest_observation_age_days(
-                        table="volatility_index_history", column="dvol",
-                        currency=currency, lookback_hours=lookback_90d, time_column="date",
+                        table="dvol_history", column="dvol_value",
+                        currency=currency, lookback_hours=lookback_90d, time_column="timestamp",
                     ),
                 ))
-                tables_used.append(("volatility_index_history", None))
+                tables_used.append(("dvol_history", None))
             except ValueError as exc:
                 logger.error(
                     "dvol normalized-metric history hit a whitelist violation "

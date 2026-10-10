@@ -49,7 +49,7 @@ class TestFlowDeltaHourlySyncEntry:
 class TestLiveTablesAreSynced:
     """Five live tables were missing from the sync list (found 2026-10-11)."""
 
-    APPEND_ONLY = ("dvol_history",)
+    APPEND_ONLY = ()  # every live table with a watermark is currently an upsert table
     MUTABLE = {
         # Rows are updated on the VPS after insertion (alerts, settlement results).
         "forward_test_predictions": ["currency", "snapshot_hour"],
@@ -58,6 +58,8 @@ class TestLiveTablesAreSynced:
         # Rewritten in place on the VPS (ON CONFLICT ... DO UPDATE) when recomputed.
         "daily_oi_snapshots": ["snapshot_date", "snapshot_hour_utc", "currency", "expiration", "strike", "option_type"],
         "volatility_skew_history": ["snapshot_hour", "currency", "expiration"],
+        # Final candle closes, corrected in place for the last 48 h every cycle.
+        "dvol_history": ["asset", "timestamp"],
     }
 
     def test_append_only_tables_are_present_with_a_do_nothing_conflict_target(self):
@@ -78,9 +80,30 @@ class TestLiveTablesAreSynced:
         dropped = {
             "calculated_greeks", "data_quality_checks", "collection_logs",
             "collection_completeness", "hourly_trade_volume", "latest_hourly_snapshots",
+            "volatility_index_history",  # merged into dvol_history
         }
         assert dropped.isdisjoint({entry["name"] for entry in SYNC_TABLES})
 
     def test_table_names_are_unique(self):
         names = [entry["name"] for entry in SYNC_TABLES]
         assert len(names) == len(set(names))
+
+
+class TestLookbackWindows:
+    """Tables whose rows change only shortly after insertion re-read just a recent window.
+    Tables whose rows change long after insertion (resolved scans) must be re-read in full."""
+
+    def test_recent_window_tables(self):
+        assert _find("dvol_history")["lookback_hours"] == 72  # daemon repairs the last 48 h
+        assert _find("daily_oi_snapshots")["lookback_hours"] == 6
+        assert _find("volatility_skew_history")["lookback_hours"] == 6
+
+    def test_tables_resolved_long_after_insertion_are_re_read_in_full(self):
+        for name in ("forward_test_predictions", "straddle_scan_history", "defined_risk_scan_history"):
+            assert "lookback_hours" not in _find(name), name
+
+    def test_lookback_is_only_used_with_an_upsert_key_and_a_timestamp_watermark(self):
+        for entry in SYNC_TABLES:
+            if "lookback_hours" in entry:
+                assert entry.get("upsert_key"), entry["name"]
+                assert entry["watermark_type"] == "timestamp", entry["name"]

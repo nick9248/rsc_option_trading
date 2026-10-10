@@ -230,8 +230,8 @@ class TestBuildNormalizedMetrics:
         history_30 = [30.0 + i for i in range(30)]
         history_90 = [30.0 + i for i in range(90)]
         repo.get_metric_history.side_effect = _history_side_effect({
-            ("volatility_index_history", "dvol", 720): history_30,
-            ("volatility_index_history", "dvol", 2160): history_90,
+            ("dvol_history", "dvol_value", 720): history_30,
+            ("dvol_history", "dvol_value", 2160): history_90,
             ("funding_rate_history", "funding_rate", 720): history_30,
             ("funding_rate_history", "funding_rate", 2160): history_90,
         })
@@ -250,7 +250,7 @@ class TestBuildNormalizedMetrics:
         # Market-wide calls must never pass an expiration filter.
         for call in repo.get_metric_history.call_args_list:
             kwargs = call.kwargs
-            if kwargs.get("table") in ("volatility_index_history", "funding_rate_history"):
+            if kwargs.get("table") in ("dvol_history", "funding_rate_history"):
                 assert kwargs.get("expiration") is None
 
     def test_funding_history_rescaled_to_match_live_value_scale(self):
@@ -341,8 +341,8 @@ class TestBuildNormalizedMetrics:
                 ("onchain_analysis_snapshots", "total_call_oi", 2160): good_history_90,
                 ("onchain_analysis_snapshots", "total_put_oi", 720): good_history_30,
                 ("onchain_analysis_snapshots", "total_put_oi", 2160): good_history_90,
-                ("volatility_index_history", "dvol", 720): good_history_30,
-                ("volatility_index_history", "dvol", 2160): good_history_90,
+                ("dvol_history", "dvol_value", 720): good_history_30,
+                ("dvol_history", "dvol_value", 2160): good_history_90,
                 ("funding_rate_history", "funding_rate", 720): good_history_30,
                 ("funding_rate_history", "funding_rate", 2160): good_history_90,
             }.get(key, [])
