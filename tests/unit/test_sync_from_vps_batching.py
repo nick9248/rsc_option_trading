@@ -55,17 +55,18 @@ class FakeCursor:
     def __enter__(self):
         return self
 
-    def __exit__(self, *_exc):
+    def __exit__(self, *_exception_info):
         return False
 
 
-class FakeVpsConn:
+class FakeVpsConnection:
     """In-memory source table, kept sorted by the watermark column."""
 
     def __init__(self, rows, fail_on_query_number=None):
         self.rows = sorted(rows, key=lambda r: r[0])
         self.queries = []
         self.commits = 0
+        self.rollbacks = 0
         self.autocommit = True
         self._fail_on = fail_on_query_number
 
@@ -78,6 +79,9 @@ class FakeVpsConn:
     def commit(self):
         self.commits += 1
 
+    def rollback(self):
+        self.rollbacks += 1
+
 
 def _rows_with_ties(group_sizes):
     """One row per (watermark, index): watermark g appears group_sizes[g-1] times."""
@@ -87,21 +91,21 @@ def _rows_with_ties(group_sizes):
     return rows
 
 
-def _batches(conn, local_max=None, batch_size=10):
-    return list(iter_new_row_batches(conn, TABLE, COLUMNS, local_max, batch_size))
+def _batches(connection, local_max=None, batch_size=10):
+    return list(iter_new_row_batches(connection, TABLE, COLUMNS, local_max, batch_size))
 
 
 class TestIterNewRowBatches:
     def test_all_rows_come_back_in_watermark_order(self):
         rows = _rows_with_ties([3, 1, 4, 1, 5, 9, 2, 6, 5, 3])
-        batches = _batches(FakeVpsConn(rows))
+        batches = _batches(FakeVpsConnection(rows))
 
         flattened = [row for batch in batches for row in batch]
         assert sorted(flattened) == sorted(rows)
         assert [row[0] for row in flattened] == sorted(row[0] for row in rows)
 
     def test_a_watermark_group_is_never_split_across_batches(self):
-        batches = _batches(FakeVpsConn(_rows_with_ties([3, 1, 4, 1, 5, 9, 2, 6, 5, 3])))
+        batches = _batches(FakeVpsConnection(_rows_with_ties([3, 1, 4, 1, 5, 9, 2, 6, 5, 3])))
 
         seen = [{row[0] for row in batch} for batch in batches]
         for index, watermarks in enumerate(seen):
@@ -109,7 +113,7 @@ class TestIterNewRowBatches:
                 assert not watermarks & later, "a watermark value appears in two batches"
 
     def test_a_group_larger_than_the_page_is_returned_whole(self):
-        batches = _batches(FakeVpsConn(_rows_with_ties([2, 25, 2])), batch_size=10)
+        batches = _batches(FakeVpsConnection(_rows_with_ties([2, 25, 2])), batch_size=10)
 
         sizes_by_watermark = {}
         for batch in batches:
@@ -118,51 +122,66 @@ class TestIterNewRowBatches:
         assert sizes_by_watermark == {1: 2, 2: 25, 3: 2}
         assert any(len(batch) == 25 for batch in batches)
 
+    def test_a_group_above_the_safety_cap_stops_the_sync_with_an_error(self, monkeypatch):
+        monkeypatch.setattr(sync_from_vps, "MAX_WATERMARK_GROUP_ROWS", 20)
+        connection = FakeVpsConnection(_rows_with_ties([2, 25, 2]))
+
+        with pytest.raises(RuntimeError, match="refusing to load"):
+            _batches(connection, batch_size=10)
+
+    def test_a_failed_read_rolls_back_the_vps_connection(self):
+        connection = FakeVpsConnection(_rows_with_ties([5, 5, 5, 5]), fail_on_query_number=2)
+
+        with pytest.raises(psycopg2.OperationalError):
+            _batches(connection, batch_size=5)
+
+        assert connection.rollbacks == 1
+
     def test_an_exactly_full_last_page_loses_nothing(self):
         rows = _rows_with_ties([5, 5])  # two full pages of 5, then an empty page
-        flattened = [row for batch in _batches(FakeVpsConn(rows), batch_size=5) for row in batch]
+        flattened = [row for batch in _batches(FakeVpsConnection(rows), batch_size=5) for row in batch]
 
         assert sorted(flattened) == sorted(rows)
 
     def test_incremental_read_returns_only_rows_after_the_local_watermark(self):
         rows = _rows_with_ties([3, 3, 3, 3])
-        flattened = [row for batch in _batches(FakeVpsConn(rows), local_max=2) for row in batch]
+        flattened = [row for batch in _batches(FakeVpsConnection(rows), local_max=2) for row in batch]
 
         assert {row[0] for row in flattened} == {3, 4}
 
     def test_empty_source_yields_nothing(self):
-        assert _batches(FakeVpsConn([])) == []
+        assert _batches(FakeVpsConnection([])) == []
 
     def test_every_page_is_a_bounded_query_and_ends_its_read_transaction(self):
-        conn = FakeVpsConn(_rows_with_ties([4, 4, 4, 4, 4, 4]))
-        _batches(conn, batch_size=5)
+        connection = FakeVpsConnection(_rows_with_ties([4, 4, 4, 4, 4, 4]))
+        _batches(connection, batch_size=5)
 
-        for query, _ in conn.queries:
+        for query, _ in connection.queries:
             assert "LIMIT %s" in query or "captured_at = %s" in query
-        assert conn.commits == len(conn.queries)
+        assert connection.commits == len(connection.queries)
 
     def test_first_read_skips_null_watermarks(self):
-        conn = FakeVpsConn([])
-        _batches(conn)
+        connection = FakeVpsConnection([])
+        _batches(connection)
 
-        assert "captured_at IS NOT NULL" in conn.queries[0][0]
+        assert "captured_at IS NOT NULL" in connection.queries[0][0]
 
     def test_a_read_failure_propagates(self):
-        conn = FakeVpsConn(_rows_with_ties([5, 5, 5, 5]), fail_on_query_number=2)
+        connection = FakeVpsConnection(_rows_with_ties([5, 5, 5, 5]), fail_on_query_number=2)
 
         with pytest.raises(psycopg2.OperationalError, match="connection lost"):
-            _batches(conn, batch_size=5)
+            _batches(connection, batch_size=5)
 
 
 class TestInsertRows:
     def test_returns_the_number_of_rows_actually_inserted(self):
         # RETURNING 1 yields one row per inserted row, none for ON CONFLICT skips
-        with patch.object(sync_from_vps, "execute_values", return_value=[(1,), (1,)]) as mock_ev:
+        with patch.object(sync_from_vps, "execute_values", return_value=[(1,), (1,)]) as mock_execute_values:
             inserted = insert_rows(MagicMock(), TABLE, COLUMNS, [(1, "a"), (2, "b"), (3, "c")])
 
         assert inserted == 2
-        assert mock_ev.call_args.kwargs == {"fetch": True}
-        assert mock_ev.call_args.args[1].endswith("RETURNING 1")
+        assert mock_execute_values.call_args.kwargs == {"fetch": True}
+        assert mock_execute_values.call_args.args[1].endswith("RETURNING 1")
 
     def test_empty_input_inserts_nothing(self):
         assert insert_rows(MagicMock(), TABLE, COLUMNS, []) == 0
@@ -184,7 +203,7 @@ class TestSyncTable:
             return sync_table(vps, local, TABLE)
 
     def test_commits_after_every_batch(self, monkeypatch):
-        vps = FakeVpsConn(_rows_with_ties([4, 4, 4, 4, 4, 4]))
+        vps = FakeVpsConnection(_rows_with_ties([4, 4, 4, 4, 4, 4]))
         local = self._local_conn()
 
         count, message = self._run(vps, local, monkeypatch)
@@ -194,7 +213,7 @@ class TestSyncTable:
         assert local.commit.call_count >= 2  # several batches, one commit each
 
     def test_rows_that_were_fetched_but_already_present_are_not_reported_as_up_to_date(self, monkeypatch):
-        vps = FakeVpsConn(_rows_with_ties([4, 4, 4]))
+        vps = FakeVpsConnection(_rows_with_ties([4, 4, 4]))
         local = self._local_conn()
         monkeypatch.setattr(sync_from_vps, "FETCH_BATCH_SIZE", 10)
 
@@ -208,7 +227,7 @@ class TestSyncTable:
     def test_empty_source_reports_up_to_date_and_ends_the_local_read_transaction(self, monkeypatch):
         local = self._local_conn()
 
-        count, message = self._run(FakeVpsConn([]), local, monkeypatch)
+        count, message = self._run(FakeVpsConnection([]), local, monkeypatch)
 
         assert (count, message) == (0, "up to date")
         local.commit.assert_not_called()
@@ -216,7 +235,7 @@ class TestSyncTable:
 
     def test_failure_keeps_committed_batches_and_reports_the_resume_point(self, monkeypatch):
         # query 1 = column list, 2 = first page (commits), 3 = second page (fails)
-        vps = FakeVpsConn(_rows_with_ties([4, 4, 4, 4, 4, 4]), fail_on_query_number=3)
+        vps = FakeVpsConnection(_rows_with_ties([4, 4, 4, 4, 4, 4]), fail_on_query_number=3)
         local = self._local_conn()
 
         count, message = self._run(vps, local, monkeypatch)
@@ -230,7 +249,7 @@ class TestSyncTable:
     def test_a_dead_local_connection_still_returns_an_error_tuple(self, monkeypatch):
         """rollback() on an already-closed local connection must not escape
         sync_table; the caller's per-table loop relies on the (-1, msg) return."""
-        vps = FakeVpsConn(_rows_with_ties([4, 4, 4]), fail_on_query_number=2)
+        vps = FakeVpsConnection(_rows_with_ties([4, 4, 4]), fail_on_query_number=2)
         local = self._local_conn()
         local.rollback.side_effect = psycopg2.InterfaceError("connection already closed")
 
@@ -241,8 +260,8 @@ class TestSyncTable:
 
     def test_cursors_are_closed_on_success_and_on_error(self, monkeypatch):
         for vps in (
-            FakeVpsConn(_rows_with_ties([4, 4])),
-            FakeVpsConn(_rows_with_ties([4, 4, 4]), fail_on_query_number=3),
+            FakeVpsConnection(_rows_with_ties([4, 4])),
+            FakeVpsConnection(_rows_with_ties([4, 4, 4]), fail_on_query_number=3),
         ):
             local = self._local_conn()
             self._run(vps, local, monkeypatch, batch_size=5)

@@ -117,11 +117,11 @@ def test_interrupted_run_leaves_a_complete_prefix_and_the_next_run_finishes_clea
     monkeypatch.setattr(sync_from_vps, "FETCH_BATCH_SIZE", 10)
 
     real_insert_rows = sync_from_vps.insert_rows
-    calls = {"n": 0}
+    calls = {"count": 0}
 
     def fail_on_third_batch(*args, **kwargs):
-        calls["n"] += 1
-        if calls["n"] == 3:
+        calls["count"] += 1
+        if calls["count"] == 3:
             raise RuntimeError("simulated crash mid-sync")
         return real_insert_rows(*args, **kwargs)
 

@@ -56,6 +56,7 @@ VPS_TUNNEL_CONN = {
 
 FETCH_BATCH_SIZE = 50_000    # Rows read from the VPS per batch (bounds memory use)
 LOG_EVERY_BATCHES = 10       # Progress line every 10 committed batches (500k rows)
+MAX_WATERMARK_GROUP_ROWS = 1_000_000  # Safety cap for rows sharing one watermark value
 SSH_HOST = "option-server"   # Matches C:\Users\Nick\.ssh\config
 TUNNEL_WAIT_SEC = 3          # Seconds to wait for tunnel to establish
 
@@ -185,11 +186,15 @@ def _best_effort(action) -> None:
 
 def _fetch_rows(vps_conn, query: str, params: tuple) -> list:
     """Run one short read on the VPS and return all its rows."""
-    with vps_conn.cursor() as cursor:
-        cursor.execute(query, params)
-        rows = cursor.fetchall()
-    vps_conn.commit()  # no-op in autocommit mode; otherwise ends the read transaction
-    return rows
+    try:
+        with vps_conn.cursor() as cursor:
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+        vps_conn.commit()  # no-op in autocommit mode; otherwise ends the read transaction
+        return rows
+    except Exception:
+        _best_effort(vps_conn.rollback)  # never leave an aborted transaction behind
+        raise
 
 
 def iter_new_row_batches(vps_conn, table: dict, columns: list, local_max, batch_size: int):
@@ -207,11 +212,14 @@ def iter_new_row_batches(vps_conn, table: dict, columns: list, local_max, batch_
     group, so committing batch by batch and resuming from the local MAX()
     watermark neither skips nor duplicates rows.
 
+    The VPS connection is expected to be in autocommit mode (both callers set it).
+
     Assumptions (checked against the VPS on 2026-10-11):
       * every table has an index starting with its watermark column, so each page
         is an index range scan (the five small tables without one hold <32k rows);
-      * a single watermark value holds few rows (largest recent group: 960), so
-        the oversized-group read, which has no LIMIT, stays small;
+      * a single watermark value holds few rows (largest recent group: 960); a group
+        that fills a whole page is read in one go, capped at
+        MAX_WATERMARK_GROUP_ROWS (the sync stops with an error above that);
       * no table has NULL watermarks; such rows are never synced.
     Like every watermark sync, rows written late with an older watermark, or into
     a group that is still being written when it is copied, are not picked up.
@@ -244,8 +252,15 @@ def iter_new_row_batches(vps_conn, table: dict, columns: list, local_max, batch_
         else:
             # One watermark value fills the whole page: read that group in full.
             complete = _fetch_rows(
-                vps_conn, f"{select} WHERE {watermark_col} = %s", (newest,)
+                vps_conn,
+                f"{select} WHERE {watermark_col} = %s LIMIT %s",
+                (newest, MAX_WATERMARK_GROUP_ROWS + 1),
             )
+            if len(complete) > MAX_WATERMARK_GROUP_ROWS:
+                raise RuntimeError(
+                    f"{table['name']}: more than {MAX_WATERMARK_GROUP_ROWS:,} rows share "
+                    f"{watermark_col} = {newest}; refusing to load them into memory at once"
+                )
             last_seen = newest
         yield complete
 
