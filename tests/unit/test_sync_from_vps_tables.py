@@ -44,3 +44,40 @@ class TestFlowDeltaHourlySyncEntry:
         required_keys = {"name", "watermark_col", "watermark_type", "conflict_target"}
         for entry in SYNC_TABLES:
             assert required_keys.issubset(entry.keys()), entry
+
+
+class TestLiveTablesAreSynced:
+    """Five live tables were missing from the sync list (found 2026-10-11)."""
+
+    APPEND_ONLY = ("daily_oi_snapshots", "dvol_history", "volatility_skew_history")
+    MUTABLE = {
+        # Rows are updated on the VPS after insertion (alerts, settlement results).
+        "forward_test_predictions": ["currency", "snapshot_hour"],
+        "straddle_scan_history": ["currency", "expiration", "scan_time"],
+        "defined_risk_scan_history": ["currency", "expiration", "structure_type", "scan_time"],
+    }
+
+    def test_append_only_tables_are_present_with_a_do_nothing_conflict_target(self):
+        for name in self.APPEND_ONLY:
+            entry = _find(name)
+            assert entry is not None, f"{name} missing from SYNC_TABLES"
+            assert entry["conflict_target"].endswith("DO NOTHING"), entry
+            assert "upsert_key" not in entry
+
+    def test_mutable_tables_are_present_with_their_unique_key(self):
+        for name, key in self.MUTABLE.items():
+            entry = _find(name)
+            assert entry is not None, f"{name} missing from SYNC_TABLES"
+            assert entry["upsert_key"] == key
+            assert entry["conflict_target"] is None  # unused for upsert tables
+
+    def test_dead_tables_are_not_synced(self):
+        dropped = {
+            "calculated_greeks", "data_quality_checks", "collection_logs",
+            "collection_completeness", "hourly_trade_volume", "latest_hourly_snapshots",
+        }
+        assert dropped.isdisjoint({entry["name"] for entry in SYNC_TABLES})
+
+    def test_table_names_are_unique(self):
+        names = [entry["name"] for entry in SYNC_TABLES]
+        assert len(names) == len(set(names))

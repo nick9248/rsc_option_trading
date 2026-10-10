@@ -1,14 +1,58 @@
-"""Tests for defined_risk_scan_history repository methods."""
-from datetime import datetime, timedelta, timezone
+"""Tests for defined_risk_scan_history repository methods.
 
+These tests write rows, so they run on a throw-away database created for each
+test: they used to write into the real local database (option_trading) and never
+cleaned up, leaving synthetic scan rows mixed into the copy of production data.
+They are skipped when the local PostgreSQL server is not reachable.
+"""
+import uuid
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import psycopg2
 import pytest
 
+from coding.core.database.config import ConnectionPool, DatabaseConfig
 from coding.core.database.repository import DatabaseRepository
+
+MIGRATION = Path(__file__).parents[2] / "migrations" / "015_add_defined_risk_scan_history.sql"
 
 
 @pytest.fixture
 def repo():
-    return DatabaseRepository()
+    base_connection = DatabaseConfig().get_connection_dict()
+    if base_connection["host"] not in ("localhost", "127.0.0.1"):
+        pytest.skip("scratch databases are only created on a local server")
+    scratch_name = f"test_defined_risk_{uuid.uuid4().hex[:8]}"
+
+    try:
+        admin = psycopg2.connect(connect_timeout=3, **dict(base_connection, database="postgres"))
+    except psycopg2.OperationalError as error:
+        pytest.skip(f"local PostgreSQL not reachable: {error}")
+    admin.autocommit = True
+    with admin.cursor() as cursor:
+        cursor.execute(f"CREATE DATABASE {scratch_name}")
+
+    scratch_connection = dict(base_connection, database=scratch_name)
+    with psycopg2.connect(**scratch_connection) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(MIGRATION.read_text(encoding="utf8"))
+
+    # ConnectionPool is a process-wide singleton: reset it so the repository really
+    # connects to the scratch database, and again afterwards for the other tests.
+    ConnectionPool().close_all()
+    repository = DatabaseRepository(config=DatabaseConfig(
+        host=scratch_connection["host"], port=scratch_connection["port"],
+        database=scratch_name, user=scratch_connection["user"],
+        password=scratch_connection["password"],
+    ))
+    try:
+        yield repository
+    finally:
+        ConnectionPool().close_all()
+        with admin.cursor() as cursor:
+            cursor.execute(f"DROP DATABASE IF EXISTS {scratch_name} WITH (FORCE)")
+        admin.close()
 
 
 def _row(**overrides):

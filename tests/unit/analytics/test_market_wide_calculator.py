@@ -39,17 +39,29 @@ def calculator():
 class TestMarketWideCalculator:
     """Tests for MarketWideCalculator."""
 
-    def test_iv_term_structure_contango(self, calculator):
-        atm_ivs = {
-            "28FEB26": 70.0,
-            "28MAR26": 65.0,
-            "27JUN26": 60.0,
-        }
+    @staticmethod
+    def _future_expiration(days_ahead: int) -> str:
+        """An expiration string like "28MAR26", at least `days_ahead` days from today.
+        The day of month is kept at 10 or later so the format is unambiguous."""
+        from datetime import datetime, timedelta, timezone
+
+        target = datetime.now(timezone.utc) + timedelta(days=days_ahead)
+        if target.day < 10:
+            target += timedelta(days=10)
+        return f"{target.day}{target.strftime('%b').upper()}{target.strftime('%y')}"
+
+    def test_iv_term_structure_backwardation(self, calculator):
+        # Expirations are built relative to today: hard-coded dates go stale (past
+        # expirations are clamped to 0 DTE and the shape can no longer be judged).
+        front, middle, back = (
+            self._future_expiration(days) for days in (30, 60, 120)
+        )
+        atm_ivs = {front: 70.0, middle: 65.0, back: 60.0}
         report, structured = calculator.calculate_iv_term_structure(atm_ivs)
 
         assert "IV TERM STRUCTURE" in report
-        assert "28FEB26" in report
-        assert "28MAR26" in report
+        assert front in report
+        assert middle in report
         # Front month (70) > back month (60) = backwardated
         assert "BACKWARDATED" in report
         assert structured["shape"] == "BACKWARDATION"

@@ -6,7 +6,6 @@ Utility scripts for system maintenance, testing, and validation.
 
 ### Data Collection
 - **check_collection_status.py** - Verify daemon is collecting data and database is up-to-date
-- **start_collection_daemon.bat** - Windows batch file to start collection daemon
 
 ### Database Management
 - **check_database.py** - Check database for collected trades (basic)

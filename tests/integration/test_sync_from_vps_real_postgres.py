@@ -73,6 +73,10 @@ def source_and_copy():
     for connection in (source, copy):
         with connection.cursor() as cursor:
             cursor.execute("CREATE TABLE probe (id serial PRIMARY KEY, captured_at bigint, value text)")
+            cursor.execute(
+                "CREATE TABLE scans (id serial PRIMARY KEY, currency text, scan_time bigint, "
+                "resolved_at bigint, pnl numeric, UNIQUE (currency, scan_time))"
+            )
         connection.commit()
     try:
         yield source, copy
@@ -158,3 +162,49 @@ def test_second_run_is_up_to_date_and_new_source_rows_are_picked_up(source_and_c
 
     assert count == len(later)
     assert Counter(_copy_rows(copy)) == Counter(first + later)
+
+
+MUTABLE_TABLE = {
+    "name": "scans",
+    "watermark_col": "scan_time",
+    "watermark_type": "bigint",
+    "conflict_target": None,
+    "upsert_key": ["currency", "scan_time"],
+}
+
+
+def _scans(copy):
+    with copy.cursor() as cursor:
+        cursor.execute("SELECT currency, scan_time, resolved_at, pnl FROM scans ORDER BY currency, scan_time")
+        return cursor.fetchall()
+
+
+def test_rows_updated_on_the_source_after_the_first_sync_reach_the_copy(source_and_copy, monkeypatch):
+    """Scan-history rows get resolved_at and pnl filled in LATER on the VPS; a
+    copy-once sync would leave them unresolved locally forever."""
+    source, copy = source_and_copy
+    monkeypatch.setattr(sync_from_vps, "FETCH_BATCH_SIZE", 10)
+    with source.cursor() as cursor:
+        cursor.executemany(
+            "INSERT INTO scans (currency, scan_time) VALUES (%s, %s)",
+            [(currency, scan_time) for scan_time in range(1, 26) for currency in ("BTC", "ETH")],
+        )
+
+    count, _ = sync_table(source, copy, MUTABLE_TABLE)
+    assert count == 50
+    assert all(row[2] is None for row in _scans(copy))
+
+    with source.cursor() as cursor:  # the VPS resolves some rows and adds new ones
+        cursor.execute("UPDATE scans SET resolved_at = 100, pnl = 12.5 WHERE scan_time <= 5")
+        cursor.executemany("INSERT INTO scans (currency, scan_time) VALUES (%s, %s)", [("BTC", 26), ("ETH", 26)])
+
+    count, message = sync_table(source, copy, MUTABLE_TABLE)
+
+    assert count == 12, "10 updated rows + 2 new rows, and nothing else rewritten"
+    assert "new or updated (52 rows checked)" in message
+    copied = _scans(copy)
+    assert len(copied) == 52
+    assert all(row[2] == 100 and row[3] == 12.5 for row in copied if row[1] <= 5)
+    assert all(row[2] is None for row in copied if row[1] > 5)
+
+    assert sync_table(source, copy, MUTABLE_TABLE) == (0, "up to date (52 rows checked)")

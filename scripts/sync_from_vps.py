@@ -66,6 +66,10 @@ TUNNEL_WAIT_SEC = 3          # Seconds to wait for tunnel to establish
 # watermark_col  : column used to find "what's new" (timestamp/bigint)
 # watermark_type : "timestamp" or "bigint" (affects comparison query)
 # conflict_target: ON CONFLICT clause suffix, or None for plain INSERT
+# upsert_key     : optional. For tables whose rows are UPDATED on the VPS after
+#                  insertion: the unique key columns. The whole table is re-read
+#                  each sync and local rows that differ from the VPS are updated.
+#                  conflict_target is not used for these tables.
 # ─────────────────────────────────────────────
 SYNC_TABLES = [
     {
@@ -149,10 +153,47 @@ SYNC_TABLES = [
         "conflict_target": "(snapshot_hour, currency, expiration) DO NOTHING",
     },
     {
+        # Rows are updated on the VPS after insertion (resolved_at and the outcome
+        # columns are filled in when the forecast horizon passes), so the whole
+        # table is re-read every sync and local rows that differ are updated.
         "name": "forward_test_predictions",
         "watermark_col": "created_at",
         "watermark_type": "timestamp",
-        "conflict_target": "(currency, snapshot_hour) DO NOTHING",
+        "conflict_target": None,
+        "upsert_key": ["currency", "snapshot_hour"],
+    },
+    {
+        "name": "daily_oi_snapshots",
+        "watermark_col": "created_at",
+        "watermark_type": "timestamp",
+        "conflict_target": "(snapshot_date, snapshot_hour_utc, currency, expiration, strike, option_type) DO NOTHING",
+    },
+    {
+        "name": "dvol_history",
+        "watermark_col": "timestamp",
+        "watermark_type": "timestamp",
+        "conflict_target": '(asset, "timestamp") DO NOTHING',
+    },
+    {
+        "name": "volatility_skew_history",
+        "watermark_col": "snapshot_hour",
+        "watermark_type": "timestamp",
+        "conflict_target": "(snapshot_hour, currency, expiration) DO NOTHING",
+    },
+    {
+        # Alert flags and expiry settlement results are written after insertion.
+        "name": "straddle_scan_history",
+        "watermark_col": "scan_time",
+        "watermark_type": "timestamp",
+        "conflict_target": None,
+        "upsert_key": ["currency", "expiration", "scan_time"],
+    },
+    {
+        "name": "defined_risk_scan_history",
+        "watermark_col": "scan_time",
+        "watermark_type": "timestamp",
+        "conflict_target": None,
+        "upsert_key": ["currency", "expiration", "structure_type", "scan_time"],
     },
 ]
 
@@ -282,6 +323,28 @@ def insert_rows(local_cur, table: dict, columns: list, rows: list) -> int:
     return len(inserted)
 
 
+def upsert_rows(local_cur, table: dict, columns: list, rows: list) -> int:
+    """Insert new rows and update local rows that differ from the VPS.
+    Returns the number of rows inserted or changed (unchanged rows are not counted)."""
+    if not rows:
+        return 0
+
+    key = table["upsert_key"]
+    value_columns = [column for column in columns if column not in key]
+    col_list = ", ".join(columns)
+    assignments = ", ".join(f"{column} = EXCLUDED.{column}" for column in value_columns)
+    local_values = ", ".join(f"t.{column}" for column in value_columns)
+    vps_values = ", ".join(f"EXCLUDED.{column}" for column in value_columns)
+
+    sql = (
+        f"INSERT INTO {table['name']} AS t ({col_list}) VALUES %s "
+        f"ON CONFLICT ({', '.join(key)}) DO UPDATE SET {assignments} "
+        f"WHERE ({local_values}) IS DISTINCT FROM ({vps_values}) RETURNING 1"
+    )
+    changed = execute_values(local_cur, sql, rows, fetch=True)
+    return len(changed)
+
+
 def sync_table(vps_conn, local_conn, table: dict) -> tuple[int, str]:
     """
     Sync one table from VPS to local.
@@ -289,7 +352,8 @@ def sync_table(vps_conn, local_conn, table: dict) -> tuple[int, str]:
 
     The VPS is read in batches that never split a group of rows sharing a
     watermark value, and each batch is committed locally as soon as it is
-    inserted. If a run is interrupted, everything committed so far is a complete
+    inserted. Tables with an "upsert_key" (rows updated on the VPS after
+    insertion) are re-read in full each time and only changed rows are written. If a run is interrupted, everything committed so far is a complete
     prefix of the table, and the next run resumes after it.
     """
     vps_cur = None
@@ -304,14 +368,21 @@ def sync_table(vps_conn, local_conn, table: dict) -> tuple[int, str]:
         columns = get_columns(vps_cur, table["name"])
         vps_cur.close()  # nothing may stay open on the VPS connection while paging
 
-        # Find local watermark
-        local_max = get_local_watermark(local_cur, table)
+        # Tables whose rows change after insertion are re-read in full and upserted;
+        # all others are read incrementally from the local watermark.
+        is_upsert_table = bool(table.get("upsert_key"))
+        if is_upsert_table:
+            local_max = None
+            write_rows = upsert_rows
+        else:
+            local_max = get_local_watermark(local_cur, table)
+            write_rows = insert_rows
 
-        # Copy new rows from VPS, committing batch by batch
+        # Copy rows from VPS, committing batch by batch
         batch_number = 0
         for rows in iter_new_row_batches(vps_conn, table, columns, local_max, FETCH_BATCH_SIZE):
             fetched += len(rows)
-            inserted += insert_rows(local_cur, table, columns, rows)
+            inserted += write_rows(local_cur, table, columns, rows)
             local_conn.commit()
             batch_number += 1
             if batch_number % LOG_EVERY_BATCHES == 0:
@@ -321,6 +392,11 @@ def sync_table(vps_conn, local_conn, table: dict) -> tuple[int, str]:
             # End the read-only transaction opened by the watermark query.
             local_conn.rollback()
             return 0, "up to date"
+
+        if is_upsert_table:
+            if inserted == 0:
+                return 0, f"up to date ({fetched:,} rows checked)"
+            return inserted, f"{inserted:,} new or updated ({fetched:,} rows checked)"
 
         already_present = fetched - inserted
         note = f" ({already_present:,} already present)" if already_present else ""

@@ -5,6 +5,20 @@ longer written to by any surviving code path — dropping tables is irreversible
 data loss and was left to an explicit user decision, per this repo's CLAUDE.md
 rules and the cleanup spec (`SHOULD_BE_DONE.md`).
 
+**UPDATE 2026-10-11: user approved removing stale objects found while auditing
+which tables `scripts/sync_from_vps.py` skipped.** Migration
+`026_drop_dead_tables_and_views.sql` drops `calculated_greeks`,
+`data_quality_checks`, `collection_logs` (tables, all with 0 rows) and the views
+`collection_completeness`, `hourly_trade_volume`, `latest_hourly_snapshots`
+(zero references in code). `collection_logs` was empty because its only writer,
+`repo.save_collection_log()`, never existed: the daemon's calls failed silently
+every cycle; the daemon now logs gaps to the journal instead. Kept although
+empty: `futures_basis` (a live consumer is expected) and `buy_sell_flow_metrics`
+(repository readers still exist). The migration still has to be applied on the
+VPS at the next deployment. Five live tables that were missing from the sync
+(`daily_oi_snapshots`, `dvol_history`, `volatility_skew_history`,
+`straddle_scan_history`, `defined_risk_scan_history`) are now synced.
+
 **UPDATE 2026-08-06 (onchain-overhaul campaign, Wave E task E5): user approved
 dropping the confirmed-dead tables below.** Migration `024_drop_dead_tables.sql`
 executed the drops on the local DB. CSV backups of every row in every dropped
