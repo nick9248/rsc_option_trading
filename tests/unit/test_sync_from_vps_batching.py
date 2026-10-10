@@ -212,6 +212,12 @@ class TestUpsertRows:
     def test_empty_input_writes_nothing(self):
         assert upsert_rows(MagicMock(), MUTABLE_TABLE, COLUMNS, []) == 0
 
+    def test_a_key_that_covers_every_column_is_rejected_instead_of_generating_invalid_sql(self):
+        table = dict(MUTABLE_TABLE, upsert_key=["captured_at", "value"])
+
+        with pytest.raises(ValueError, match="nothing to update"):
+            upsert_rows(MagicMock(), table, COLUMNS, [(1, "a")])
+
 
 class TestSyncTable:
     def _local_conn(self):

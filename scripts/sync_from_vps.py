@@ -340,6 +340,8 @@ def upsert_rows(local_cur, table: dict, columns: list, rows: list) -> int:
 
     key = table["upsert_key"]
     value_columns = [column for column in columns if column not in key]
+    if not value_columns:
+        raise ValueError(f"{table['name']}: upsert_key covers every column, there is nothing to update")
     col_list = ", ".join(columns)
     assignments = ", ".join(f"{column} = EXCLUDED.{column}" for column in value_columns)
     local_values = ", ".join(f"t.{column}" for column in value_columns)

@@ -40,21 +40,23 @@ class TestMarketWideCalculator:
     """Tests for MarketWideCalculator."""
 
     @staticmethod
-    def _future_expiration(days_ahead: int) -> str:
-        """An expiration string like "28MAR26", at least `days_ahead` days from today.
-        The day of month is kept at 10 or later so the format is unambiguous."""
-        from datetime import datetime, timedelta, timezone
+    def _expiration_months_ahead(months_ahead: int) -> str:
+        """An expiration string like "28MAR27": the 28th of the month `months_ahead`
+        months from now. Always in the future, always a two-digit day, and the
+        expirations stay in the same order and spacing whatever today's date is."""
+        from datetime import datetime, timezone
 
-        target = datetime.now(timezone.utc) + timedelta(days=days_ahead)
-        if target.day < 10:
-            target += timedelta(days=10)
-        return f"{target.day}{target.strftime('%b').upper()}{target.strftime('%y')}"
+        today = datetime.now(timezone.utc)
+        month_index = today.year * 12 + (today.month - 1) + months_ahead
+        year, month = divmod(month_index, 12)
+        expiry = datetime(year, month + 1, 28)
+        return f"{expiry.day}{expiry.strftime('%b').upper()}{expiry.strftime('%y')}"
 
     def test_iv_term_structure_backwardation(self, calculator):
         # Expirations are built relative to today: hard-coded dates go stale (past
         # expirations are clamped to 0 DTE and the shape can no longer be judged).
         front, middle, back = (
-            self._future_expiration(days) for days in (30, 60, 120)
+            self._expiration_months_ahead(months) for months in (1, 2, 4)
         )
         atm_ivs = {front: 70.0, middle: 65.0, back: 60.0}
         report, structured = calculator.calculate_iv_term_structure(atm_ivs)
