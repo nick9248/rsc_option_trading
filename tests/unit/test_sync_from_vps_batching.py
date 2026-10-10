@@ -11,6 +11,7 @@ No database or SSH tunnel is used: connections are small fakes.
 
 from unittest.mock import MagicMock, patch
 
+import psycopg2
 import pytest
 
 from scripts import sync_from_vps
@@ -56,8 +57,9 @@ class FakeNamedCursor:
 
 
 class FakeVpsConn:
-    def __init__(self, named_cursor):
+    def __init__(self, named_cursor, rollback_error=None):
         self.autocommit = True
+        self.rollback_error = rollback_error
         self.named_cursor = named_cursor
         self.named_cursor_names = []
         self.autocommit_while_streaming = []
@@ -74,6 +76,8 @@ class FakeVpsConn:
 
     def rollback(self):
         self.rollbacks += 1
+        if self.rollback_error is not None:
+            raise self.rollback_error
 
 
 def _rows(n):
@@ -114,6 +118,17 @@ class TestIterNewRowBatches:
             list(iter_new_row_batches(conn, TABLE, COLUMNS, None, batch_size=10))
 
         assert conn.autocommit is True
+
+    def test_broken_connection_does_not_mask_the_original_error(self):
+        """A dropped tunnel makes rollback() raise too; the caller must still
+        see the original read error, not the cleanup error."""
+        conn = FakeVpsConn(
+            FakeNamedCursor(_rows(30), fail_after_batches=1),
+            rollback_error=psycopg2.OperationalError("connection already closed"),
+        )
+
+        with pytest.raises(RuntimeError, match="connection lost"):
+            list(iter_new_row_batches(conn, TABLE, COLUMNS, None, batch_size=10))
 
     def test_full_read_has_no_watermark_filter(self):
         cursor = FakeNamedCursor([])
@@ -166,6 +181,28 @@ class TestSyncTable:
 
         assert (count, message) == (0, "up to date")
         local.commit.assert_not_called()
+
+    def test_up_to_date_ends_the_local_read_transaction(self):
+        """The watermark MAX() query opens a transaction; an early return must
+        not leave it idle-in-transaction for the rest of the run."""
+        vps = FakeVpsConn(FakeNamedCursor([]))
+        local = self._local_conn()
+
+        with patch.object(sync_from_vps, "execute_values"):
+            sync_table(vps, local, TABLE)
+
+        local.rollback.assert_called_once()
+
+    def test_cursors_are_closed_on_success_and_on_error(self, monkeypatch):
+        monkeypatch.setattr(sync_from_vps, "FETCH_BATCH_SIZE", 10)
+        for vps in (
+            FakeVpsConn(FakeNamedCursor(_rows(15))),
+            FakeVpsConn(FakeNamedCursor(_rows(30), fail_after_batches=1)),
+        ):
+            local = self._local_conn()
+            with patch.object(sync_from_vps, "execute_values"):
+                sync_table(vps, local, TABLE)
+            local.cursor.return_value.close.assert_called_once()
 
     def test_read_failure_rolls_back_the_local_transaction_and_commits_nothing(self, monkeypatch):
         monkeypatch.setattr(sync_from_vps, "FETCH_BATCH_SIZE", 10)

@@ -55,6 +55,7 @@ VPS_TUNNEL_CONN = {
 }
 
 FETCH_BATCH_SIZE = 50_000    # Rows read from the VPS per batch (bounds memory use)
+LOG_EVERY_BATCHES = 10       # Progress line every 10 batches (500k rows)
 SSH_HOST = "option-server"   # Matches C:\Users\Nick\.ssh\config
 TUNNEL_WAIT_SEC = 3          # Seconds to wait for tunnel to establish
 
@@ -207,8 +208,13 @@ def iter_new_row_batches(vps_conn, table: dict, columns: list, local_max, batch_
                     break
                 yield rows
     finally:
-        vps_conn.rollback()
-        vps_conn.autocommit = was_autocommit
+        try:
+            vps_conn.rollback()
+            vps_conn.autocommit = was_autocommit
+        except psycopg2.Error:
+            # Connection already broken (e.g. the tunnel dropped): keep the
+            # original error instead of masking it with this one.
+            pass
 
 
 def insert_rows(local_cur, table: dict, columns: list, rows: list) -> int:
@@ -238,13 +244,14 @@ def sync_table(vps_conn, local_conn, table: dict) -> tuple[int, str]:
     error. Committing per batch could skip rows on resume, because rows from
     one capture share the same watermark value.
     """
+    vps_cur = None
+    local_cur = None
     try:
         vps_cur = vps_conn.cursor()
         local_cur = local_conn.cursor()
 
         # Get columns from VPS (source of truth — avoids local schema drift)
         columns = get_columns(vps_cur, table["name"])
-        vps_cur.close()
 
         # Find local watermark
         local_max = get_local_watermark(local_cur, table)
@@ -253,23 +260,32 @@ def sync_table(vps_conn, local_conn, table: dict) -> tuple[int, str]:
         count = 0
         batches = iter_new_row_batches(vps_conn, table, columns, local_max, FETCH_BATCH_SIZE)
         try:
-            for rows in batches:
+            for batch_number, rows in enumerate(batches, start=1):
                 count += insert_rows(local_cur, table, columns, rows)
-                logger.info(f"      {table['name']}: {count:,} rows staged (commit at end of table)")
+                if batch_number % LOG_EVERY_BATCHES == 0:
+                    logger.info(f"      {table['name']}: {count:,} rows staged (commit at end of table)")
         finally:
             batches.close()
 
         if count == 0:
-            local_cur.close()
+            # End the read-only transaction opened by the watermark query.
+            local_conn.rollback()
             return 0, "up to date"
 
         local_conn.commit()
-        local_cur.close()
         return count, f"+{count} rows"
 
     except Exception as e:
         local_conn.rollback()
         return -1, f"ERROR: {e}"
+
+    finally:
+        for cursor in (vps_cur, local_cur):
+            if cursor is not None:
+                try:
+                    cursor.close()
+                except psycopg2.Error:
+                    pass
 
 
 def _pull_health_json():
