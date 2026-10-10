@@ -54,6 +54,9 @@ VPS_TUNNEL_CONN = {
     "password": os.getenv("DB_PASSWORD"),
 }
 
+FETCH_BATCH_SIZE = 50_000    # Rows read from the VPS per batch (bounds memory use)
+LOG_EVERY_BATCHES = 10       # Progress line every 10 committed batches (500k rows)
+MAX_WATERMARK_GROUP_ROWS = 1_000_000  # Safety cap for rows sharing one watermark value
 SSH_HOST = "option-server"   # Matches C:\Users\Nick\.ssh\config
 TUNNEL_WAIT_SEC = 3          # Seconds to wait for tunnel to establish
 
@@ -173,73 +176,166 @@ def get_local_watermark(cur, table: dict):
     return result
 
 
-def fetch_new_rows(vps_cur, table: dict, columns: list, local_max) -> list:
-    """Fetch rows from VPS newer than local_max."""
+def _best_effort(action) -> None:
+    """Run a cleanup step. A broken connection must not mask the original error."""
+    try:
+        action()
+    except psycopg2.Error as error:
+        logger.warning(f"Cleanup step failed (ignored so the original error is kept): {error}")
+
+
+def _fetch_rows(vps_conn, query: str, params: tuple) -> list:
+    """Run one short read on the VPS and return all its rows."""
+    try:
+        with vps_conn.cursor() as cursor:
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+        vps_conn.commit()  # no-op in autocommit mode; otherwise ends the read transaction
+        return rows
+    except Exception:
+        _best_effort(vps_conn.rollback)  # never leave an aborted transaction behind
+        raise
+
+
+def iter_new_row_batches(vps_conn, table: dict, columns: list, local_max, batch_size: int):
+    """
+    Yield lists of rows from the VPS newer than local_max, in watermark order.
+
+    The VPS is read in short pages (ORDER BY watermark LIMIT n), one query each,
+    so no long transaction is held open on the production database and memory
+    use stays bounded (a 16M-row table would need ~19 GB with fetchall()).
+
+    Rows that share a watermark value (e.g. every row of one capture) are never
+    split across batches: the last, possibly unfinished, group of a full page is
+    dropped and re-read at the start of the next page, and a group bigger than a
+    whole page is read in one go. Every batch therefore ends on a complete
+    group, so committing batch by batch and resuming from the local MAX()
+    watermark neither skips nor duplicates rows.
+
+    The VPS connection is expected to be in autocommit mode (both callers set it).
+
+    Assumptions (checked against the VPS on 2026-10-11):
+      * every table has an index starting with its watermark column, so each page
+        is an index range scan (the five small tables without one hold <32k rows);
+      * a single watermark value holds few rows (largest recent group: 960); a group
+        that fills a whole page is read in one go, capped at
+        MAX_WATERMARK_GROUP_ROWS (the sync stops with an error above that);
+      * no table has NULL watermarks; such rows are never synced.
+    Like every watermark sync, rows written late with an older watermark, or into
+    a group that is still being written when it is copied, are not picked up.
+    """
     col_list = ", ".join(columns)
     watermark_col = table["watermark_col"]
+    watermark_index = columns.index(watermark_col)
+    select = f"SELECT {col_list} FROM {table['name']}"
 
-    if local_max is None:
-        vps_cur.execute(f"SELECT {col_list} FROM {table['name']} ORDER BY {watermark_col}")
-    else:
-        vps_cur.execute(
-            f"SELECT {col_list} FROM {table['name']} WHERE {watermark_col} > %s ORDER BY {watermark_col}",
-            (local_max,)
-        )
+    last_seen = local_max
+    while True:
+        if last_seen is None:
+            query = f"{select} WHERE {watermark_col} IS NOT NULL ORDER BY {watermark_col} LIMIT %s"
+            params = (batch_size,)
+        else:
+            query = f"{select} WHERE {watermark_col} > %s ORDER BY {watermark_col} LIMIT %s"
+            params = (last_seen, batch_size)
+        page = _fetch_rows(vps_conn, query, params)
 
-    return vps_cur.fetchall()
+        if not page:
+            return
+        if len(page) < batch_size:
+            yield page  # last page: nothing follows, so every group in it is complete
+            return
+
+        newest = page[-1][watermark_index]
+        complete = [row for row in page if row[watermark_index] < newest]
+        if complete:
+            last_seen = complete[-1][watermark_index]
+        else:
+            # One watermark value fills the whole page: read that group in full.
+            complete = _fetch_rows(
+                vps_conn,
+                f"{select} WHERE {watermark_col} = %s LIMIT %s",
+                (newest, MAX_WATERMARK_GROUP_ROWS + 1),
+            )
+            if len(complete) > MAX_WATERMARK_GROUP_ROWS:
+                raise RuntimeError(
+                    f"{table['name']}: more than {MAX_WATERMARK_GROUP_ROWS:,} rows share "
+                    f"{watermark_col} = {newest}; refusing to load them into memory at once"
+                )
+            last_seen = newest
+        yield complete
 
 
 def insert_rows(local_cur, table: dict, columns: list, rows: list) -> int:
-    """Insert rows into local DB. Returns number of rows inserted."""
+    """Insert rows into local DB. Returns the number of rows actually inserted
+    (rows skipped by ON CONFLICT DO NOTHING are not counted)."""
     if not rows:
         return 0
 
     col_list = ", ".join(columns)
-    placeholders = ", ".join(["%s"] * len(columns))
 
     if table["conflict_target"]:
-        sql = f"INSERT INTO {table['name']} ({col_list}) VALUES %s ON CONFLICT {table['conflict_target']}"
+        sql = f"INSERT INTO {table['name']} ({col_list}) VALUES %s ON CONFLICT {table['conflict_target']} RETURNING 1"
     else:
-        sql = f"INSERT INTO {table['name']} ({col_list}) VALUES %s"
+        sql = f"INSERT INTO {table['name']} ({col_list}) VALUES %s RETURNING 1"
 
-    execute_values(local_cur, sql, rows)
-    return len(rows)
+    inserted = execute_values(local_cur, sql, rows, fetch=True)
+    return len(inserted)
 
 
 def sync_table(vps_conn, local_conn, table: dict) -> tuple[int, str]:
     """
     Sync one table from VPS to local.
     Returns (rows_synced, status_message).
+
+    The VPS is read in batches that never split a group of rows sharing a
+    watermark value, and each batch is committed locally as soon as it is
+    inserted. If a run is interrupted, everything committed so far is a complete
+    prefix of the table, and the next run resumes after it.
     """
+    vps_cur = None
+    local_cur = None
+    fetched = 0
+    inserted = 0
     try:
         vps_cur = vps_conn.cursor()
         local_cur = local_conn.cursor()
 
         # Get columns from VPS (source of truth — avoids local schema drift)
         columns = get_columns(vps_cur, table["name"])
+        vps_cur.close()  # nothing may stay open on the VPS connection while paging
 
         # Find local watermark
         local_max = get_local_watermark(local_cur, table)
 
-        # Fetch new rows from VPS
-        rows = fetch_new_rows(vps_cur, table, columns, local_max)
+        # Copy new rows from VPS, committing batch by batch
+        batch_number = 0
+        for rows in iter_new_row_batches(vps_conn, table, columns, local_max, FETCH_BATCH_SIZE):
+            fetched += len(rows)
+            inserted += insert_rows(local_cur, table, columns, rows)
+            local_conn.commit()
+            batch_number += 1
+            if batch_number % LOG_EVERY_BATCHES == 0:
+                logger.info(f"      {table['name']}: {inserted:,} rows committed")
 
-        if not rows:
-            vps_cur.close()
-            local_cur.close()
+        if fetched == 0:
+            # End the read-only transaction opened by the watermark query.
+            local_conn.rollback()
             return 0, "up to date"
 
-        # Insert into local
-        count = insert_rows(local_cur, table, columns, rows)
-        local_conn.commit()
-
-        vps_cur.close()
-        local_cur.close()
-        return count, f"+{count} rows"
+        already_present = fetched - inserted
+        note = f" ({already_present:,} already present)" if already_present else ""
+        return inserted, f"+{inserted} rows{note}"
 
     except Exception as e:
-        local_conn.rollback()
-        return -1, f"ERROR: {e}"
+        logger.exception(f"Sync of {table['name']} failed")
+        _best_effort(local_conn.rollback)
+        resume_hint = f" ({inserted:,} rows already committed; the next run resumes after them)" if inserted else ""
+        return -1, f"ERROR: {e}{resume_hint}"
+
+    finally:
+        for cursor in (vps_cur, local_cur):
+            if cursor is not None:
+                _best_effort(cursor.close)
 
 
 def _pull_health_json():
