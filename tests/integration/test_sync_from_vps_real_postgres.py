@@ -36,6 +36,8 @@ GROUP_SIZES = [3, 1, 4, 30, 2, 1, 5, 7, 1, 2]
 
 
 def _admin_connection():
+    if LOCAL_CONN["host"] not in ("localhost", "127.0.0.1"):
+        pytest.skip("scratch databases are only created on a local server")
     try:
         connection = psycopg2.connect(connect_timeout=3, **dict(LOCAL_CONN, database="postgres"))
     except psycopg2.OperationalError as error:

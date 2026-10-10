@@ -179,8 +179,8 @@ def _best_effort(action) -> None:
     """Run a cleanup step. A broken connection must not mask the original error."""
     try:
         action()
-    except psycopg2.Error:
-        pass
+    except psycopg2.Error as error:
+        logger.warning(f"Cleanup step failed (ignored so the original error is kept): {error}")
 
 
 def _fetch_rows(vps_conn, query: str, params: tuple) -> list:
@@ -207,8 +207,14 @@ def iter_new_row_batches(vps_conn, table: dict, columns: list, local_max, batch_
     group, so committing batch by batch and resuming from the local MAX()
     watermark neither skips nor duplicates rows.
 
-    Rows with a NULL watermark are never synced (same as incremental syncs
-    before this change).
+    Assumptions (checked against the VPS on 2026-10-11):
+      * every table has an index starting with its watermark column, so each page
+        is an index range scan (the five small tables without one hold <32k rows);
+      * a single watermark value holds few rows (largest recent group: 960), so
+        the oversized-group read, which has no LIMIT, stays small;
+      * no table has NULL watermarks; such rows are never synced.
+    Like every watermark sync, rows written late with an older watermark, or into
+    a group that is still being written when it is copied, are not picked up.
     """
     col_list = ", ".join(columns)
     watermark_col = table["watermark_col"]
@@ -273,13 +279,15 @@ def sync_table(vps_conn, local_conn, table: dict) -> tuple[int, str]:
     """
     vps_cur = None
     local_cur = None
-    count = 0
+    fetched = 0
+    inserted = 0
     try:
         vps_cur = vps_conn.cursor()
         local_cur = local_conn.cursor()
 
         # Get columns from VPS (source of truth — avoids local schema drift)
         columns = get_columns(vps_cur, table["name"])
+        vps_cur.close()  # nothing may stay open on the VPS connection while paging
 
         # Find local watermark
         local_max = get_local_watermark(local_cur, table)
@@ -287,22 +295,26 @@ def sync_table(vps_conn, local_conn, table: dict) -> tuple[int, str]:
         # Copy new rows from VPS, committing batch by batch
         batch_number = 0
         for rows in iter_new_row_batches(vps_conn, table, columns, local_max, FETCH_BATCH_SIZE):
-            count += insert_rows(local_cur, table, columns, rows)
+            fetched += len(rows)
+            inserted += insert_rows(local_cur, table, columns, rows)
             local_conn.commit()
             batch_number += 1
             if batch_number % LOG_EVERY_BATCHES == 0:
-                logger.info(f"      {table['name']}: {count:,} rows committed")
+                logger.info(f"      {table['name']}: {inserted:,} rows committed")
 
-        if count == 0:
+        if fetched == 0:
             # End the read-only transaction opened by the watermark query.
             local_conn.rollback()
             return 0, "up to date"
 
-        return count, f"+{count} rows"
+        already_present = fetched - inserted
+        note = f" ({already_present:,} already present)" if already_present else ""
+        return inserted, f"+{inserted} rows{note}"
 
     except Exception as e:
+        logger.exception(f"Sync of {table['name']} failed")
         _best_effort(local_conn.rollback)
-        resume_hint = f" ({count:,} rows already committed; the next run resumes after them)" if count else ""
+        resume_hint = f" ({inserted:,} rows already committed; the next run resumes after them)" if inserted else ""
         return -1, f"ERROR: {e}{resume_hint}"
 
     finally:

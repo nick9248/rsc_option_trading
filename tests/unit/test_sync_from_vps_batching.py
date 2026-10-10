@@ -193,6 +193,18 @@ class TestSyncTable:
         assert message == "+24 rows"
         assert local.commit.call_count >= 2  # several batches, one commit each
 
+    def test_rows_that_were_fetched_but_already_present_are_not_reported_as_up_to_date(self, monkeypatch):
+        vps = FakeVpsConn(_rows_with_ties([4, 4, 4]))
+        local = self._local_conn()
+        monkeypatch.setattr(sync_from_vps, "FETCH_BATCH_SIZE", 10)
+
+        # ON CONFLICT DO NOTHING skipped everything: RETURNING gives back no rows
+        with patch.object(sync_from_vps, "execute_values", return_value=[]):
+            count, message = sync_table(vps, local, TABLE)
+
+        assert count == 0
+        assert message == "+0 rows (12 already present)"
+
     def test_empty_source_reports_up_to_date_and_ends_the_local_read_transaction(self, monkeypatch):
         local = self._local_conn()
 
