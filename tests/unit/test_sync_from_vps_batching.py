@@ -29,8 +29,9 @@ COLUMNS = ["captured_at", "value"]
 class FakeNamedCursor:
     """Server-side cursor stand-in: serves rows via fetchmany, records the query."""
 
-    def __init__(self, rows, fail_after_batches=None):
+    def __init__(self, rows, fail_after_batches=None, close_error=None):
         self._rows = list(rows)
+        self._close_error = close_error
         self._served = 0
         self._batches_served = 0
         self._fail_after_batches = fail_after_batches
@@ -48,6 +49,10 @@ class FakeNamedCursor:
         self._served += len(chunk)
         self._batches_served += 1
         return chunk
+
+    def close(self):
+        if self._close_error is not None:
+            raise self._close_error
 
     def __enter__(self):
         return self
@@ -130,6 +135,25 @@ class TestIterNewRowBatches:
         with pytest.raises(RuntimeError, match="connection lost"):
             list(iter_new_row_batches(conn, TABLE, COLUMNS, None, batch_size=10))
 
+    def test_cursor_close_failure_does_not_mask_the_original_error(self):
+        conn = FakeVpsConn(FakeNamedCursor(
+            _rows(30), fail_after_batches=1,
+            close_error=psycopg2.InterfaceError("connection already closed"),
+        ))
+
+        with pytest.raises(RuntimeError, match="connection lost"):
+            list(iter_new_row_batches(conn, TABLE, COLUMNS, None, batch_size=10))
+
+    def test_autocommit_is_restored_even_when_rollback_fails(self):
+        conn = FakeVpsConn(
+            FakeNamedCursor(_rows(3)),
+            rollback_error=psycopg2.OperationalError("rollback failed"),
+        )
+
+        list(iter_new_row_batches(conn, TABLE, COLUMNS, None, batch_size=10))
+
+        assert conn.autocommit is True
+
     def test_full_read_has_no_watermark_filter(self):
         cursor = FakeNamedCursor([])
         conn = FakeVpsConn(cursor)
@@ -192,6 +216,20 @@ class TestSyncTable:
             sync_table(vps, local, TABLE)
 
         local.rollback.assert_called_once()
+
+    def test_a_dead_local_connection_still_returns_an_error_tuple(self, monkeypatch):
+        """rollback() on an already-closed local connection must not escape
+        sync_table; the caller's per-table loop relies on the (-1, msg) return."""
+        monkeypatch.setattr(sync_from_vps, "FETCH_BATCH_SIZE", 10)
+        vps = FakeVpsConn(FakeNamedCursor(_rows(30), fail_after_batches=1))
+        local = self._local_conn()
+        local.rollback.side_effect = psycopg2.InterfaceError("connection already closed")
+
+        with patch.object(sync_from_vps, "execute_values"):
+            count, message = sync_table(vps, local, TABLE)
+
+        assert count == -1
+        assert message.startswith("ERROR")
 
     def test_cursors_are_closed_on_success_and_on_error(self, monkeypatch):
         monkeypatch.setattr(sync_from_vps, "FETCH_BATCH_SIZE", 10)

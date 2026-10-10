@@ -175,6 +175,14 @@ def get_local_watermark(cur, table: dict):
     return result
 
 
+def _best_effort(action) -> None:
+    """Run a cleanup step. A broken connection must not mask the original error."""
+    try:
+        action()
+    except psycopg2.Error:
+        pass
+
+
 def iter_new_row_batches(vps_conn, table: dict, columns: list, local_max, batch_size: int):
     """
     Yield lists of rows from the VPS newer than local_max, batch_size at a time.
@@ -199,22 +207,20 @@ def iter_new_row_batches(vps_conn, table: dict, columns: list, local_max, batch_
 
     was_autocommit = vps_conn.autocommit
     vps_conn.autocommit = False
+    cursor = None
     try:
-        with vps_conn.cursor(name=f"sync_{table['name']}") as cursor:
-            cursor.execute(query, params)
-            while True:
-                rows = cursor.fetchmany(batch_size)
-                if not rows:
-                    break
-                yield rows
+        cursor = vps_conn.cursor(name=f"sync_{table['name']}")
+        cursor.execute(query, params)
+        while True:
+            rows = cursor.fetchmany(batch_size)
+            if not rows:
+                break
+            yield rows
     finally:
-        try:
-            vps_conn.rollback()
-            vps_conn.autocommit = was_autocommit
-        except psycopg2.Error:
-            # Connection already broken (e.g. the tunnel dropped): keep the
-            # original error instead of masking it with this one.
-            pass
+        if cursor is not None:
+            _best_effort(cursor.close)
+        _best_effort(vps_conn.rollback)
+        _best_effort(lambda: setattr(vps_conn, "autocommit", was_autocommit))
 
 
 def insert_rows(local_cur, table: dict, columns: list, rows: list) -> int:
@@ -276,16 +282,13 @@ def sync_table(vps_conn, local_conn, table: dict) -> tuple[int, str]:
         return count, f"+{count} rows"
 
     except Exception as e:
-        local_conn.rollback()
+        _best_effort(local_conn.rollback)
         return -1, f"ERROR: {e}"
 
     finally:
         for cursor in (vps_cur, local_cur):
             if cursor is not None:
-                try:
-                    cursor.close()
-                except psycopg2.Error:
-                    pass
+                _best_effort(cursor.close)
 
 
 def _pull_health_json():
