@@ -290,7 +290,12 @@ class CollectionDaemon:
 
     def _log_gap(self, start_time: datetime, end_time: datetime, gap_hours: float):
         """
-        Log data gap to collection_logs table for quality tracking.
+        Log a data gap that cannot be backfilled (visible in the systemd journal).
+
+        This used to write to a ``collection_logs`` table through
+        ``repo.save_collection_log``, a method that does not exist, so every call
+        failed silently and the table never held a row. The table was dropped
+        (migration 026); the log line is the record.
 
         Args:
             start_time: Gap start (timezone-aware, see
@@ -298,31 +303,10 @@ class CollectionDaemon:
             end_time: Gap end (timezone-aware, see ``_handle_startup``).
             gap_hours: Gap duration in hours
         """
-        try:
-            # Same naive-UTC-valued convention as _backfill_gap's
-            # collect_hour calls -- collection_hour columns in this
-            # codebase are "timestamp without time zone, UTC-valued".
-            collection_hour = start_time.astimezone(timezone.utc).replace(
-                minute=0, second=0, microsecond=0, tzinfo=None
-            )
-            self.collector.repo.save_collection_log(
-                collection_hour=collection_hour,
-                status="gap_detected",
-                currencies_collected=self.currencies,
-                trades_collected=0,
-                instruments_collected=0,
-                greeks_calculated=0,
-                duration_seconds=0.0,
-                error_message=(
-                    f"Data gap: {gap_hours:.2f}h from {start_time} to {end_time}. "
-                    f"Exceeds API lookback (1.5h), cannot backfill."
-                ),
-                error_count=0
-            )
-            logger.info(f"  Gap logged to collection_logs ({gap_hours:.2f}h)")
-
-        except Exception as e:
-            logger.error(f"  Failed to log gap: {e}")
+        logger.warning(
+            f"  DATA GAP: {gap_hours:.2f}h from {start_time} to {end_time}. "
+            f"Exceeds API lookback (1.5h), cannot backfill."
+        )
 
     def _run_collection(self):
         """
@@ -370,37 +354,6 @@ class CollectionDaemon:
 
             self.stats["collections_run"] += 1
             self.stats["collections_failed"] += 1
-
-        # Write to collection_logs table
-        try:
-            hour = collection_start.replace(minute=0, second=0, microsecond=0)
-            if result:
-                agg_data = result.get("aggregation", {})
-                self.collector.repo.save_collection_log(
-                    collection_hour=hour,
-                    status=result["status"],
-                    currencies_collected=self.currencies,
-                    trades_collected=result.get("trades_collected", 0),
-                    instruments_collected=result.get("instruments_collected", 0),
-                    greeks_calculated=agg_data.get("snapshots_created", 0),
-                    duration_seconds=result.get("duration_seconds", 0),
-                    error_message="; ".join(result.get("errors", [])) or None,
-                    error_count=len(result.get("errors", []))
-                )
-            else:
-                self.collector.repo.save_collection_log(
-                    collection_hour=hour,
-                    status="failed",
-                    currencies_collected=self.currencies,
-                    trades_collected=0,
-                    instruments_collected=0,
-                    greeks_calculated=0,
-                    duration_seconds=(time.time() - collection_start.timestamp()),
-                    error_message="Collection crashed before returning result",
-                    error_count=1
-                )
-        except Exception as log_err:
-            logger.error(f"Failed to write collection log: {log_err}")
 
         # Calculate next collection time
         next_job = self.scheduler.get_job('recurring_collection')

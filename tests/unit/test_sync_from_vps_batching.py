@@ -16,7 +16,7 @@ import psycopg2
 import pytest
 
 from scripts import sync_from_vps
-from scripts.sync_from_vps import insert_rows, iter_new_row_batches, sync_table
+from scripts.sync_from_vps import insert_rows, iter_new_row_batches, sync_table, upsert_rows
 
 TABLE = {
     "name": "snapshots",
@@ -187,6 +187,38 @@ class TestInsertRows:
         assert insert_rows(MagicMock(), TABLE, COLUMNS, []) == 0
 
 
+MUTABLE_TABLE = {
+    "name": "straddle_scan_history",
+    "watermark_col": "captured_at",
+    "watermark_type": "bigint",
+    "conflict_target": None,
+    "upsert_key": ["captured_at"],
+}
+
+
+class TestUpsertRows:
+    def test_updates_only_rows_that_differ_and_counts_only_those(self):
+        with patch.object(sync_from_vps, "execute_values", return_value=[(1,)]) as mock_execute_values:
+            changed = upsert_rows(MagicMock(), MUTABLE_TABLE, COLUMNS, [(1, "a"), (2, "b")])
+
+        sql = mock_execute_values.call_args.args[1]
+        assert changed == 1
+        assert "ON CONFLICT (captured_at) DO UPDATE SET value = EXCLUDED.value" in sql
+        assert "WHERE (t.value) IS DISTINCT FROM (EXCLUDED.value)" in sql
+        assert sql.endswith("RETURNING 1")
+        assert "INSERT INTO straddle_scan_history AS t" in sql
+        assert mock_execute_values.call_args.kwargs == {"fetch": True}
+
+    def test_empty_input_writes_nothing(self):
+        assert upsert_rows(MagicMock(), MUTABLE_TABLE, COLUMNS, []) == 0
+
+    def test_a_key_that_covers_every_column_is_rejected_instead_of_generating_invalid_sql(self):
+        table = dict(MUTABLE_TABLE, upsert_key=["captured_at", "value"])
+
+        with pytest.raises(ValueError, match="nothing to update"):
+            upsert_rows(MagicMock(), table, COLUMNS, [(1, "a")])
+
+
 class TestSyncTable:
     def _local_conn(self):
         local = MagicMock()
@@ -223,6 +255,34 @@ class TestSyncTable:
 
         assert count == 0
         assert message == "+0 rows (12 already present)"
+
+    def test_mutable_table_is_re_read_in_full_even_when_the_local_table_has_rows(self, monkeypatch):
+        """Rows change on the VPS after insertion, so the local watermark must not
+        limit the read: the page queries have no "watermark > value" filter."""
+        vps = FakeVpsConnection(_rows_with_ties([4, 4, 4]))
+        local = self._local_conn()
+        local.cursor.return_value.fetchone.return_value = (999,)  # local table already has data
+        monkeypatch.setattr(sync_from_vps, "FETCH_BATCH_SIZE", 10)
+
+        with patch.object(sync_from_vps, "execute_values", return_value=[(1,)] * 3):
+            count, message = sync_table(vps, local, MUTABLE_TABLE)
+
+        page_queries = [(query, params) for query, params in vps.queries if "information_schema" not in query]
+        first_query, _ = page_queries[0]
+        assert "captured_at > %s" not in first_query, "the first page must start at the beginning of the table"
+        assert all(999 not in (params or ()) for _, params in page_queries), "the local watermark leaked into a query"
+        assert count > 0
+        assert "new or updated (12 rows checked)" in message
+
+    def test_mutable_table_with_no_changes_reports_up_to_date_with_the_rows_checked(self, monkeypatch):
+        vps = FakeVpsConnection(_rows_with_ties([4, 4, 4]))
+        local = self._local_conn()
+        monkeypatch.setattr(sync_from_vps, "FETCH_BATCH_SIZE", 10)
+
+        with patch.object(sync_from_vps, "execute_values", return_value=[]):
+            count, message = sync_table(vps, local, MUTABLE_TABLE)
+
+        assert (count, message) == (0, "up to date (12 rows checked)")
 
     def test_empty_source_reports_up_to_date_and_ends_the_local_read_transaction(self, monkeypatch):
         local = self._local_conn()
