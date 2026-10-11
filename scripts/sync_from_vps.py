@@ -127,24 +127,6 @@ SYNC_TABLES = [
         "conflict_target": "(instrument_name, timestamp) DO NOTHING",
     },
     {
-        "name": "max_pain",
-        "watermark_col": "captured_at",
-        "watermark_type": "timestamp",
-        "conflict_target": None,
-    },
-    {
-        "name": "open_interest",
-        "watermark_col": "captured_at",
-        "watermark_type": "timestamp",
-        "conflict_target": None,
-    },
-    {
-        "name": "volume",
-        "watermark_col": "captured_at",
-        "watermark_type": "timestamp",
-        "conflict_target": None,
-    },
-    {
         "name": "onchain_volatility_snapshots",
         "watermark_col": "reconstructed_at",
         "watermark_type": "timestamp",
@@ -170,6 +152,14 @@ SYNC_TABLES = [
         "conflict_target": None,
         "upsert_key": ["snapshot_date", "snapshot_hour_utc", "currency", "expiration", "strike", "option_type"],
         "lookback_hours": 6,  # rewritten only while the same (date, hour) is re-analysed
+    },
+    {
+        # One row per listed dated future per hour (history accumulates from the first
+        # capture: Deribit does not serve expired futures). Never updated afterwards.
+        "name": "futures_basis",
+        "watermark_col": "timestamp",
+        "watermark_type": "timestamp",
+        "conflict_target": "(futures_instrument, timestamp) DO NOTHING",
     },
     {
         # Hourly DVOL candle closes. The daemon re-checks the last 48 hours every

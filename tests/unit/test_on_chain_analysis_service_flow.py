@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 """
 Unit tests for OnChainAnalysisService.get_filtered_aggregate_flow.
 
@@ -74,16 +75,16 @@ class TestGetFilteredAggregateFlowEarlyExit:
         assert result == {"flow_data": {}, "spot_price": 0.0}
 
     def test_returns_empty_when_no_active_expirations(self, service, mock_repo):
-        mock_repo.get_active_expirations_with_flow.return_value = []
+        mock_repo.get_active_expirations_with_recent_trades.return_value = []
         result = service.get_filtered_aggregate_flow("BTC", "block")
         assert result == {"flow_data": {}, "spot_price": 0.0}
 
-    def test_spot_price_comes_from_first_expiration(self, service, mock_repo):
-        mock_repo.get_active_expirations_with_flow.return_value = [
+    def test_spot_price_is_the_latest_index_price(self, service, mock_repo):
+        mock_repo.get_active_expirations_with_recent_trades.return_value = [
             _exp_info("28MAR26"),
             _exp_info("25APR26"),
         ]
-        mock_repo.get_flow_metrics.return_value = {"spot_price": 83000.0}
+        mock_repo.get_latest_index_price.return_value = 83000.0
 
         with patch(
             "coding.service.on_chain.on_chain_analysis_service.BuySellFlowAnalyzer"
@@ -92,12 +93,12 @@ class TestGetFilteredAggregateFlowEarlyExit:
 
             result = service.get_filtered_aggregate_flow("BTC", "block")
 
-        mock_repo.get_flow_metrics.assert_called_once_with("BTC", "28MAR26")
+        mock_repo.get_latest_index_price.assert_called_once_with("BTC")
         assert result["spot_price"] == 83000.0
 
-    def test_spot_price_defaults_to_zero_when_metrics_missing(self, service, mock_repo):
-        mock_repo.get_active_expirations_with_flow.return_value = [_exp_info("28MAR26")]
-        mock_repo.get_flow_metrics.return_value = {}
+    def test_nothing_is_computed_when_no_index_price_is_known(self, service, mock_repo):
+        mock_repo.get_active_expirations_with_recent_trades.return_value = [_exp_info("28MAR26")]
+        mock_repo.get_latest_index_price.return_value = None
 
         with patch(
             "coding.service.on_chain.on_chain_analysis_service.BuySellFlowAnalyzer"
@@ -117,11 +118,11 @@ class TestGetFilteredAggregateFlowAggregation:
 
     def test_aggregates_across_expirations(self, service, mock_repo):
         """Volumes from two expirations are summed at the same strike."""
-        mock_repo.get_active_expirations_with_flow.return_value = [
+        mock_repo.get_active_expirations_with_recent_trades.return_value = [
             _exp_info("28MAR26"),
             _exp_info("25APR26"),
         ]
-        mock_repo.get_flow_metrics.return_value = {"spot_price": 85000.0}
+        mock_repo.get_latest_index_price.return_value = 85000.0
 
         with patch(
             "coding.service.on_chain.on_chain_analysis_service.BuySellFlowAnalyzer"
@@ -138,8 +139,8 @@ class TestGetFilteredAggregateFlowAggregation:
         assert strike_data["sell_count"] == 4  # 2+2
 
     def test_net_flow_derived_correctly(self, service, mock_repo):
-        mock_repo.get_active_expirations_with_flow.return_value = [_exp_info("28MAR26")]
-        mock_repo.get_flow_metrics.return_value = {"spot_price": 85000.0}
+        mock_repo.get_active_expirations_with_recent_trades.return_value = [_exp_info("28MAR26")]
+        mock_repo.get_latest_index_price.return_value = 85000.0
 
         with patch(
             "coding.service.on_chain.on_chain_analysis_service.BuySellFlowAnalyzer"
@@ -152,8 +153,8 @@ class TestGetFilteredAggregateFlowAggregation:
         assert c_data["net_flow"] == pytest.approx(6.0)  # 10-4
 
     def test_buy_sell_ratio_derived_correctly(self, service, mock_repo):
-        mock_repo.get_active_expirations_with_flow.return_value = [_exp_info("28MAR26")]
-        mock_repo.get_flow_metrics.return_value = {"spot_price": 85000.0}
+        mock_repo.get_active_expirations_with_recent_trades.return_value = [_exp_info("28MAR26")]
+        mock_repo.get_latest_index_price.return_value = 85000.0
 
         with patch(
             "coding.service.on_chain.on_chain_analysis_service.BuySellFlowAnalyzer"
@@ -166,8 +167,8 @@ class TestGetFilteredAggregateFlowAggregation:
         assert c_data["buy_sell_ratio"] == pytest.approx(2.0)  # 8/4
 
     def test_buy_sell_ratio_is_none_when_sell_volume_is_zero(self, service, mock_repo):
-        mock_repo.get_active_expirations_with_flow.return_value = [_exp_info("28MAR26")]
-        mock_repo.get_flow_metrics.return_value = {"spot_price": 85000.0}
+        mock_repo.get_active_expirations_with_recent_trades.return_value = [_exp_info("28MAR26")]
+        mock_repo.get_latest_index_price.return_value = 85000.0
 
         with patch(
             "coding.service.on_chain.on_chain_analysis_service.BuySellFlowAnalyzer"
@@ -181,11 +182,11 @@ class TestGetFilteredAggregateFlowAggregation:
 
     def test_skips_expiration_on_exception_and_continues(self, service, mock_repo):
         """A failing expiration is skipped; others are still processed."""
-        mock_repo.get_active_expirations_with_flow.return_value = [
+        mock_repo.get_active_expirations_with_recent_trades.return_value = [
             _exp_info("28MAR26"),
             _exp_info("25APR26"),
         ]
-        mock_repo.get_flow_metrics.return_value = {"spot_price": 85000.0}
+        mock_repo.get_latest_index_price.return_value = 85000.0
 
         call_count = 0
 
@@ -213,8 +214,8 @@ class TestGetFilteredAggregateFlowAggregation:
         """T5: trade_filter and the explicit window go to the repository
         fetch, not to the BuySellFlowAnalyzer constructor (which no longer
         accepts either)."""
-        mock_repo.get_active_expirations_with_flow.return_value = [_exp_info("28MAR26")]
-        mock_repo.get_flow_metrics.return_value = {"spot_price": 85000.0}
+        mock_repo.get_active_expirations_with_recent_trades.return_value = [_exp_info("28MAR26")]
+        mock_repo.get_latest_index_price.return_value = 85000.0
         mock_repo.get_trades_for_flow_analysis.return_value = []
 
         with patch(
@@ -300,12 +301,20 @@ class TestCalculateBuySellFlowSingleFetch:
 # ---------------------------------------------------------------------------
 
 
-def test_get_flow_metrics_delegates_to_repository(service, mock_repo):
-    mock_repo.get_flow_metrics.return_value = {"flow_data": {"x": 1}, "spot_price": 90000.0}
+def test_get_flow_metrics_computes_flow_from_the_last_24_hours_of_trades(service, mock_repo):
+    mock_repo.get_trades_for_flow_analysis.return_value = [{"trade": 1}]
+    mock_repo.get_latest_index_price.return_value = 90000.0
 
-    result = service.get_flow_metrics("BTC", "28MAR26")
+    with patch("coding.service.on_chain.on_chain_analysis_service.BuySellFlowAnalyzer") as MockAnalyzer:
+        MockAnalyzer.return_value = _mock_analyzer_instance({"x": 1})
+        result = service.get_flow_metrics("BTC", "28MAR26")
 
-    mock_repo.get_flow_metrics.assert_called_once_with("BTC", "28MAR26")
+    _, fetch_kwargs = mock_repo.get_trades_for_flow_analysis.call_args
+    assert fetch_kwargs["currency"] == "BTC"
+    assert fetch_kwargs["expiration"] == "28MAR26"
+    assert fetch_kwargs["trade_filter"] == "all"
+    assert fetch_kwargs["end_ts"] - fetch_kwargs["start_ts"] == 24 * 3_600_000
+    assert MockAnalyzer.call_args.kwargs["trades"] == [{"trade": 1}]
     assert result == {"flow_data": {"x": 1}, "spot_price": 90000.0}
 
 
@@ -314,13 +323,24 @@ def test_get_flow_metrics_without_repository_returns_empty_shape():
     assert service.get_flow_metrics("BTC", "28MAR26") == {"flow_data": {}, "spot_price": 0.0}
 
 
-def test_get_aggregated_flow_metrics_delegates_to_repository(service, mock_repo):
-    mock_repo.get_aggregated_flow_metrics.return_value = {"flow_data": {"y": 2}, "spot_price": 91000.0}
+def test_get_aggregated_flow_metrics_is_the_unfiltered_aggregate(service):
+    with patch.object(service, "get_filtered_aggregate_flow", return_value={"flow_data": {"y": 2}, "spot_price": 91000.0}) as aggregate:
+        result = service.get_aggregated_flow_metrics("BTC")
 
-    result = service.get_aggregated_flow_metrics("BTC")
-
-    mock_repo.get_aggregated_flow_metrics.assert_called_once_with("BTC")
+    aggregate.assert_called_once_with("BTC", "all")
     assert result == {"flow_data": {"y": 2}, "spot_price": 91000.0}
+
+
+def test_active_expirations_are_those_traded_in_the_last_24_hours(service, mock_repo):
+    mock_repo.get_active_expirations_with_recent_trades.return_value = [_exp_info("28MAR26")]
+
+    result = service.get_active_expirations_with_flow("BTC")
+
+    currency, window_start_ms = mock_repo.get_active_expirations_with_recent_trades.call_args.args
+    assert currency == "BTC"
+    now_ms = datetime.now(timezone.utc).timestamp() * 1000
+    assert abs((now_ms - window_start_ms) - 24 * 3_600_000) < 60_000
+    assert result == [_exp_info("28MAR26")]
 
 
 def test_get_aggregated_flow_metrics_without_repository_returns_empty_shape():
@@ -345,3 +365,10 @@ def test_create_default_constructs_its_own_repository():
     mock_repo_cls.assert_called_once_with()
     assert service.repository is mock_repo_cls.return_value
     assert service.api is None
+
+
+def test_get_flow_metrics_without_a_known_index_price_returns_the_empty_shape(service, mock_repo):
+    mock_repo.get_trades_for_flow_analysis.return_value = []
+    mock_repo.get_latest_index_price.return_value = None
+
+    assert service.get_flow_metrics("BTC", "28MAR26") == {"flow_data": {}, "spot_price": 0.0}

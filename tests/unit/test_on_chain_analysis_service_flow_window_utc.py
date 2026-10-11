@@ -121,10 +121,10 @@ class TestGetFilteredAggregateFlowWindowClock:
 
     def test_window_end_uses_utc_not_local_clock(self):
         mock_repo = MagicMock()
-        mock_repo.get_active_expirations_with_flow.return_value = [
+        mock_repo.get_active_expirations_with_recent_trades.return_value = [
             {"expiration": "28MAR26"}
         ]
-        mock_repo.get_flow_metrics.return_value = {"spot_price": 85000.0}
+        mock_repo.get_latest_index_price.return_value = 85000.0
         mock_repo.get_trades_for_flow_analysis.return_value = []
         service = OnChainAnalysisService(repository=mock_repo)
 

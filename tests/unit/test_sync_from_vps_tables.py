@@ -49,7 +49,7 @@ class TestFlowDeltaHourlySyncEntry:
 class TestLiveTablesAreSynced:
     """Five live tables were missing from the sync list (found 2026-10-11)."""
 
-    APPEND_ONLY = ()  # every live table with a watermark is currently an upsert table
+    APPEND_ONLY = ("futures_basis",)  # several rows share one hour: the tie-safe batches cover that
     MUTABLE = {
         # Rows are updated on the VPS after insertion (alerts, settlement results).
         "forward_test_predictions": ["currency", "snapshot_hour"],
@@ -81,6 +81,8 @@ class TestLiveTablesAreSynced:
             "calculated_greeks", "data_quality_checks", "collection_logs",
             "collection_completeness", "hourly_trade_volume", "latest_hourly_snapshots",
             "volatility_index_history",  # merged into dvol_history
+            "max_pain", "open_interest", "volume",  # onchain_analysis_snapshots has them hourly
+            "buy_sell_flow_metrics",  # computed on demand from historical_trades
         }
         assert dropped.isdisjoint({entry["name"] for entry in SYNC_TABLES})
 

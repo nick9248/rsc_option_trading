@@ -73,7 +73,7 @@ class FlowResult:
         Reproduce the legacy ``BuySellFlowAnalyzer.calculate()`` dict shape.
         ``flow_data`` is consumed by
         ``chart_generator.generate_flow_distribution_chart`` /
-        ``generate_net_flow_chart`` and ``repository.save_flow_metrics``.
+        ``generate_net_flow_chart``.
         """
         flow_data: Dict[float, Dict[str, Dict[str, Any]]] = {
             strike: {

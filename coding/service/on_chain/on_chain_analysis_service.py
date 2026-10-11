@@ -2494,18 +2494,6 @@ class OnChainAnalysisService:
                 flow_result_dict["lookback_hours"] = flow_result.lookback_hours
 
                 # Save to database for chart queries
-                try:
-                    self.repository.save_flow_metrics(
-                        currency=analyzer.currency,
-                        expiration=expiration,
-                        flow_data=flow_result_dict["flow_data"],
-                        underlying_price=analyzer.index_price,
-                        window_hours=24
-                    )
-                    logger.info(f"Saved flow metrics to database for {expiration}")
-                except Exception as save_error:
-                    logger.warning(f"Failed to save flow metrics for {expiration}: {save_error}")
-
                 # Save flow charts to output/charts/flow_analysis/<expiration>/
                 chart_paths: Dict[str, str] = {}
                 try:
@@ -2567,63 +2555,85 @@ class OnChainAnalysisService:
                 logger.warning(f"Failed to calculate buy/sell flow for {expiration}: {e}")
                 progress_callback(f"Warning: Failed to calculate flow for {expiration}")
 
+    _FLOW_WINDOW_HOURS = 24
+
+    def _flow_window_ms(self) -> Tuple[int, int]:
+        """(start, end) of the trailing flow window, epoch milliseconds (UTC)."""
+        window_end = datetime.now(timezone.utc)
+        window_start = window_end - timedelta(hours=self._FLOW_WINDOW_HOURS)
+        return int(window_start.timestamp() * 1000), int(window_end.timestamp() * 1000)
+
     def get_flow_metrics(self, currency: str, expiration: str) -> Dict[str, Any]:
         """
-        T9 (refactor_design_spec.md): passthrough so GUI callers (e.g.
-        ``FlowChartsWindow``) go through this service instead of holding a
-        raw ``DatabaseRepository`` reference directly.
+        Buy/sell flow of one expiration over the trailing 24 hours, computed from the
+        stored trades (historical_trades) with BuySellFlowAnalyzer. Nothing is cached:
+        the numbers are always current and have a single definition.
 
         Args:
             currency: Currency symbol (BTC, ETH).
             expiration: Expiration date string.
 
         Returns:
-            Dict with flow_data structure and metadata (see
-            ``DatabaseRepository.get_flow_metrics``), or an empty-shaped
-            dict when no repository is configured.
+            {"flow_data": strike -> {"C"|"P" -> metrics}, "spot_price": float}, or an
+            empty-shaped dict when no repository is configured.
         """
         if self.repository is None:
             logger.warning("Repository not available for get_flow_metrics")
             return {"flow_data": {}, "spot_price": 0.0}
-        return self.repository.get_flow_metrics(currency, expiration)
+
+        window_start_ms, window_end_ms = self._flow_window_ms()
+        trades = self.repository.get_trades_for_flow_analysis(
+            currency=currency,
+            expiration=expiration,
+            start_ts=window_start_ms,
+            end_ts=window_end_ms,
+            trade_filter="all",
+        )
+        spot_price = self.repository.get_latest_index_price(currency)
+        if spot_price is None:
+            logger.warning(f"No index price known for {currency}; flow not computed")
+            return {"flow_data": {}, "spot_price": 0.0}
+        result = BuySellFlowAnalyzer(
+            trades=trades,
+            currency=currency,
+            expiration=expiration,
+            spot_price=spot_price,
+            window_start_ms=window_start_ms,
+            window_end_ms=window_end_ms,
+        ).calculate().to_dict()
+        return {"flow_data": result.get("flow_data", {}), "spot_price": spot_price}
 
     def get_aggregated_flow_metrics(self, currency: str) -> Dict[str, Any]:
         """
-        T9 (refactor_design_spec.md): passthrough so GUI callers (e.g.
-        ``FlowChartsWindow``) go through this service instead of holding a
-        raw ``DatabaseRepository`` reference directly.
+        Buy/sell flow summed over every active expiration, trailing 24 hours, computed
+        from the stored trades (see ``get_filtered_aggregate_flow`` with filter "all").
 
         Args:
             currency: Currency symbol (BTC, ETH).
 
         Returns:
-            Dict with flow_data structure and metadata (see
-            ``DatabaseRepository.get_aggregated_flow_metrics``), or an
-            empty-shaped dict when no repository is configured.
+            {"flow_data": ..., "spot_price": float}, or an empty-shaped dict when no
+            repository is configured.
         """
-        if self.repository is None:
-            logger.warning("Repository not available for get_aggregated_flow_metrics")
-            return {"flow_data": {}, "spot_price": 0.0}
-        return self.repository.get_aggregated_flow_metrics(currency)
+        return self.get_filtered_aggregate_flow(currency, "all")
 
     def get_active_expirations_with_flow(self, currency: str) -> List[Dict[str, Any]]:
         """
-        Review fix (task A6, Important #2): passthrough so
-        ``FlowChartsWindow`` goes through this service instead of reaching
-        through to its own ``.repository`` attribute directly.
+        Expirations the Flow Charts can show: not expired and traded in the last 24
+        hours, highest open interest first.
 
         Args:
             currency: Currency symbol (BTC, ETH).
 
         Returns:
-            List of active-expiration dicts (see
-            ``DatabaseRepository.get_active_expirations_with_flow``), or an
-            empty list when no repository is configured.
+            [{"expiration": str, "total_oi": float}, ...], or an empty list when no
+            repository is configured.
         """
         if self.repository is None:
             logger.warning("Repository not available for get_active_expirations_with_flow")
             return []
-        return self.repository.get_active_expirations_with_flow(currency)
+        window_start_ms, _ = self._flow_window_ms()
+        return self.repository.get_active_expirations_with_recent_trades(currency, window_start_ms)
 
     def generate_flow_trend_chart_figure(
         self,
@@ -2665,32 +2675,30 @@ class OnChainAnalysisService:
         trade_filter: str,
     ) -> Dict[str, Any]:
         """
-        Aggregate flow data across all expirations with block trade filtering.
-
-        Used when a Block or Non-Block filter is active with All Expirations view.
-        Bypasses the pre-aggregated buy_sell_flow_metrics table (which lacks raw
-        amount/index_price columns) by re-running BuySellFlowAnalyzer per expiration.
+        Aggregate flow data across all expirations, optionally filtered to block or
+        non-block trades, over the trailing 24 hours. Always computed from the stored
+        trades (historical_trades) by re-running BuySellFlowAnalyzer per expiration.
 
         Args:
             currency: Currency symbol (BTC, ETH).
-            trade_filter: "block" or "non_block" — applied to raw historical_trades.
+            trade_filter: "all", "block" or "non_block", applied to historical_trades.
 
         Returns:
-            Dict with "flow_data" and "spot_price" keys matching get_aggregated_flow_metrics format.
+            Dict with "flow_data" and "spot_price" keys.
         """
         if self.repository is None:
             logger.warning("Repository not available for filtered aggregate flow")
             return {"flow_data": {}, "spot_price": 0.0}
 
-        expirations = self.repository.get_active_expirations_with_flow(currency)
+        expirations = self.get_active_expirations_with_flow(currency)
         if not expirations:
             logger.warning(f"No active expirations found for {currency}")
             return {"flow_data": {}, "spot_price": 0.0}
 
-        # Fetch real spot price from stored metrics for the first expiration
-        first_exp = expirations[0]["expiration"]
-        first_metrics = self.repository.get_flow_metrics(currency, first_exp)
-        spot_price = first_metrics.get("spot_price", 0.0)
+        spot_price = self.repository.get_latest_index_price(currency)
+        if spot_price is None:
+            logger.warning(f"No index price known for {currency}; aggregate flow not computed")
+            return {"flow_data": {}, "spot_price": 0.0}
 
         agg_flow: dict = defaultdict(lambda: {
             "C": {"buy_count": 0, "sell_count": 0, "buy_volume": 0.0, "sell_volume": 0.0,
