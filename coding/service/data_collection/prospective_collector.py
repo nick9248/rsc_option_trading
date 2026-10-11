@@ -380,6 +380,13 @@ class ProspectiveCollector:
         except Exception as e:
             logger.error(f"    Error syncing DVOL history: {e}", exc_info=True)
 
+        # 4b. Dated futures basis (own try/except: a failure here never blocks other steps)
+        logger.info(f"  Capturing {currency} futures basis...")
+        try:
+            self._capture_futures_basis(currency, hour)
+        except Exception as e:
+            logger.error(f"    Error capturing futures basis: {e}", exc_info=True)
+
         # 5. Fetch and store funding rate data
         logger.info(f"  Fetching {currency} funding rate...")
         try:
@@ -1329,6 +1336,58 @@ class ProspectiveCollector:
             })
 
         return enriched
+
+    def _capture_futures_basis(self, currency: str, hour: datetime) -> int:
+        """
+        Store the basis of every listed dated future for this hour.
+
+        Source: Deribit's instrument list plus each future's ticker (mark price and
+        index price), via ``DeribitApiService.get_dated_futures_marks``. Deribit does
+        not serve expired futures, so history can only accumulate from the first
+        capture. The annualized basis uses ``MarketWideCalculator`` (simple ACT/365
+        to the 08:00 UTC settlement; None below its minimum tenor).
+
+        Args:
+            currency: Currency symbol (BTC, ETH).
+            hour: Hour bucket of this cycle (UTC-valued, naive or aware).
+
+        Returns:
+            Number of rows inserted.
+        """
+        marks = self.api.get_dated_futures_marks(currency)
+        priced = [m for m in marks if (m.get("mark_price") or 0) > 0 and (m.get("index_price") or 0) > 0]
+        if not priced:
+            logger.warning(f"    No priced dated futures returned for {currency}")
+            return 0
+
+        now_utc = datetime.now(timezone.utc)
+        calculator = MarketWideCalculator(currency=currency, spot_price=priced[0]["index_price"])
+        annualized_by_name = {
+            entry.instrument_name: entry.annualized_premium_pct
+            for entry in calculator.calculate_futures_basis(priced, now_utc=now_utc).entries
+        }
+        stored_hour = hour.replace(minute=0, second=0, microsecond=0, tzinfo=None)
+
+        rows = []
+        for mark in priced:
+            name = mark["instrument_name"]
+            price, index = mark["mark_price"], mark["index_price"]
+            days = MarketWideCalculator.calculate_days_to_expiry(name.split("-")[1], now_utc)
+            rows.append({
+                "timestamp": stored_hour,
+                "currency": currency,
+                "futures_instrument": name,
+                "futures_price": price,
+                "spot_price": index,
+                "basis_absolute": price - index,
+                "basis_percentage": (price - index) / index * 100.0,
+                "implied_repo_rate": annualized_by_name.get(name),
+                "days_to_expiry": None if days is None else round(days, 2),
+            })
+
+        inserted = self.repo.save_futures_basis(rows)
+        logger.info(f"    futures_basis: {inserted} of {len(rows)} rows stored")
+        return inserted
 
     def _sync_dvol_history(self, currency: str, hours: int = 48) -> None:
         """

@@ -953,284 +953,110 @@ class DatabaseRepository:
 
             return rows_inserted
 
-    def save_flow_metrics(
+    def get_active_expirations_with_recent_trades(
         self,
         currency: str,
-        expiration: str,
-        flow_data: Dict[float, Dict[str, Dict[str, float]]],
-        underlying_price: float,
-        window_hours: int = 24,
-        captured_at: Optional[datetime] = None
-    ) -> int:
-        """
-        Save aggregated flow metrics to database.
-
-        Inserts per-strike buy/sell aggregates from BuySellFlowAnalyzer.
-
-        Args:
-            currency: Currency symbol (BTC, ETH).
-            expiration: Expiration date string.
-            flow_data: Flow data structure {strike: {option_type: {metrics}}}.
-            underlying_price: Current underlying price.
-            window_hours: Lookback window in hours.
-            captured_at: Timestamp of capture.
-
-        Returns:
-            Number of rows inserted.
-        """
-        if not flow_data:
-            return 0
-
-        # Final verification sweep (post Wave J): naive-local datetime.now()
-        # into a `TIMESTAMP` (no time zone) column -- this codebase's
-        # established convention throughout is UTC-valued naive datetimes
-        # for every such column (see e.g. Wave-J-E's identical fix for
-        # hourly_snapshots.captured_at). Explicit UTC, then drop tzinfo.
-        captured_at = captured_at or datetime.now(timezone.utc).replace(tzinfo=None)
-
-        try:
-            with self._db_cursor() as cursor:
-                insert_sql = """
-                    INSERT INTO buy_sell_flow_metrics (
-                        captured_at, window_hours, currency, expiration,
-                        strike, option_type, buy_count, buy_volume, buy_notional,
-                        sell_count, sell_volume, sell_notional, net_flow,
-                        buy_sell_ratio, underlying_price
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (captured_at, currency, expiration, strike, option_type) DO NOTHING
-                """
-
-                rows = []
-                for strike, option_types in flow_data.items():
-                    for option_type, metrics in option_types.items():
-                        buy_volume = metrics.get("buy_volume", 0)
-                        sell_volume = metrics.get("sell_volume", 0)
-                        net_flow = buy_volume - sell_volume
-                        buy_sell_ratio = (buy_volume / sell_volume) if sell_volume > 0 else None
-
-                        rows.append((
-                            captured_at,
-                            window_hours,
-                            currency,
-                            expiration,
-                            strike,
-                            option_type[0].upper(),  # 'C' or 'P'
-                            metrics.get("buy_count", 0),
-                            buy_volume,
-                            metrics.get("buy_notional", 0),
-                            metrics.get("sell_count", 0),
-                            sell_volume,
-                            metrics.get("sell_notional", 0),
-                            net_flow,
-                            buy_sell_ratio,
-                            underlying_price
-                        ))
-
-                cursor.executemany(insert_sql, rows)
-
-                logger.info(f"Saved {len(rows)} flow metrics for {currency} {expiration}")
-                return len(rows)
-
-        except Exception as e:
-            logger.error(f"Failed to save flow metrics: {e}")
-            raise
-
-    def get_flow_metrics(
-        self,
-        currency: str,
-        expiration: str,
-        limit: int = 1
-    ) -> Dict[str, Any]:
-        """
-        Get latest flow metrics for an expiration.
-
-        Returns flow_data structure matching BuySellFlowAnalyzer output.
-
-        Args:
-            currency: Currency symbol.
-            expiration: Expiration date string.
-            limit: Number of most recent captures to retrieve (default 1).
-
-        Returns:
-            Dict with flow_data structure and metadata.
-        """
-        with self._db_cursor() as cursor:
-            # Get latest captured_at for this expiration
-            cursor.execute("""
-                SELECT DISTINCT captured_at
-                FROM buy_sell_flow_metrics
-                WHERE currency = %s AND expiration = %s
-                ORDER BY captured_at DESC
-                LIMIT %s
-            """, (currency, expiration, limit))
-
-            timestamps = [row[0] for row in cursor.fetchall()]
-            if not timestamps:
-                return {"flow_data": {}, "spot_price": 0.0}
-
-            latest_timestamp = timestamps[0]
-
-            # Get all metrics for latest timestamp
-            cursor.execute("""
-                SELECT strike, option_type, buy_count, buy_volume, buy_notional,
-                       sell_count, sell_volume, sell_notional, net_flow,
-                       buy_sell_ratio, underlying_price
-                FROM buy_sell_flow_metrics
-                WHERE currency = %s AND expiration = %s AND captured_at = %s
-                ORDER BY strike, option_type
-            """, (currency, expiration, latest_timestamp))
-
-            # Reconstruct flow_data structure (convert all Decimals to float)
-            flow_data = {}
-            underlying_price = 0.0
-
-            for row in cursor.fetchall():
-                strike, opt_type, buy_count, buy_vol, buy_not, sell_count, sell_vol, sell_not, net_flow, bs_ratio, price = row
-
-                # Convert strike to float for dict key
-                strike_float = float(strike)
-
-                if strike_float not in flow_data:
-                    flow_data[strike_float] = {}
-
-                # Use "C" and "P" as keys (matches BuySellFlowAnalyzer format)
-                flow_data[strike_float][opt_type] = {
-                    "buy_count": int(buy_count),
-                    "buy_volume": float(buy_vol),
-                    "buy_notional": float(buy_not),
-                    "sell_count": int(sell_count),
-                    "sell_volume": float(sell_vol),
-                    "sell_notional": float(sell_not),
-                    "net_flow": float(net_flow),
-                    "buy_sell_ratio": float(bs_ratio) if bs_ratio else None
-                }
-
-                underlying_price = float(price)
-
-            return {
-                "flow_data": flow_data,
-                "spot_price": underlying_price
-            }
-
-    def get_aggregated_flow_metrics(self, currency: str) -> Dict[str, Any]:
-        """
-        Get flow metrics aggregated across all expirations for a currency.
-
-        Uses the latest snapshot per (expiration, strike, option_type) then
-        sums all flow columns by (strike, option_type) across expirations.
-
-        Args:
-            currency: Currency symbol (BTC, ETH).
-
-        Returns:
-            Dict with flow_data structure (same format as get_flow_metrics) and median spot_price.
-        """
-        query = """
-            WITH latest_per_expiry AS (
-                SELECT DISTINCT ON (expiration, strike, option_type)
-                    strike,
-                    option_type,
-                    buy_count,
-                    buy_volume,
-                    buy_notional,
-                    sell_count,
-                    sell_volume,
-                    sell_notional,
-                    net_flow,
-                    underlying_price
-                FROM buy_sell_flow_metrics
-                WHERE currency = %s
-                ORDER BY expiration, strike, option_type, captured_at DESC
-            )
-            SELECT
-                strike,
-                option_type,
-                SUM(buy_count)        AS buy_count,
-                SUM(buy_volume)       AS buy_volume,
-                SUM(buy_notional)     AS buy_notional,
-                SUM(sell_count)       AS sell_count,
-                SUM(sell_volume)      AS sell_volume,
-                SUM(sell_notional)    AS sell_notional,
-                SUM(net_flow)         AS net_flow,
-                AVG(underlying_price) AS underlying_price
-            FROM latest_per_expiry
-            GROUP BY strike, option_type
-            ORDER BY strike, option_type
-        """
-
-        with self._db_cursor() as cursor:
-            cursor.execute(query, (currency,))
-            rows = cursor.fetchall()
-
-        if not rows:
-            return {"flow_data": {}, "spot_price": 0.0}
-
-        flow_data: Dict[float, Dict[str, Any]] = {}
-        prices = []
-
-        for row in rows:
-            strike, opt_type, buy_count, buy_vol, buy_not, sell_count, sell_vol, sell_not, net_flow, price = row
-
-            strike_f = float(strike)
-            if strike_f not in flow_data:
-                flow_data[strike_f] = {}
-
-            sell_vol_f = float(sell_vol)
-            flow_data[strike_f][opt_type] = {
-                "buy_count":     int(buy_count),
-                "buy_volume":    float(buy_vol),
-                "buy_notional":  float(buy_not),
-                "sell_count":    int(sell_count),
-                "sell_volume":   sell_vol_f,
-                "sell_notional": float(sell_not),
-                "net_flow":      float(net_flow),
-                "buy_sell_ratio": float(buy_vol) / sell_vol_f if sell_vol_f > 0 else None,
-            }
-            prices.append(float(price))
-
-        spot_price = sorted(prices)[len(prices) // 2] if prices else 0.0  # median
-
-        return {"flow_data": flow_data, "spot_price": spot_price}
-
-    def get_active_expirations_with_flow(
-        self,
-        currency: str
+        since_ms: int,
     ) -> List[Dict[str, Any]]:
         """
-        Get active expirations with flow data.
+        Expirations that have not expired yet and traded since ``since_ms``.
 
-        Filters:
-        - Expiration date >= today (not expired)
-        - Has flow metrics in database
-        - Joins with open_interest table to get total OI
+        The Flow Charts views are computed from historical_trades; this lists the
+        expirations they can show. Ordered by open interest (latest call + put OI
+        from onchain_analysis_snapshots, 0 when unknown), highest first.
+
+        Args:
+            currency: Currency symbol (BTC, ETH).
+            since_ms: Only trades at or after this epoch-millisecond timestamp count.
 
         Returns:
-            List sorted by total_oi DESC (highest OI first).
+            [{"expiration": str, "total_oi": float}, ...]
         """
         with self._db_cursor() as cursor:
             cursor.execute("""
-                SELECT DISTINCT
-                    f.expiration,
-                    COALESCE(oi.total_oi, 0) as total_oi
-                FROM buy_sell_flow_metrics f
+                SELECT t.expiration, COALESCE(oi.total_oi, 0) AS total_oi
+                FROM (
+                    SELECT DISTINCT expiration
+                    FROM historical_trades
+                    WHERE currency = %s
+                      AND trade_timestamp >= %s
+                      AND expiration IS NOT NULL
+                      AND strike IS NOT NULL
+                      AND direction IS NOT NULL
+                ) t
                 LEFT JOIN LATERAL (
-                    SELECT total_oi
-                    FROM open_interest
-                    WHERE currency = f.currency
-                      AND expiration = f.expiration
-                    ORDER BY captured_at DESC
+                    SELECT COALESCE(total_call_oi, 0) + COALESCE(total_put_oi, 0) AS total_oi
+                    FROM onchain_analysis_snapshots
+                    WHERE currency = %s AND expiration = t.expiration
+                    ORDER BY snapshot_hour DESC
                     LIMIT 1
                 ) oi ON true
-                WHERE f.currency = %s
-                  AND TO_DATE(f.expiration, 'DDMONYY') >= CURRENT_DATE
-                ORDER BY total_oi DESC, f.expiration
+                WHERE TO_DATE(t.expiration, 'DDMONYY') >= CURRENT_DATE
+                ORDER BY total_oi DESC, t.expiration
+            """, (currency, since_ms, currency))
+            results = [{"expiration": row[0], "total_oi": float(row[1])} for row in cursor.fetchall()]
+
+        logger.info(f"Found {len(results)} active expirations with recent trades for {currency}")
+        return results
+
+    def get_latest_index_price(self, currency: str) -> float:
+        """
+        Latest known index (spot) price: the newest onchain_analysis_snapshots row,
+        else the newest stored trade's index price. 0.0 when there is neither.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                SELECT index_price FROM onchain_analysis_snapshots
+                WHERE currency = %s AND index_price IS NOT NULL
+                ORDER BY snapshot_hour DESC LIMIT 1
             """, (currency,))
+            row = cursor.fetchone()
+            if row is None:
+                cursor.execute("""
+                    SELECT index_price FROM historical_trades
+                    WHERE currency = %s AND index_price IS NOT NULL
+                    ORDER BY trade_timestamp DESC LIMIT 1
+                """, (currency,))
+                row = cursor.fetchone()
+        return float(row[0]) if row else 0.0
 
-            columns = ["expiration", "total_oi"]
-            results = [dict(zip(columns, row)) for row in cursor.fetchall()]
+    def save_futures_basis(self, rows: List[Dict[str, Any]]) -> int:
+        """
+        Store one hourly capture of the dated futures' basis.
 
-            logger.info(f"Found {len(results)} active expirations with flow data for {currency}")
-            return results
+        Args:
+            rows: dicts with timestamp (hour, UTC-valued naive datetime), currency,
+                futures_instrument, futures_price, spot_price, basis_absolute,
+                basis_percentage, implied_repo_rate (annualized; None when the tenor
+                is too short to annualize) and days_to_expiry.
+
+        Returns:
+            Number of rows inserted (an hour already stored is left untouched).
+        """
+        if not rows:
+            return 0
+        with self._db_cursor() as cursor:
+            inserted = execute_values(
+                cursor,
+                """
+                INSERT INTO futures_basis (
+                    timestamp, currency, futures_instrument, futures_price, spot_price,
+                    basis_absolute, basis_percentage, implied_repo_rate, days_to_expiry
+                ) VALUES %s
+                ON CONFLICT (futures_instrument, timestamp) DO NOTHING
+                RETURNING 1
+                """,
+                [
+                    (
+                        row["timestamp"], row["currency"], row["futures_instrument"],
+                        row["futures_price"], row["spot_price"], row["basis_absolute"],
+                        row["basis_percentage"], row["implied_repo_rate"], row["days_to_expiry"],
+                    )
+                    for row in rows
+                ],
+                fetch=True,
+            )
+        return len(inserted)
 
     def save_daily_oi_snapshot(
         self,

@@ -343,6 +343,34 @@ class DeribitApiService:
             csv_subdirectory="trades/historical"
         )
 
+    def get_dated_futures_marks(self, currency: str) -> List[Dict[str, Any]]:
+        """
+        Mark price and index price of every listed dated future (the perpetual is excluded).
+
+        Args:
+            currency: Currency symbol (BTC, ETH).
+
+        Returns:
+            [{"instrument_name": "BTC-25DEC26", "mark_price": float, "index_price": float|None}, ...].
+            A future whose ticker cannot be fetched is skipped with a warning.
+        """
+        marks: List[Dict[str, Any]] = []
+        for future in self.get_instruments(currency=currency, kind="future", expired=False):
+            name = future.get("instrument_name", "")
+            if "PERPETUAL" in name:
+                continue
+            try:
+                ticker = self.get_ticker(name)
+            except Exception as error:
+                logger.warning(f"Failed to fetch future ticker {name}: {error}")
+                continue
+            marks.append({
+                "instrument_name": name,
+                "mark_price": ticker.get("mark_price", 0),
+                "index_price": ticker.get("index_price"),
+            })
+        return marks
+
     def get_ticker(
         self,
         instrument_name: str,

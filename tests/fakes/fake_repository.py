@@ -60,7 +60,6 @@ class FakeDatabaseRepository:
         )
 
         # Write methods record calls here instead of hitting a real DB.
-        self.saved_flow_metrics: List[Dict[str, Any]] = []
         self.saved_daily_oi_snapshots: List[Dict[str, Any]] = []
 
     @staticmethod
@@ -261,26 +260,6 @@ class FakeDatabaseRepository:
         return None
 
     # ── Write methods (record, never persist) ───────────────────────────────
-
-    def save_flow_metrics(
-        self,
-        currency: str,
-        expiration: str,
-        flow_data: Dict[float, Dict[str, Dict[str, float]]],
-        underlying_price: float,
-        window_hours: int = 24,
-        captured_at: Optional[Any] = None,
-    ) -> int:
-        self.saved_flow_metrics.append(
-            {
-                "currency": currency,
-                "expiration": expiration,
-                "flow_data": flow_data,
-                "underlying_price": underlying_price,
-                "window_hours": window_hours,
-            }
-        )
-        return sum(len(type_data) for type_data in flow_data.values())
 
     def save_daily_oi_snapshot(
         self,

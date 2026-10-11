@@ -94,31 +94,6 @@ class TestRepositorySaveSnapshotCapturedAtUTC:
         assert captured["executemany_rows"][0][0] == explicit
 
 
-class TestRepositorySaveFlowMetricsCapturedAtUTC:
-    def test_default_captured_at_is_utc_not_host_local(self):
-        repo = DatabaseRepository.__new__(DatabaseRepository)
-        captured = {}
-        repo._db_cursor = MagicMock(return_value=_FakeCursor(captured))
-
-        with patch("coding.core.database.repository.datetime", _HostOffsetDateTime):
-            repo.save_flow_metrics(
-                expiration="1JAN27",
-                flow_data={100.0: {"C": {"buy_count": 1, "buy_volume": 1.0, "buy_notional": 1.0,
-                                          "sell_count": 0, "sell_volume": 0.0, "sell_notional": 0.0}}},
-                underlying_price=64000.0,
-                currency="BTC",
-                window_hours=24,
-            )
-
-        rows = captured.get("executemany_rows")
-        assert rows and len(rows) == 1
-        captured_at = rows[0][0]
-        assert captured_at == _FIXED_UTC.replace(tzinfo=None), (
-            f"expected UTC-valued naive captured_at, got {captured_at} -- "
-            "default is using the host-local clock, not UTC"
-        )
-
-
 class TestProspectiveCollectorFetchBookSummaryCapturedAtUTC:
     def test_fetch_book_summary_passes_utc_captured_at(self):
         collector = ProspectiveCollector.__new__(ProspectiveCollector)
