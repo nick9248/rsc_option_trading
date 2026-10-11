@@ -999,10 +999,10 @@ class DatabaseRepository:
         logger.info(f"Found {len(results)} active expirations with recent trades for {currency}")
         return results
 
-    def get_latest_index_price(self, currency: str) -> float:
+    def get_latest_index_price(self, currency: str) -> Optional[float]:
         """
         Latest known index (spot) price: the newest onchain_analysis_snapshots row,
-        else the newest stored trade's index price. 0.0 when there is neither.
+        else the newest stored trade's index price. None when there is neither.
         """
         with self._db_cursor() as cursor:
             cursor.execute("""
@@ -1018,7 +1018,7 @@ class DatabaseRepository:
                     ORDER BY trade_timestamp DESC LIMIT 1
                 """, (currency,))
                 row = cursor.fetchone()
-        return float(row[0]) if row else 0.0
+        return float(row[0]) if row else None
 
     def save_futures_basis(self, rows: List[Dict[str, Any]]) -> int:
         """

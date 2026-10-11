@@ -2590,6 +2590,9 @@ class OnChainAnalysisService:
             trade_filter="all",
         )
         spot_price = self.repository.get_latest_index_price(currency)
+        if spot_price is None:
+            logger.warning(f"No index price known for {currency}; flow not computed")
+            return {"flow_data": {}, "spot_price": 0.0}
         result = BuySellFlowAnalyzer(
             trades=trades,
             currency=currency,
@@ -2693,6 +2696,9 @@ class OnChainAnalysisService:
             return {"flow_data": {}, "spot_price": 0.0}
 
         spot_price = self.repository.get_latest_index_price(currency)
+        if spot_price is None:
+            logger.warning(f"No index price known for {currency}; aggregate flow not computed")
+            return {"flow_data": {}, "spot_price": 0.0}
 
         agg_flow: dict = defaultdict(lambda: {
             "C": {"buy_count": 0, "sell_count": 0, "buy_volume": 0.0, "sell_volume": 0.0,

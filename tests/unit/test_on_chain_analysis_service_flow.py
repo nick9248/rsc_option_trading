@@ -96,9 +96,9 @@ class TestGetFilteredAggregateFlowEarlyExit:
         mock_repo.get_latest_index_price.assert_called_once_with("BTC")
         assert result["spot_price"] == 83000.0
 
-    def test_spot_price_is_zero_when_no_index_price_is_known(self, service, mock_repo):
+    def test_nothing_is_computed_when_no_index_price_is_known(self, service, mock_repo):
         mock_repo.get_active_expirations_with_recent_trades.return_value = [_exp_info("28MAR26")]
-        mock_repo.get_latest_index_price.return_value = 0.0
+        mock_repo.get_latest_index_price.return_value = None
 
         with patch(
             "coding.service.on_chain.on_chain_analysis_service.BuySellFlowAnalyzer"
@@ -365,3 +365,10 @@ def test_create_default_constructs_its_own_repository():
     mock_repo_cls.assert_called_once_with()
     assert service.repository is mock_repo_cls.return_value
     assert service.api is None
+
+
+def test_get_flow_metrics_without_a_known_index_price_returns_the_empty_shape(service, mock_repo):
+    mock_repo.get_trades_for_flow_analysis.return_value = []
+    mock_repo.get_latest_index_price.return_value = None
+
+    assert service.get_flow_metrics("BTC", "28MAR26") == {"flow_data": {}, "spot_price": 0.0}

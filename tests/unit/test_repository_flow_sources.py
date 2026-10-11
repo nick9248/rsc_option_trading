@@ -152,13 +152,13 @@ class TestLatestIndexPrice:
 
         assert repo.get_latest_index_price("BTC") == 65000.0
 
-    def test_falls_back_to_the_newest_trade_then_to_zero(self, repo):
-        assert repo.get_latest_index_price("BTC") == 0.0
+    def test_falls_back_to_the_newest_trade_then_to_none(self, repo):
+        assert repo.get_latest_index_price("BTC") is None
         _trade(repo, "31DEC26", 1000, index_price=61000)
         _trade(repo, "31DEC26", 2000, index_price=62000)
 
         assert repo.get_latest_index_price("BTC") == 62000.0
-        assert repo.get_latest_index_price("ETH") == 0.0
+        assert repo.get_latest_index_price("ETH") is None
 
 
 class TestSaveFuturesBasis:

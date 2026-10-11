@@ -366,7 +366,7 @@ class DeribitApiService:
                 continue
             marks.append({
                 "instrument_name": name,
-                "mark_price": ticker.get("mark_price", 0),
+                "mark_price": ticker.get("mark_price"),
                 "index_price": ticker.get("index_price"),
             })
         return marks
