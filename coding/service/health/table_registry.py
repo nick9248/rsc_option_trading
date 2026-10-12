@@ -7,7 +7,8 @@ each table: which column carries its time, how old the newest row may be before 
 check warns or fails, and which columns must be filled.
 
 Thresholds are in hours and follow the table's write cadence:
-  - hourly tables are written every collection cycle (warn after 2 h, fail after 6 h)
+  - hourly tables are written every collection cycle (warn after 2 h, fail after 6 h;
+    flow_delta_hourly warns after 3 h because it stores the previous hour)
   - dvol_history stores completed hourly candles, so its newest row is up to ~2 h old
   - daily tables are written once a day
   - event tables (our own fills, orders, settlements, positions) only change when we
@@ -31,8 +32,8 @@ class TableSpec:
 
 
 def _hourly(table: str, time_column: str, time_kind: str = "datetime",
-            required: Tuple[str, ...] = (), optional: bool = False) -> TableSpec:
-    return TableSpec(table, time_column, time_kind, 2.0, 6.0, required, optional)
+            required: Tuple[str, ...] = (), optional: bool = False, warn_hours: float = 2.0) -> TableSpec:
+    return TableSpec(table, time_column, time_kind, warn_hours, 6.0, required, optional)
 
 
 def _event(table: str, time_column: str) -> TableSpec:
@@ -47,7 +48,9 @@ TABLE_SPECS: Tuple[TableSpec, ...] = (
     _hourly("onchain_volatility_snapshots", "snapshot_hour",
             required=("atm_iv", "iv_percentile_expiry", "iv_percentile_365d", "realized_vol", "underlying_price")),
     _hourly("volatility_skew_history", "snapshot_hour"),
-    _hourly("flow_delta_hourly", "snapshot_hour"),
+    # Stores the hour that has just closed, written by the cycle after it: at the top of an hour
+    # the newest bucket is already 2 hours old.
+    _hourly("flow_delta_hourly", "snapshot_hour", warn_hours=3.0),
     _hourly("straddle_scan_history", "scan_time",
             required=("strike", "cost_usd", "breakeven_down", "breakeven_up",
                       "iv_percentile", "iv_percentile_n_obs", "iv_percentile_window_days")),
