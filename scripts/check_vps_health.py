@@ -10,7 +10,7 @@ Usage:
 
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -18,15 +18,13 @@ from coding.core.database.repository import DatabaseRepository
 from coding.core.health.models import CheckEnvironment, CheckStatus
 from coding.core.logging.logging_setup import init_logging
 from coding.service.health.registry import run_checks
+from coding.service.health.table_registry import TABLE_SPECS
 
 init_logging(level="WARNING")
 
-# Tables surfaced in the "tables" section for the local sync-gap check.
-_SYNC_TRACKED_TABLES = [
-    "historical_trades", "hourly_snapshots", "onchain_analysis_snapshots",
-    "onchain_volatility_snapshots", "straddle_scan_history",
-    "forward_test_predictions", "dvol_history", "ohlcv_history",
-]
+# Tables surfaced in the "tables" section (row counts): every table the health checks
+# watch, so the local sync-gap check can compare each of them with the VPS.
+_SYNC_TRACKED_TABLES = [spec.table for spec in TABLE_SPECS]
 
 
 def _table_snapshot(repo: DatabaseRepository) -> dict:
@@ -62,7 +60,8 @@ def _write_health_json(log_dir: Path, data: dict) -> None:
 
 def run(log_dir: Optional[Path] = None) -> int:
     """Run every VPS-environment health check and write logs/vps_health.json."""
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    run_at = datetime.now(timezone.utc)
+    now = run_at.strftime("%Y-%m-%d %H:%M:%S")  # UTC
     print(f"\n{'='*60}")
     print(f"VPS HEALTH CHECK — {now}")
     print(f"{'='*60}")
@@ -111,6 +110,16 @@ def run(log_dir: Optional[Path] = None) -> int:
         "problems": problems,
         "tables": tables,
     }
+    # Keep the history on the VPS too; a failure here is a problem to report, not a crash.
+    try:
+        repo.save_health_check_run(
+            run_at=run_at, total=data["total"], passed=passed,
+            problems=problems, results=data["results"], tables=tables,
+        )
+    except Exception as exc:
+        print(f"  [ERR ] Failed to store the health-check run: {exc}")
+        problems.append(f"Health-check history not stored: {exc}")
+
     _write_health_json(log_dir, data)
 
     print()
