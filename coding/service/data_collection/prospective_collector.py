@@ -24,6 +24,7 @@ from coding.core.analytics.results.delta_flow_results import FlowBucket
 from coding.core.analytics.volatility_surface_calculator import VolatilitySurfaceCalculator
 from coding.core.config import SUPPORTED_CURRENCIES
 from coding.core.database.repository import DatabaseRepository
+from coding.service.data_collection.account_collector import AccountCollector
 from coding.service.data_collection.hourly_aggregation_service import HourlyAggregationService
 from coding.service.deribit.deribit_api_service import DeribitApiService
 from coding.service.deribit.dvol_fetcher import DVOLFetcher
@@ -74,6 +75,8 @@ class ProspectiveCollector:
         # (calls the Deribit REST endpoint directly), so it is instantiated once
         # here for reuse across cycles.
         self._dvol_fetcher = DVOLFetcher()
+        # Our own Deribit account (read-only); skipped when no credentials are configured.
+        self._account_collector = AccountCollector(repository=self.repo)
         self._forward_harness = ForwardTestingHarness(repository=self.repo)
         self._volatility_reconstruction = VolatilityReconstructionService(repository=self.repo)
         # institutional_metrics_spec.md section 6 / task C7: signed delta-
@@ -386,6 +389,17 @@ class ProspectiveCollector:
             self._capture_futures_basis(currency, hour)
         except Exception as e:
             logger.error(f"    Error capturing futures basis: {e}", exc_info=True)
+
+        # 4c. Our own Deribit account: summary, positions, fills, orders, settlements (read-only)
+        logger.info(f"  Collecting {currency} account data...")
+        try:
+            self._account_collector.collect(
+                currency,
+                snapshot_hour=hour.replace(minute=0, second=0, microsecond=0, tzinfo=timezone.utc),
+                now_ms=int(datetime.now(timezone.utc).timestamp() * 1000),
+            )
+        except Exception as e:
+            logger.error(f"    Error collecting account data: {e}", exc_info=True)
 
         # 5. Fetch and store funding rate data
         logger.info(f"  Fetching {currency} funding rate...")
