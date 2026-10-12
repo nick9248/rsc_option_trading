@@ -40,8 +40,8 @@ A VPS running 24/7 eliminates the sleep gap entirely and gets to 720h in approxi
 │                                                 │
 │  ┌──────────────────────────────────────────┐   │
 │  │  option-trading.service (systemd)        │   │
-│  │  CollectionDaemon → ProspectiveCollector │   │
-│  │  Every 30 minutes, 24/7                  │   │
+│  │  UnifiedScheduler: ProspectiveCollector  │   │
+│  │  every 30 min + TradeCollector every 60 s│   │
 │  └──────────────────────────────────────────┘   │
 │                      ↓                          │
 │  ┌──────────────────────────────────────────┐   │
