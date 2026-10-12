@@ -20,7 +20,7 @@ Other folders: `scripts/` (backfills, sync, health check), `migrations/` (number
 
 ## Data collection
 
-The collector runs on the Hetzner VPS as the systemd service `option-trading` (see `vps/vps_setup_and_operations.md`). The entry point is `coding/service/data_collection/collection_daemon.py`: `CollectionDaemon` runs `ProspectiveCollector.collect_hour()` every 30 minutes (APScheduler). At start-up it backfills a gap of up to 1.5 hours; a larger gap is logged and accepted.
+The collector runs on the Hetzner VPS as the systemd service `option-trading` (see `vps/vps_setup_and_operations.md`). The entry point is `coding/service/data_collection/unified_scheduler.py` (`python -m coding.service.data_collection.unified_scheduler`; the `ExecStart` of the unit on the server was checked on 2026-10-12): `UnifiedScheduler` runs `ProspectiveCollector.collect_hour()` every 30 minutes (hourly snapshots, on-chain analysis, scanners, DVOL, futures basis, account data) and `TradeCollector` every 60 seconds (trades for the flow data), both with APScheduler. On start-up it runs one collection of each straight away, but it has no gap backfill: hours missed while the service was down stay missing (the older `CollectionDaemon` backfilled up to 1.5 hours).
 
 For each currency (BTC, ETH) one cycle does, in this order:
 
@@ -37,7 +37,7 @@ For each currency (BTC, ETH) one cycle does, in this order:
 
 After the currencies: hourly aggregation into `hourly_snapshots`, volatility reconstruction into `onchain_volatility_snapshots`, and the scanners (straddle, then iron condor and butterfly) into `straddle_scan_history` and `defined_risk_scan_history`, with Telegram alerts.
 
-`TradeCollector` and `UnifiedScheduler` also exist in `coding/service/data_collection/`, but nothing in the code imports them; the daemon uses `ProspectiveCollector` only.
+`collection_daemon.py` (`CollectionDaemon`) is an older, simpler runner (its docstring: started with the PC by Windows Task Scheduler): it runs `ProspectiveCollector` only, every 30 minutes, and backfills a start-up gap of up to 1.5 hours. The server does not use it, and it is not maintained further.
 
 Buy/sell flow is not stored per capture. It is computed on demand from `historical_trades` with `BuySellFlowAnalyzer` (see `features/buy_sell_flow_charts.md`).
 
