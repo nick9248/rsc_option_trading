@@ -43,7 +43,7 @@ Buy/sell flow is not stored per capture. It is computed on demand from `historic
 
 ## Live tables
 
-21 tables, created by `migrations/000` to `030` (dropped tables are listed in `migrations/TABLES_TO_DROP_LATER.md`):
+21 tables, created by `migrations/000` to `030` (tables dropped along the way: see migrations `026` to `028`):
 
 | Group | Tables |
 |-------|--------|

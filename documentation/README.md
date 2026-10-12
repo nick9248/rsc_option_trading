@@ -31,19 +31,6 @@ One file per tab that exists in `coding/gui/tabs/`:
 
 The Automation tab (`automation_tab.py`) has no document yet.
 
-## Obsolete documents (proposed for deletion, awaiting the owner's decision)
-
-These describe code that has been removed (strategy system, regime detection, OTM contract finder, ML pipeline, Windows Task Scheduler setup). Do not rely on them:
-
-- `features/feature_strategy_system.md`
-- `features/feature_market_regime_detection.md`
-- `features/feature_otm_contract_finder.md`
-- `strategy_scoring_calculation_example.md`
-- `gui_tabs/tab_strategies.md`
-- `gui_tabs/tab_market_regime.md`
-- `ml/ml_data_collection_system.md`
-- `ml/ml_for_decision_making_complete.md` (the owner may want to keep its ML model plan)
-
 ## Keeping documentation current
 
 - When code changes a table, command, class name or path that a document mentions, update the document in the same pull request.
