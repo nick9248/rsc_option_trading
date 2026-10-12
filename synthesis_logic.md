@@ -33,13 +33,14 @@
 ## Architecture Overview
 
 ```
-OnChainAnalyzer (live run)
+OnChainAnalysisResult (typed, frozen; built by OnChainAnalysisService.fetch_and_analyze)
          │
-         ├─ .gex_dex_structured           ← per expiry
-         ├─ .volatility_surface_structured ← per expiry
-         ├─ .buy_sell_flow_structured      ← per expiry
-         ├─ .market_wide_structured        ← global
-         └─ .parsed_data                  ← raw instruments
+         ├─ .bundle(expiry).gex_dex       ← per expiry
+         ├─ .bundle(expiry).vol_surface   ← per expiry
+         ├─ .bundle(expiry).flow          ← per expiry
+         ├─ .bundle(expiry).analysis      ← per expiry (underlying price, max pain, P/C ratio)
+         ├─ .market_wide                  ← global (incl. .aggregate_gex_dex)
+         └─ .parsed_instruments           ← raw instruments per expiry
                    │
                    ▼
          SynthesisMapper.build_all()
@@ -67,13 +68,15 @@ OnChainAnalyzer (live run)
          Executive Summary (string)
 ```
 
-**Important**: The synthesis does **not** parse `report.txt`. Both the report text and the synthesis read from the same structured dicts on `OnChainAnalyzer`. They are siblings generated from the same data, not a chain.
+**Important**: The synthesis does **not** parse `report.txt`. Both the report text and the synthesis read from the same typed `OnChainAnalysisResult`. They are siblings generated from the same data, not a chain.
+
+> **Documentation note (2026-10-12):** this specification was written when the mapper read dict-shaped attributes on `OnChainAnalyzer` (`gex_dex_structured`, `market_wide_structured`, ...). The mapper now reads the typed `OnChainAnalysisResult` (`SynthesisMapper.build_all(result)`). In the two "Source" tables of Stage 1 below, the dict-key names are the historical names; the scoring and regime rules in the later stages are unchanged and still describe the code. When a "Source" cell and `SynthesisMapper` disagree, the code wins. Where this document says `analyzer`, read `result`.
 
 ---
 
-## Stage 1: SynthesisMapper — Raw Dicts → Typed Dataclasses
+## Stage 1: SynthesisMapper — Typed Result → Typed Dataclasses
 
-`SynthesisMapper.build_all(analyzer)` produces two objects consumed by `SynthesisEngine`:
+`SynthesisMapper.build_all(result)` produces two objects consumed by `SynthesisEngine`:
 
 ### MarketWideMetrics
 
@@ -89,7 +92,7 @@ OnChainAnalyzer (live run)
 | `cone_10d_pctile` | `market_wide_structured["cone_10d_pctile"]` | 0–100 |
 | `cone_20d_pctile` | `market_wide_structured["cone_20d_pctile"]` | 0–100 |
 | `cone_30d_pctile` | `market_wide_structured["cone_30d_pctile"]` | 0–100 |
-| `term_structure_shape` | `market_wide_structured["shape"]` | `"CONTANGO"` or `"BACKWARDATION"` (no other values) |
+| `term_structure_shape` | `market_wide_structured["shape"]` | passed through from the term-structure result (`"CONTANGO"`, `"BACKWARDATION"` or `"FLAT"`); `None` when fewer than 2 expiries have an ATM IV |
 | `term_structure_spread` | `market_wide_structured["spread"]` | absolute pts (for scoring) |
 | `term_structure_spread_signed` | `market_wide_structured["spread_signed"]` | signed pts (back - front, for display) |
 | `iv_by_dte` | `market_wide_structured["iv_by_dte"]` | `{dte_int: iv_float}` |
@@ -109,12 +112,12 @@ OnChainAnalyzer (live run)
 Note: These aggregate fields come from `gex_dex_structured` (not `market_wide_structured`), via `SynthesisMapper.build_market_wide()`.
 
 **Validation rules:**
-- `term_structure_shape` must be exactly `"CONTANGO"` or `"BACKWARDATION"`. If the source provides any other value (e.g., `"FLAT"`), the mapper must normalize: `spread < 0.5` → `"CONTANGO"` with `spread = 0`.
+- `term_structure_shape` is passed through unchanged. The mapper no longer normalizes `"FLAT"` to `"CONTANGO"` (that rewrite produced contradictory output such as "CONTANGO (-1.8pts)"). When there is no term-structure result the shape, spread and signed spread are `None`, never a default.
 - `futures_basis` dict **must** be insertion-ordered by DTE ascending. `basis_values[0]` = front (nearest), `basis_values[-1]` = back (furthest). If the source provides unordered data, the mapper must re-sort before constructing the dict.
 
 ### ExpiryMetrics (one per expiration)
 
-Built by `build_expiry_metrics(analyzer, expiration)`. Returns `None` if GEX data or instrument list is missing — those expiries are silently excluded.
+Built by `build_expiry_metrics(result, expiration)`. Returns `None` if GEX data or instrument list is missing — those expiries are silently excluded.
 
 | Field | Source |
 |-------|--------|
@@ -760,30 +763,29 @@ Market-wide aggregate GEX sums OI-weighted gamma across all expirations without 
 ```
 OnChainAnalysisService.fetch_and_analyze()
     |
-    |-- GexDexCalculator.calculate(instruments)      [per expiry]
-    |       -> stores result in analyzer.gex_dex_structured[expiry]
+    |-- GexDexCalculator.calculate()                 [per expiry]
+    |       -> result.bundle(expiry).gex_dex
     |
     |-- GexDexCalculator.aggregate_across_expirations()  [after all expiries]
-    |       -> stores result in analyzer.gex_dex_structured["AGGREGATE"]
-    |       -> stores report in analyzer.market_wide_sections["aggregate_gex_dex"]
+    |       -> result.market_wide.aggregate_gex_dex
     |
-    |-- VolatilitySurfaceCalculator.calculate(instruments)
-    |       -> stores result in analyzer.volatility_surface_structured[expiry]
+    |-- VolatilitySurfaceCalculator                  [per expiry]
+    |       -> result.bundle(expiry).vol_surface
     |
-    |-- BuySellFlowCalculator.calculate(instruments)
-    |       -> stores result in analyzer.buy_sell_flow_structured[expiry]
+    |-- BuySellFlowAnalyzer.calculate()              [per expiry, from stored trades]
+    |       -> result.bundle(expiry).flow
     |
-    '-- MarketWideCalculator.calculate(all_data)
-            -> stores result in analyzer.market_wide_structured
+    '-- market-wide calculators (MarketWideOrchestrator)
+            -> result.market_wide
                    |
                    v
-        SynthesisMapper reads these four dicts + gex_dex_structured["AGGREGATE"]
+        SynthesisMapper.build_all(result) reads the typed result
                    |
                    v
         SynthesisEngine.run(market, expiries)
 ```
 
-The `return_analyzer=True` flag on `fetch_and_analyze()` is required for the synthesis path. Without it, the analyzer is discarded and `SynthesisMapper` has nothing to read.
+`fetch_and_analyze(..., return_result=True)` returns the typed `OnChainAnalysisResult` that `SynthesisMapper` needs; `OnChainWorkflowService.run()` does this for the GUI and the health check.
 
 ---
 

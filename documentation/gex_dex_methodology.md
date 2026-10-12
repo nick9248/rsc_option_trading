@@ -76,9 +76,11 @@ The strike price with the **maximum negative Net GEX** (by absolute value).
 - When price approaches this level, dealers will hedge by **buying into dips**
 - Acts as a support/magnet level that dampens downward price movement
 
-### HVL (High Volatility Level / Zero Gamma Level)
+### HVL (Cumulative GEX Zero Strike)
 
-The strike where **cumulative GEX crosses zero**.
+The strike where **cumulative GEX crosses zero**. In code this is `GexDexKeyLevels.hvl` (also called `gamma_flip`); the report labels it "Cumulative GEX Zero Strike".
+
+> **Not the real Zero Gamma Level.** The HVL depends only on how open interest is spread along the strike axis. The actual Zero Gamma Level (`GexDexKeyLevels.zero_gamma_level`, shown in the report's "GAMMA PROFILE" block) re-prices total dealer gamma across a grid of spot prices (Black-Scholes, `GammaProfileCalculator`) and finds where it changes sign. The two can sit on opposite sides of spot. The market-wide aggregate has no `zero_gamma_level` (always `None`), because merged strike rows have lost each option's own IV and expiry.
 
 - Above HVL: Dealers are net short gamma → amplified volatility
 - Below HVL: Dealers are net long gamma → suppressed volatility
@@ -153,10 +155,15 @@ This implementation follows the methodology used by:
 
 **Service Integration:**
 - `coding/service/on_chain/on_chain_analysis_service.py` - Fetches Greeks and calls calculator
-- `coding/service/database/capture_strategies.py` - GexDexCaptureStrategy for database storage
+- `coding/service/data_collection/prospective_collector.py` - Runs the calculation every cycle and stores the results in `onchain_analysis_snapshots` (`total_net_gex`, `total_net_dex`, `call_resistance_strike`, `put_support_strike`, `hvl_level`)
+- `coding/core/analytics/reporting/gex_dex_formatter.py` - Report text
 
 **Tests:**
-- `tests/unit/analytics/test_gex_dex_calculator.py` - Comprehensive unit tests (27 tests, 100% coverage)
+- `tests/unit/analytics/test_gex_dex_calculator.py`, `tests/unit/analytics/test_gex_dex_completeness.py`
+
+### Sign conventions
+
+`net_gex` is the assumed-dealer gamma number (dealers long calls, short puts; the published SqueezeMetrics/SpotGamma convention). `net_dex` is the holder-side delta sum. `dealer_delta_exposure` is `-net_dex` (dealers are short whatever holders hold). Holder-side and assumed-dealer fields are both exposed (`gamma_exposure_holder`, `delta_exposure_holder`, `dealer_gamma_exposure`, `dealer_delta_exposure`); the class docstring of `GexDexCalculator` is the one place this is defined.
 
 ## Example Calculation
 
@@ -287,53 +294,15 @@ Stores GEX/DEX data in database for historical analysis and charting.
 
 ### Unit Tests
 
-Location: `tests/unit/analytics/test_gex_dex_calculator.py`
+Location: `tests/unit/analytics/test_gex_dex_calculator.py` and `tests/unit/analytics/test_gex_dex_completeness.py`.
 
-**Test Coverage (27 tests):**
-
-`TestGexDexCalculator` (20 tests):
-- ✓ Formula validation (Spot² × 0.01)
-- ✓ Aggregation by strike
-- ✓ Weighting by OI
-- ✓ Call Resistance detection
-- ✓ Put Support detection
-- ✓ HVL zero crossing
-- ✓ Cumulative GEX calculation
-- ✓ DEX calculation
-- ✓ Edge cases (empty data, missing Greeks, all positive/negative)
-- ✓ Total GEX/DEX summation
-- ✓ Multi-strike scenarios
-- ✓ USD units in GEX report, currency units in DEX report
-
-`TestAggregateAcrossExpirations` (7 tests):
-- ✓ Single-expiry aggregate matches original per-expiry result
-- ✓ Overlapping strikes summed correctly across expirations
-- ✓ Non-overlapping strikes all present in aggregate
-- ✓ Aggregate key levels differ from single-expiry (multi-expiry interaction)
-- ✓ Empty input returns safe zero result
-- ✓ Existing "AGGREGATE" key skipped (no recursion)
-- ✓ Aggregate report section contains expected content
-
-**Run Tests:**
-```bash
-pytest tests/unit/analytics/test_gex_dex_calculator.py -v
-```
-
-### Investigation Script
-
-Location: `scripts/investigate_gex_discrepancy.py`
-
-Fetches real market data and compares our calculations against industry references:
+They cover the formula (Spot² × 0.01), aggregation by strike and OI weighting, call resistance, put support and HVL detection, cumulative GEX, DEX, edge cases (empty data, missing Greeks), the market-wide aggregate (`aggregate_across_expirations`), the holder/dealer sign convention, and the gamma roll-off profile.
 
 ```bash
-python -m scripts.investigate_gex_discrepancy
+.venv\Scripts\python -m pytest tests/unit/analytics/test_gex_dex_calculator.py -v
 ```
 
-Generates:
-- Raw data snapshots (JSON)
-- Comparison reports (TXT)
-- Per-expiration analysis
-- Formula A/B testing (OLD vs NEW formula)
+The one-off script `scripts/investigate_gex_discrepancy.py` that this section used to describe no longer exists.
 
 ## Change History
 
@@ -362,17 +331,17 @@ In addition to per-expiry analysis, the system computes a **market-wide aggregat
 
 ```python
 GexDexCalculator.aggregate_across_expirations(
-    gex_dex_by_expiry: Dict[str, Dict],  # per-expiry calculate() results
+    gex_dex_by_expiry: Dict[str, GexDexResult],  # per-expiry calculate() results
     spot_price: float,
     currency: str = "BTC",
-) -> Dict[str, Any]
+) -> GexDexResult
 ```
 
 **Algorithm:**
 1. Skip any key named `"AGGREGATE"` (prevents recursion)
 2. Merge `strike_data` from all expirations — summing gamma, delta, and OI at each strike
 3. Re-run `_calculate_gex_dex()`, `_calculate_cumulative_profiles()`, and `_detect_key_levels()` on the merged data
-4. Return a dict with the same structure as `calculate()`, plus `expiration_count`
+4. Return a `GexDexResult` with the same structure as `calculate()`, plus `expiration_count`
 
 ### Why Equal-Weight Summation (No DTE-Weighting)
 
@@ -382,15 +351,15 @@ This is the industry standard methodology (SqueezeMetrics, SpotGamma, Glassnode,
 
 ### How It's Used in the Synthesis Engine
 
-The aggregate result is stored at `analyzer.gex_dex_structured["AGGREGATE"]` and used by `SynthesisMapper.build_market_wide()` to populate five fields on `MarketWideMetrics`:
+The aggregate result is `result.market_wide.aggregate_gex_dex` (a `GexDexResult`) and is used by `SynthesisMapper.build_market_wide()` to populate five fields on `MarketWideMetrics`:
 
 | Field | Source |
 |-------|--------|
-| `aggregate_total_gex` | `gex_dex_structured["AGGREGATE"]["total_net_gex"]` |
-| `aggregate_total_dex` | `gex_dex_structured["AGGREGATE"]["total_net_dex"]` |
-| `aggregate_call_resistance` | `gex_dex_structured["AGGREGATE"]["key_levels"]["call_resistance"]` |
-| `aggregate_put_support` | `gex_dex_structured["AGGREGATE"]["key_levels"]["put_support"]` |
-| `aggregate_hvl` | `gex_dex_structured["AGGREGATE"]["key_levels"]["hvl"]` |
+| `aggregate_total_gex` | `aggregate_gex_dex.total_net_gex` |
+| `aggregate_total_dex` | `aggregate_gex_dex.total_net_dex` |
+| `aggregate_call_resistance` | `aggregate_gex_dex.key_levels.call_resistance` |
+| `aggregate_put_support` | `aggregate_gex_dex.key_levels.put_support` |
+| `aggregate_hvl` | `aggregate_gex_dex.key_levels.hvl` |
 
 The **vol regime classifier** uses `aggregate_total_gex` (falling back to the largest expiry when aggregate is zero) to determine SUPPRESSED vs. EXPLOSIVE regime. This is preferred over single-expiry GEX because dealers hedge total portfolio gamma, not per-expiry.
 
@@ -398,7 +367,7 @@ The **vol regime classifier** uses `aggregate_total_gex` (falling back to the la
 
 A weekly expiry with deeply negative GEX near spot and a monthly expiry with positive GEX farther away may net to a mildly positive aggregate. The vol regime says SUPPRESSED, but the near-term expiry can still drive amplified moves. This is why **risk factors always use the largest-expiry GEX** as a separate check — it fires even when aggregate is benign.
 
-### Report Section: `generate_aggregate_report_section()`
+### Report Section: `format_aggregate_gex_dex_section()`
 
 Generates a formatted text block for the market-wide report. Unlike per-expiry sections, no per-strike table is shown (too many strikes to be readable). Shows:
 - Spot price
