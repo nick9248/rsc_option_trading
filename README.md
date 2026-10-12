@@ -29,7 +29,7 @@ coding/
 └── pipelines/  fetch-and-process helpers
 
 scripts/        backfills, VPS sync, health check, migration runner
-migrations/     numbered, forward-only PostgreSQL migrations (000 to 030)
+migrations/     numbered, forward-only PostgreSQL migrations
 tests/          unit, integration and characterization tests (golden files in tests/golden)
 documentation/  methodology, GUI tab notes, VPS operations
 strategies/     sample strategies running on the VPS (left alone)
@@ -83,7 +83,7 @@ Copy `.env.example` to `.env` and fill in the values. The code reads these keys:
 ```bash
 psql -U postgres -c "CREATE DATABASE option_trading;"
 python scripts/run_migration.py migrations/000_base_schema.sql
-# then every later migration in number order, up to migrations/030_add_health_check_runs.sql
+# then every later migration in number order
 ```
 
 Migrations are forward-only. The production data lives on the VPS; `python -m scripts.sync_from_vps` copies it into the local database.

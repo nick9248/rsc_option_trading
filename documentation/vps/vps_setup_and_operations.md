@@ -285,34 +285,21 @@ How fresh each table must be is set in `coding/service/health/table_registry.py`
 
 ## 10. VPS .env Contents
 
+As recorded when the VPS was set up; not re-checked against the server.
+
 ```env
 DB_PASSWORD=DB_PASSWORD_REDACTED
 DB_HOST=localhost
 DB_PORT=5432
 DB_NAME=option_trading
 DB_USER=nick
-crypto_quant_token="..."
 ```
 
-Further keys the code reads (set only if the feature is wanted): `client_id` and `deribit_key` (read-only Deribit credentials for the account collector; without them the account tables stay empty) and `OSF_TELEGRAM_BOT_TOKEN` / `OSF_TELEGRAM_CHAT_ID` (scanner alerts). No code in this repo reads `crypto_quant_token`.
+Further keys the code reads (set only if the feature is wanted): `client_id` and `deribit_key` (read-only Deribit credentials for the account collector; without them the account tables stay empty) and `OSF_TELEGRAM_BOT_TOKEN` / `OSF_TELEGRAM_CHAT_ID` (scanner alerts).
 
 ---
 
-## 11. ML Training Progress
-
-Historical (March 2026; the ML code has since been removed). The VPS was set up specifically to build the ML training dataset:
-
-| Metric | Value |
-|--------|-------|
-| Target | 720h of `hourly_snapshots` |
-| Before VPS | ~418h (55% coverage) |
-| Gap cause | PC sleeping 16-24h/night |
-| Expected time to target | ~30 days from VPS start |
-| Full walk-forward requirement | 1,224h (720h train + 168h test × 3 folds) |
-
----
-
-## 12. Daily Operations Checklist
+## 11. Daily Operations Checklist
 
 ### When you turn on your PC
 
@@ -368,14 +355,3 @@ ssh option-server
 sudo systemctl restart option-trading
 sudo systemctl status option-trading
 ```
-
-### To check ML data progress
-
-```bash
-ssh option-server
-sudo -u postgres psql -d option_trading -c "
-SELECT currency, COUNT(DISTINCT snapshot_hour) as hours
-FROM hourly_snapshots
-GROUP BY currency;"
-```
-Target: 720h per currency.
