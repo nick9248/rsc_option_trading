@@ -2831,23 +2831,29 @@ class DatabaseRepository:
         OnChainAnalysisService._fetch_market_metrics, on_chain_analysis_service.py:896).
         Returns oldest-first, plain floats (dvol_value), empty list on error.
 
-        Note: dvol_history only stores daily close-equivalent dvol_value, not
-        daily high/low — so this can reconstruct iv_percentile_365d (close-based)
+        Note: dvol_history only stores one close per hourly candle, not
+        high/low — so this can reconstruct iv_percentile_365d (close-based)
         but NOT iv_rank_365d (true-range based, needs high/low that was never persisted).
+
+        Point in time: rows are stamped with the candle START and hold its FINAL
+        close, which is only known one hour later. So a candle is returned only
+        when start + 1 hour <= before_time (otherwise the result would contain
+        the close of a candle that had not ended yet: look-ahead).
 
         Args:
             asset: Currency symbol (e.g., "BTC", "ETH").
-            before_time: Anchor — only rows with timestamp <= this are included.
+            before_time: Anchor — only candles that had closed by this time are included.
             days: Trailing window size in days (default 365, matches live lookback).
         """
         try:
             window_start = before_time - timedelta(days=days)
+            latest_candle_start = before_time - timedelta(hours=1)
             with self._db_cursor() as cursor:
                 cursor.execute(
                     "SELECT dvol_value FROM dvol_history "
                     "WHERE asset = %s AND timestamp >= %s AND timestamp <= %s "
                     "ORDER BY timestamp ASC",
-                    (asset, window_start, before_time),
+                    (asset, window_start, latest_candle_start),
                 )
                 return [float(r[0]) for r in cursor.fetchall()]
         except Exception as exc:
