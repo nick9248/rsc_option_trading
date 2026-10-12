@@ -7,6 +7,17 @@ anything else on top of this codebase.
 The goal: strip the project down to what it actually is right now —
 **data collection + on-chain analysis validation**. Nothing more.
 
+> **Status 2026-10-12 (documentation audit, verified against the code):** items 1, 2,
+> 3 and 4 below are done. `coding/core/strategy/`, `coding/service/strategy/`,
+> `coding/core/ml/`, `coding/service/ml/`, `coding/service/regime/`,
+> `capture_service.py` and `capture_strategies.py` no longer exist; the Database tab
+> only syncs from the VPS (and opens the charts folder); the health checks were
+> rewritten around the shared registry in `coding/service/health/`. The old
+> capture tables were dropped by migrations 024, 026 and 028
+> (`migrations/TABLES_TO_DROP_LATER.md`). What is still open is the section "Carried
+> forward from TODO.md / TASKS.md" at the end. The text in between is kept as the
+> record of what was planned. `strategies/` (the VPS sample) is intentionally left alone.
+
 ---
 
 ## Current state audit (2026-07-13)
@@ -186,7 +197,8 @@ designed around strategies, ML models, and the manual capture pipeline.
   not removed). `check_collection_status.py` and `check_database.py` were
   themselves dead code (monitored dropped tables / hardcoded scrubbed
   password) and were deleted 2026-07-14.
-  `verify_flow_data.py`, `aggregate_hourly_snapshots.py`, `run_full_backfill.py`
+  `aggregate_hourly_snapshots.py`, `run_full_backfill.py`. (`verify_flow_data.py`
+  was also on this list; it has since been removed.)
 - Phase 2 artifacts worth keeping: `phase2_blueprint.txt`, `phase2_single_metric_results.csv`
   (move into a results folder or commit as-is)
 - Snapshot service + morning note service (flagged above, kept for now)

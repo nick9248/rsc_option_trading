@@ -1,157 +1,50 @@
-# Documentation Organization
+# Documentation
 
-This directory contains comprehensive documentation for the Options Trading Platform.
+The code is the source of truth. If a document here disagrees with the code, the document is wrong: fix it or tell the owner.
 
-**Last Updated**: February 13, 2026 - Reorganized into logical subdirectories
+Other specifications live outside this folder: `synthesis_logic.md` (morning-note scoring, repo root) and `migrations/` (the schema, as numbered SQL files).
 
-## 📁 Directory Structure
+## System
 
-```
-documentation/
-├── README.md                          # This file
-├── system_overview.md                 # High-level system architecture
-├── strategy_scoring_calculation_example.md
-│
-├── ml/                                # ML & Analytics Documentation
-│   ├── ml_for_decision_making_complete.md     # Complete ML system guide
-│   └── ml_data_collection_system.md           # Data collection technical reference
-│
-├── gui_tabs/                          # GUI Tab Documentation
-│   ├── tab_api_connection.md
-│   ├── tab_database.md
-│   ├── tab_snapshot.md
-│   ├── tab_on_chain_analysis.md
-│   ├── tab_market_regime.md
-│   ├── tab_strategies.md
-│   └── tab_system_validation.md
-│
-├── features/                          # Feature Implementation Guides
-│   ├── feature_market_regime_detection.md
-│   └── feature_strategy_system.md
-│
-└── archive/                           # Historical/Deprecated Documentation
-    └── ... (old docs and research)
-```
+- `system_overview.md`: architecture, data flow, live tables, health checks, how to run things.
+- `vps/vps_setup_and_operations.md`: the Hetzner VPS, the systemd daemon, syncing, daily operations.
 
-## 📚 Documentation Categories
+## Methodology
 
-### 🔬 ML & Analytics (`ml/`)
+- `gex_dex_methodology.md`: GEX/DEX formulas, sign conventions and key levels.
+- `gex_dex_validation_results.md`: dated validation of the GEX/DEX formula (2026-02-16), kept as a record.
 
-Machine learning and analytics systems:
+## Features
 
-- **`ml_for_decision_making_complete.md`** ⭐ - **COMPREHENSIVE ML GUIDE**
-  - Complete project goals, architecture, and status
-  - What was achieved (data collection infrastructure)
-  - What remains (ML model training)
-  - Feature engineering (Flow-based GEX, VRP, 80+ features)
-  - Database verification results
-  - Timeline and roadmap
+- `features/buy_sell_flow_charts.md`: the Flow Charts window (flow computed on demand from stored trades).
+- `features/morning_note_synthesis.md`: how the morning note is built from the on-chain analysis.
 
-- **`ml_data_collection_system.md`** - Technical data collection reference
-  - TradeCollector, ProspectiveCollector, UnifiedScheduler
-  - Architecture diagrams
-  - Database schemas
-  - API endpoints
-  - Troubleshooting guide
+## GUI tabs
 
-### 🎨 GUI Tabs (`gui_tabs/`)
+One file per tab that exists in `coding/gui/tabs/`:
 
-Documentation for each PySide6 GUI tab:
+- `gui_tabs/tab_api_connection.md`
+- `gui_tabs/tab_snapshot.md`
+- `gui_tabs/tab_on_chain_analysis.md`
+- `gui_tabs/tab_database.md`
+- `gui_tabs/tab_system_validation.md`
 
-- **`tab_api_connection.md`** - API connection testing
-- **`tab_database.md`** - Database operations and capture controls
-- **`tab_snapshot.md`** - Real-time snapshot viewer
-- **`tab_on_chain_analysis.md`** - On-chain analytics (max pain, GEX/DEX)
-- **`tab_market_regime.md`** - Market regime detection
-- **`tab_strategies.md`** - Strategy evaluation and scoring
-- **`tab_system_validation.md`** - System health checks
+The Automation tab (`automation_tab.py`) has no document yet.
 
-### 🚀 Features (`features/`)
+## Obsolete documents (proposed for deletion, awaiting the owner's decision)
 
-Detailed feature implementation guides:
+These describe code that has been removed (strategy system, regime detection, OTM contract finder, ML pipeline, Windows Task Scheduler setup). Do not rely on them:
 
-- **`feature_market_regime_detection.md`** - Regime detection methodology
-- **`feature_strategy_system.md`** - Strategy evaluation framework
-- **`feature_otm_contract_finder.md`** - OTM contract finder (4-gate pipeline, Kelly sizing, GUI)
+- `features/feature_strategy_system.md`
+- `features/feature_market_regime_detection.md`
+- `features/feature_otm_contract_finder.md`
+- `strategy_scoring_calculation_example.md`
+- `gui_tabs/tab_strategies.md`
+- `gui_tabs/tab_market_regime.md`
+- `ml/ml_data_collection_system.md`
+- `ml/ml_for_decision_making_complete.md` (the owner may want to keep its ML model plan)
 
-### 📊 Top-Level
+## Keeping documentation current
 
-Core system documentation:
-
-- **`system_overview.md`** - High-level system architecture
-- **`strategy_scoring_calculation_example.md`** - Scoring methodology
-
-## Documentation Structure
-
-### Tab Documentation
-Each tab document includes:
-- **Overview**: Purpose and functionality
-- **Features**: List of all features with descriptions
-- **Architecture**: Component diagram and file locations
-- **Usage**: Step-by-step usage instructions
-- **Sample Output**: Example data/reports
-- **Use Cases**: Common usage scenarios
-- **Important Notes**: Performance, limitations, best practices
-- **Future Enhancements**: Planned improvements
-
-### Feature Documentation
-Each feature document includes:
-- **System Architecture**: Component relationships
-- **Implementation Details**: How it works internally
-- **Configuration Options**: Customization and tuning
-- **Integration Points**: How it connects with other systems
-- **Examples**: Code examples and usage patterns
-- **Reference Information**: Formulas, algorithms, data structures
-
-### System Documentation
-System-level documentation includes:
-- **Setup Instructions**: Installation and configuration
-- **Database Schema**: Table structures and relationships
-- **Data Collection**: Daemon setup and monitoring
-- **ML Pipeline**: Model training and inference
-- **Maintenance**: Backup, monitoring, troubleshooting
-- **Production Readiness**: Requirements and checklists
-
-## Quick Reference
-
-### For GUI Users
-Start with tab documentation:
-1. `tab_api_connection.md` - Test connectivity first
-2. `tab_snapshot.md` - Quick data export
-3. `tab_on_chain_analysis.md` - Market overview
-4. `tab_database.md` - Historical tracking
-5. `tab_strategies.md` - Strategy evaluation
-6. `tab_market_regime.md` - Market regime detection
-7. `tab_system_validation.md` - Health monitoring
-
-### For Developers
-Start with system and feature documentation:
-1. `system_overview.md` - Understand overall architecture
-2. `feature_strategy_system.md` - Strategy system deep dive
-3. `feature_market_regime_detection.md` - Regime detection internals
-
-### For Strategy Development
-Follow this sequence:
-1. `feature_strategy_system.md` - Understand scoring system
-2. `strategy_scoring_calculation_example.md` - See calculation details
-3. `tab_strategies.md` - Use GUI for evaluation
-
-## Archive
-
-The `archive/` directory contains deprecated documentation from previous versions:
-- `archive/GUI_DOCUMENTATION.md` - Old GUI documentation (superseded by tab_*.md files)
-
-## Updating Documentation
-
-When creating new documentation:
-1. Follow the naming pattern: `{type}_{name}.md`
-2. Use consistent section structure
-3. Include practical examples
-4. Update this README to reference new files
-5. Move old/deprecated docs to archive/
-
-When updating major features:
-1. Update relevant tab documentation
-2. Update feature documentation if architecture changes
-3. Update system documentation if integration points change
-4. Keep examples current with latest API/features
+- When code changes a table, command, class name or path that a document mentions, update the document in the same pull request.
+- Put new documents in a subfolder by type (`features/`, `gui_tabs/`, `vps/`) and list them here.

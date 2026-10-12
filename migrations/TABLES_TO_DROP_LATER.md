@@ -5,6 +5,27 @@ longer written to by any surviving code path — dropping tables is irreversible
 data loss and was left to an explicit user decision, per this repo's CLAUDE.md
 rules and the cleanup spec (`SHOULD_BE_DONE.md`).
 
+**STATUS 2026-10-12 (documentation audit): nothing on this list is pending any more.**
+Every table this file marks as dead has been dropped by a migration (024, 026,
+027, 028); the live tables it mentions (`snapshots`, `dvol_history`,
+`funding_rate_history`, `ohlcv_history`) stay. The file is now a history of those
+decisions. Later changes that supersede statements
+further down:
+
+- Migration `027_drop_volatility_index_history.sql` merged `volatility_index_history`
+  into `dvol_history`, which is now the single DVOL table.
+- Migration `028_drop_redundant_oi_volume_flow_tables.sql` dropped `max_pain`,
+  `open_interest`, `volume` and `buy_sell_flow_metrics` (all empty). Their
+  remaining readers were removed; the Flow Charts now compute buy/sell flow on
+  demand from `historical_trades` with `BuySellFlowAnalyzer`. Where this file says
+  those readers "are still alive" or that `buy_sell_flow_metrics` was kept, it is
+  out of date.
+- `futures_basis` (kept empty on 2026-10-11) is now captured hourly by
+  `ProspectiveCollector._capture_futures_basis`.
+- Migrations 029 and 030 added tables (`account_snapshots`, `position_snapshots`,
+  `user_trades`, `orders`, `settlements`, `health_check_runs`); they are not part
+  of this list.
+
 **UPDATE 2026-10-11: user approved removing stale objects found while auditing
 which tables `scripts/sync_from_vps.py` skipped.** Migration
 `026_drop_dead_tables_and_views.sql` drops `calculated_greeks`,

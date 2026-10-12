@@ -9,48 +9,49 @@ the full report and synthesis to disk.
 ```
 Core Layer (coding/core/analytics/)
 ├── synthesis.py
-│   ├── ExpiryMetrics          # Typed dataclass — per-expiry structured data
-│   ├── MarketWideMetrics      # Typed dataclass — market-wide structured data
-│   ├── ScoringEngine          # Converts raw metrics → directional/vol scores
-│   ├── RegimeClassifier       # Scores → MarketRegime + VolRegime enums
-│   ├── NarrativeGenerator     # Regimes + scores → human-readable text
-│   ├── SynthesisEngine        # Master pipeline: run(market, expiries) → str
-│   └── SynthesisMapper        # OnChainAnalyzer structured dicts → dataclasses
-└── market_wide_calculator.py  # Returns (str, dict) tuples; dict feeds mapper
+│   ├── ExpiryMetrics          # Typed dataclass: per-expiry data
+│   ├── MarketWideMetrics      # Typed dataclass: market-wide data
+│   ├── ScoringEngine          # Raw metrics -> directional/vol scores
+│   ├── RegimeClassifier       # Scores -> MarketRegime + VolRegime enums
+│   ├── NarrativeGenerator     # Regimes + scores -> human-readable text
+│   ├── SynthesisEngine        # Pipeline: run(market, expiries) -> str
+│   └── SynthesisMapper        # OnChainAnalysisResult -> the two dataclasses above
+└── results/                   # Frozen result dataclasses (OnChainAnalysisResult and parts)
 
 Service Layer (coding/service/)
 ├── on_chain/on_chain_analysis_service.py
-│   └── fetch_and_analyze(..., return_analyzer=True) → (report, analyzer)
-└── morning_note/morning_note_service.py
-    ├── generate(currency)              # Full fetch + synthesis
-    ├── generate_from_analyzer(analyzer) # Synthesis only (no re-fetch)
-    └── save_report_bundle(currency, report, synthesis) → Path
+│   └── fetch_and_analyze(currency, ..., return_result=True) -> (report, OnChainAnalysisResult)
+├── morning_note/morning_note_service.py
+│   ├── generate(result)                         # Synthesis from a typed result
+│   └── save_report_bundle(currency, report, synthesis) -> Path
+└── on_chain/on_chain_workflow_service.py
+    └── OnChainWorkflowService.run()             # fetch_and_analyze -> generate -> save_report_bundle
 
 GUI Layer (coding/gui/tabs/on_chain_analysis_tab.py)
-└── OnChainAnalysisWorker.run()  # Calls service → saves bundle → emits report
+└── OnChainAnalysisWorker.run()  # One call into OnChainWorkflowService, emits the output
 ```
 
 ## Data Flow
 
 ```
-DeribitApiService
-    ↓
-OnChainAnalysisService.fetch_and_analyze(return_analyzer=True)
-    ↓ populates structured dicts on OnChainAnalyzer:
-    ├── analyzer.gex_dex_structured        {expiry: {total_net_gex, key_levels, ...}}
-    │                                      + ["AGGREGATE"] key after all expiries processed
-    ├── analyzer.buy_sell_flow_structured  {expiry: {bias_interpretation, flow_trend, ...}}
-    ├── analyzer.volatility_surface_structured  {expiry: {atm_iv, skew_25d, ...}}
-    └── analyzer.market_wide_structured    {rv_10d, rv_20d, rv_30d, vrp, funding_rate, ...}
-    ↓
-SynthesisMapper.build_all(analyzer)
-    ↓ reads all 4 dicts + gex_dex_structured["AGGREGATE"]
-    ↓ returns (MarketWideMetrics, List[ExpiryMetrics])
-    ↓
+DeribitApiService + DatabaseRepository
+    |
+OnChainAnalysisService.fetch_and_analyze(return_result=True)
+    |  builds the frozen OnChainAnalysisResult:
+    |   result.market_wide                 (realized vol, funding, term structure, futures basis, ...)
+    |   result.bundle(expiration)          (.gex_dex, .vol_surface, .flow, .analysis per expiry)
+    |   result.parsed_instruments          (raw instruments per expiry)
+    v
+SynthesisMapper.build_all(result)
+    |  returns (MarketWideMetrics, List[ExpiryMetrics])
+    |  an expiry is skipped when it has no instruments or no GEX/DEX data
+    v
 SynthesisEngine.run(market, expiries)
-    ↓
+    v
 Executive summary string
 ```
+
+The report text and the synthesis are siblings: both are built from the same typed result. The synthesis does not parse the report text.
 
 ## Output Files
 
@@ -97,11 +98,11 @@ Signal + VolRegime → MarketRegime enum (TRENDING_UP/RANGE_BOUND/TRANSITION/...
 ## Unit Conventions
 
 Critical: all vol/funding values in `MarketWideMetrics` are in **percentage points**,
-not decimals. The mapper applies `× 100` when reading from structured dicts:
+not decimals. `SynthesisMapper.build_market_wide` applies `× 100` to the realized-vol and funding fields of `result.market_wide`:
 
 | Field | Source (decimal) | MarketWideMetrics (pct) |
 |---|---|---|
-| `rv_10d/20d/30d` | `calculate_realized_volatility_multi_window` → 0.585 | 58.5 |
+| `rv_10d/20d/30d` | `realized_volatility.rv_10d/20d/30d` → 0.585 | 58.5 |
 | `funding_rate` | API `current_funding` → -0.000201 | -0.0201 |
 | `funding_8h` | API `funding_8h` → -0.000135 | -0.0135 |
 | `dvol` | Already in pct | 58.7 |
@@ -109,8 +110,8 @@ not decimals. The mapper applies `× 100` when reading from structured dicts:
 
 ## Term Structure Display
 
-`structured["spread"] = abs(diff)` — kept unsigned for `score_term_structure` comparisons.
-`structured["spread_signed"] = diff` — signed value used in synthesis header display.
+`term_structure.spread` is unsigned (`abs(diff)`), used for `score_term_structure` comparisons.
+`term_structure.spread_signed` is the signed value (`MarketWideMetrics.term_structure_spread_signed`), used in the synthesis header display.
 Header format: `Term Structure: FLAT (-1.5pts)` — one decimal place, sign preserved.
 
 ## Funding Sources
@@ -162,34 +163,13 @@ All are labelled in output with `(model:` prefix or `NOTE [model]:` when appropr
 ## Tests
 
 ```
-tests/unit/analytics/test_synthesis.py     — 74 tests
-    TestScorePcRatio            — contrarian dampening, DTE clamping
-    TestScoreDex                — normalized thresholds, DTE clamping
-    TestScoreMaxPainGravity     — DTE-scaled weight
-    TestScoreFunding            — funding_8h annualization, contrarian logic
-    TestScoreFlow               — bias + trend adjustment
-    TestScoreVannaCharm         — IV-regime-conditional vanna, gamma weight
-    TestScoreFuturesBasis       — front basis thresholds
-    TestFragilityDetection      — confidence multiplier, not score
-    TestScoreIvPercentile       — richness axis
-    TestScoreVrp                — stale correction (high/low cone)
-    TestScoreTermStructure      — shape + spread, kink detection
-    TestScoreSkew               — fear axis, complacency
-    TestClassifyVolRegime       — SUPPRESSED/EXPLOSIVE/ELEVATED/NORMAL
-    TestClassifyMarketRegime    — 12-regime matrix, TRANSITION magnitude guard
-    TestTradeRecommendations    — IC skew adjustment, risk reversal exclusion
-    TestBuildMarketWide         — mapper unit conversion, shape normalization
-    TestBuildExpiryMetrics      — missing data handling, removed fields
-    TestBuildAll                — full pipeline assembly, GEX-missing skip
-    TestSynthesisEngineRun      — no-crash, regime labels, trade recs, DTE-0 exclusion
-
-tests/unit/analytics/test_gex_dex_calculator.py — 27 tests
-    TestGexDexCalculator              (20) — formula, key levels, report, units
-    TestAggregateAcrossExpirations    (7)  — summation, key levels, empty, recursion guard
+tests/unit/analytics/test_synthesis.py           # scorers, regime classification, mapper, narrative
+tests/unit/analytics/test_gex_dex_calculator.py  # GEX/DEX calculator
+tests/unit/test_morning_note_smoke_test_check.py # health check that runs the whole pipeline
 ```
 
 Run:
 ```bash
-pytest tests/unit/analytics/test_synthesis.py -v
-pytest tests/unit/analytics/test_gex_dex_calculator.py -v
+.venv\Scripts\python -m pytest tests/unit/analytics/test_synthesis.py -v
+.venv\Scripts\python -m pytest tests/unit/analytics/test_gex_dex_calculator.py -v
 ```

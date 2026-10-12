@@ -1,19 +1,21 @@
-# option_trading
+# rsc_option_trading
 
-A BTC/ETH options trading decision-support platform built on the Deribit API. Collects market data continuously, runs analysis pipelines, and surfaces actionable signals through a desktop GUI and Telegram alerts.
+Automated crypto options trading for BTC and ETH on Deribit. The long-term goal is to trade automatically: on-chain analysis and market analysis pick the best strategy, and every step is validated by forward and backward tests. The current focus is data collection and validating the on-chain analysis.
 
 ---
 
-## What it does
+## What it does today
 
 | Feature | Description |
 |---------|-------------|
-| **Market regime detection** | LightGBM classifier trained on realized vol, funding rate, DVOL, and OI to label market state (trending/ranging/volatile) |
-| **Displacement scanner** | Detects abnormal price moves relative to options-implied expectations; scores conviction and sends Telegram alerts |
-| **On-chain analytics** | GEX/DEX by strike, max pain, P/C ratio, IV surface, block trades — parsed from Deribit snapshot data |
-| **Strategy scoring** | Evaluates option strategies (spreads, straddles, condors) against current regime and vol surface |
-| **Data collection daemon** | Runs 24/7 on VPS; collects trades, book snapshots, DVOL, funding rate, OHLCV every 30 minutes |
-| **Desktop GUI** | PySide6 app with tabs for live data, displacement signals, strategy evaluation, and system health |
+| **Data collection daemon** | Runs 24/7 on a Hetzner VPS (systemd). Every 30 minutes it collects trades, book summaries, on-chain analysis, DVOL, funding rate, daily OHLCV, dated-futures basis and the owner's own Deribit account (read-only). |
+| **On-chain analysis** | GEX/DEX by strike, max pain, put/call ratios, volatility surface, buy/sell flow (computed on demand from stored trades), dealer inventory, exposure profiles. |
+| **Morning note** | Turns the on-chain analysis into a scored executive summary (`synthesis_logic.md`). |
+| **Scanners and forward tests** | Straddle, iron condor and butterfly scanners with Telegram alerts; forward-test harnesses that record predictions and resolve them at settlement. |
+| **Health checks** | One shared check registry, run locally (`scripts/validate_system.py`) and on the VPS (`scripts/check_vps_health.py`, hourly cron). |
+| **Desktop GUI** | PySide6 app: API connection, snapshot, on-chain analysis, database sync, system health and automation tabs. |
+
+No code in this repo places real orders.
 
 ---
 
@@ -21,16 +23,19 @@ A BTC/ETH options trading decision-support platform built on the Deribit API. Co
 
 ```
 coding/
-├── core/           — data models, API client, database, ML, analytics
-├── service/        — orchestration: displacement, regime, strategy, Deribit
-├── gui/            — PySide6 desktop app (tabs, components, theme)
-└── pipelines/      — data processing and feature engineering
+├── core/       models, calculators, API client, database repository, health models
+├── service/    orchestration: data collection, on-chain, scanners, health, Deribit clients
+├── gui/        PySide6 app (no business logic; calls services)
+└── pipelines/  fetch-and-process helpers
 
-scripts/            — data collection, backfill, validation utilities
-migrations/         — PostgreSQL schema (14 migration files)
-tests/              — 41 unit + integration tests
-documentation/      — architecture, VPS setup, API reference
+scripts/        backfills, VPS sync, health check, migration runner
+migrations/     numbered, forward-only PostgreSQL migrations (000 to 030)
+tests/          unit, integration and characterization tests (golden files in tests/golden)
+documentation/  methodology, GUI tab notes, VPS operations
+strategies/     sample strategies running on the VPS (left alone)
 ```
+
+Layering: Core -> Service -> GUI/CLI.
 
 ---
 
@@ -39,13 +44,14 @@ documentation/      — architecture, VPS setup, API reference
 | Layer | Technology |
 |-------|-----------|
 | Language | Python 3.13 |
-| Market data | Deribit API (REST + WebSocket) |
-| ML | LightGBM, scikit-learn, ARCH (GARCH) |
-| Data | pandas, PostgreSQL (psycopg2) |
+| Market data | Deribit REST API (public, plus a read-only private client for the owner's account) |
+| Data | pandas, PostgreSQL 18 (psycopg2) |
 | GUI | PySide6, Plotly |
 | Alerts | Telegram Bot API |
 | Scheduling | APScheduler |
-| Deployment | systemd daemon on Hetzner VPS |
+| Deployment | systemd daemon on a Hetzner VPS |
+
+The full dependency list is in `requirements.txt`.
 
 ---
 
@@ -57,52 +63,56 @@ documentation/      — architecture, VPS setup, API reference
 git clone https://github.com/nick9248/rsc_option_trading.git
 cd rsc_option_trading
 python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
+.venv\Scripts\activate          # Linux/macOS: source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
 ### 2. Configure
 
-```bash
-cp .env.example .env
-```
-
-Edit `.env` — required keys:
+Copy `.env.example` to `.env` and fill in the values. The code reads these keys:
 
 | Key | Purpose |
 |-----|---------|
-| `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` | PostgreSQL connection |
-| `DERIBIT_CLIENT_ID`, `DERIBIT_CLIENT_SECRET` | Deribit API credentials |
-| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Displacement alerts |
-| `CRYPTO_QUANT_TOKEN` | On-chain data feed |
+| `DB_PASSWORD` | PostgreSQL password (required) |
+| `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_NAME` | Optional. Defaults: `localhost`, `5433`, `postgres`, `option_trading` |
+| `client_id`, `deribit_key` | Optional. Read-only Deribit API credentials for the account collector. Without them the account tables stay empty. |
+| `OSF_TELEGRAM_BOT_TOKEN`, `OSF_TELEGRAM_CHAT_ID` | Optional. Telegram scanner alerts |
 
 ### 3. Database
 
 ```bash
 psql -U postgres -c "CREATE DATABASE option_trading;"
-# Run migrations in order:
-psql -U postgres -d option_trading -f migrations/000_base_schema.sql
-# ... through migrations/013_*.sql
+python scripts/run_migration.py migrations/000_base_schema.sql
+# then every later migration in number order, up to migrations/030_add_health_check_runs.sql
 ```
+
+Migrations are forward-only. The production data lives on the VPS; `python -m scripts.sync_from_vps` copies it into the local database.
 
 ### 4. Run
 
 ```bash
 # Desktop GUI
-python main.py
+.venv\Scripts\python -m coding.gui.app
 
-# Data collection daemon (VPS)
-python -m coding.service.data_collection.collection_daemon
+# Health check
+.venv\Scripts\python -m scripts.validate_system
 
-# Displacement scanner daemon (VPS)
-python -m scripts.displacement_daemon
+# Tests
+.venv\Scripts\python -m pytest
+
+# Data collection daemon (runs on the VPS under systemd; locally only for debugging)
+.venv\Scripts\python -m coding.service.data_collection.collection_daemon
 ```
 
 ---
 
-## Deployment
+## Documentation
 
-The data collection and displacement scanner run as systemd services on a Hetzner VPS (Ubuntu 24.04). Set `DB_HOST` and `DB_PORT` in `.env` to point at the remote PostgreSQL instance. The GUI syncs from VPS to local via SSH tunnel.
+- `documentation/README.md`: index of the documentation
+- `synthesis_logic.md`: scoring specification for the morning note
+- `documentation/gex_dex_methodology.md`: GEX/DEX formulas
+- `documentation/vps/vps_setup_and_operations.md`: VPS setup and daily operations
+- `scripts/README.md`: what each script does
 
 ---
 

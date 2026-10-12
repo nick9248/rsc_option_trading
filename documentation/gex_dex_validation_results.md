@@ -1,5 +1,7 @@
 # GEX/DEX Formula Validation Results
 
+> **Historical record (2026-02-16).** The measurements below were taken once, on that date. Since then the calculator gained a holder/dealer sign convention and a re-priced Zero Gamma Level (see `gex_dex_methodology.md`), and the tests moved to `tests/unit/analytics/test_gex_dex_calculator.py` (far more than the 17 tests named here). `scripts/investigate_gex_discrepancy.py` and the `output/gex_investigation/` files listed under "Files Modified/Created" are no longer in the repository. The formula `net_gex = net_gamma × spot² × 0.01` is unchanged.
+
 ## Executive Summary
 
 The GEX/DEX calculator has been successfully updated to use the industry-standard formula and validated across both BTC and ETH options with real market data.
