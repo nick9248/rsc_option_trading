@@ -149,3 +149,13 @@ def test_event_table_with_no_rows_is_fine():
     result = DatabaseLocalFreshnessCheck()._freshness_result(
         _FakeCursor((None, 0)), "position_snapshots", "snapshot_hour", "datetime", None, None, True)
     assert result.status == CheckStatus.PASS
+
+
+def test_very_stale_optional_table_is_only_a_warning_and_old_ages_are_shown_in_days():
+    old = datetime.now(timezone.utc) - timedelta(days=5)
+    check = DatabaseLocalFreshnessCheck()
+    optional = check._freshness_result(_FakeCursor((old, 10)), "account_snapshots", "snapshot_hour", "datetime", 2.0, 6.0, True)
+    required = check._freshness_result(_FakeCursor((old, 10)), "hourly_snapshots", "snapshot_hour", "datetime", 2.0, 6.0)
+    assert optional.status == CheckStatus.WARN
+    assert required.status == CheckStatus.FAIL
+    assert "5.0 days" in required.message

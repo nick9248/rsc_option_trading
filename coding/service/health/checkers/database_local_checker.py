@@ -79,8 +79,8 @@ class DatabaseLocalFreshnessCheck(HealthCheck):
         """
         Age of the newest row against the table's limits. Times are compared in UTC:
         the database stores UTC (naive columns are UTC-valued), whatever this host's clock.
-        Event tables (no limits) only report their row count (none yet is fine); an empty
-        ``optional`` hourly table is a warning, an empty required table a failure.
+        Event tables (no limits) only report their row count (none yet is fine); an empty or
+        stale ``optional`` hourly table is a warning, a required one a failure.
         """
         cursor.execute(f"SELECT MAX({ts_col}), COUNT(*) FROM {table}")
         latest, row_count = cursor.fetchone()
@@ -114,9 +114,11 @@ class DatabaseLocalFreshnessCheck(HealthCheck):
                 message=f"{table}: stale ({hours_ago:.1f}h ago)",
                 details={"hours_ago": hours_ago},
             )
+        age = f"{hours_ago / 24:.1f} days" if hours_ago >= 48 else f"{hours_ago:.1f}h"
         return CheckResult(
-            name=f"{table} freshness", status=CheckStatus.FAIL,
-            message=f"{table}: very stale ({hours_ago:.1f}h ago)",
+            name=f"{table} freshness",
+            status=CheckStatus.WARN if optional else CheckStatus.FAIL,  # optional feature may be switched off
+            message=f"{table}: very stale ({age} ago)",
             details={"hours_ago": hours_ago},
         )
 
