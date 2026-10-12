@@ -29,3 +29,10 @@ def test_freshness_limits_are_consistent():
 def test_dvol_history_is_judged_in_hours_not_days():
     dvol = next(spec for spec in TABLE_SPECS if spec.table == "dvol_history")
     assert dvol.fail_hours <= 6  # it used to be 7 / 30 days
+
+
+def test_flow_delta_hourly_allows_for_its_two_hour_lag():
+    """It stores the just-closed hour one cycle later, so it is 2 h old at the top of the hour
+    (the first real health run on the server warned at exactly 2.0 h)."""
+    flow_delta = next(spec for spec in TABLE_SPECS if spec.table == "flow_delta_hourly")
+    assert flow_delta.warn_hours > 2.25

@@ -47,7 +47,9 @@ TABLE_SPECS: Tuple[TableSpec, ...] = (
     _hourly("onchain_volatility_snapshots", "snapshot_hour",
             required=("atm_iv", "iv_percentile_expiry", "iv_percentile_365d", "realized_vol", "underlying_price")),
     _hourly("volatility_skew_history", "snapshot_hour"),
-    _hourly("flow_delta_hourly", "snapshot_hour"),
+    # Stores the hour that has just closed, written by the cycle after it: at the top of an hour
+    # the newest bucket is already 2 hours old.
+    TableSpec("flow_delta_hourly", "snapshot_hour", "datetime", 3.0, 6.0),
     _hourly("straddle_scan_history", "scan_time",
             required=("strike", "cost_usd", "breakeven_down", "breakeven_up",
                       "iv_percentile", "iv_percentile_n_obs", "iv_percentile_window_days")),
