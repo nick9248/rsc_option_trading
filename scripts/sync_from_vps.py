@@ -154,6 +154,40 @@ SYNC_TABLES = [
         "lookback_hours": 6,  # rewritten only while the same (date, hour) is re-analysed
     },
     {
+        # Our own Deribit account (read-only collector). Hourly snapshots, fills and
+        # settlements are never changed after they are stored.
+        "name": "account_snapshots",
+        "watermark_col": "snapshot_hour",
+        "watermark_type": "timestamp",
+        "conflict_target": "(currency, snapshot_hour) DO NOTHING",
+    },
+    {
+        "name": "position_snapshots",
+        "watermark_col": "snapshot_hour",
+        "watermark_type": "timestamp",
+        "conflict_target": "(snapshot_hour, instrument_name) DO NOTHING",
+    },
+    {
+        "name": "user_trades",
+        "watermark_col": "trade_time",
+        "watermark_type": "timestamp",
+        "conflict_target": "(trade_id) DO NOTHING",
+    },
+    {
+        "name": "settlements",
+        "watermark_col": "settled_at",
+        "watermark_type": "timestamp",
+        "conflict_target": "(currency, settled_at, type, instrument_name) DO NOTHING",
+    },
+    {
+        # An order changes while it is open (fills, cancel), so it is re-read and updated.
+        "name": "orders",
+        "watermark_col": "last_update_at",
+        "watermark_type": "timestamp",
+        "conflict_target": None,
+        "upsert_key": ["order_id"],
+    },
+    {
         # One row per listed dated future per hour (history accumulates from the first
         # capture: Deribit does not serve expired futures). Never updated afterwards.
         "name": "futures_basis",

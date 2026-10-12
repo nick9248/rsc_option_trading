@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from psycopg2.extras import execute_values
+from psycopg2.extras import Json, execute_values
 
 from coding.core.analytics.market_wide_calculator import DERIBIT_SETTLEMENT_HOUR_UTC
 from coding.core.analytics.results.delta_flow_results import FlowBucket
@@ -1053,6 +1053,223 @@ class DatabaseRepository:
                         row["basis_percentage"], row["implied_repo_rate"], row["days_to_expiry"],
                     )
                     for row in rows
+                ],
+                fetch=True,
+            )
+        return len(inserted)
+
+    # ── Our own Deribit account (read-only API; migration 029) ─────────────
+
+    @staticmethod
+    def _from_epoch_ms(milliseconds: int) -> datetime:
+        """Deribit epoch milliseconds -> UTC-aware datetime."""
+        return datetime.fromtimestamp(milliseconds / 1000, tz=timezone.utc)
+
+    def save_account_snapshot(self, currency: str, snapshot_hour: datetime, summary: Dict[str, Any]) -> int:
+        """
+        Store one hourly account summary (equity, margin, session P&L, portfolio Greeks).
+
+        Only the listed numeric fields are kept: the summary also carries personal data
+        (email, username, deposit address) that must not be stored.
+
+        Args:
+            currency: BTC or ETH.
+            snapshot_hour: Hour bucket, UTC-aware.
+            summary: Deribit ``private/get_account_summary`` result.
+
+        Returns:
+            1 if a row was inserted, 0 if this hour was already stored.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO account_snapshots (
+                    snapshot_hour, currency, equity, balance, available_funds, margin_balance,
+                    initial_margin, maintenance_margin, session_upl, session_rpl, total_pl,
+                    futures_pl, options_pl, options_value, delta_total, options_delta,
+                    options_gamma, options_vega, options_theta, margin_model
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (currency, snapshot_hour) DO NOTHING
+                """,
+                (
+                    snapshot_hour, currency, summary.get("equity"), summary.get("balance"),
+                    summary.get("available_funds"), summary.get("margin_balance"),
+                    summary.get("initial_margin"), summary.get("maintenance_margin"),
+                    summary.get("session_upl"), summary.get("session_rpl"), summary.get("total_pl"),
+                    summary.get("futures_pl"), summary.get("options_pl"), summary.get("options_value"),
+                    summary.get("delta_total"), summary.get("options_delta"),
+                    summary.get("options_gamma"), summary.get("options_vega"),
+                    summary.get("options_theta"), summary.get("margin_model"),
+                ),
+            )
+            return cursor.rowcount
+
+    def save_position_snapshots(self, currency: str, snapshot_hour: datetime, positions: List[Dict[str, Any]]) -> int:
+        """
+        Store the open positions of one hour.
+
+        Args:
+            currency: BTC or ETH.
+            snapshot_hour: Hour bucket, UTC-aware.
+            positions: Deribit ``private/get_positions`` result.
+
+        Returns:
+            Number of rows inserted (an hour already stored is left untouched).
+        """
+        if not positions:
+            return 0
+        with self._db_cursor() as cursor:
+            inserted = execute_values(
+                cursor,
+                """
+                INSERT INTO position_snapshots (
+                    snapshot_hour, currency, instrument_name, kind, direction, size, average_price,
+                    mark_price, index_price, delta, gamma, vega, theta, initial_margin,
+                    maintenance_margin, floating_profit_loss, realized_profit_loss,
+                    total_profit_loss, raw
+                ) VALUES %s
+                ON CONFLICT (snapshot_hour, instrument_name) DO NOTHING
+                RETURNING 1
+                """,
+                [
+                    (
+                        snapshot_hour, currency, p["instrument_name"], p.get("kind"), p.get("direction"),
+                        p.get("size"), p.get("average_price"), p.get("mark_price"), p.get("index_price"),
+                        p.get("delta"), p.get("gamma"), p.get("vega"), p.get("theta"),
+                        p.get("initial_margin"), p.get("maintenance_margin"),
+                        p.get("floating_profit_loss"), p.get("realized_profit_loss"),
+                        p.get("total_profit_loss"), Json(p),
+                    )
+                    for p in positions
+                ],
+                fetch=True,
+            )
+        return len(inserted)
+
+    def get_latest_user_trade_ms(self, currency: str) -> Optional[int]:
+        """Epoch milliseconds of our newest stored fill in this currency, or None if there is none."""
+        with self._db_cursor() as cursor:
+            cursor.execute("SELECT MAX(trade_time) FROM user_trades WHERE currency = %s", (currency,))
+            newest = cursor.fetchone()[0]
+        return None if newest is None else int(newest.timestamp() * 1000)
+
+    def save_user_trades(self, currency: str, trades: List[Dict[str, Any]]) -> int:
+        """
+        Store our fills. A fill never changes after it happens, so known trade ids are skipped.
+
+        Args:
+            currency: BTC or ETH.
+            trades: Deribit trade records (``private/get_user_trades_by_currency_and_time``).
+
+        Returns:
+            Number of new fills stored.
+        """
+        if not trades:
+            return 0
+        with self._db_cursor() as cursor:
+            inserted = execute_values(
+                cursor,
+                """
+                INSERT INTO user_trades (
+                    trade_id, currency, trade_time, instrument_name, order_id, label, direction,
+                    price, amount, index_price, mark_price, iv, fee, fee_currency, liquidity,
+                    order_type, profit_loss, raw
+                ) VALUES %s
+                ON CONFLICT (trade_id) DO NOTHING
+                RETURNING 1
+                """,
+                [
+                    (
+                        t["trade_id"], currency, self._from_epoch_ms(t["timestamp"]), t["instrument_name"],
+                        t.get("order_id"), t.get("label"), t.get("direction"), t.get("price"),
+                        t.get("amount"), t.get("index_price"), t.get("mark_price"), t.get("iv"),
+                        t.get("fee"), t.get("fee_currency"), t.get("liquidity"), t.get("order_type"),
+                        t.get("profit_loss"), Json(t),
+                    )
+                    for t in trades
+                ],
+                fetch=True,
+            )
+        return len(inserted)
+
+    def save_orders(self, currency: str, orders: List[Dict[str, Any]]) -> int:
+        """
+        Store our order history. An order changes while it is open (fills, cancel), so a
+        known order is updated when Deribit reports a newer ``last_update_timestamp``.
+
+        Args:
+            currency: BTC or ETH.
+            orders: Deribit order records (``private/get_order_history_by_currency``).
+
+        Returns:
+            Number of orders inserted or updated.
+        """
+        if not orders:
+            return 0
+        with self._db_cursor() as cursor:
+            changed = execute_values(
+                cursor,
+                """
+                INSERT INTO orders AS t (
+                    order_id, currency, created_at, last_update_at, instrument_name, label,
+                    direction, order_state, order_type, time_in_force, price, amount,
+                    filled_amount, average_price, post_only, reduce_only, api, cancel_reason, raw
+                ) VALUES %s
+                ON CONFLICT (order_id) DO UPDATE SET
+                    last_update_at = EXCLUDED.last_update_at, order_state = EXCLUDED.order_state,
+                    price = EXCLUDED.price, amount = EXCLUDED.amount,
+                    filled_amount = EXCLUDED.filled_amount, average_price = EXCLUDED.average_price,
+                    cancel_reason = EXCLUDED.cancel_reason, raw = EXCLUDED.raw
+                WHERE t.last_update_at < EXCLUDED.last_update_at
+                RETURNING 1
+                """,
+                [
+                    (
+                        o["order_id"], currency, self._from_epoch_ms(o["creation_timestamp"]),
+                        self._from_epoch_ms(o["last_update_timestamp"]), o["instrument_name"],
+                        o.get("label"), o.get("direction"), o.get("order_state"), o.get("order_type"),
+                        o.get("time_in_force"), o.get("price") if isinstance(o.get("price"), (int, float)) else None,
+                        o.get("amount"), o.get("filled_amount"), o.get("average_price"),
+                        o.get("post_only"), o.get("reduce_only"), o.get("api"), o.get("cancel_reason"),
+                        Json(o),
+                    )
+                    for o in orders
+                ],
+                fetch=True,
+            )
+        return len(changed)
+
+    def save_settlements(self, currency: str, settlements: List[Dict[str, Any]]) -> int:
+        """
+        Store settlement / delivery / bankruptcy events that affected the account.
+
+        Args:
+            currency: BTC or ETH.
+            settlements: Deribit records (``private/get_settlement_history_by_currency``).
+
+        Returns:
+            Number of new events stored.
+        """
+        if not settlements:
+            return 0
+        with self._db_cursor() as cursor:
+            inserted = execute_values(
+                cursor,
+                """
+                INSERT INTO settlements (
+                    currency, settled_at, type, instrument_name, position, index_price,
+                    mark_price, profit_loss, session_profit_loss, raw
+                ) VALUES %s
+                ON CONFLICT (currency, settled_at, type, instrument_name) DO NOTHING
+                RETURNING 1
+                """,
+                [
+                    (
+                        currency, self._from_epoch_ms(e["timestamp"]), e["type"],
+                        e.get("instrument_name", ""), e.get("position"), e.get("index_price"),
+                        e.get("mark_price"), e.get("profit_loss"), e.get("session_profit_loss"), Json(e),
+                    )
+                    for e in settlements
                 ],
                 fetch=True,
             )
