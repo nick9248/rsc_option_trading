@@ -462,13 +462,22 @@ class VolatilityReconstructionService:
         OUR OWN reconstructed atm_iv series, with a time-based trailing window
         (days, not row count — hourly density makes row counts a poor proxy
         for "days of history").
+
+        History is READ from [start - lookback, end] but only rows inside
+        [start, end] are UPDATED. The hourly collector asks for a single hour
+        (start == end); reading only that hour left one row per expiry, below
+        IV_PERCENTILE_EXPIRY_MIN_HISTORY, so no percentile was ever written.
+        Each row is ranked only against rows strictly earlier in time
+        (point-in-time, no lookahead).
         """
-        rows = self.repo.get_volatility_snapshots_for_percentile_backfill(currency, start, end)
+        window = timedelta(days=self.IV_PERCENTILE_EXPIRY_LOOKBACK_DAYS)
+        rows = self.repo.get_volatility_snapshots_for_percentile_backfill(
+            currency, start - window, end
+        )
         by_expiration: Dict[str, List[Dict[str, Any]]] = {}
         for row in rows:
             by_expiration.setdefault(row["expiration"], []).append(row)
 
-        window = timedelta(days=self.IV_PERCENTILE_EXPIRY_LOOKBACK_DAYS)
         updated = 0
 
         for expiration, exp_rows in by_expiration.items():
@@ -478,6 +487,8 @@ class VolatilityReconstructionService:
                 current_iv = row["atm_iv"]
                 if current_iv is None:
                     continue
+                if not start <= row["snapshot_hour"] <= end:
+                    continue  # read only as history for the rows inside the range
 
                 cutoff = row["snapshot_hour"] - window
                 history = [

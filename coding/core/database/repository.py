@@ -2473,13 +2473,13 @@ class DatabaseRepository:
         atm_iv rows stripped out first -- those are missing-data artifacts,
         not real "cheap IV" observations, and must never rank as cheap.
 
-        Same percentile convention as the stored column (count of population
-        values <= the latest valid observation, divided by population size,
-        x100) -- the two will differ ONLY when the stored column's unfiltered
-        population included a zero/NULL atm_iv row that this method excludes,
-        or (for long-lived expiries) because the stored column also applies
-        a 365-day trailing window while this method uses the expiry's full
-        available history (that's what window_days below exposes).
+        Definition differs from the stored column in two ways: this method
+        counts values <= the latest observation within a population that
+        INCLUDES the latest observation; the stored column counts values
+        strictly below the row's own value among strictly EARLIER rows only,
+        within a trailing 90-day window (this method uses the expiry's full
+        history, see window_days below). It also differs when the stored
+        column's unfiltered population held a zero/NULL atm_iv row.
 
         Args:
             currency: Currency symbol (e.g., "BTC", "ETH").
