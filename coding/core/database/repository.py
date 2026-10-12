@@ -1275,6 +1275,41 @@ class DatabaseRepository:
             )
         return len(inserted)
 
+    # ── Health-check history (migration 030) ───────────────────────────────
+
+    def save_health_check_run(
+        self,
+        run_at: datetime,
+        total: int,
+        passed: int,
+        problems: List[str],
+        results: List[Dict[str, Any]],
+        tables: Dict[str, Any],
+        keep_days: int = 90,
+    ) -> None:
+        """
+        Store one health-check run and delete runs older than ``keep_days``.
+
+        Args:
+            run_at: When the run happened, UTC-aware.
+            total: Number of checks run.
+            passed: Number of checks that passed.
+            problems: Messages of the checks that did not pass.
+            results: Every check result ({"ok", "label", "message"}).
+            tables: Row count (or error) per watched table.
+            keep_days: Runs older than this are removed.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO health_check_runs (run_at, total, passed, problems, results, tables) "
+                "VALUES (%s, %s, %s, %s, %s, %s)",
+                (run_at, total, passed, Json(problems), Json(results), Json(tables)),
+            )
+            cursor.execute(
+                "DELETE FROM health_check_runs WHERE run_at < %s",
+                (run_at - timedelta(days=keep_days),),
+            )
+
     def save_daily_oi_snapshot(
         self,
         currency: str,

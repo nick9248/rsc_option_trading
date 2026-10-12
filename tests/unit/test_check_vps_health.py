@@ -23,6 +23,12 @@ class _FakeConnection:
 
 
 class _FakeRepo:
+    def __init__(self):
+        self.saved_runs = []
+
+    def save_health_check_run(self, **run):
+        self.saved_runs.append(run)
+
     def _get_connection(self):
         return _FakeConnection()
 
@@ -139,3 +145,46 @@ def test_table_snapshot_isolates_one_table_failure():
     assert "error" in snapshot["onchain_volatility_snapshots"]
     assert snapshot["historical_trades"]["rows"] == 100
     assert conn.rolled_back is True
+
+
+def test_every_run_is_stored_in_the_database_as_well(tmp_path, monkeypatch):
+    repo = _FakeRepo()
+    monkeypatch.setattr(check_vps_health, "DatabaseRepository", lambda: repo)
+    monkeypatch.setattr(
+        check_vps_health, "run_checks",
+        lambda environment, repo: {
+            "API": [CheckResult(name="Deribit API", status=CheckStatus.PASS, message="ok")],
+            "Daemon": [CheckResult(name="Daemon", status=CheckStatus.FAIL, message="not running")],
+        },
+    )
+
+    check_vps_health.run(log_dir=tmp_path)
+
+    (run,) = repo.saved_runs
+    assert run["run_at"].tzinfo is not None
+    assert (run["total"], run["passed"], run["problems"]) == (2, 1, ["not running"])
+    assert run["tables"]["historical_trades"]["rows"] == 42
+    assert [result["label"] for result in run["results"]] == ["Deribit API", "Daemon"]
+
+
+def test_failing_to_store_the_run_is_reported_as_a_problem_and_json_is_still_written(tmp_path, monkeypatch):
+    class _RepoWithBrokenHistory(_FakeRepo):
+        def save_health_check_run(self, **run):
+            raise RuntimeError("relation health_check_runs does not exist")
+
+    monkeypatch.setattr(check_vps_health, "DatabaseRepository", lambda: _RepoWithBrokenHistory())
+    monkeypatch.setattr(
+        check_vps_health, "run_checks",
+        lambda environment, repo: {"API": [CheckResult(name="Deribit API", status=CheckStatus.PASS, message="ok")]},
+    )
+
+    assert check_vps_health.run(log_dir=tmp_path) == 1
+
+    data = json.loads((tmp_path / "vps_health.json").read_text())
+    assert any("history not stored" in problem for problem in data["problems"])
+
+
+def test_row_counts_cover_every_watched_table():
+    from coding.service.health.table_registry import TABLE_SPECS
+
+    assert check_vps_health._SYNC_TRACKED_TABLES == [spec.table for spec in TABLE_SPECS]
