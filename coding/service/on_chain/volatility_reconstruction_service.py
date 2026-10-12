@@ -476,6 +476,8 @@ class VolatilityReconstructionService:
         )
         by_expiration: Dict[str, List[Dict[str, Any]]] = {}
         for row in rows:
+            if row["atm_iv"] is None or float(row["atm_iv"]) <= 0:
+                continue  # missing-data artifact: never ranked, never used as history
             by_expiration.setdefault(row["expiration"], []).append(row)
 
         updated = 0
@@ -485,15 +487,13 @@ class VolatilityReconstructionService:
 
             for idx, row in enumerate(exp_rows):
                 current_iv = row["atm_iv"]
-                if current_iv is None:
-                    continue
                 if not start <= row["snapshot_hour"] <= end:
                     continue  # read only as history for the rows inside the range
 
                 cutoff = row["snapshot_hour"] - window
                 history = [
                     float(r["atm_iv"]) for r in exp_rows[:idx]
-                    if r["atm_iv"] is not None and r["snapshot_hour"] >= cutoff
+                    if r["snapshot_hour"] >= cutoff
                 ]
                 if len(history) < self.IV_PERCENTILE_EXPIRY_MIN_HISTORY:
                     continue
@@ -509,6 +509,6 @@ class VolatilityReconstructionService:
                 )
                 updated += 1
 
-            progress(f"  {currency} {expiration}: {len(exp_rows)} rows scanned")
+            progress(f"  {currency} {expiration}: {len(exp_rows)} rows read (incl. history)")
 
         return updated

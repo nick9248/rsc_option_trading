@@ -97,3 +97,18 @@ def test_too_little_history_writes_nothing():
     )
 
     assert updated == 0
+
+
+def test_zero_and_missing_atm_iv_are_not_ranked_or_used_as_history():
+    # Zeros and None are missing-data artifacts: they must not count as cheap history.
+    repository = InMemoryRepository([0.0, None, 0.0, 50.0, 60.0, 40.0, 70.0, 55.0, 65.0, 0.0])
+    target_hour = FIRST_HOUR + timedelta(hours=8)  # atm_iv 65.0
+
+    _service(repository)._backfill_iv_percentile_expiry(
+        "BTC", FIRST_HOUR, FIRST_HOUR + timedelta(hours=9), lambda message: None
+    )
+
+    # Valid history before 65: 50, 60, 40, 70, 55 -> below 65 is 4 of 5.
+    assert repository.updates[target_hour] == 80.0
+    assert FIRST_HOUR + timedelta(hours=9) not in repository.updates  # the zero row itself
+    assert FIRST_HOUR not in repository.updates
