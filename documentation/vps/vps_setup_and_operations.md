@@ -168,7 +168,7 @@ Type=simple
 User=nick
 WorkingDirectory=/home/nick/option_trading
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/home/nick/option_trading/.venv/bin/python -m coding.service.data_collection.collection_daemon
+ExecStart=/home/nick/option_trading/.venv/bin/python -m coding.service.data_collection.unified_scheduler
 Restart=always
 RestartSec=30
 StandardOutput=journal
@@ -272,7 +272,7 @@ How fresh each table must be is set in `coding/service/health/table_registry.py`
 
 | File | Location | Purpose |
 |------|----------|---------|
-| Daemon entry point | `coding/service/data_collection/collection_daemon.py` | Main daemon |
+| Service entry point | `coding/service/data_collection/unified_scheduler.py` | Runs `ProspectiveCollector` (30 min) and `TradeCollector` (60 s) |
 | Collector | `coding/service/data_collection/prospective_collector.py` | Data collection logic |
 | DB config | `coding/core/database/config.py` | Reads from .env |
 | Base schema | `migrations/000_base_schema.sql` | All base tables for fresh DB |

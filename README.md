@@ -100,8 +100,8 @@ Migrations are forward-only. The production data lives on the VPS; `python -m sc
 # Tests
 .venv\Scripts\python -m pytest
 
-# Data collection daemon (runs on the VPS under systemd; locally only for debugging)
-.venv\Scripts\python -m coding.service.data_collection.collection_daemon
+# Data collection (runs on the VPS under systemd; locally only for debugging)
+.venv\Scripts\python -m coding.service.data_collection.unified_scheduler
 ```
 
 ---
