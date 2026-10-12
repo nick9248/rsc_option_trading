@@ -7,7 +7,7 @@ settlement events. Each step has its own try/except, so one failing endpoint nev
 blocks the others or the rest of the data-collection cycle.
 """
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Optional
 
 from coding.core.database.repository import DatabaseRepository
@@ -43,27 +43,37 @@ class AccountCollector:
 
         Returns:
             Rows written per kind: account, positions, trades, orders, settlements.
-            All zero when no credentials are configured.
+            A step that failed is None; a step that was skipped is absent. Nothing is
+            collected when no credentials are configured.
         """
-        written = {"account": 0, "positions": 0, "trades": 0, "orders": 0, "settlements": 0}
+        written: Dict[str, Optional[int]] = {}
         if not self.client.is_configured:
             logger.info("    Deribit account credentials not configured; skipping account data")
             return written
 
         steps = {
-            "account": lambda: self.repo.save_account_snapshot(
-                currency, snapshot_hour, self.client.get_account_summary(currency)),
-            "positions": lambda: self.repo.save_position_snapshots(
-                currency, snapshot_hour, self.client.get_positions(currency)),
             "trades": lambda: self._collect_trades(currency, now_ms),
             "orders": lambda: self.repo.save_orders(currency, self.client.get_orders(currency)),
             "settlements": lambda: self.repo.save_settlements(currency, self.client.get_settlements(currency)),
         }
+        # The account state is "now". Stamping it on an earlier hour (a backfill or a re-run
+        # of a past hour) would put today's equity and positions into that hour's history.
+        current_hour = datetime.fromtimestamp(now_ms / 1000, tz=timezone.utc).replace(
+            minute=0, second=0, microsecond=0)
+        if snapshot_hour == current_hour:
+            steps["account"] = lambda: self.repo.save_account_snapshot(
+                currency, snapshot_hour, self.client.get_account_summary(currency))
+            steps["positions"] = lambda: self.repo.save_position_snapshots(
+                currency, snapshot_hour, self.client.get_positions(currency))
+        else:
+            logger.warning(f"    {snapshot_hour} is not the current hour: account snapshot and positions skipped")
+
         for name, step in steps.items():
             try:
                 written[name] = step()
             except Exception as error:
-                logger.error(f"    Account step '{name}' failed for {currency}: {error}", exc_info=True)
+                written[name] = None
+                logger.error(f"    Account step '{name}' failed for {currency}: {error}")
         logger.info(f"    Account data stored for {currency}: {written}")
         return written
 

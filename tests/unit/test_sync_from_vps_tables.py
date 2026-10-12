@@ -49,7 +49,11 @@ class TestFlowDeltaHourlySyncEntry:
 class TestLiveTablesAreSynced:
     """Five live tables were missing from the sync list (found 2026-10-11)."""
 
-    APPEND_ONLY = ("futures_basis", "account_snapshots", "position_snapshots", "user_trades", "settlements")  # several rows share one hour: the tie-safe batches cover that
+    # Never changed after insertion. futures_basis and position_snapshots put several rows
+    # on one hour: the tie-safe batches cover that.
+    APPEND_ONLY = (
+        "futures_basis", "account_snapshots", "position_snapshots", "user_trades", "settlements",
+    )
     MUTABLE = {
         # Rows are updated on the VPS after insertion (alerts, settlement results).
         "forward_test_predictions": ["currency", "snapshot_hour"],

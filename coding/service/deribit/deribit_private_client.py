@@ -28,6 +28,7 @@ _TIMEOUT_SEC = 20
 _TOKEN_SAFETY_MARGIN_SEC = 60
 _PAGE_SIZE = 1000
 _READ_ONLY_PREFIX = "private/get_"
+_INVALID_TOKEN_CODE = 13009  # Deribit error "unauthorized": token expired or invalidated
 _LAST_PAGE_TOKEN = "none"  # Deribit's continuation value on the final page
 
 
@@ -52,18 +53,30 @@ class DeribitPrivateClient:
 
     # ── transport ──────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _get_json(path: str, params: Dict[str, Any], headers: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+        """
+        GET one Deribit endpoint and return the decoded JSON body.
+
+        Errors are re-raised WITHOUT the request URL: the authentication request carries
+        the client secret in its query string, and `requests` puts the full URL in its
+        exception messages, which would end up in the logs.
+        """
+        try:
+            response = requests.get(f"{_BASE_URL}/{path}", params=params, headers=headers, timeout=_TIMEOUT_SEC)
+        except requests.RequestException as error:
+            raise RuntimeError(f"Deribit request to {path} failed: {type(error).__name__}") from None
+        try:
+            return response.json()
+        except ValueError:
+            raise RuntimeError(f"Deribit {path} returned a non-JSON response (HTTP {response.status_code})") from None
+
     def _authenticate(self) -> None:
-        response = requests.get(
-            f"{_BASE_URL}/public/auth",
-            params={
-                "grant_type": "client_credentials",
-                "client_id": self._client_id,
-                "client_secret": self._client_secret,
-            },
-            timeout=_TIMEOUT_SEC,
-        )
-        response.raise_for_status()
-        body = response.json()
+        body = self._get_json("public/auth", {
+            "grant_type": "client_credentials",
+            "client_id": self._client_id,
+            "client_secret": self._client_secret,
+        })
         if "result" not in body:
             raise RuntimeError(f"Deribit authentication failed: {body.get('error')}")
         result = body["result"]
@@ -79,13 +92,10 @@ class DeribitPrivateClient:
         if self._access_token is None or time.monotonic() >= self._token_expires_at:
             self._authenticate()
 
-        response = requests.get(
-            f"{_BASE_URL}/{method}",
-            params=params,
-            headers={"Authorization": f"Bearer {self._access_token}"},
-            timeout=_TIMEOUT_SEC,
-        )
-        body = response.json()
+        body = self._get_json(method, params, {"Authorization": f"Bearer {self._access_token}"})
+        if body.get("error", {}).get("code") == _INVALID_TOKEN_CODE:
+            self._authenticate()  # Deribit invalidated the token early: log in again, once
+            body = self._get_json(method, params, {"Authorization": f"Bearer {self._access_token}"})
         if "result" not in body:
             raise RuntimeError(f"Deribit {method} failed: {body.get('error')}")
         return body["result"]
@@ -123,18 +133,33 @@ class DeribitPrivateClient:
             new_trades = [trade for trade in page if trade["trade_id"] not in trades]
             for trade in new_trades:
                 trades[trade["trade_id"]] = trade
-            if not result.get("has_more") or not new_trades:
+            if not result.get("has_more"):
                 break
+            if not new_trades:
+                # A whole page of fills shares one millisecond: the next page would be the
+                # same page. Fail rather than silently skip fills (the stored watermark
+                # would then move past them and they would never be fetched again).
+                raise RuntimeError(f"More than {_PAGE_SIZE} fills at timestamp {cursor_ms}; cannot page past them")
             cursor_ms = max(trade["timestamp"] for trade in page)
         return list(trades.values())
 
     def get_orders(self, currency: str) -> List[Dict[str, Any]]:
         """
-        Our order history, all pages. ``historical=true`` is how Deribit serves old
-        orders; it cannot be combined with ``include_unfilled``, so cancelled orders
-        that never filled at all may be missing.
+        Our orders: the history plus the orders still open, one record per order id.
+
+        ``historical=true`` is how Deribit serves old orders; it cannot be combined with
+        ``include_unfilled``, so cancelled orders that never filled at all may be missing
+        from the history. The history is paged by offset while new orders can arrive, so
+        a record may repeat across pages; the newest version of each order is kept.
         """
-        orders: List[Dict[str, Any]] = []
+        by_id: Dict[str, Dict[str, Any]] = {}
+
+        def keep_newest(records: List[Dict[str, Any]]) -> None:
+            for record in records:
+                known = by_id.get(record["order_id"])
+                if known is None or record["last_update_timestamp"] >= known["last_update_timestamp"]:
+                    by_id[record["order_id"]] = record
+
         offset = 0
         while True:
             page = self._call("private/get_order_history_by_currency", {
@@ -143,10 +168,12 @@ class DeribitPrivateClient:
                 "offset": offset,
                 "historical": "true",
             })
-            orders.extend(page)
+            keep_newest(page)
             if len(page) < _PAGE_SIZE:
-                return orders
+                break
             offset += _PAGE_SIZE
+        keep_newest(self._call("private/get_open_orders_by_currency", {"currency": currency}))
+        return list(by_id.values())
 
     def get_settlements(self, currency: str) -> List[Dict[str, Any]]:
         """Settlement, delivery and bankruptcy events that affected the account, all pages."""

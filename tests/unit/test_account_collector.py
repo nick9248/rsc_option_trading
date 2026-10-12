@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 from coding.service.data_collection.account_collector import AccountCollector
 
 HOUR = datetime(2026, 10, 12, 8, 0, tzinfo=timezone.utc)
-NOW_MS = 1_791_800_000_000
+NOW_MS = int(HOUR.timestamp() * 1000) + 90_000  # 90 s into HOUR
 
 
 def _collector(configured=True):
@@ -52,7 +52,7 @@ def test_nothing_is_called_without_credentials():
 
     written = collector.collect("BTC", HOUR, NOW_MS)
 
-    assert written == {"account": 0, "positions": 0, "trades": 0, "orders": 0, "settlements": 0}
+    assert written == {}
     client.get_account_summary.assert_not_called()
     repository.save_account_snapshot.assert_not_called()
 
@@ -64,7 +64,20 @@ def test_a_failing_step_does_not_stop_the_other_steps():
 
     written = collector.collect("BTC", HOUR, NOW_MS)
 
-    assert written["account"] == 0
+    assert written["account"] is None  # failed, not "nothing new"
     assert written["orders"] == 3
     repository.save_position_snapshots.assert_called_once()
     repository.save_settlements.assert_called_once()
+
+
+def test_account_state_is_not_stamped_on_a_past_hour():
+    collector, client, repository = _collector()
+    past_hour = datetime(2026, 10, 12, 5, 0, tzinfo=timezone.utc)
+
+    written = collector.collect("BTC", past_hour, NOW_MS)
+
+    assert "account" not in written and "positions" not in written
+    client.get_account_summary.assert_not_called()
+    repository.save_account_snapshot.assert_not_called()
+    repository.save_position_snapshots.assert_not_called()
+    repository.save_user_trades.assert_called_once()  # fills and orders do not depend on the hour
