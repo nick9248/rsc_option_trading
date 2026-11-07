@@ -67,8 +67,9 @@ def summarize_replication(
     panels: Dict[str, Dict[str, Any]] = {}
     for panel_name in PANEL_NAMES:
         expiration = replication["panels"][panel_ranking].get(panel_name)
-        panel_levels = (select_drawn_levels(replication["gex_by_expiration"][expiration]["levels"])
-                        if expiration is not None else dict.fromkeys(LEVEL_NAMES))
+        panel_levels: Dict[str, Optional[float]] = (
+            select_drawn_levels(replication["gex_by_expiration"][expiration]["levels"])
+            if expiration is not None else {level_name: None for level_name in LEVEL_NAMES})
         panels[panel_name] = {"expiration": expiration, **panel_levels}
     return {
         "expirations": list(replication["settings"]["expirations"]),
@@ -234,17 +235,18 @@ def forward_price_outcomes(prices: Sequence[Optional[float]], step_hours: float)
          "maximum_price", "minimum_price" (over prices[1:], the future
          samples)}. All None when any sample is missing or non-positive.
     """
-    if len(prices) < 2 or any(price is None or price <= 0 for price in prices):
+    present = [price for price in prices if price is not None and price > 0]
+    if len(prices) < 2 or len(present) != len(prices):
         return {"realized_volatility_annualized_percent": None, "absolute_log_return_percent": None,
                 "maximum_price": None, "minimum_price": None}
-    returns = [math.log(prices[position] / prices[position - 1]) for position in range(1, len(prices))]
+    returns = [math.log(present[position] / present[position - 1]) for position in range(1, len(present))]
     mean_square = sum(value * value for value in returns) / len(returns)
     return {
         "realized_volatility_annualized_percent":
             100.0 * math.sqrt(mean_square * HOURS_PER_YEAR / step_hours),
-        "absolute_log_return_percent": 100.0 * abs(math.log(prices[-1] / prices[0])),
-        "maximum_price": max(prices[1:]),
-        "minimum_price": min(prices[1:]),
+        "absolute_log_return_percent": 100.0 * abs(math.log(present[-1] / present[0])),
+        "maximum_price": max(present[1:]),
+        "minimum_price": min(present[1:]),
     }
 
 
@@ -264,7 +266,8 @@ def barrier_outcome(
         {"touched", "rejected"} (rejected is False when not touched), or None
         when an input is missing or the level equals spot.
     """
-    if None in (spot, level, maximum_price, minimum_price, final_price) or level == spot:
+    if (spot is None or level is None or maximum_price is None or minimum_price is None
+            or final_price is None or level == spot):
         return None
     if level > spot:
         touched = maximum_price >= level

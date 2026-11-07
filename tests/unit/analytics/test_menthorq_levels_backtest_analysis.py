@@ -76,6 +76,19 @@ def test_alert_table_counts_flips_sign_changes_and_moves():
     assert entry["alert_count"] == 0 and entry["days_inside"] == 4
 
 
+def test_alert_table_distance_is_not_computed_for_a_missing_level_or_zero_spot():
+    rows = make_rows()
+    # Call Resistance 3%, 0.5%, missing, 0.5% from spot; day 4's spot is 0 (not computed)
+    for row, level in zip(rows, [103000.0, 100500.0, None, 100500.0]):
+        row["u_call_resistance"] = level
+    rows[3]["index_price"] = 0.0
+    table = alert_threshold_table(rows, "u", target_alerts_per_month=())
+    by_rule = {(entry["alert"], entry["threshold"]): entry for entry in table["alerts"]}
+    # inside within 1%: False, True, None, None -> one entry (day 2), one day inside
+    entry = by_rule[("spot_enters_within_n_percent_of_call_resistance", 1.0)]
+    assert entry["alert_count"] == 1 and entry["days_inside"] == 1
+
+
 def test_predictive_tests_run_the_full_fixed_battery_and_find_a_planted_effect():
     rows = []
     for day in range(120):

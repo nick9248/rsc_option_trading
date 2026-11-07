@@ -107,6 +107,19 @@ def test_forward_price_outcomes_with_missing_sample_is_none():
     assert outcome["maximum_price"] is None
 
 
+def test_forward_price_outcomes_with_non_positive_or_too_few_samples_is_none():
+    for prices in ([100.0, 0.0, 99.0], [100.0, -1.0], [100.0], [None, 100.0]):
+        outcome = forward_price_outcomes(prices, step_hours=1)
+        assert set(outcome.values()) == {None}
+
+
+def test_barrier_outcome_is_none_when_any_window_input_is_missing():
+    assert barrier_outcome(None, 105.0, 106.0, 98.0, 104.0) is None
+    assert barrier_outcome(100.0, 105.0, None, 98.0, 104.0) is None
+    assert barrier_outcome(100.0, 105.0, 106.0, None, 104.0) is None
+    assert barrier_outcome(100.0, 105.0, 106.0, 98.0, None) is None
+
+
 def test_barrier_outcome_above_and_below_spot():
     assert barrier_outcome(100.0, 105.0, 106.0, 98.0, 104.0) == {"touched": True, "rejected": True}
     assert barrier_outcome(100.0, 105.0, 106.0, 98.0, 107.0) == {"touched": True, "rejected": False}
