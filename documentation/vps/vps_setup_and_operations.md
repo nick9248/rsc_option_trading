@@ -295,7 +295,7 @@ DB_NAME=option_trading
 DB_USER=nick
 ```
 
-Further keys the code reads (set only if the feature is wanted): `client_id` and `deribit_key` (read-only Deribit credentials for the account collector; without them the account tables stay empty) and `OSF_TELEGRAM_BOT_TOKEN` / `OSF_TELEGRAM_CHAT_ID` (scanner alerts).
+Further keys the code reads (set only if the feature is wanted): `client_id` and `deribit_key` (read-only Deribit credentials for the account collector; without them the account tables stay empty) and `OSF_TELEGRAM_BOT_TOKEN` / `OSF_TELEGRAM_CHAT_ID` (Telegram bot of the MenthorQ monitor).
 
 ---
 

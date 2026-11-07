@@ -6,7 +6,7 @@ cleaned up, leaving synthetic scan rows mixed into the copy of production data.
 They are skipped when the local PostgreSQL server is not reachable.
 """
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 import psycopg2
@@ -105,16 +105,3 @@ class TestUnresolvedAndResolve:
         )
         still_pending = repo.get_unresolved_defined_risk_scans("BTC", "iron_condor")
         assert not any(r["expiration"] == "2SEP26" for r in still_pending)
-
-
-class TestAlerting:
-    def test_no_prior_alert_returns_none(self, repo):
-        assert repo.get_last_alert_for_defined_risk("BTC", "3SEP26", "iron_condor") is None
-
-    def test_mark_and_fetch_last_alert(self, repo):
-        scan_time = datetime.now(timezone.utc)
-        repo.save_defined_risk_scan(_row(scan_time=scan_time, expiration="4SEP26"))
-        repo.mark_defined_risk_scan_alert_sent("BTC", "4SEP26", "iron_condor", scan_time)
-        last = repo.get_last_alert_for_defined_risk("BTC", "4SEP26", "iron_condor")
-        assert last is not None
-        assert last["ev"] == 10.0

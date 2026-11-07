@@ -35,7 +35,7 @@ For each currency (BTC, ETH) one cycle does, in this order:
 9. delta-weighted taker flow into `flow_delta_hourly`
 10. the daily open-interest anchor into `daily_oi_snapshots` (only in the 08:00 UTC hour)
 
-After the currencies: hourly aggregation into `hourly_snapshots`, volatility reconstruction into `onchain_volatility_snapshots`, and the scanners (straddle, then iron condor and butterfly) into `straddle_scan_history` and `defined_risk_scan_history`, with Telegram alerts.
+After the currencies: hourly aggregation into `hourly_snapshots`, volatility reconstruction into `onchain_volatility_snapshots`, and the scanners (straddle, then iron condor and butterfly) into `straddle_scan_history` and `defined_risk_scan_history` (recorded only; the scanners send no alerts).
 
 `collection_daemon.py` (`CollectionDaemon`) is an older, simpler runner (its docstring: started with the PC by Windows Task Scheduler): it runs `ProspectiveCollector` only, every 30 minutes, and backfills a start-up gap of up to 1.5 hours. The server does not use it, and it is not maintained further.
 
@@ -59,7 +59,7 @@ Buy/sell flow is not stored per capture. It is computed on demand from `historic
 
 One registry (`coding/service/health/registry.py`) holds the checks; each check is marked LOCAL, VPS or BOTH:
 
-- API connectivity, local database freshness (per table, from `table_registry.py`), VPS internal continuity (VPS), sync gap between VPS and local (LOCAL), scanner activity, daemon service (VPS), Telegram configuration and delivery, forward-test harnesses (on-chain and straddle), IV-percentile window (LOCAL), morning-note smoke test (LOCAL).
+- API connectivity, local database freshness (per table, from `table_registry.py`), VPS internal continuity (VPS), sync gap between VPS and local (LOCAL), scanner activity, daemon service (VPS), Telegram configuration (bot token valid), forward-test harnesses (on-chain and straddle), IV-percentile window (LOCAL), morning-note smoke test (LOCAL).
 - `python -m scripts.validate_system` runs the LOCAL checks; the GUI "System Health" tab shows them too.
 - `scripts/check_vps_health.py` runs the VPS checks every hour (cron) and writes `logs/vps_health.json` and a row in `health_check_runs` (rows older than 90 days are pruned).
 

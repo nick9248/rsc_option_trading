@@ -31,7 +31,7 @@ class TestDefinedRiskScannerWiring:
             assert "error" in result["defined_risk_scanner"]["BTC"]["iron_condor"]
             assert "error" in result["defined_risk_scanner"]["BTC"]["butterfly"]
 
-    def test_successful_cycle_records_and_checks_alert_for_both_structures(self):
+    def test_successful_cycle_records_both_structures(self):
         from coding.service.data_collection.prospective_collector import ProspectiveCollector
 
         with patch("coding.service.data_collection.prospective_collector.DeribitApiService"), \
@@ -54,16 +54,12 @@ class TestDefinedRiskScannerWiring:
             collector._defined_risk_harness = MagicMock()
             collector._defined_risk_harness.record_scan.return_value = 0
             collector._defined_risk_harness.resolve_due.return_value = 0
-            collector._iron_condor_alert_rule = MagicMock()
-            collector._iron_condor_alert_rule.should_alert.return_value = (False, None, "no included expiries")
-            collector._butterfly_alert_rule = MagicMock()
-            collector._butterfly_alert_rule.should_alert.return_value = (False, None, "no included expiries")
 
             result = {}
             collector._run_defined_risk_scanners(currencies=["BTC"], hour=MagicMock(), result=result)
 
-            assert result["defined_risk_scanner"]["BTC"]["iron_condor"]["alert_sent"] is False
-            assert result["defined_risk_scanner"]["BTC"]["butterfly"]["alert_sent"] is False
+            assert result["defined_risk_scanner"]["BTC"]["iron_condor"] == {"inserted": 0}
+            assert result["defined_risk_scanner"]["BTC"]["butterfly"] == {"inserted": 0}
             collector._defined_risk_harness.record_scan.assert_called()
             collector._defined_risk_harness.resolve_due.assert_called()
 
@@ -102,10 +98,6 @@ class TestDefinedRiskScannerWiring:
             collector._defined_risk_harness = MagicMock()
             collector._defined_risk_harness.record_scan.return_value = 0
             collector._defined_risk_harness.resolve_due.return_value = 0
-            collector._iron_condor_alert_rule = MagicMock()
-            collector._iron_condor_alert_rule.should_alert.return_value = (False, None, "no included expiries")
-            collector._butterfly_alert_rule = MagicMock()
-            collector._butterfly_alert_rule.should_alert.return_value = (False, None, "no included expiries")
 
             result = {}
             collector._run_defined_risk_scanners(currencies=["BTC", "ETH"], hour=MagicMock(), result=result)
@@ -116,8 +108,8 @@ class TestDefinedRiskScannerWiring:
             assert "butterfly" not in result["defined_risk_scanner"]["BTC"]
 
             # ETH: still fully processed despite BTC's regime failure.
-            assert result["defined_risk_scanner"]["ETH"]["iron_condor"]["alert_sent"] is False
-            assert result["defined_risk_scanner"]["ETH"]["butterfly"]["alert_sent"] is False
+            assert result["defined_risk_scanner"]["ETH"]["iron_condor"] == {"inserted": 0}
+            assert result["defined_risk_scanner"]["ETH"]["butterfly"] == {"inserted": 0}
             assert "error" not in result["defined_risk_scanner"]["ETH"]["iron_condor"]
             assert "error" not in result["defined_risk_scanner"]["ETH"]["butterfly"]
             collector._iron_condor_scan_service.scan.assert_called_once_with("ETH", regime={"gate_pass": False})

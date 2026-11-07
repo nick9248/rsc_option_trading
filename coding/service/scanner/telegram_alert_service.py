@@ -1,12 +1,13 @@
 """
-Telegram delivery for the long-straddle scanner (increment 2, Part 3).
+Generic Telegram Bot API sender, used by the MenthorQ monitor
+(coding/service/on_chain/menthorq_monitor/) for its alerts, briefs and
+command replies.
 
-Clean rewrite for the scanner — shaped after (but not sharing any code
-with) the deleted displacement TelegramAlertService
-(coding/service/displacement/telegram_alert_service.py, removed in the
-2026-07-13 foundation cleanup). This version sends the plain-text message
-StraddleScanService.format_alert() already builds; it does no formatting
-of its own.
+It was first written for the long-straddle scanner's alerts; that alert
+workflow has been removed. Shaped after (but not sharing any code with) the
+deleted displacement TelegramAlertService (removed in the 2026-07-13
+foundation cleanup). It sends the plain text its caller builds and does no
+formatting of its own.
 """
 
 import logging

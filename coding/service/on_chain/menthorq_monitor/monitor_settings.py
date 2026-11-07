@@ -21,7 +21,7 @@ in (0, 100] or "off"):
   MENTHORQ_ALERT_SPOT_NEAR_WALL_PERCENT        default off (e.g. 1: spot within 1% of
                                                Call Resistance or Put Support)
 
-The Telegram bot token and the owner chat id are the scanner's
+The Telegram bot token and the owner chat id come from the environment
 (OSF_TELEGRAM_BOT_TOKEN / OSF_TELEGRAM_CHAT_ID, see TelegramAlertService);
 only that chat may use the commands.
 """
