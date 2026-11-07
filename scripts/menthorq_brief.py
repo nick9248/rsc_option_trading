@@ -68,7 +68,8 @@ def build_dry_run_output(service: MenthorqMonitorService, as_of: datetime) -> st
     daily_close = service.compute_daily_close_record((as_of - timedelta(days=1)).date())
     brief = format_brief(latest, comparisons,
                          daily_close if daily_close.spot is not None else None,
-                         title="Dry run (references replayed, not stored)")
+                         title="Dry run (references replayed, not stored)",
+                         stale_limit=service.settings.stale_snapshot_limit)
     by_label = {comparison.label: comparison for comparison in comparisons}
     alerts = evaluate_urgent_alerts(latest, by_label[COMPARISON_PREVIOUS], by_label[COMPARISON_ONE_DAY],
                                     service.settings.alert_thresholds)

@@ -50,10 +50,12 @@ from coding.core.database.repository import DatabaseRepository
 from coding.service.on_chain.menthorq_monitor.brief_formatter import (
     data_caveats,
     format_brief,
+    format_duration,
     format_gex,
     format_strike,
     format_urgent_alert,
     format_utc,
+    stale_data_warning,
     telegram_length,
 )
 from coding.service.on_chain.menthorq_monitor.menthorq_monitor_service import (
@@ -97,9 +99,10 @@ class BriefPreview:
 def telegram_html_to_plain_text(text: str) -> str:
     """
     What Telegram displays for a message in its HTML mode using only <b>,
-    <i> and <pre>: the tags removed and &amp; &lt; &gt; turned back.
+    <i>, <pre> and <code> (with or without a class attribute): the tags
+    removed and &amp; &lt; &gt; turned back.
     """
-    return html.unescape(re.sub(r"</?(?:b|i|pre)>", "", text))
+    return html.unescape(re.sub(r"</?(?:b|i|pre|code)(?:\s[^>]*)?>", "", text))
 
 
 def monitor_output_directory(
@@ -228,14 +231,7 @@ def _format_wall_distances(latest: MenthorqLevelRecord) -> str:
 
 def _format_age(age: Optional[timedelta]) -> str:
     """timedelta(hours=26, minutes=5) -> "1 d 2 h 5 min"; None -> "not computed"."""
-    if age is None:
-        return NOT_COMPUTED
-    total_minutes = int(age.total_seconds() // 60)
-    sign = "-" if total_minutes < 0 else ""
-    days, remainder = divmod(abs(total_minutes), 24 * 60)
-    hours, minutes = divmod(remainder, 60)
-    parts = ([f"{days} d"] if days else []) + ([f"{hours} h"] if days or hours else [])
-    return sign + " ".join(parts + [f"{minutes} min"])
+    return NOT_COMPUTED if age is None else format_duration(age)
 
 
 def iv_source_summary(iv_source_counts: Dict[str, int]) -> str:
@@ -325,7 +321,12 @@ class MenthorqBriefPreviewService:
         daily_close_record = service.compute_daily_close_record(
             (latest.as_of_utc - timedelta(days=1)).date())
         daily_close = daily_close_record if daily_close_record.spot is not None else None
-        brief = format_brief(latest, comparisons, daily_close, title=PREVIEW_TITLE)
+        stale_limit = self.settings.stale_snapshot_limit
+        brief = format_brief(latest, comparisons, daily_close, title=PREVIEW_TITLE,
+                             stale_limit=stale_limit)
+        stale_warning = stale_data_warning(latest, stale_limit)
+        warnings = ([] if stale_warning is None else [f"DATA STALE: {stale_warning}"]) \
+            + data_caveats(latest, stale_limit)
 
         by_label = {comparison.label: comparison for comparison in comparisons}
         previous, day = by_label[COMPARISON_PREVIOUS], by_label[COMPARISON_ONE_DAY]
@@ -344,7 +345,7 @@ class MenthorqBriefPreviewService:
                                            self.settings.alerts_enabled),
             urgent_alert_html=format_urgent_alert(latest, alerts) if alerts else None,
             info_rows=info_rows(latest, daily_close, self.clock()),
-            warnings=data_caveats(latest, comparisons),
+            warnings=warnings,
         )
 
 

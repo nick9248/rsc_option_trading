@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from coding.core.analytics.menthorq_monitor.level_record import MODE_DAILY_CLOSE, MODE_LIVE
-from coding.service.on_chain.menthorq_monitor.brief_formatter import telegram_length
+from coding.service.on_chain.menthorq_monitor.brief_formatter import code_block, telegram_length
 from coding.service.on_chain.menthorq_monitor.brief_preview_service import (
     PREVIEW_TITLE,
     MenthorqBriefPreviewService,
@@ -111,6 +111,16 @@ class TestBuildPreview:
         assert rows["Daily-close column"] == "2026-11-05 (23:59 UTC, open interest 00:00 UTC)"
         assert any("Live mode" in warning for warning in preview.warnings)
 
+    def test_stale_line_in_brief_and_warnings_follow_the_settings_limit(self):
+        # Snapshot 08:50 is 20 min before the data time 09:10.
+        _, fresh = _preview(moving_records(), replace(MenthorqMonitorSettings(), stale_snapshot_minutes=20))
+        assert "DATA STALE" not in fresh.brief_html
+        assert not any("DATA STALE" in warning for warning in fresh.warnings)
+        _, stale = _preview(moving_records(), replace(MenthorqMonitorSettings(), stale_snapshot_minutes=19))
+        warning = "snapshot is 20 min older than the data time; levels may be out of date."
+        assert stale.brief_html.split("\n")[1] == f"<b>DATA STALE:</b> {warning}"
+        assert stale.warnings[0] == f"DATA STALE: {warning}"
+
     def test_alerts_disabled_shows_enabled_no(self):
         settings = replace(MenthorqMonitorSettings(), alerts_enabled=False)
         _, preview = _preview(moving_records(), settings)
@@ -140,6 +150,9 @@ class TestHelpers:
     def test_plain_text_is_what_telegram_displays(self):
         text = "<b>BTC &amp; ETH</b>\n<i>note</i>\n<pre>a &lt; b &gt; c</pre>"
         assert telegram_html_to_plain_text(text) == "BTC & ETH\nnote\na < b > c"
+        block = '<b>T</b>\n<pre><code class="language-text">a &lt; b\nc</code></pre>'
+        assert telegram_html_to_plain_text(block) == "T\na < b\nc"
+        assert telegram_html_to_plain_text(code_block("x & y")) == "x & y"
 
     def test_output_directory_is_dated(self):
         base = Path("outputs/gui")
