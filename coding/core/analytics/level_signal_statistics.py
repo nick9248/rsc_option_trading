@@ -10,10 +10,11 @@ Pure: no database. Missing values (None or NaN) are dropped pairwise.
 
 import math
 import random
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple, TypeGuard
 
 
-def _is_present(value: Optional[float]) -> bool:
+def _is_present(value: Optional[float]) -> TypeGuard[float]:
+    """True when the value is a number (not None and not NaN)."""
     return value is not None and not (isinstance(value, float) and math.isnan(value))
 
 

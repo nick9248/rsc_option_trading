@@ -9,6 +9,7 @@ from coding.core.analytics.level_signal_statistics import (
     group_mean_difference,
     moving_block_bootstrap_indices,
     moving_block_bootstrap_interval,
+    paired_present,
     spearman_rank_correlation,
     two_sided_bootstrap_p_value,
 )
@@ -34,6 +35,16 @@ def test_group_mean_difference():
     # in group: 1 and 10 -> 5.5; out: 2 and 3 -> 2.5; difference 3.0
     assert group_mean_difference([1.0, 2.0, 3.0, 10.0, None], [True, False, False, True, True]) == 3.0
     assert group_mean_difference([1.0, 2.0], [True, True]) is None
+
+
+def test_missing_values_none_and_nan_are_dropped():
+    nan = float("nan")
+    # NaN pair dropped: [1, 2, 3] vs [1, 2, 3] -> perfect rank correlation
+    assert spearman_rank_correlation([1.0, nan, 2.0, 3.0], [1.0, 5.0, 2.0, 3.0]) == pytest.approx(1.0)
+    # in group: 1 (NaN dropped) -> 1.0; out: 2 (None group ignored, NaN value dropped) -> 2.0
+    assert group_mean_difference([1.0, nan, 2.0, 7.0, nan], [True, True, False, None, False]) == -1.0
+    # only rows 0 and 3 have both values present
+    assert paired_present([1.0, None, nan, 4.0], [10.0, 20.0, 30.0, 40.0]) == ([1.0, 4.0], [10.0, 40.0])
 
 
 def test_moving_block_bootstrap_indices_are_wrapped_blocks():
