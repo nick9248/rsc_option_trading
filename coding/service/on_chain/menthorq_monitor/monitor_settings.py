@@ -11,7 +11,7 @@ Variables (all optional; the defaults are in ``MenthorqMonitorSettings``):
   MENTHORQ_WEEKLY_BRIEF_TIME_UTC  HH:MM (UTC)
   MENTHORQ_COMMAND_POLL_SECONDS   seconds between getUpdates calls (>= 5)
 
-The Telegram bot token and the owner chat id are the scanner's
+The Telegram bot token and the owner chat id come from the environment
 (OSF_TELEGRAM_BOT_TOKEN / OSF_TELEGRAM_CHAT_ID, see TelegramAlertService);
 only that chat may use /brief.
 """

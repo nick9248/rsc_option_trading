@@ -2881,61 +2881,6 @@ class DatabaseRepository:
                 settlement_return_pct, resolved_at, scan_id,
             ))
 
-    def get_last_alert_for_expiry(
-        self,
-        currency: str,
-        expiration: str
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Return the most recently alerted straddle_scan_history row for
-        (currency, expiration) — used by the alert rate-limit rule.
-
-        Args:
-            currency: Currency symbol (e.g., "BTC", "ETH").
-            expiration: Expiration date string (e.g., "25SEP26").
-
-        Returns:
-            Dict {iv_percentile, alert_sent_at}, or None if never alerted.
-        """
-        with self._db_cursor() as cursor:
-            cursor.execute("""
-                SELECT iv_percentile, alert_sent_at
-                FROM straddle_scan_history
-                WHERE currency = %s AND expiration = %s AND alert_sent = TRUE
-                ORDER BY alert_sent_at DESC
-                LIMIT 1
-            """, (currency, expiration))
-            row = cursor.fetchone()
-            if row is None:
-                return None
-            return {
-                "iv_percentile": float(row[0]) if row[0] is not None else None,
-                "alert_sent_at": row[1],
-            }
-
-    def mark_straddle_scan_alert_sent(
-        self,
-        currency: str,
-        expiration: str,
-        scan_time,
-    ) -> None:
-        """
-        Mark the straddle_scan_history row for this (currency, expiration,
-        scan_time) as alerted — called right after a successful Telegram send.
-
-        Args:
-            currency: Currency symbol (e.g., "BTC", "ETH").
-            expiration: Expiration date string (e.g., "25SEP26").
-            scan_time: The scan cycle's timestamp (same value passed to
-                save_straddle_scan for this row).
-        """
-        with self._db_cursor() as cursor:
-            cursor.execute("""
-                UPDATE straddle_scan_history
-                SET alert_sent = TRUE, alert_sent_at = NOW()
-                WHERE currency = %s AND expiration = %s AND scan_time = %s
-            """, (currency, expiration, scan_time))
-
     # ── Defined-Risk Scanner (Iron Condor / Butterfly) ──────────────────────────
 
     def save_defined_risk_scan(self, row: Dict[str, Any]) -> bool:
@@ -3017,34 +2962,6 @@ class DatabaseRepository:
                     resolved_at = %s
                 WHERE id = %s
             """, (settlement_index_price, settlement_pnl_usd, settlement_return_pct, resolved_at, scan_id))
-
-    def get_last_alert_for_defined_risk(
-        self, currency: str, expiration: str, structure_type: str
-    ) -> Optional[Dict[str, Any]]:
-        """Return the most recently alerted row for (currency, expiration, structure_type), or None."""
-        with self._db_cursor() as cursor:
-            cursor.execute("""
-                SELECT ev, alert_sent_at
-                FROM defined_risk_scan_history
-                WHERE currency = %s AND expiration = %s AND structure_type = %s AND alert_sent = TRUE
-                ORDER BY alert_sent_at DESC
-                LIMIT 1
-            """, (currency, expiration, structure_type))
-            row = cursor.fetchone()
-            if row is None:
-                return None
-            return {"ev": float(row[0]) if row[0] is not None else None, "alert_sent_at": row[1]}
-
-    def mark_defined_risk_scan_alert_sent(
-        self, currency: str, expiration: str, structure_type: str, scan_time
-    ) -> None:
-        """Mark the row for this (currency, expiration, structure_type, scan_time) as alerted."""
-        with self._db_cursor() as cursor:
-            cursor.execute("""
-                UPDATE defined_risk_scan_history
-                SET alert_sent = TRUE, alert_sent_at = NOW()
-                WHERE currency = %s AND expiration = %s AND structure_type = %s AND scan_time = %s
-            """, (currency, expiration, structure_type, scan_time))
 
     # ── OTM Contract Finder ───────────────────────────────────────────────────
 
