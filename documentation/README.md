@@ -29,6 +29,7 @@ One file per tab that exists in `coding/gui/tabs/`:
 - `gui_tabs/tab_database.md`
 - `gui_tabs/tab_system_validation.md`
 - `gui_tabs/tab_menthorq_charts.md`
+- `gui_tabs/tab_menthorq_monitor.md`
 
 The Automation tab (`automation_tab.py`) has no document yet.
 
