@@ -18,6 +18,7 @@ from matplotlib.patches import Patch
 from matplotlib.ticker import FuncFormatter
 
 from coding.core.analytics.menthorq_replication_calculator import (
+    DEFAULT_GEX_EXPIRING_CANDIDATE,
     GEX_PER_ONE_PERCENT_MOVE,
     IMPLIED_VOLATILITY_UNIT_DECIMAL,
     IV_OI_AGGREGATION_SUM,
@@ -112,11 +113,13 @@ def format_dollars(value: float, _position: Optional[int] = None) -> str:
 
 
 def render_iv_times_open_interest_chart(
-    replication: Dict[str, Any], output_path: Path, timestamp_label: str
+    replication: Dict[str, Any], output_path: Path, timestamp_label: str,
+    currency: str = "BTC",
 ) -> None:
     """
     Horizontal IV*OI bars (IV as a decimal, summed over the expiry
     universe): calls filled green, puts as orange outlines, plus level lines.
+    ``currency`` only sets the title and axis labels.
     """
     settings = replication["settings"]
     _render_iv_times_open_interest(
@@ -129,12 +132,13 @@ def render_iv_times_open_interest_chart(
         timestamp_label=timestamp_label,
         subtitle_lines=[f"Expiration: {settings['expiry_universe']} expiries "
                         f"({len(settings['expirations'])})"],
+        currency=currency,
     )
 
 
 def render_expiry_iv_times_open_interest_chart(
     expiry_iv_times_open_interest: Dict[str, Any], spot: float, output_path: Path,
-    timestamp_label: str,
+    timestamp_label: str, currency: str = "BTC",
 ) -> None:
     """
     IV*OI chart of a single expiry (``compute_expiry_iv_times_open_interest``)
@@ -153,12 +157,14 @@ def render_expiry_iv_times_open_interest_chart(
         subtitle_lines=[f"Expiration: {settlement_text}",
                         "Levels from this expiry's net GEX only (highest / lowest net GEX "
                         "strike; HVL = minimum of cumulative net GEX)"],
+        currency=currency,
     )
 
 
 def _render_iv_times_open_interest(
     by_strike: Dict[float, Dict[str, Optional[float]]], levels: Dict[str, Optional[float]],
     spot: float, output_path: Path, timestamp_label: str, subtitle_lines: List[str],
+    currency: str,
 ) -> None:
     """Draw and save one IV*OI chart."""
     low, high = _display_window(spot, levels.values())
@@ -188,8 +194,8 @@ def _render_iv_times_open_interest(
     axes.set_ylim(low - height, high + height)
     axes.set_xlim(left=0)
     axes.set_ylabel("Strike Price")
-    axes.set_xlabel("IV*OI  (IV decimal x OI in BTC)")
-    figure.text(0.05, 0.95, "IV * OI Chart for BTCUSD (DERIBIT) - replica",
+    axes.set_xlabel(f"IV*OI  (IV decimal x OI in {currency})")
+    figure.text(0.05, 0.95, f"IV * OI Chart for {currency}USD (DERIBIT) - replica",
                 color="white", fontsize=15, fontweight="bold")
     figure.text(0.05, 0.92, f"Timestamp: {timestamp_label}", color="white", fontsize=11)
     for line_number, line in enumerate(subtitle_lines):
@@ -261,7 +267,7 @@ def _draw_gex_panel(
 
 def render_gex_panels_chart(
     replication: Dict[str, Any], output_path: Path, timestamp_label: str,
-    expiring_candidate: str = "net_over_absolute_net_sum",
+    expiring_candidate: str = DEFAULT_GEX_EXPIRING_CANDIDATE, currency: str = "BTC",
 ) -> None:
     """
     2x2 "NET GEX Multi Expirations" figure: first, next, highest and
@@ -276,7 +282,7 @@ def render_gex_panels_chart(
     spot = replication["settings"]["index_price"]
     panels = replication["panels"][PANEL_RANKING_ABSOLUTE_NET]
     figure = Figure(figsize=(16, 15), facecolor=BACKGROUND_COLOR)
-    figure.text(0.04, 0.965, "NET GEX Multi Expirations for BTCUSD (DERIBIT) - replica",
+    figure.text(0.04, 0.965, f"NET GEX Multi Expirations for {currency}USD (DERIBIT) - replica",
                 color="white", fontsize=16, fontweight="bold")
     figure.text(0.04, 0.945,
                 f"Timestamp: {timestamp_label}   expiry universe: "
@@ -304,7 +310,8 @@ def render_gex_panels_chart(
 
 
 def render_net_dex_chart(
-    replication: Dict[str, Any], output_path: Path, timestamp_label: str
+    replication: Dict[str, Any], output_path: Path, timestamp_label: str,
+    currency: str = "BTC",
 ) -> None:
     """
     "Net DEX All Expirations" chart: horizontal net DEX bars (green
@@ -352,7 +359,7 @@ def render_net_dex_chart(
     axes.xaxis.set_major_formatter(FuncFormatter(format_dollars))
     axes.set_ylabel("Strike Price")
     axes.set_xlabel("DEX (delta at forward x OI x spot, $)")
-    figure.text(0.05, 0.95, "Net DEX All Expirations for BTCUSD (DERIBIT) - replica",
+    figure.text(0.05, 0.95, f"Net DEX All Expirations for {currency}USD (DERIBIT) - replica",
                 color="white", fontsize=15, fontweight="bold")
     figure.text(0.05, 0.92, f"Timestamp: {timestamp_label}", color="white", fontsize=11)
     figure.text(0.05, 0.895,
