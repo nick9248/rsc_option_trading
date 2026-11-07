@@ -15,8 +15,10 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
+from matplotlib.ticker import FuncFormatter
 
 from coding.core.analytics.menthorq_replication_calculator import (
+    GEX_PER_ONE_PERCENT_MOVE,
     IMPLIED_VOLATILITY_UNIT_DECIMAL,
     IV_OI_AGGREGATION_SUM,
     PANEL_FIRST_EXPIRATION,
@@ -26,6 +28,7 @@ from coding.core.analytics.menthorq_replication_calculator import (
     PANEL_RANKING_ABSOLUTE_NET,
     PANEL_SECOND_HIGHEST_GEX,
     parse_expiry_settlement,
+    select_drawn_levels,
 )
 
 logger = logging.getLogger(__name__)
@@ -40,30 +43,11 @@ PUT_SUPPORT_COLOR = "#22b322"
 HVL_COLOR = "#d4d42a"
 SPOT_COLOR = "#cccccc"
 PROFILE_COLOR = "#f0e030"
+DEX_PROFILE_COLOR = "#f0a030"
 
 DISPLAY_LOW_MULTIPLIER = 0.75
 DISPLAY_HIGH_MULTIPLIER = 1.35
-MILLION = 1_000_000.0
-
-# Which candidate each drawn level line uses, chosen by comparison with
-# MenthorQ's charts labelled 2026-11-06 and 2026-10-12 (tuning), replayed at
-# 23:59 UTC with open interest from 00:00 UTC (a consistent choice; the
-# open-interest instant is only constrained to roughly 21:00 UTC of the
-# previous day to about 00:20 UTC): the net-GEX extremes and the
-# cumulative-net-GEX minimum matched 24 of 24 per-expiry panel levels and
-# 3 of 3 all-expiry levels on each date, but only with a different expiry
-# set per date (monthly or quarterly + front month on 2026-11-06, all
-# expiries on 2026-10-12; no single set fits both). The call-only /
-# put-only gamma maxima (MenthorQ's published wording) matched 8 of 16
-# per-expiry levels. The 2026-08-24 "hold-out" (3 of 3 levels on two
-# charts) is weak evidence: snapshots.mark_iv is NULL there, so it needs the
-# IV rebuilt from mark_price, and the rules were written after its legend
-# had been seen. The JSON output carries every candidate.
-DEFAULT_LEVEL_CANDIDATES = {
-    "call_resistance": "net_gex_argmax_positive",
-    "put_support": "net_gex_argmin_negative",
-    "hvl": "cumulative_net_gex_argmin",
-}
+DOLLAR_UNITS = ((1e9, "B"), (1e6, "M"), (1e3, "K"))
 
 PANEL_TITLES = {
     PANEL_FIRST_EXPIRATION: "First Expiration",
@@ -119,12 +103,12 @@ def _draw_level_lines(axes, levels: Dict[str, Optional[float]], spot: float) -> 
     return handles
 
 
-def _chosen_levels(level_candidates: Dict[str, Dict[str, Optional[float]]]) -> Dict[str, Optional[float]]:
-    """Pick the drawn candidate for each level (see DEFAULT_LEVEL_CANDIDATES)."""
-    return {
-        level_name: level_candidates[level_name].get(candidate_name)
-        for level_name, candidate_name in DEFAULT_LEVEL_CANDIDATES.items()
-    }
+def format_dollars(value: float, _position: Optional[int] = None) -> str:
+    """Axis label in MenthorQ's style: 400M, -1.5B, 12K, 0 (dollars, no $ sign)."""
+    for size, suffix in DOLLAR_UNITS:
+        if abs(value) >= size:
+            return f"{value / size:g}{suffix}"
+    return f"{value:g}"
 
 
 def render_iv_times_open_interest_chart(
@@ -134,11 +118,49 @@ def render_iv_times_open_interest_chart(
     Horizontal IV*OI bars (IV as a decimal, summed over the expiry
     universe): calls filled green, puts as orange outlines, plus level lines.
     """
-    spot = replication["settings"]["index_price"]
-    by_strike = replication["iv_times_open_interest"]["by_candidate"][
-        f"{IMPLIED_VOLATILITY_UNIT_DECIMAL}_{IV_OI_AGGREGATION_SUM}"
-    ]
-    levels = _chosen_levels(replication["iv_times_open_interest"]["levels"])
+    settings = replication["settings"]
+    _render_iv_times_open_interest(
+        by_strike=replication["iv_times_open_interest"]["by_candidate"][
+            f"{IMPLIED_VOLATILITY_UNIT_DECIMAL}_{IV_OI_AGGREGATION_SUM}"
+        ],
+        levels=select_drawn_levels(replication["iv_times_open_interest"]["levels"]),
+        spot=settings["index_price"],
+        output_path=output_path,
+        timestamp_label=timestamp_label,
+        subtitle_lines=[f"Expiration: {settings['expiry_universe']} expiries "
+                        f"({len(settings['expirations'])})"],
+    )
+
+
+def render_expiry_iv_times_open_interest_chart(
+    expiry_iv_times_open_interest: Dict[str, Any], spot: float, output_path: Path,
+    timestamp_label: str,
+) -> None:
+    """
+    IV*OI chart of a single expiry (``compute_expiry_iv_times_open_interest``)
+    with that expiry's own levels; the subtitle states how they were derived.
+    """
+    expiration = expiry_iv_times_open_interest["expiration"]
+    settlement = parse_expiry_settlement(expiration)
+    settlement_text = (f"{settlement.date().isoformat()} 08:00 UTC ({expiration})"
+                       if settlement else expiration)
+    _render_iv_times_open_interest(
+        by_strike=expiry_iv_times_open_interest["by_strike"],
+        levels=expiry_iv_times_open_interest["levels"],
+        spot=spot,
+        output_path=output_path,
+        timestamp_label=timestamp_label,
+        subtitle_lines=[f"Expiration: {settlement_text}",
+                        "Levels from this expiry's net GEX only (highest / lowest net GEX "
+                        "strike; HVL = minimum of cumulative net GEX)"],
+    )
+
+
+def _render_iv_times_open_interest(
+    by_strike: Dict[float, Dict[str, Optional[float]]], levels: Dict[str, Optional[float]],
+    spot: float, output_path: Path, timestamp_label: str, subtitle_lines: List[str],
+) -> None:
+    """Draw and save one IV*OI chart."""
     low, high = _display_window(spot, levels.values())
     strikes = [strike for strike in by_strike if low <= strike <= high]
     height = _bar_height(strikes)
@@ -167,15 +189,13 @@ def render_iv_times_open_interest_chart(
     axes.set_xlim(left=0)
     axes.set_ylabel("Strike Price")
     axes.set_xlabel("IV*OI  (IV decimal x OI in BTC)")
-    settings = replication["settings"]
     figure.text(0.05, 0.95, "IV * OI Chart for BTCUSD (DERIBIT) - replica",
                 color="white", fontsize=15, fontweight="bold")
     figure.text(0.05, 0.92, f"Timestamp: {timestamp_label}", color="white", fontsize=11)
-    figure.text(0.05, 0.895,
-                f"Expiration: {settings['expiry_universe']} expiries "
-                f"({len(settings['expirations'])})",
-                color="white", fontsize=10)
-    figure.legend(handles=handles, loc="upper left", bbox_to_anchor=(0.05, 0.875),
+    for line_number, line in enumerate(subtitle_lines):
+        figure.text(0.05, 0.895 - 0.02 * line_number, line, color="white", fontsize=10)
+    legend_top = 0.875 - 0.02 * (len(subtitle_lines) - 1)
+    figure.legend(handles=handles, loc="upper left", bbox_to_anchor=(0.05, legend_top),
                   ncol=3, frameon=False, fontsize=8, labelcolor=FOREGROUND_COLOR)
     figure.savefig(output_path, facecolor=BACKGROUND_COLOR, dpi=120)
     logger.info("Wrote %s", output_path)
@@ -185,13 +205,19 @@ def _draw_gex_panel(
     axes, title: str, expiration: str, exposure: Dict[str, Any],
     expiring_percent: Optional[float], spot: float,
 ) -> None:
-    """One per-expiry Net GEX panel ($M per 1% move) with profile line and levels."""
+    """
+    One per-expiry Net GEX panel with profile line and levels.
+
+    Bars are drawn in MenthorQ's unit, gamma * OI(BTC) * spot in dollars
+    (fitted on the 2026-11-06 panels): the stored net GEX (USD per 1% move,
+    gamma * OI * spot^2 * 0.01) divided by spot * 0.01.
+    """
     _style_axes(axes)
-    levels = _chosen_levels(exposure["levels"])
+    levels = select_drawn_levels(exposure["levels"])
     low, high = _display_window(spot, levels.values())
     rows = [row for row in exposure["strikes"] if low <= row["strike"] <= high]
     strikes = [row["strike"] for row in rows]
-    net_values = [row["net_gex"] / MILLION for row in rows]
+    net_values = [row["net_gex"] / (spot * GEX_PER_ONE_PERCENT_MOVE) for row in rows]
     height = _bar_height(strikes)
     axes.barh(strikes, net_values, height=height,
               color=[POSITIVE_COLOR if value >= 0 else NEGATIVE_COLOR for value in net_values])
@@ -219,7 +245,8 @@ def _draw_gex_panel(
     axes.set_ylim(low - height, high + height)
     axes.axvline(0, color=FOREGROUND_COLOR, linewidth=0.6)
     axes.set_ylabel("Strike Price")
-    axes.set_xlabel("Net GEX ($M per 1% move)")
+    axes.set_xlabel("Net GEX (gamma x OI x spot, $)")
+    axes.xaxis.set_major_formatter(FuncFormatter(format_dollars))
     settlement = parse_expiry_settlement(expiration)
     expiring_text = (f"{expiring_percent:.2f}%" if expiring_percent is not None
                      else "not computed")
@@ -273,4 +300,67 @@ def render_gex_panels_chart(
             spot,
         )
     figure.savefig(output_path, facecolor=BACKGROUND_COLOR, dpi=110)
+    logger.info("Wrote %s", output_path)
+
+
+def render_net_dex_chart(
+    replication: Dict[str, Any], output_path: Path, timestamp_label: str
+) -> None:
+    """
+    "Net DEX All Expirations" chart: horizontal net DEX bars (green
+    positive, red negative), orange DEX profile and yellow GEX profile (both
+    already rescaled by the calculator), all-expiry level lines and spot.
+    The strike window is this module's 0.75x-1.35x spot rule; MenthorQ's
+    DEX window is not published.
+    """
+    settings = replication["settings"]
+    spot = settings["index_price"]
+    net_dex = replication["net_dex_all_expiries"]
+    levels = net_dex["levels"]
+    low, high = _display_window(spot, levels.values())
+    rows = [row for row in net_dex["strikes"] if low <= row["strike"] <= high]
+    bar_rows = [row for row in rows if row["net_dex"] is not None]
+    bar_strikes = [row["strike"] for row in bar_rows]
+    bar_values = [row["net_dex"] for row in bar_rows]
+    height = _bar_height(bar_strikes)
+
+    figure = Figure(figsize=(9, 10), facecolor=BACKGROUND_COLOR)
+    axes = figure.add_axes((0.13, 0.08, 0.82, 0.73))
+    _style_axes(axes)
+    axes.barh(bar_strikes, bar_values, height=height,
+              color=[POSITIVE_COLOR if value >= 0 else NEGATIVE_COLOR for value in bar_values])
+    handles = []
+    shown_values = list(bar_values)
+    for key, color, label in (("dex_profile", DEX_PROFILE_COLOR, "DEX Profile"),
+                              ("gex_profile", PROFILE_COLOR, "GEX Profile")):
+        profile_rows = [row for row in rows if row[key] is not None]
+        if not profile_rows:
+            label = f"{label}: not computed"
+        else:
+            axes.plot([row[key] for row in profile_rows], [row["strike"] for row in profile_rows],
+                      color=color, linewidth=1.3)
+            shown_values += [row[key] for row in profile_rows]
+        handles.append(Line2D([], [], color=color, label=label))
+    handles += _draw_level_lines(axes, levels, spot)
+    handles += [Patch(facecolor=POSITIVE_COLOR, label="Positive DEX"),
+                Patch(facecolor=NEGATIVE_COLOR, label="Negative DEX")]
+    largest = max((abs(value) for value in shown_values), default=0.0)
+    limit = largest * 1.1 if largest > 0 else 1.0
+    axes.set_xlim(-limit, limit)
+    axes.set_ylim(low - height, high + height)
+    axes.axvline(0, color=POSITIVE_COLOR, linewidth=0.6)
+    axes.xaxis.set_major_formatter(FuncFormatter(format_dollars))
+    axes.set_ylabel("Strike Price")
+    axes.set_xlabel("DEX (delta at forward x OI x spot, $)")
+    figure.text(0.05, 0.95, "Net DEX All Expirations for BTCUSD (DERIBIT) - replica",
+                color="white", fontsize=15, fontweight="bold")
+    figure.text(0.05, 0.92, f"Timestamp: {timestamp_label}", color="white", fontsize=11)
+    figure.text(0.05, 0.895,
+                f"Expiration: {settings['expiry_universe']} expiries "
+                f"({len(settings['expirations'])}); levels from all-expiry net GEX; "
+                f"gamma at {settings['gamma_underlying']}",
+                color="white", fontsize=9)
+    figure.legend(handles=handles, loc="upper left", bbox_to_anchor=(0.05, 0.875),
+                  ncol=3, frameon=False, fontsize=8, labelcolor=FOREGROUND_COLOR)
+    figure.savefig(output_path, facecolor=BACKGROUND_COLOR, dpi=120)
     logger.info("Wrote %s", output_path)

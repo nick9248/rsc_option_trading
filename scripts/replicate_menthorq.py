@@ -27,7 +27,10 @@ Panel choice on 2026-10-12 needs weeklies but no dailies ("all" picks the
 script does not offer.
 
 Reads only (newest snapshot and index price at or before as_of; no
-lookahead). Writes PNGs and a JSON of every number to --output-directory.
+lookahead). Writes PNGs and a JSON of every number to --output-directory:
+the all-expiry IV*OI, NET GEX panels and Net DEX charts for the chosen
+universe (plus an "_all_listed_expiries" variant when it is not "all"), and
+one IV*OI chart per listed, unsettled expiry with that expiry's own levels.
 """
 
 import argparse

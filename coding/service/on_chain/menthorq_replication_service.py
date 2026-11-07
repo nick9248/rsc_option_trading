@@ -10,14 +10,17 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from coding.core.analytics.menthorq_chart_renderer import (
-    DEFAULT_LEVEL_CANDIDATES,
+    render_expiry_iv_times_open_interest_chart,
     render_gex_panels_chart,
     render_iv_times_open_interest_chart,
+    render_net_dex_chart,
 )
 from coding.core.analytics.menthorq_replication_calculator import (
+    DEFAULT_LEVEL_CANDIDATES,
+    EXPIRY_UNIVERSE_ALL,
     EXPIRY_UNIVERSE_MONTHLY,
     EXPIRY_UNIVERSES,
     GAMMA_UNDERLYING_INDEX,
@@ -25,6 +28,7 @@ from coding.core.analytics.menthorq_replication_calculator import (
     IV_SOURCE_MISSING,
     IV_SOURCE_REBUILT_FROM_MARK_PRICE,
     compare_with_reference,
+    compute_expiry_iv_times_open_interest,
     fill_missing_implied_volatility,
     replicate_menthorq,
 )
@@ -163,7 +167,8 @@ class MenthorqReplicationService:
                                 if exposure["total_net_gex"] is None]
                 if not_computed:
                     logger.warning(
-                        "%s / gamma at %s: GEX not computed (no leg has a gamma) for %d of %d "
+                        "%s / gamma at %s: GEX not computed (no leg has both gamma and open "
+                        "interest) for %d of %d "
                         "expiries %s; their levels are None and they are skipped for panels",
                         universe, underlying, len(not_computed),
                         len(replication["gex_by_expiration"]), not_computed,
@@ -182,10 +187,25 @@ class MenthorqReplicationService:
         stem = f"{currency.lower()}_{as_of.strftime('%Y%m%dT%H%M')}Z"
         if open_interest_as_of is not None:
             stem += f"_open_interest_{open_interest_as_of.strftime('%Y%m%dT%H%M')}Z"
-        iv_path = output_directory / f"{stem}_iv_times_open_interest.png"
-        gex_path = output_directory / f"{stem}_net_gex_panels.png"
-        render_iv_times_open_interest_chart(primary, iv_path, timestamp_label)
-        render_gex_panels_chart(primary, gex_path, timestamp_label)
+        charts: Dict[str, str] = {}
+        chart_variants = {"": primary}
+        if expiry_universe != EXPIRY_UNIVERSE_ALL:
+            # Variant with every listed expiry (dailies and weeklies included).
+            chart_variants["_all_listed_expiries"] = configurations[
+                f"{EXPIRY_UNIVERSE_ALL}__gamma_at_{gamma_underlying}"]["replication"]
+        for suffix, replication in chart_variants.items():
+            for chart_name, render in (("iv_times_open_interest", render_iv_times_open_interest_chart),
+                                       ("net_gex_panels", render_gex_panels_chart),
+                                       ("net_dex", render_net_dex_chart)):
+                path = output_directory / f"{stem}_{chart_name}{suffix}.png"
+                render(replication, path, timestamp_label)
+                charts[f"{chart_name}{suffix}"] = path.name
+
+        per_expiry = self._render_per_expiry_iv_times_open_interest(
+            inputs["chain_rows"],
+            configurations[f"{EXPIRY_UNIVERSE_ALL}__gamma_at_{gamma_underlying}"]["replication"],
+            output_directory, stem, timestamp_label,
+        )
 
         output = {
             "as_of_utc": as_of.isoformat(),
@@ -201,10 +221,50 @@ class MenthorqReplicationService:
             },
             "primary_configuration": primary_name,
             "drawn_level_candidates": DEFAULT_LEVEL_CANDIDATES,
-            "charts": {"iv_times_open_interest": iv_path.name, "net_gex_panels": gex_path.name},
+            "charts": charts,
+            "per_expiry_iv_times_open_interest": per_expiry,
             "configurations": configurations,
         }
         json_path = output_directory / f"{stem}_replication.json"
         json_path.write_text(json.dumps(output, indent=1, default=str), encoding="utf-8")
         logger.info("Wrote %s", json_path)
         return output
+
+    @staticmethod
+    def _render_per_expiry_iv_times_open_interest(
+        chain_rows: List[Dict[str, Any]], all_expiries_replication: Dict[str, Any],
+        output_directory: Path, stem: str, timestamp_label: str,
+    ) -> List[Dict[str, Any]]:
+        """
+        One IV*OI chart per expiry listed in the snapshot and not settled at
+        as_of (the "all" universe), each with its own net-GEX levels.
+
+        Returns:
+            Per expiry: expiration, levels, level_rule, chart file name,
+            chain rows without open interest (None in the open-interest
+            snapshot) and the per-strike IV*OI.
+        """
+        spot = all_expiries_replication["settings"]["index_price"]
+        results = []
+        for expiration in all_expiries_replication["settings"]["expirations"]:
+            expiry_result = compute_expiry_iv_times_open_interest(
+                chain_rows, expiration, all_expiries_replication["gex_by_expiration"][expiration]
+            )
+            path = output_directory / f"{stem}_iv_times_open_interest_{expiration}.png"
+            render_expiry_iv_times_open_interest_chart(expiry_result, spot, path, timestamp_label)
+            rows_without_open_interest = sum(
+                1 for row in chain_rows
+                if row.get("expiration") == expiration and row.get("open_interest") is None
+            )
+            if rows_without_open_interest:
+                logger.warning("%s: %d rows have no open interest; left out of IV*OI and GEX",
+                               expiration, rows_without_open_interest)
+            results.append({
+                "expiration": expiration,
+                "levels": expiry_result["levels"],
+                "level_rule": expiry_result["level_rule"],
+                "chart": path.name,
+                "rows_without_open_interest": rows_without_open_interest,
+                "by_strike": expiry_result["by_strike"],
+            })
+        return results

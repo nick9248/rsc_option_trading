@@ -1,6 +1,7 @@
 """
-Point-in-time replication of MenthorQ's BTC (Deribit) "IV * OI" chart and
-"NET GEX Multi Expirations" panels from one stored option-chain snapshot.
+Point-in-time replication of MenthorQ's BTC (Deribit) "IV * OI" chart,
+"NET GEX Multi Expirations" panels and "Net DEX All Expirations" chart from
+one stored option-chain snapshot.
 
 MenthorQ publishes only the DEFINITIONS of its levels, not formulas, units
 or the expiry set:
@@ -84,6 +85,36 @@ PANEL_NAMES = (
 )
 PANEL_RANKING_ABSOLUTE_NET = "absolute_net_gex"
 PANEL_RANKING_GROSS = "gross_gex"
+
+# Which candidate each drawn level uses, chosen by comparison with
+# MenthorQ's charts labelled 2026-11-06 and 2026-10-12 (tuning), replayed at
+# 23:59 UTC with open interest from 00:00 UTC (a consistent choice; the
+# open-interest instant is only constrained to roughly 21:00 UTC of the
+# previous day to about 00:20 UTC): the net-GEX extremes and the
+# cumulative-net-GEX minimum matched 24 of 24 per-expiry panel levels and
+# 3 of 3 all-expiry levels on each date, but only with a different expiry
+# set per date (monthly or quarterly + front month on 2026-11-06, all
+# expiries on 2026-10-12; no single set fits both). The call-only /
+# put-only gamma maxima (MenthorQ's published wording) matched 8 of 16
+# per-expiry levels. The 2026-08-24 "hold-out" (3 of 3 levels on two
+# charts) is weak evidence: snapshots.mark_iv is NULL there, so it needs the
+# IV rebuilt from mark_price, and the rules were written after its legend
+# had been seen. The JSON output carries every candidate.
+DEFAULT_LEVEL_CANDIDATES = {
+    "call_resistance": "net_gex_argmax_positive",
+    "put_support": "net_gex_argmin_negative",
+    "hvl": "cumulative_net_gex_argmin",
+}
+LEVEL_RULE_DESCRIPTION = (
+    "Call Resistance = strike with the highest positive net GEX; Put Support = strike "
+    "with the lowest negative net GEX; HVL = strike where cumulative net GEX (summed "
+    "from the lowest strike up) is lowest"
+)
+DELTA_UNDERLYING_FORWARD = "forward"
+PROFILE_RESCALE_RULE = (
+    "cumulative sum over ascending strikes of the whole chain, multiplied so that its "
+    "largest |value| over the whole chain equals the largest |net DEX bar| over the whole chain"
+)
 
 IV_SOURCE_MARK_IV = "mark_iv"
 IV_SOURCE_REBUILT_FROM_MARK_PRICE = "rebuilt_from_mark_price"
@@ -573,15 +604,19 @@ def compute_exposure(
         }
         All GEX values are USD per 1% move.
 
-        When NO instrument has a gamma (e.g. a snapshot without mark_iv),
-        every GEX value, total and level is None ("not computed"):
-        ``GexDexCalculator`` adds a missing gamma as 0, so the pickers
-        would otherwise return the lowest strike as a level.
+        When NO instrument has both a gamma and an open interest (e.g. a
+        snapshot without mark_iv, or an expiry listed after the
+        open-interest snapshot), every GEX value, total and level is None
+        ("not computed"): ``GexDexCalculator`` adds a missing gamma or open
+        interest as 0, so the pickers would otherwise return the lowest
+        strike as a level.
     """
     gex_result = GexDexCalculator(
         list(instruments), index_price, currency="BTC", as_of=as_of
     ).calculate()
-    if gex_result.instruments_missing_gamma == len(instruments):
+    has_exposure = any(item.get("gamma") is not None and item.get("open_interest") is not None
+                       for item in instruments)
+    if not has_exposure:
         return {
             "strikes": [
                 {
@@ -664,6 +699,132 @@ def compute_exposure(
         },
         "spot_sweep_profile": sweep["profile"],
     }
+
+
+def select_drawn_levels(
+    level_candidates: Mapping[str, Mapping[str, Optional[float]]]
+) -> Dict[str, Optional[float]]:
+    """
+    The level drawn for each of call_resistance / put_support / hvl, picked
+    from a ``compute_exposure`` "levels" dict by ``DEFAULT_LEVEL_CANDIDATES``
+    (the net-GEX rules, ``LEVEL_RULE_DESCRIPTION``). None stays None.
+    """
+    return {
+        level_name: level_candidates[level_name].get(candidate_name)
+        for level_name, candidate_name in DEFAULT_LEVEL_CANDIDATES.items()
+    }
+
+
+def compute_expiry_iv_times_open_interest(
+    chain_rows: Sequence[Dict[str, Any]], expiration: str, exposure: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    IV*OI of one expiry with that expiry's own levels.
+
+    Args:
+        chain_rows: Snapshot rows (mark_iv in percent, open_interest in BTC).
+        expiration: The expiry label, e.g. "27NOV26".
+        exposure: ``compute_exposure`` of this expiry's instruments only; its
+            levels are selected by the net-GEX rules (``select_drawn_levels``).
+
+    Returns:
+        {"expiration", "by_strike" (IV decimal * OI, as
+        ``compute_iv_times_open_interest``), "levels", "level_rule"}. Levels
+        are None when this expiry's GEX was not computed.
+    """
+    return {
+        "expiration": expiration,
+        "by_strike": compute_iv_times_open_interest(chain_rows, [expiration]),
+        "levels": select_drawn_levels(exposure["levels"]),
+        "level_rule": f"from this expiry's own net GEX only: {LEVEL_RULE_DESCRIPTION}",
+    }
+
+
+def compute_net_delta_exposure(
+    instruments: Sequence[Dict[str, Any]], spot: float
+) -> Dict[str, Any]:
+    """
+    Net DEX per strike: spot * sum over legs of delta * OI (BTC), with the
+    put delta negative (Black-Scholes sign). Checked against MenthorQ's
+    "Net DEX All Expirations" charts of 2026-10-12 and 2026-08-24 with the
+    delta evaluated at each expiry's forward: same signs and magnitudes
+    (e.g. 80000: 381M ours vs about 370M read off the 2026-10-12 chart).
+
+    A leg without delta or open interest is left out and counted in
+    ``instruments_missing_delta``; a strike where no leg contributes gets
+    None, never 0.
+
+    Returns:
+        {"net_dex_by_strike": {strike: USD or None}, "total_net_dex": USD or
+        None (None when no leg contributes), "instruments_missing_delta": n}.
+    """
+    net_by_strike: Dict[float, Optional[float]] = {}
+    missing = 0
+    for instrument in instruments:
+        strike = instrument.get("strike")
+        if strike is None:
+            missing += 1
+            continue
+        net_by_strike.setdefault(strike, None)
+        delta = instrument.get("delta")
+        open_interest = instrument.get("open_interest")
+        if delta is None or open_interest is None:
+            missing += 1
+            continue
+        net_by_strike[strike] = (net_by_strike[strike] or 0.0) + delta * open_interest * spot
+    present = [value for value in net_by_strike.values() if value is not None]
+    return {
+        "net_dex_by_strike": dict(sorted(net_by_strike.items())),
+        "total_net_dex": sum(present) if present else None,
+        "instruments_missing_delta": missing,
+    }
+
+
+def profile_rescale_factor(
+    profile_values: Iterable[Optional[float]], bar_values: Iterable[Optional[float]]
+) -> Optional[float]:
+    """
+    Factor that makes the largest |profile value| equal the largest |bar|
+    (None values ignored). None when either side has no non-zero value.
+    """
+    largest_profile = max((abs(value) for value in profile_values if value is not None), default=0.0)
+    largest_bar = max((abs(value) for value in bar_values if value is not None), default=0.0)
+    if largest_profile == 0 or largest_bar == 0:
+        return None
+    return largest_bar / largest_profile
+
+
+def build_net_dex_chart_data(
+    net_dex_by_strike: Mapping[float, Optional[float]],
+    net_gex_by_strike: Mapping[float, Optional[float]],
+) -> List[Dict[str, Optional[float]]]:
+    """
+    Rows of the "Net DEX All Expirations" chart over the union of strikes:
+    net DEX bar, DEX profile and GEX profile (both ``PROFILE_RESCALE_RULE``:
+    cumulative over the whole chain, rescaled to the largest |net DEX bar|).
+    A strike without a value contributes nothing to a cumulative sum; a
+    profile is None everywhere when it cannot be rescaled (no non-zero value).
+    """
+    strikes = sorted(set(net_dex_by_strike) | set(net_gex_by_strike))
+    cumulative_dex: Dict[float, float] = cumulative_by_strike(
+        {strike: net_dex_by_strike.get(strike) or 0.0 for strike in strikes})
+    cumulative_gex: Dict[float, float] = cumulative_by_strike(
+        {strike: net_gex_by_strike.get(strike) or 0.0 for strike in strikes})
+    bars = list(net_dex_by_strike.values())
+    has_dex = any(value is not None for value in net_dex_by_strike.values())
+    has_gex = any(value is not None for value in net_gex_by_strike.values())
+    dex_factor = profile_rescale_factor(cumulative_dex.values(), bars) if has_dex else None
+    gex_factor = profile_rescale_factor(cumulative_gex.values(), bars) if has_gex else None
+    return [
+        {
+            "strike": strike,
+            "net_dex": net_dex_by_strike.get(strike),
+            "cumulative_net_dex": cumulative_dex[strike] if has_dex else None,
+            "dex_profile": cumulative_dex[strike] * dex_factor if dex_factor is not None else None,
+            "gex_profile": cumulative_gex[strike] * gex_factor if gex_factor is not None else None,
+        }
+        for strike in strikes
+    ]
 
 
 def compute_gex_expiring_shares(
@@ -773,8 +934,10 @@ def replicate_menthorq(
 
     Returns:
         JSON-serialisable dict with "settings", "iv_times_open_interest"
-        (per-strike candidates and chart levels) and "gex_by_expiration",
-        "gex_expiring_percent", "panels" for the GEX panels chart.
+        (per-strike candidates and chart levels), "net_dex_all_expiries"
+        (net DEX bars and profiles, see ``compute_net_delta_exposure``) and
+        "gex_by_expiration", "gex_expiring_percent", "panels" for the GEX
+        panels chart.
     """
     if as_of.tzinfo is None:
         raise ValueError("as_of must be timezone-aware UTC")
@@ -819,6 +982,15 @@ def replicate_menthorq(
         expiration: {"net": exposure["total_net_gex"], "gross": exposure["total_gross_gex"]}
         for expiration, exposure in gex_by_expiration.items()
     }
+
+    forward_priced_instruments = build_priced_instruments(
+        chain_rows, expirations, index_price, as_of, DELTA_UNDERLYING_FORWARD
+    )
+    net_delta = compute_net_delta_exposure(forward_priced_instruments, index_price)
+    net_dex_chart_rows = build_net_dex_chart_data(
+        net_delta["net_dex_by_strike"],
+        {row["strike"]: row["net_gex"] for row in all_expiries_exposure["strikes"]},
+    )
     return {
         "settings": {
             "as_of_utc": as_of.isoformat(),
@@ -827,6 +999,16 @@ def replicate_menthorq(
             "gamma_underlying": gamma_underlying,
             "expirations": expirations,
             "gex_units": "USD per 1% move: gamma * OI(BTC) * S^2 * 0.01",
+            "dex_units": "USD: delta at the expiry's forward * OI(BTC) * index price",
+        },
+        "net_dex_all_expiries": {
+            "delta_underlying": DELTA_UNDERLYING_FORWARD,
+            "total_net_dex": net_delta["total_net_dex"],
+            "instruments_missing_delta": net_delta["instruments_missing_delta"],
+            "levels": select_drawn_levels(all_expiries_levels),
+            "level_rule": f"all-expiry net GEX: {LEVEL_RULE_DESCRIPTION}",
+            "profile_rule": PROFILE_RESCALE_RULE,
+            "strikes": net_dex_chart_rows,
         },
         "iv_times_open_interest": {
             "by_candidate": iv_times_open_interest,

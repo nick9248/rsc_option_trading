@@ -22,12 +22,17 @@ from coding.core.analytics.menthorq_replication_calculator import (
     PANEL_RANKING_ABSOLUTE_NET,
     PANEL_RANKING_GROSS,
     black76_price,
+    build_net_dex_chart_data,
     build_priced_instruments,
     compare_with_reference,
+    compute_expiry_iv_times_open_interest,
     compute_exposure,
     compute_gex_expiring_shares,
     compute_iv_times_open_interest,
     compute_leg_greeks,
+    compute_net_delta_exposure,
+    profile_rescale_factor,
+    select_drawn_levels,
     cumulative_by_strike,
     fill_missing_implied_volatility,
     fit_scale_factor,
@@ -318,12 +323,123 @@ class TestExposure:
             assert all(value is None for value in candidates.values())
         assert exposure["spot_sweep_profile"] == []
 
+    def test_no_leg_with_open_interest_gives_none_not_the_lowest_strike(self):
+        # 10NOV26 on 2026-11-06: listed after the 00:00 UTC open-interest
+        # snapshot, so every row has gamma but open interest None. Before the
+        # fix net GEX was 0 everywhere and HVL became the lowest strike (90).
+        rows = [_row("27NOV26", 90, "P", None, 50.0), _row("27NOV26", 100, "C", None, 50.0)]
+        instruments = build_priced_instruments(
+            rows, ["27NOV26"], 100.0, ONE_YEAR_BEFORE, GAMMA_UNDERLYING_INDEX
+        )
+        exposure = compute_exposure(instruments, 100.0, ONE_YEAR_BEFORE)
+        assert exposure["total_net_gex"] is None
+        for candidates in exposure["levels"].values():
+            assert all(value is None for value in candidates.values())
+
     def test_missing_forward_gives_none_gamma(self):
         rows = [_row("27NOV26", 100, "C", 10.0, 50.0, underlying_price=None)]
         instruments = build_priced_instruments(
             rows, ["27NOV26"], 100.0, ONE_YEAR_BEFORE, GAMMA_UNDERLYING_FORWARD
         )
         assert instruments[0]["gamma"] is None
+
+
+class TestPerExpiryLevels:
+    def test_select_drawn_levels_uses_net_gex_rules(self):
+        candidates = {
+            "call_resistance": {"call_gex_argmax": 1.0, "net_gex_argmax_positive": 2.0},
+            "put_support": {"put_gex_argmax": 3.0, "net_gex_argmin_negative": None},
+            "hvl": {"cumulative_net_gex_argmin": 5.0, "spot_sweep_gex_argmin": 6.0},
+        }
+        assert select_drawn_levels(candidates) == {
+            "call_resistance": 2.0, "put_support": None, "hvl": 5.0}
+
+    def test_each_expiry_gets_its_own_levels_and_iv_times_open_interest(self):
+        # 27NOV26: call K=100 OI 10 -> net GEX +7.73 at 100 (only strike):
+        #   Call Resistance 100, no negative strike -> Put Support None,
+        #   cumulative = [+7.73] -> HVL 100. IV*OI: call 0.5 * 10 = 5.
+        # 25DEC26: put K=100 OI 4 -> net GEX < 0 at 100:
+        #   Call Resistance None, Put Support 100, HVL 100. IV*OI: put 0.5 * 4 = 2.
+        # Together the strike is net positive (Put Support None), so the
+        # per-expiry levels differ from the all-expiry ones.
+        rows = [_row("27NOV26", 100, "C", 10.0, 50.0), _row("25DEC26", 100, "P", 4.0, 50.0)]
+        replication = replicate_menthorq(rows, 100.0, ONE_YEAR_BEFORE, EXPIRY_UNIVERSE_ALL)
+        november = compute_expiry_iv_times_open_interest(
+            rows, "27NOV26", replication["gex_by_expiration"]["27NOV26"])
+        december = compute_expiry_iv_times_open_interest(
+            rows, "25DEC26", replication["gex_by_expiration"]["25DEC26"])
+        assert november["levels"] == {"call_resistance": 100.0, "put_support": None, "hvl": 100.0}
+        assert december["levels"] == {"call_resistance": None, "put_support": 100.0, "hvl": 100.0}
+        assert november["by_strike"] == {100.0: {"call": pytest.approx(5.0), "put": None}}
+        assert december["by_strike"] == {100.0: {"call": None, "put": pytest.approx(2.0)}}
+        assert "own net GEX" in november["level_rule"]
+        assert replication["net_dex_all_expiries"]["levels"]["put_support"] is None
+
+    def test_expiry_without_gamma_has_no_levels(self):
+        rows = [_row("27NOV26", 100, "C", 10.0, None)]
+        replication = replicate_menthorq(rows, 100.0, ONE_YEAR_BEFORE, EXPIRY_UNIVERSE_ALL)
+        result = compute_expiry_iv_times_open_interest(
+            rows, "27NOV26", replication["gex_by_expiration"]["27NOV26"])
+        assert result["levels"] == {"call_resistance": None, "put_support": None, "hvl": None}
+        assert result["by_strike"] == {}
+
+
+class TestNetDex:
+    def test_net_dex_matches_hand_calculation(self):
+        # Delta at the forward 100 (K = 100, sigma 0.5, tau 1): call
+        # N(0.25) = 0.598706, put 0.598706 - 1 = -0.401294. Index 80.
+        #   net DEX(100) = (0.598706 * 10 - 0.401294 * 4) * 80
+        #                = (5.98706 - 1.605176) * 80 = 350.55072
+        # K = 110 has no IV: strike None (not 0), one leg missing.
+        rows = [_row("27NOV26", 100, "C", 10.0, 50.0), _row("27NOV26", 100, "P", 4.0, 50.0),
+                _row("27NOV26", 110, "C", 7.0, None)]
+        instruments = build_priced_instruments(
+            rows, ["27NOV26"], 80.0, ONE_YEAR_BEFORE, GAMMA_UNDERLYING_FORWARD)
+        result = compute_net_delta_exposure(instruments, 80.0)
+        assert result["net_dex_by_strike"][100.0] == pytest.approx(350.55072, rel=1e-5)
+        assert result["net_dex_by_strike"][110.0] is None
+        assert result["total_net_dex"] == pytest.approx(350.55072, rel=1e-5)
+        assert result["instruments_missing_delta"] == 1
+
+    def test_no_delta_anywhere_gives_none_total(self):
+        rows = [_row("27NOV26", 100, "C", 10.0, None)]
+        instruments = build_priced_instruments(
+            rows, ["27NOV26"], 100.0, ONE_YEAR_BEFORE, GAMMA_UNDERLYING_FORWARD)
+        result = compute_net_delta_exposure(instruments, 100.0)
+        assert result == {"net_dex_by_strike": {100.0: None}, "total_net_dex": None,
+                          "instruments_missing_delta": 1}
+
+    def test_replication_uses_delta_at_forward_even_with_gamma_at_index(self):
+        # forward 100, index 80: DEX = 0.598706 * 10 * 80 = 478.9648
+        # (delta at the index 80 would be N(ln(0.8)/0.5 + 0.25) = N(-0.196) = 0.422).
+        rows = [_row("27NOV26", 100, "C", 10.0, 50.0, underlying_price=100.0)]
+        replication = replicate_menthorq(rows, 80.0, ONE_YEAR_BEFORE,
+                                         gamma_underlying=GAMMA_UNDERLYING_INDEX)
+        (row,) = replication["net_dex_all_expiries"]["strikes"]
+        assert row["net_dex"] == pytest.approx(478.9648, rel=1e-5)
+        assert replication["net_dex_all_expiries"]["delta_underlying"] == "forward"
+
+    def test_profile_rescale_factor(self):
+        # largest |profile| 4, largest |bar| 6 -> 1.5
+        assert profile_rescale_factor([1.0, -4.0, 2.0], [3.0, -6.0, None]) == pytest.approx(1.5)
+        assert profile_rescale_factor([0.0], [1.0]) is None
+        assert profile_rescale_factor([1.0], [None]) is None
+
+    def test_chart_rows_rescale_both_profiles_to_the_largest_dex_bar(self):
+        # DEX bars 90: -2, 100: 6, 110: None. Largest |bar| = 6.
+        #   cumulative DEX = -2, 4, 4 -> factor 6/4 = 1.5 -> -3, 6, 6
+        #   cumulative GEX (90: -3, 100: 1) = -3, -2, -2 -> factor 6/3 = 2 -> -6, -4, -4
+        rows = build_net_dex_chart_data({90.0: -2.0, 100.0: 6.0, 110.0: None},
+                                        {90.0: -3.0, 100.0: 1.0})
+        assert [row["strike"] for row in rows] == [90.0, 100.0, 110.0]
+        assert [row["net_dex"] for row in rows] == [-2.0, 6.0, None]
+        assert [row["dex_profile"] for row in rows] == pytest.approx([-3.0, 6.0, 6.0])
+        assert [row["gex_profile"] for row in rows] == pytest.approx([-6.0, -4.0, -4.0])
+
+    def test_chart_rows_without_gex_have_no_gex_profile(self):
+        rows = build_net_dex_chart_data({100.0: 5.0}, {100.0: None})
+        assert rows[0]["gex_profile"] is None
+        assert rows[0]["dex_profile"] == pytest.approx(5.0)
 
 
 class TestGexExpiringShares:
