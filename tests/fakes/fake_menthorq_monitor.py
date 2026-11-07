@@ -9,8 +9,9 @@ their method signatures match production.
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from coding.core.analytics.menthorq_monitor.alert_mute import MenthorqMonitorState
 from coding.core.analytics.menthorq_monitor.level_record import (
     MODE_LIVE,
     MenthorqLevelRecord,
@@ -58,6 +59,8 @@ class FakeMonitorRepository(DatabaseRepository):
     def __init__(self, records: Optional[List[MenthorqLevelRecord]] = None):
         self.records: List[MenthorqLevelRecord] = list(records or [])
         self.deliveries: List[Dict[str, Any]] = []
+        self.states: Dict[str, MenthorqMonitorState] = {}
+        self.fail_state = False   # True: the state methods raise (table missing)
 
     def save_menthorq_level_snapshot(self, record: MenthorqLevelRecord) -> Optional[int]:
         if self.has_menthorq_level_snapshot(record.currency, record.mode, record.expiry_universe,
@@ -95,6 +98,45 @@ class FakeMonitorRepository(DatabaseRepository):
         times = [d["delivered_at"] for d in self.deliveries
                  if d["currency"] == currency and d["alert_key"] == alert_key]
         return max(times) if times else None
+
+    def get_latest_menthorq_level_run(self, currency: str, mode: str, expiry_universe: str,
+                                      gamma_underlying: str) -> Optional[MenthorqLevelRecord]:
+        candidates = [r for r in self.records
+                      if r.currency == currency and r.mode == mode
+                      and r.expiry_universe == expiry_universe and r.gamma_underlying == gamma_underlying]
+        return max(candidates, key=lambda r: r.as_of_utc) if candidates else None
+
+    def get_last_menthorq_alert_delivery_of_keys(
+        self, currency: str, alert_keys: List[str],
+    ) -> Optional[Tuple[str, datetime]]:
+        matching = [d for d in self.deliveries
+                    if d["currency"] == currency and d["alert_key"] in alert_keys]
+        if not matching:
+            return None
+        newest = max(matching, key=lambda d: d["delivered_at"])
+        return newest["alert_key"], newest["delivered_at"]
+
+    def _state(self, currency: str) -> MenthorqMonitorState:
+        if self.fail_state:
+            raise RuntimeError('relation "menthorq_monitor_state" does not exist')
+        return self.states.setdefault(currency, MenthorqMonitorState(currency=currency))
+
+    def get_menthorq_monitor_state(self, currency: str) -> Optional[MenthorqMonitorState]:
+        if self.fail_state:
+            raise RuntimeError('relation "menthorq_monitor_state" does not exist')
+        return self.states.get(currency)
+
+    def save_menthorq_alert_mute(self, currency: str, alerts_muted_until: Optional[datetime],
+                                 updated_at: datetime) -> None:
+        state = self._state(currency)
+        state.alerts_muted_until = alerts_muted_until
+        state.mute_updated_at = updated_at
+
+    def save_menthorq_suppressed_alerts(self, currency: str, alert_keys: List[str],
+                                        suppressed_at: datetime) -> None:
+        state = self._state(currency)
+        state.last_suppressed_at = suppressed_at
+        state.last_suppressed_alert_keys = list(alert_keys)
 
 
 class FakeInputLoader(MenthorqInputLoader):
@@ -135,7 +177,8 @@ class FakeInputLoader(MenthorqInputLoader):
 class FakeTelegram(TelegramAlertService):
     """
     Records sent messages; ``accept`` decides whether a send succeeds.
-    ``updates`` are served by get_updates (None when ``fail_updates``).
+    ``updates`` are served by get_updates (None when ``fail_updates``);
+    set_my_commands calls are kept in ``registered_commands``.
     """
 
     def __init__(self, accept: bool = True, chat_id: str = "111",
@@ -147,10 +190,16 @@ class FakeTelegram(TelegramAlertService):
         self.sent: List[Dict[str, Any]] = []
         self.updates = list(updates or [])
         self.get_updates_calls: List[Dict[str, Any]] = []
+        self.registered_commands: List[List[Tuple[str, str]]] = []
+        self.accept_commands = True
 
     def send(self, message: str, parse_mode: Optional[str] = None) -> bool:
         self.sent.append({"message": message, "parse_mode": parse_mode})
         return self.accept
+
+    def set_my_commands(self, commands: Sequence[Tuple[str, str]]) -> bool:
+        self.registered_commands.append(list(commands))
+        return self.accept_commands
 
     def get_updates(self, offset: Optional[int], timeout_seconds: int) -> Optional[List[Dict[str, Any]]]:
         self.get_updates_calls.append({"offset": offset, "timeout_seconds": timeout_seconds})

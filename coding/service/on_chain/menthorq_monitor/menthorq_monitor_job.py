@@ -7,7 +7,8 @@ Registered on the collector's APScheduler (all times UTC):
     urgent alerts, catch up a missed weekly brief.
   - ``menthorq_weekly_brief``    MENTHORQ_WEEKLY_BRIEF_DAY at
     MENTHORQ_WEEKLY_BRIEF_TIME_UTC.
-  - ``menthorq_command_poll``    every MENTHORQ_COMMAND_POLL_SECONDS: /brief.
+  - ``menthorq_command_poll``    every MENTHORQ_COMMAND_POLL_SECONDS: the bot commands
+    (/brief /levels /changes /status /mute /help, see bot_command_service).
 
 Every step is isolated: a failure is logged and never stops the collector or
 the next step. Numbers only; nothing on this path imports matplotlib.
@@ -21,7 +22,9 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from coding.core.database.repository import DatabaseRepository
+from coding.service.on_chain.menthorq_monitor.bot_command_service import MenthorqBotCommandService
 from coding.service.on_chain.menthorq_monitor.brief_delivery_service import MenthorqBriefDeliveryService
+from coding.service.on_chain.menthorq_monitor.command_formatter import BOT_COMMANDS
 from coding.service.on_chain.menthorq_monitor.menthorq_monitor_service import MenthorqMonitorService
 from coding.service.on_chain.menthorq_monitor.monitor_settings import MenthorqMonitorSettings
 from coding.service.on_chain.menthorq_monitor.telegram_command_listener import TelegramCommandListener
@@ -33,7 +36,6 @@ HOURLY_JOB_ID = "menthorq_monitor_hourly"
 WEEKLY_BRIEF_JOB_ID = "menthorq_weekly_brief"
 COMMAND_POLL_JOB_ID = "menthorq_command_poll"
 MISFIRE_GRACE_SECONDS = 600
-BRIEF_COMMAND = "/brief"
 
 
 class MenthorqMonitorJob:
@@ -52,7 +54,7 @@ class MenthorqMonitorJob:
             settings: Monitor settings.
             monitor_service: Computes and stores the records.
             delivery_service: Sends alerts and briefs.
-            command_listener: /brief polling; None when commands are disabled.
+            command_listener: Bot command polling; None when commands are disabled.
             clock: Wall clock (UTC-aware).
         """
         self.settings = settings
@@ -131,10 +133,10 @@ class MenthorqMonitorJob:
             scheduler.add_job(
                 func=self.poll_commands,
                 trigger=IntervalTrigger(seconds=settings.command_poll_seconds),
-                id=COMMAND_POLL_JOB_ID, name="MenthorQ /brief command polling",
+                id=COMMAND_POLL_JOB_ID, name="MenthorQ bot command polling",
                 replace_existing=True, max_instances=1, coalesce=True,
             )
-            logger.info("[OK] MenthorQ /brief command polling every %d s",
+            logger.info("[OK] MenthorQ bot command polling every %d s",
                         settings.command_poll_seconds)
 
 
@@ -158,8 +160,10 @@ def build_menthorq_monitor_job(
     delivery_service = MenthorqBriefDeliveryService(monitor_service, telegram)
     listener = None
     if settings.commands_enabled:
+        command_service = MenthorqBotCommandService(monitor_service, delivery_service, telegram)
         listener = TelegramCommandListener(
-            telegram, telegram.chat_id,
-            {BRIEF_COMMAND: delivery_service.send_on_demand_brief},
+            telegram, telegram.chat_id, command_service.handlers(),
+            unknown_command_handler=command_service.reply_to_unknown_command,
+            command_menu=BOT_COMMANDS,
         )
     return MenthorqMonitorJob(settings, monitor_service, delivery_service, listener)

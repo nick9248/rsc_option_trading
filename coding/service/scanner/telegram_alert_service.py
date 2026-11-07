@@ -12,7 +12,7 @@ of its own.
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import requests
 from dotenv import load_dotenv
@@ -86,6 +86,35 @@ class TelegramAlertService:
             return True
         except Exception as exc:
             logger.warning("TelegramAlertService: send failed: %s", exc)
+            return False
+
+    def set_my_commands(self, commands: Sequence[Tuple[str, str]]) -> bool:
+        """
+        Register the bot's command menu (Bot API setMyCommands), shown by
+        Telegram when the user types "/".
+
+        Args:
+            commands: (command without the slash, description) pairs.
+
+        Returns:
+            True when Telegram accepted the list, False on any failure.
+            Never raises.
+        """
+        if not self._token:
+            logger.warning("TelegramAlertService: missing bot token, skipping setMyCommands")
+            return False
+        payload = {"commands": [{"command": command, "description": description}
+                                for command, description in commands]}
+        try:
+            response = requests.post(f"{self._base_url}/setMyCommands", json=payload, timeout=10)
+            if not response.ok:
+                logger.warning("TelegramAlertService: setMyCommands returned %s: %s",
+                               response.status_code, response.text)
+                return False
+            return True
+        except Exception as exc:
+            logger.warning("TelegramAlertService: setMyCommands failed: %s",
+                           str(exc).replace(self._token, "<bot token>"))
             return False
 
     def get_updates(self, offset: Optional[int], timeout_seconds: int) -> Optional[List[Dict[str, Any]]]:

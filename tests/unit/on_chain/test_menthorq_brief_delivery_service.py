@@ -4,8 +4,10 @@ fake Telegram (nothing is sent): de-duplication, failed sends, weekly
 schedule and catch-up, on-demand brief.
 """
 
+from dataclasses import replace
 from datetime import datetime, time, timedelta, timezone
 
+from coding.core.analytics.menthorq_monitor.alert_rules import AlertThresholds
 from coding.service.on_chain.menthorq_monitor.brief_delivery_service import (
     DELIVERY_KEY_ON_DEMAND_BRIEF,
     DELIVERY_KEY_WEEKLY_BRIEF,
@@ -36,9 +38,9 @@ def _delivery(records, accept=True, settings=None):
 
 
 def _crossing_history():
-    """Previous run above HVL, latest below; 24 h ago HVL 4% of spot lower."""
+    """Previous run above HVL, latest below; 24 h ago HVL 6,000 USD (6.38% of spot) lower."""
     previous = make_record(as_of=FRIDAY_0910 - timedelta(hours=1), spot=96000.0, hvl=95000.0)
-    day_ago = make_record(as_of=FRIDAY_0910 - timedelta(hours=24), spot=96000.0, hvl=91000.0)
+    day_ago = make_record(as_of=FRIDAY_0910 - timedelta(hours=24), spot=96000.0, hvl=89000.0)
     latest = make_record(as_of=FRIDAY_0910, spot=94000.0, hvl=95000.0)
     return previous, day_ago, latest
 
@@ -47,9 +49,9 @@ def test_urgent_alerts_are_sent_once_then_held_by_the_cooldown():
     previous, day_ago, latest = _crossing_history()
     service, repository, telegram, clock = _delivery([previous, day_ago, latest])
 
-    # HVL 91,000 -> 95,000 = 4,000 / 94,000 = 4.26% of spot > 3%; spot crossed below HVL
+    # HVL 89,000 -> 95,000 = 6,000 / 94,000 = 6.38% of spot > 5%; the crossing rule is off by default
     delivered = service.send_urgent_alerts(latest, FRIDAY_0910)
-    assert sorted(delivered) == ["hvl_move_24h", "spot_crossed_below_hvl"]
+    assert delivered == ["hvl_move_24h"]
     assert len(telegram.sent) == 1 and telegram.sent[0]["parse_mode"] == "HTML"
     assert {d["alert_key"] for d in repository.deliveries} == set(delivered)
 
@@ -117,3 +119,47 @@ def test_on_demand_brief_without_records_says_so():
     assert service.send_on_demand_brief(FRIDAY_0910) is True
     assert "No live record is stored yet." in telegram.sent[0]["message"]
     assert repository.deliveries[0]["alert_key"] == DELIVERY_KEY_ON_DEMAND_BRIEF
+
+
+def test_thresholds_come_from_the_settings_when_not_given():
+    previous, day_ago, latest = _crossing_history()
+    settings = replace(MenthorqMonitorSettings(),
+                       alert_thresholds=AlertThresholds(hvl_move_percent_of_spot=None,
+                                                        spot_crosses_hvl=True))
+    service, _, _, _ = _delivery([previous, day_ago, latest], settings=settings)
+    assert service.thresholds == settings.alert_thresholds
+    assert service.send_urgent_alerts(latest, FRIDAY_0910) == ["spot_crossed_below_hvl"]
+
+
+def test_muted_alerts_are_not_sent_but_recorded_and_resume_after_the_mute():
+    previous, day_ago, latest = _crossing_history()
+    service, repository, telegram, clock = _delivery([previous, day_ago, latest])
+    repository.save_menthorq_alert_mute("BTC", FRIDAY_0910 + timedelta(hours=1), FRIDAY_0910)
+
+    assert service.send_urgent_alerts(latest, FRIDAY_0910) == []
+    assert telegram.sent == [] and repository.deliveries == []          # nothing sent, no cooldown
+    state = repository.get_menthorq_monitor_state("BTC")
+    assert state is not None
+    assert state.last_suppressed_alert_keys == ["hvl_move_24h"]
+    assert state.last_suppressed_at == FRIDAY_0910
+
+    # At the mute end exactly (now == muted_until) alerts are sent again
+    clock["now"] = FRIDAY_0910 + timedelta(hours=1)
+    assert service.send_urgent_alerts(latest, FRIDAY_0910 + timedelta(hours=1)) == ["hvl_move_24h"]
+    assert len(telegram.sent) == 1
+
+
+def test_unreadable_mute_state_sends_the_alert_and_logs(caplog):
+    previous, day_ago, latest = _crossing_history()
+    service, repository, telegram, _ = _delivery([previous, day_ago, latest])
+    repository.fail_state = True
+    assert service.send_urgent_alerts(latest, FRIDAY_0910) == ["hvl_move_24h"]
+    assert "mute state not readable" in caplog.text
+
+
+def test_mute_does_not_silence_the_briefs():
+    service, repository, telegram, _ = _delivery([make_record(as_of=FRIDAY_0910 - timedelta(hours=1))])
+    repository.save_menthorq_alert_mute("BTC", FRIDAY_0910 + timedelta(days=3), FRIDAY_0910)
+    assert service.send_on_demand_brief(FRIDAY_0910) is True
+    assert service.send_weekly_brief_if_due(FRIDAY_0910) is True
+    assert len(telegram.sent) == 2

@@ -8,7 +8,7 @@ from html.parser import HTMLParser
 
 import pytest
 
-from coding.core.analytics.menthorq_monitor.alert_rules import evaluate_urgent_alerts
+from coding.core.analytics.menthorq_monitor.alert_rules import AlertThresholds, evaluate_urgent_alerts
 from coding.core.analytics.menthorq_monitor.level_trend_calculator import compare_records
 from coding.service.on_chain.menthorq_monitor.brief_formatter import (
     TELEGRAM_MESSAGE_LIMIT,
@@ -19,6 +19,7 @@ from coding.service.on_chain.menthorq_monitor.brief_formatter import (
     format_signed_usd,
     format_strike,
     format_urgent_alert,
+    regime_versus_net_gex_note,
     telegram_length,
 )
 from tests.fakes.fake_menthorq_monitor import BASE_TIME, make_record
@@ -149,8 +150,10 @@ def test_urgent_alert_lists_alerts_with_roll_off_label():
                            expirations=["27NOV26"])
     day_ago = make_record(as_of=BASE_TIME - timedelta(hours=24), hvl=96000.0,
                           expirations=["6NOV26", "27NOV26"])
-    alerts = evaluate_urgent_alerts(compare_records(latest, previous, "previous"),
-                                    compare_records(latest, day_ago, "24h"))
+    # Crossing switched on and HVL at 3% so one message shows every alert kind.
+    thresholds = AlertThresholds(hvl_move_percent_of_spot=3.0, spot_crosses_hvl=True)
+    alerts = evaluate_urgent_alerts(latest, compare_records(latest, previous, "previous"),
+                                    compare_records(latest, day_ago, "24h"), thresholds)
     message = format_urgent_alert(latest, alerts)
     text = _check_html(message)
     assert text.startswith("URGENT | BTC MenthorQ-style levels")
@@ -159,3 +162,22 @@ def test_urgent_alert_lists_alerts_with_roll_off_label():
     assert "Spot crossed BELOW HVL (negative gamma regime)." in text
     assert "Total net GEX turned NEGATIVE: net GEX change -$3.00M." in text
     assert telegram_length(message) <= TELEGRAM_MESSAGE_LIMIT
+
+
+def test_brief_explains_when_regime_and_net_gex_disagree():
+    # spot 100,000 < HVL 101,000 (negative-gamma regime) but total net GEX +5M
+    disagree = make_record(hvl=101000.0, total_net_gex=5e6)
+    expected = ("Not a contradiction: spot below HVL = negative-gamma regime, while total net GEX "
+                "(sum over all strikes) is positive; these are different measures.")
+    assert regime_versus_net_gex_note(disagree) == expected
+    assert f"<i>{expected}</i>" in format_brief(disagree, [])
+    # spot above HVL 95,000 (positive regime) with negative GEX: the mirrored line
+    assert regime_versus_net_gex_note(make_record(total_net_gex=-2e6)) == (
+        "Not a contradiction: spot above HVL = positive-gamma regime, while total net GEX "
+        "(sum over all strikes) is negative; these are different measures.")
+    # agreement or a missing value: no line
+    assert regime_versus_net_gex_note(make_record(total_net_gex=5e6)) is None
+    assert regime_versus_net_gex_note(make_record(hvl=101000.0, total_net_gex=-1e6)) is None
+    assert regime_versus_net_gex_note(make_record(total_net_gex=None)) is None
+    assert regime_versus_net_gex_note(make_record(hvl=None)) is None
+    assert "Not a contradiction" not in format_brief(make_record(), [])

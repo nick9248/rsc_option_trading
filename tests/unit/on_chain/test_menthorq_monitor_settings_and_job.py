@@ -20,6 +20,8 @@ from coding.service.on_chain.menthorq_monitor.menthorq_monitor_job import (
     MenthorqMonitorJob,
     build_menthorq_monitor_job,
 )
+from coding.core.analytics.menthorq_monitor.alert_rules import AlertThresholds
+from coding.service.on_chain.menthorq_monitor.command_formatter import BOT_COMMANDS
 from coding.service.on_chain.menthorq_monitor.monitor_settings import MenthorqMonitorSettings
 from tests.fakes.fake_menthorq_monitor import BASE_TIME, FakeTelegram
 
@@ -49,10 +51,51 @@ def test_values_are_read_from_the_environment():
     ("MENTHORQ_WEEKLY_BRIEF_DAY", "friday"), ("MENTHORQ_WEEKLY_BRIEF_TIME_UTC", "9am"),
     ("MENTHORQ_LIVE_RUN_MINUTE", "60"), ("MENTHORQ_ALERTS_ENABLED", "maybe"),
     ("MENTHORQ_EXPIRY_UNIVERSE", "weekly"), ("MENTHORQ_COMMAND_POLL_SECONDS", "1"),
+    ("MENTHORQ_ALERT_HVL_MOVE_PERCENT", "five"), ("MENTHORQ_ALERT_HVL_MOVE_PERCENT", "0"),
+    ("MENTHORQ_ALERT_CALL_RESISTANCE_MOVE_PERCENT", "-10"),
+    ("MENTHORQ_ALERT_PUT_SUPPORT_MOVE_PERCENT", "101"),
+    ("MENTHORQ_ALERT_SPOT_NEAR_WALL_PERCENT", "1%"), ("MENTHORQ_ALERT_SPOT_CROSSES_HVL", "sometimes"),
+    ("MENTHORQ_ALERT_NET_GEX_SIGN_CHANGE", "2"),
 ])
 def test_invalid_values_raise_instead_of_falling_back(name, value):
     with pytest.raises(ValueError, match=name):
         MenthorqMonitorSettings.from_environment({name: value})
+
+
+def test_alert_rule_defaults_on_and_off():
+    thresholds = MenthorqMonitorSettings.from_environment({}).alert_thresholds
+    assert thresholds == AlertThresholds()
+    # ON: HVL > 5%, Call Resistance > 10%, Put Support > 5%, net GEX sign change
+    assert (thresholds.hvl_move_percent_of_spot, thresholds.call_resistance_move_percent_of_spot,
+            thresholds.put_support_move_percent_of_spot, thresholds.net_gex_sign_change) ==         (5.0, 10.0, 5.0, True)
+    # OFF: spot crosses HVL, spot near a wall
+    assert thresholds.spot_crosses_hvl is False and thresholds.spot_near_wall_percent is None
+
+
+def test_alert_rules_are_read_from_the_environment():
+    thresholds = MenthorqMonitorSettings.from_environment({
+        "MENTHORQ_ALERT_HVL_MOVE_PERCENT": "3.5", "MENTHORQ_ALERT_CALL_RESISTANCE_MOVE_PERCENT": "off",
+        "MENTHORQ_ALERT_PUT_SUPPORT_MOVE_PERCENT": " 7 ", "MENTHORQ_ALERT_NET_GEX_SIGN_CHANGE": "0",
+        "MENTHORQ_ALERT_SPOT_CROSSES_HVL": "1", "MENTHORQ_ALERT_SPOT_NEAR_WALL_PERCENT": "1",
+    }).alert_thresholds
+    assert thresholds == AlertThresholds(
+        hvl_move_percent_of_spot=3.5, call_resistance_move_percent_of_spot=None,
+        put_support_move_percent_of_spot=7.0, net_gex_sign_change=False, spot_crosses_hvl=True,
+        spot_near_wall_percent=1.0)
+
+
+def test_built_job_uses_the_settings_thresholds_and_all_commands():
+    settings = MenthorqMonitorSettings.from_environment({"MENTHORQ_ALERT_SPOT_CROSSES_HVL": "1"})
+    telegram = FakeTelegram()
+    job = build_menthorq_monitor_job(repository=MagicMock(), settings=settings, telegram=telegram)
+    assert job is not None and job.command_listener is not None
+    assert job.delivery_service.thresholds.spot_crosses_hvl is True
+    assert set(job.command_listener._handlers) == {"/brief", "/levels", "/changes", "/status",
+                                                   "/mute", "/help"}
+    job.command_listener.register_command_menu()
+    assert telegram.registered_commands == [list(BOT_COMMANDS)]
+    assert [command for command, _ in BOT_COMMANDS] == ["brief", "levels", "changes", "status",
+                                                        "mute", "help"]
 
 
 def test_disabled_monitor_builds_no_job():

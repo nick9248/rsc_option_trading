@@ -118,7 +118,7 @@ def _cap(text: str) -> str:
     return text[:MAXIMUM_LIST_ITEM_CHARACTERS - 3] + "..."
 
 
-def _bullets(items: Sequence[str], maximum: Optional[int]) -> str:
+def bullet_lines(items: Sequence[str], maximum: Optional[int]) -> str:
     """Escaped "- item" lines; beyond ``maximum`` a count of the rest."""
     shown = list(items) if maximum is None else list(items)[:maximum]
     lines = [f"- {escape(_cap(item))}" for item in shown]
@@ -127,7 +127,8 @@ def _bullets(items: Sequence[str], maximum: Optional[int]) -> str:
     return "\n".join(lines)
 
 
-def _regime_sentence(record: MenthorqLevelRecord) -> str:
+def regime_sentence(record: MenthorqLevelRecord) -> str:
+    """Plain-text gamma regime with the spot-to-HVL gap, e.g. "POSITIVE gamma: spot ... above HVL."."""
     distance = spot_distances(record)["hvl"]
     if record.gamma_regime is None or distance.distance_usd is None:
         return "Gamma regime not computed (spot or HVL missing)."
@@ -188,12 +189,37 @@ def _levels_table(record: MenthorqLevelRecord, daily_close: Optional[MenthorqLev
     return "<b>Key levels</b>\n<pre>" + escape("\n".join(rows)) + "</pre>" + note
 
 
+def regime_versus_net_gex_note(record: MenthorqLevelRecord) -> Optional[str]:
+    """
+    One plain-text line when the gamma regime (spot vs HVL) and the sign of
+    total net GEX disagree, e.g. spot below HVL (negative-gamma regime)
+    while total net GEX is positive; None when they agree or a value is
+    missing.
+    """
+    if record.total_net_gex is None or record.total_net_gex == 0:
+        return None
+    gex_sign = "positive" if record.total_net_gex > 0 else "negative"
+    if record.gamma_regime == GAMMA_REGIME_NEGATIVE and gex_sign == "positive":
+        regime_text = "spot below HVL = negative-gamma regime"
+    elif record.gamma_regime == GAMMA_REGIME_POSITIVE and gex_sign == "negative":
+        regime_text = "spot above HVL = positive-gamma regime"
+    else:
+        return None
+    return (f"Not a contradiction: {regime_text}, while total net GEX (sum over all strikes) "
+            f"is {gex_sign}; these are different measures.")
+
+
 def _regime_section(record: MenthorqLevelRecord) -> str:
-    return (f"<b>Gamma regime</b>\n{escape(_regime_sentence(record))}\n"
+    text = (f"<b>Gamma regime</b>\n{escape(regime_sentence(record))}\n"
             f"Total net GEX {escape(format_gex(record.total_net_gex))} per 1% move.")
+    note = regime_versus_net_gex_note(record)
+    if note is not None:
+        text += f"\n<i>{escape(note)}</i>"
+    return text
 
 
-def _comparison_block(comparison: RecordComparison) -> str:
+def comparison_block(comparison: RecordComparison) -> str:
+    """One comparison (spot, levels, net GEX, settled expiries) as a <pre> block."""
     title = COMPARISON_TITLES.get(comparison.label, comparison.label)
     reference = comparison.reference
     if reference is None:
@@ -219,7 +245,7 @@ def _comparison_block(comparison: RecordComparison) -> str:
 
 
 def _changes_section(comparisons: Sequence[RecordComparison], labels: tuple) -> str:
-    blocks = [_comparison_block(comparison) for comparison in comparisons
+    blocks = [comparison_block(comparison) for comparison in comparisons
               if comparison.label in labels]
     return "<b>Changes</b> (USD; level % = % of current spot)\n" + "\n".join(blocks)
 
@@ -311,9 +337,9 @@ def _render_brief(
     if options.include_panels:
         sections.append(_panels_section(record))
     events = notable_events(record, comparisons)
-    sections.append("<b>Notable events</b>\n" + (_bullets(events, options.maximum_events)
+    sections.append("<b>Notable events</b>\n" + (bullet_lines(events, options.maximum_events)
                                                   if events else "- none"))
-    sections.append("<b>Data caveats</b>\n" + _bullets(data_caveats(record, comparisons),
+    sections.append("<b>Data caveats</b>\n" + bullet_lines(data_caveats(record, comparisons),
                                                        options.maximum_caveats))
     if omitted:
         sections.append(f"<i>Shortened to fit Telegram: {escape(', '.join(omitted))}.</i>")
@@ -397,15 +423,15 @@ def format_urgent_alert(
             text += (f". Coincides with the settlement of {', '.join(alert.expiry_roll)} "
                      "(expiry roll-off)")
         alert_lines.append(text + ".")
-    lines.append(_bullets(alert_lines, None))
+    lines.append(bullet_lines(alert_lines, None))
     lines.append("")
     lines.append(escape(
         f"Now: CR {format_strike(record.call_resistance)} | HVL {format_strike(record.hvl)} | "
         f"PS {format_strike(record.put_support)} | net GEX {format_gex(record.total_net_gex)} | "
         f"regime {record.gamma_regime or NOT_AVAILABLE}"))
-    lines.append("<i>Live mode (newest open interest). Thresholds are placeholders until "
-                 "a backtest sets them.</i>")
+    lines.append("<i>Live mode (newest open interest). Thresholds are chosen by hand until "
+                 "a backtest sets them. /mute 24h silences these alerts.</i>")
     text = "\n".join(lines)
     if telegram_length(text) <= limit:
         return text
-    return "\n".join(lines[:3] + [_bullets(alert_lines, 5)] + lines[4:])
+    return "\n".join(lines[:3] + [bullet_lines(alert_lines, 5)] + lines[4:])

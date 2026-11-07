@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from psycopg2.extras import Json, execute_values
 
 from coding.core.analytics.market_wide_calculator import DERIBIT_SETTLEMENT_HOUR_UTC
+from coding.core.analytics.menthorq_monitor.alert_mute import MenthorqMonitorState
 from coding.core.analytics.menthorq_monitor.level_record import MenthorqLevelRecord
 from coding.core.analytics.results.delta_flow_results import FlowBucket
 from coding.core.analytics.results.expiry_results import ExpirationAnalysisResult
@@ -1250,6 +1251,99 @@ class DatabaseRepository:
             )
             row = cursor.fetchone()
         return row[0].astimezone(timezone.utc) if row and row[0] is not None else None
+
+    def get_latest_menthorq_level_run(
+        self, currency: str, mode: str, expiry_universe: str, gamma_underlying: str,
+    ) -> Optional[MenthorqLevelRecord]:
+        """
+        The newest stored run of ``mode``, computed or not (a run whose
+        inputs were missing has spot NULL), or None when no run is stored.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                f"SELECT {self._MENTHORQ_LEVEL_COLUMNS} FROM menthorq_level_snapshots "
+                "WHERE currency = %s AND mode = %s AND expiry_universe = %s "
+                "AND gamma_underlying = %s ORDER BY as_of_utc DESC LIMIT 1",
+                (currency, mode, expiry_universe, gamma_underlying),
+            )
+            row = cursor.fetchone()
+        return self._menthorq_level_record_from_row(row) if row else None
+
+    def get_last_menthorq_alert_delivery_of_keys(
+        self, currency: str, alert_keys: List[str],
+    ) -> Optional[Tuple[str, datetime]]:
+        """
+        The newest delivered message whose key is one of ``alert_keys``:
+        (alert_key, delivered_at UTC-aware), or None when none was delivered.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT alert_key, delivered_at FROM menthorq_alert_deliveries
+                WHERE currency = %s AND alert_key = ANY(%s)
+                ORDER BY delivered_at DESC LIMIT 1
+                """,
+                (currency, list(alert_keys)),
+            )
+            row = cursor.fetchone()
+        return (row[0], row[1].astimezone(timezone.utc)) if row else None
+
+    # MenthorQ-style monitor alert state (migration 032)
+
+    def get_menthorq_monitor_state(self, currency: str) -> Optional[MenthorqMonitorState]:
+        """The persisted alert state (mute, last suppressed alert), or None when no row exists."""
+        def to_utc(value: Optional[datetime]) -> Optional[datetime]:
+            return value.astimezone(timezone.utc) if value is not None else None
+
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT alerts_muted_until, mute_updated_at, last_suppressed_at,
+                       last_suppressed_alert_keys
+                FROM menthorq_monitor_state WHERE currency = %s
+                """,
+                (currency,),
+            )
+            row = cursor.fetchone()
+        if row is None:
+            return None
+        return MenthorqMonitorState(
+            currency=currency, alerts_muted_until=to_utc(row[0]), mute_updated_at=to_utc(row[1]),
+            last_suppressed_at=to_utc(row[2]), last_suppressed_alert_keys=list(row[3]),
+        )
+
+    def save_menthorq_alert_mute(
+        self, currency: str, alerts_muted_until: Optional[datetime], updated_at: datetime,
+    ) -> None:
+        """Set (or with None clear) the end of the urgent-alert mute."""
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO menthorq_monitor_state (currency, alerts_muted_until, mute_updated_at)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (currency) DO UPDATE
+                SET alerts_muted_until = EXCLUDED.alerts_muted_until,
+                    mute_updated_at = EXCLUDED.mute_updated_at
+                """,
+                (currency, alerts_muted_until, updated_at),
+            )
+
+    def save_menthorq_suppressed_alerts(
+        self, currency: str, alert_keys: List[str], suppressed_at: datetime,
+    ) -> None:
+        """Record the urgent alerts held back by the mute (newest only)."""
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO menthorq_monitor_state
+                    (currency, last_suppressed_at, last_suppressed_alert_keys)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (currency) DO UPDATE
+                SET last_suppressed_at = EXCLUDED.last_suppressed_at,
+                    last_suppressed_alert_keys = EXCLUDED.last_suppressed_alert_keys
+                """,
+                (currency, suppressed_at, Json(list(alert_keys))),
+            )
 
     def save_futures_basis(self, rows: List[Dict[str, Any]]) -> int:
         """

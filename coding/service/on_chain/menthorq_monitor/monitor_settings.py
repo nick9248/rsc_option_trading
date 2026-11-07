@@ -4,16 +4,26 @@ Settings of the MenthorQ-style monitor, read from the environment (.env).
 Variables (all optional; the defaults are in ``MenthorqMonitorSettings``):
   MENTHORQ_MONITOR_ENABLED        1/0  hourly computation and storage
   MENTHORQ_ALERTS_ENABLED         1/0  urgent alerts and the weekly brief (Telegram)
-  MENTHORQ_COMMANDS_ENABLED       1/0  the /brief command (Telegram getUpdates polling)
+  MENTHORQ_COMMANDS_ENABLED       1/0  the bot commands (Telegram getUpdates polling)
   MENTHORQ_EXPIRY_UNIVERSE        all | monthly | quarterly_plus_front_month
   MENTHORQ_LIVE_RUN_MINUTE        0-59, minute past each hour of the live run
   MENTHORQ_WEEKLY_BRIEF_DAY       mon | tue | wed | thu | fri | sat | sun
   MENTHORQ_WEEKLY_BRIEF_TIME_UTC  HH:MM (UTC)
   MENTHORQ_COMMAND_POLL_SECONDS   seconds between getUpdates calls (>= 5)
 
+Urgent alert rules (see alert_rules; "percent" = percent of spot, a number
+in (0, 100] or "off"):
+  MENTHORQ_ALERT_HVL_MOVE_PERCENT              default 5    (HVL move vs 24h)
+  MENTHORQ_ALERT_CALL_RESISTANCE_MOVE_PERCENT  default 10   (Call Resistance move vs 24h)
+  MENTHORQ_ALERT_PUT_SUPPORT_MOVE_PERCENT      default 5    (Put Support move vs 24h)
+  MENTHORQ_ALERT_NET_GEX_SIGN_CHANGE           1/0, default 1
+  MENTHORQ_ALERT_SPOT_CROSSES_HVL              1/0, default 0
+  MENTHORQ_ALERT_SPOT_NEAR_WALL_PERCENT        default off (e.g. 1: spot within 1% of
+                                               Call Resistance or Put Support)
+
 The Telegram bot token and the owner chat id are the scanner's
 (OSF_TELEGRAM_BOT_TOKEN / OSF_TELEGRAM_CHAT_ID, see TelegramAlertService);
-only that chat may use /brief.
+only that chat may use the commands.
 """
 
 import os
@@ -24,6 +34,7 @@ from typing import Mapping, Optional
 
 from dotenv import load_dotenv
 
+from coding.core.analytics.menthorq_monitor.alert_rules import AlertThresholds
 from coding.core.analytics.menthorq_replication_calculator import (
     EXPIRY_UNIVERSE_MONTHLY,
     EXPIRY_UNIVERSES,
@@ -32,6 +43,7 @@ from coding.core.analytics.menthorq_replication_calculator import (
 
 WEEKDAY_NAMES = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 MINIMUM_COMMAND_POLL_SECONDS = 5
+RULE_OFF = "off"
 
 
 @dataclass(frozen=True)
@@ -53,6 +65,7 @@ class MenthorqMonitorSettings:
     weekly_brief_weekday: int = 4          # Monday = 0 ... Friday = 4
     weekly_brief_time_utc: time = time(9, 0)
     command_poll_seconds: int = 20
+    alert_thresholds: AlertThresholds = AlertThresholds()
 
     @property
     def weekly_brief_day_name(self) -> str:
@@ -102,6 +115,39 @@ class MenthorqMonitorSettings:
                 raise ValueError(f"{name}={value} is outside {minimum}..{maximum}")
             return value
 
+        def percent(name: str, default: Optional[float]) -> Optional[float]:
+            text = environment.get(name)
+            if text is None or text.strip() == "":
+                return default
+            if text.strip().lower() == RULE_OFF:
+                return None
+            try:
+                value = float(text)
+            except ValueError:
+                raise ValueError(f"{name}={text!r} is not a number or 'off'") from None
+            if not 0 < value <= 100:
+                raise ValueError(f"{name}={value:g} is outside (0, 100] percent of spot")
+            return value
+
+        default_thresholds = defaults.alert_thresholds
+        thresholds = AlertThresholds(
+            hvl_move_percent_of_spot=percent(
+                "MENTHORQ_ALERT_HVL_MOVE_PERCENT", default_thresholds.hvl_move_percent_of_spot),
+            call_resistance_move_percent_of_spot=percent(
+                "MENTHORQ_ALERT_CALL_RESISTANCE_MOVE_PERCENT",
+                default_thresholds.call_resistance_move_percent_of_spot),
+            put_support_move_percent_of_spot=percent(
+                "MENTHORQ_ALERT_PUT_SUPPORT_MOVE_PERCENT",
+                default_thresholds.put_support_move_percent_of_spot),
+            net_gex_sign_change=flag("MENTHORQ_ALERT_NET_GEX_SIGN_CHANGE",
+                                     default_thresholds.net_gex_sign_change),
+            spot_crosses_hvl=flag("MENTHORQ_ALERT_SPOT_CROSSES_HVL",
+                                  default_thresholds.spot_crosses_hvl),
+            spot_near_wall_percent=percent("MENTHORQ_ALERT_SPOT_NEAR_WALL_PERCENT",
+                                           default_thresholds.spot_near_wall_percent),
+            cooldown=default_thresholds.cooldown,
+        )
+
         universe = environment.get("MENTHORQ_EXPIRY_UNIVERSE", "").strip() or defaults.expiry_universe
         if universe not in EXPIRY_UNIVERSES:
             raise ValueError(f"MENTHORQ_EXPIRY_UNIVERSE={universe!r} is not one of {EXPIRY_UNIVERSES}")
@@ -130,4 +176,5 @@ class MenthorqMonitorSettings:
             command_poll_seconds=integer("MENTHORQ_COMMAND_POLL_SECONDS",
                                          defaults.command_poll_seconds,
                                          MINIMUM_COMMAND_POLL_SECONDS, None),
+            alert_thresholds=thresholds,
         )
