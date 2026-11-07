@@ -1,0 +1,42 @@
+{
+ "source": "MenthorQ BTCUSD (DERIBIT) charts labelled '2026-08-24 15:59 EST' (menthorq_samples/img_4.png IV*OI, img_5.png Net DEX All Expirations with DEX and GEX profiles). Values read off the screenshots by eye. HOLD-OUT timestamp: not used to tune any rule.",
+ "precision": "Every bar and profile value is APPROXIMATE: about +-3% of the panel's axis span (small bars and bars that overlap neighbours are worse; the Net DEX chart has many overlapping 1000-strike bars). Level values (call_resistance, put_support, hvl, spot) are printed in the legend and exact.",
+ "timestamp_label": "2026-08-24 15:59 EST",
+ "timestamp_utc_resolved": "2026-08-24T23:59:00Z",
+ "timestamp_resolution": "Printed spot 78977 vs Deribit index (historical_trades): 78975.65 at 23:59:54 UTC (diff -1); 78745.51 at 19:58:56 UTC (-232, EDT reading) and 78917.96 at 20:58:36 UTC (-59, EST reading).",
+ "spot_price": 78977,
+ "iv_times_open_interest": {
+  "expiration": "All Expiries",
+  "levels": {"call_resistance": 80000, "put_support": 60000, "hvl": 68000},
+  "displayed_strike_window": [58000, 96000],
+  "bars": {
+   "96000": {"call": 880, "put": null}, "95000": {"call": 2140, "put": 120},
+   "94000": {"call": 420, "put": null}, "92000": {"call": 980, "put": null},
+   "90000": {"call": 4790, "put": 530}, "88000": {"call": 2190, "put": null},
+   "86000": {"call": 1000, "put": null}, "85000": {"call": 3250, "put": 480},
+   "84000": {"call": 2570, "put": 70}, "83000": {"call": 380, "put": null},
+   "82000": {"call": 4100, "put": 140}, "81000": {"call": 650, "put": null},
+   "80000": {"call": 7520, "put": 800}, "79000": {"call": 500, "put": null},
+   "78000": {"call": 4460, "put": 690}, "77000": {"call": 410, "put": 420},
+   "76000": {"call": 2370, "put": 780}, "75000": {"call": 4210, "put": 2370},
+   "74000": {"call": 2210, "put": 620}, "73000": {"call": 1190, "put": 370},
+   "72000": {"call": 3810, "put": 1080}, "71000": {"call": 1480, "put": 430},
+   "70000": {"call": 8340, "put": 2550}, "69000": {"call": 1640, "put": 740},
+   "68000": {"call": 2260, "put": 2320}, "67000": {"call": 1720, "put": 850},
+   "66000": {"call": 1780, "put": 1640}, "65000": {"call": 2560, "put": 3460},
+   "64000": {"call": 1510, "put": 1940}, "63000": {"call": 850, "put": 1410},
+   "62000": {"call": 1180, "put": 3270}, "61000": {"call": 530, "put": 1610},
+   "60000": {"call": 1970, "put": 10180}, "59000": {"call": 190, "put": 1130},
+   "58000": {"call": 420, "put": 3450}
+  }
+ },
+ "net_dex": {
+  "expiration": "All Expirations",
+  "levels": {"call_resistance": 80000, "put_support": 60000, "hvl": 68000},
+  "displayed_strike_window": [58000, 96000],
+  "axis_unit": "USD (M = million, B = billion)",
+  "dex_bars": {"96000": 32e6, "95000": 59e6, "94000": 5e6, "92000": 27e6, "90000": 133e6, "88000": 117e6, "86000": 48e6, "85000": 136e6, "84000": 168e6, "82000": 301e6, "80000": 651e6, "78000": 475e6, "76000": 277e6, "75000": 493e6, "74000": 344e6, "72000": 565e6, "70000": 1195e6, "68000": 288e6, "65000": 301e6, "64000": 181e6, "62000": 107e6, "60000": 165e6, "58000": 21e6},
+  "dex_profile": {"96000": 1144e6, "92000": 1128e6, "90000": 1117e6, "88000": 1101e6, "86000": 1088e6, "84000": 1056e6, "82000": 1021e6, "80000": 971e6, "79000": 883e6, "78000": 875e6, "76000": 789e6, "74000": 677e6, "72000": 571e6, "71000": 509e6, "70000": 496e6, "69000": 296e6, "68000": 261e6, "66000": 203e6, "64000": 109e6, "62000": 69e6, "60000": 43e6, "58000": 8e6},
+  "gex_profile": {"96000": 1069e6, "94000": 1050e6, "92000": 1035e6, "90000": 1016e6, "88000": 952e6, "86000": 939e6, "85000": 896e6, "84000": 845e6, "82000": 795e6, "81000": 677e6, "80000": 635e6, "78000": 384e6, "77000": 243e6, "76000": 208e6, "75000": 189e6, "74000": 99e6, "73000": 56e6, "72000": 43e6, "71000": 21e6, "70000": -8e6, "69000": -88e6, "68000": -93e6, "66000": -99e6, "64000": -101e6, "62000": -91e6, "60000": -77e6, "58000": -43e6}
+ }
+}

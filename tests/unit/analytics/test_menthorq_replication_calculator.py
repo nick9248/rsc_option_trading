@@ -36,6 +36,7 @@ from coding.core.analytics.menthorq_replication_calculator import (
     replicate_menthorq,
     select_expiry_universe,
     select_panel_expirations,
+    start_of_utc_day,
     strike_of_cumulative_minimum,
     strike_of_maximum,
     strike_of_minimum,
@@ -173,6 +174,21 @@ class TestExpiryHandling:
         assert select_expiry_universe(
             labels, EXPIRY_UNIVERSE_QUARTERLY_PLUS_FRONT_MONTH, as_of
         ) == ["27NOV26", "25DEC26", "26MAR27"]
+
+    def test_start_of_utc_day_floors_to_midnight_utc(self):
+        # 23:59 UTC on Nov 6 -> 00:00 UTC on Nov 6.
+        assert start_of_utc_day(datetime(2026, 11, 6, 23, 59, tzinfo=timezone.utc)) == datetime(
+            2026, 11, 6, 0, 0, tzinfo=timezone.utc)
+
+    def test_start_of_utc_day_uses_the_utc_date_not_the_local_date(self):
+        # 2026-11-06 20:30 at UTC-5 is 2026-11-07 01:30 UTC -> 2026-11-07 00:00 UTC.
+        new_york_winter = timezone(timedelta(hours=-5))
+        assert start_of_utc_day(datetime(2026, 11, 6, 20, 30, tzinfo=new_york_winter)) == datetime(
+            2026, 11, 7, 0, 0, tzinfo=timezone.utc)
+
+    def test_start_of_utc_day_rejects_naive_datetime(self):
+        with pytest.raises(ValueError):
+            start_of_utc_day(datetime(2026, 11, 6, 23, 59))
 
 
 class TestExposure:

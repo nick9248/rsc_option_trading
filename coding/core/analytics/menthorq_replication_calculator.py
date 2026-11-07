@@ -102,6 +102,24 @@ def parse_expiry_settlement(expiration: str) -> Optional[datetime]:
     )
 
 
+def start_of_utc_day(instant: datetime) -> datetime:
+    """
+    00:00 UTC of the UTC calendar day that contains ``instant``.
+
+    MenthorQ's BTC charts take open interest about one day older than their
+    spot and IV: compared on 2026-08-24, 2026-10-12 and 2026-11-06 (data
+    instant 23:59 UTC), open interest from the snapshot at or before 00:00
+    UTC of the same day matched their bars and levels best. This instant is
+    always at or before ``instant``, so using it adds no lookahead.
+
+    Raises:
+        ValueError: when ``instant`` is naive.
+    """
+    if instant.tzinfo is None:
+        raise ValueError("instant must be timezone-aware")
+    return instant.astimezone(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+
+
 def is_monthly_expiry(settlement: datetime) -> bool:
     """True when the date is the last Friday of its month (Deribit monthly)."""
     days_in_month = calendar.monthrange(settlement.year, settlement.month)[1]

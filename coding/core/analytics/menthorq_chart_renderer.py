@@ -46,13 +46,14 @@ DISPLAY_HIGH_MULTIPLIER = 1.35
 MILLION = 1_000_000.0
 
 # Which candidate each drawn level line uses, chosen by comparison with
-# MenthorQ's 2026-11-06 20:59 UTC charts (one timestamp only; monthly
-# expiries): the net-GEX extremes and the cumulative-net-GEX minimum matched
-# all 3 IV*OI-chart levels and 10 of 12 per-expiry levels with the 20:48 UTC
-# open interest (12 of 12 with the 15:18 UTC open interest and gamma at the
-# index), while the call-only / put-only gamma maxima (MenthorQ's published
-# wording) matched only 2-3 of 8 per-expiry levels. The JSON output carries
-# every candidate.
+# MenthorQ's charts labelled 2026-11-06, 2026-10-12 (tuning) and 2026-08-24
+# (hold-out), replayed at 23:59 UTC with open interest from 00:00 UTC: the
+# net-GEX extremes and the cumulative-net-GEX minimum matched 24 of 24
+# per-expiry panel levels (the two tuning dates) and 3 of 3 all-expiry
+# levels on each date when the expiry set that fits that date is used
+# (quarterly + front month on 2026-11-06, all expiries on the other two),
+# while the call-only / put-only gamma maxima (MenthorQ's published wording)
+# matched 8 of 16 per-expiry levels. The JSON output carries every candidate.
 DEFAULT_LEVEL_CANDIDATES = {
     "call_resistance": "net_gex_argmax_positive",
     "put_support": "net_gex_argmin_negative",
