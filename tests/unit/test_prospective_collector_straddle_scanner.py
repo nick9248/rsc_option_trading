@@ -116,6 +116,7 @@ def test_collect_hour_records_all_scan_history_and_sends_nothing_to_telegram():
     write straddle, iron condor and butterfly scan history rows through the real
     forward-test harnesses, and make no Telegram request at all."""
     from coding.service.data_collection.prospective_collector import ProspectiveCollector
+    from coding.service.scanner.telegram_alert_service import TelegramAlertService
 
     hour = datetime(2026, 7, 13, 14, 0, 0)
     straddle_scan = {
@@ -146,11 +147,12 @@ def test_collect_hour_records_all_scan_history_and_sends_nothing_to_telegram():
     }
 
     with patch("coding.service.data_collection.prospective_collector.DeribitApiService"), \
-         patch("coding.service.data_collection.prospective_collector.DatabaseRepository"), \
+         patch("coding.service.data_collection.prospective_collector.DatabaseRepository") as repository_class, \
          patch("requests.post") as requests_post, \
          patch("requests.get") as requests_get:
         collector = ProspectiveCollector()
-        repo = collector.repo  # shared by the real harnesses built in __init__
+        repo = repository_class.return_value  # shared by the real harnesses built in __init__
+        assert collector.repo is repo
         repo.save_straddle_scan.return_value = True
         repo.save_defined_risk_scan.return_value = True
         repo.get_unresolved_straddle_scans.return_value = []
@@ -183,3 +185,6 @@ def test_collect_hour_records_all_scan_history_and_sends_nothing_to_telegram():
 
     requests_post.assert_not_called()
     requests_get.assert_not_called()
+    # Without credentials a sender would skip the request, so also check that the
+    # collector holds no Telegram sender at all.
+    assert not any(isinstance(member, TelegramAlertService) for member in vars(collector).values())
