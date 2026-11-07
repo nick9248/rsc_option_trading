@@ -24,7 +24,7 @@ once (`setMyCommands`). If that fails, it logs the failure and the commands stil
 
 | Command | Reply |
 |---|---|
-| `/brief` | The full brief: header, key levels, gamma regime, changes vs previous run / 24h / 7d, panels, events, caveats. |
+| `/brief` | The full brief: header (with the DATA STALE line when it applies), key levels, gamma regime, changes vs previous run / 24h / 7d (a missing comparison is one "no stored record" line there, not repeated in the caveats), panels with a CR / PS / HVL legend, events, caveats. |
 | `/levels` | Call Resistance, HVL and Put Support of the newest stored live record, each with its distance to spot (level minus spot, in USD and in % of spot), plus spot, the regime sentence and total net GEX. |
 | `/changes` | The newest live record compared with the previous run, 24h ago and 7d ago: spot, the three levels and net GEX, with expiries that settled in each window. The events list says when a level move coincides with an expiry roll-off. |
 | `/status` | Health of the monitor job, the last run of each mode (live, daily_close), data age and the snapshot and open-interest instants, whether the hourly job ran in the last 2h, the alert state (off, muted until, or not muted), the last delivered urgent alert, and the last alert held back by a mute. |
@@ -32,8 +32,12 @@ once (`setMyCommands`). If that fails, it logs the failure and the commands stil
 | `/help` | The command list and which urgent alert rules are on. |
 | anything else | `Unknown command ... Send /help for details.` |
 
-Each reply uses Telegram HTML (only `<b>`, `<i>` and `<pre>`), escapes all dynamic text, and stays
-under 4096 UTF-16 units. `/changes` cuts its event list when it would be too long. If a reply cannot
+Each reply uses Telegram HTML (only `<b>`, `<i>` and the code block
+`<pre><code class="language-text">...</code></pre>`), escapes all dynamic text, and stays
+under 4096 UTF-16 units. The code-block markup is one constant, `CODE_BLOCK_OPEN` in
+`brief_formatter.py`. A bare `<pre>` block gets Telegram's syntax colors; whether
+`language-text` turns them off is not yet checked in a real chat. If it does not, change only that
+constant (for example to `<pre><code class="language-plaintext">`). `/changes` cuts its event list when it would be too long. If a reply cannot
 be built (for example, the database is down), the bot answers `<command> failed (see the collector log)`.
 
 Health in `/status` is `OK` unless one of these holds: no live run is stored, the newest live run
@@ -90,7 +94,30 @@ positive total net GEX.
 | `MENTHORQ_WEEKLY_BRIEF_DAY` | fri | mon to sun |
 | `MENTHORQ_WEEKLY_BRIEF_TIME_UTC` | 09:00 | HH:MM |
 | `MENTHORQ_COMMAND_POLL_SECONDS` | 20 | at least 5 |
+| `MENTHORQ_STALE_SNAPSHOT_MINUTES` | 120 | at least 10; stale-data limit, see below |
 | `MENTHORQ_ALERT_*` | see the rules table | alert rules |
+
+An invalid value of any of these variables (for example `MENTHORQ_STALE_SNAPSHOT_MINUTES=9`) stops
+only the MenthorQ monitor from starting; the collector logs the error and runs on.
+
+### The DATA STALE line
+
+The brief, `/levels`, `/changes` and the GUI preview start (right under the title) with one line
+when the data behind the record is older than `MENTHORQ_STALE_SNAPSHOT_MINUTES` before the record's
+data time, for example:
+
+`DATA STALE: snapshot is 12 h 41 min older than the data time (spot trade 12 h 31 min); levels may be out of date.`
+
+- Snapshot older than the limit: the levels come from an old option chain. The spot-trade age is
+  added in brackets when it is also over the limit (one line, not two).
+- Only the spot trade older than the limit: `spot comes from a trade ... before the data time;
+  distances to spot may be out of date.`
+- Exactly the limit is not stale; one minute more is. Durations are whole minutes, rounded down.
+- A spot trade more than 15 min but not more than the limit before the data time is a normal
+  caveat line instead. `/status` keeps its own 45 min snapshot check for its health line.
+
+The usual cause is a collector that stopped writing snapshots (or a local database that was not
+synced from the VPS), so the newest snapshot is hours behind the time the brief was asked for.
 
 The bot token and the owner chat are the scanner's `OSF_TELEGRAM_BOT_TOKEN` and `OSF_TELEGRAM_CHAT_ID`.
 Only one process can poll a bot token. If another process polls the same token, Telegram answers 409,

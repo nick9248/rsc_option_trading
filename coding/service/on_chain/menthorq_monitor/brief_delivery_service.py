@@ -115,6 +115,7 @@ class MenthorqBriefDeliveryService:
             self.monitor_service.build_comparisons(latest),
             self.monitor_service.latest_record(MODE_DAILY_CLOSE, now),
             title,
+            stale_limit=self.settings.stale_snapshot_limit,
         )
 
     def _deliver(self, key: str, message: str, record_id: Optional[int]) -> bool:

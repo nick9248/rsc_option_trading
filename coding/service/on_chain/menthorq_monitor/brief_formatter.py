@@ -2,9 +2,15 @@
 Telegram messages of the MenthorQ-style monitor: the brief (weekly or on
 demand) and the urgent alert.
 
-Format: Telegram HTML (``parse_mode="HTML"``). Only <b>, <i> and <pre> are
-used; every dynamic text is escaped with ``html.escape`` (&, <, >), which is
-all Telegram's HTML mode requires. ASCII only.
+Format: Telegram HTML (``parse_mode="HTML"``). Only <b>, <i> and the code
+block of ``code_block`` (<pre><code class="language-text">) are used; every
+dynamic text is escaped with ``html.escape`` (&, <, >), which is all
+Telegram's HTML mode requires. ASCII only.
+
+Stale data: when the snapshot (or the spot trade) behind a record is older
+than the configured limit (MENTHORQ_STALE_SNAPSHOT_MINUTES) relative to the
+record's data time, the brief, /levels and /changes start with one
+"DATA STALE" line (``stale_data_line``).
 
 Length: Telegram rejects messages over 4096 characters (counted after the
 tags are parsed, in UTF-16 code units). The raw HTML length is counted here,
@@ -43,9 +49,21 @@ from coding.core.analytics.menthorq_replication_calculator import PANEL_NAMES
 TELEGRAM_MESSAGE_LIMIT = 4096
 MAXIMUM_LIST_ITEM_CHARACTERS = 300
 MAXIMUM_EXPIRIES_SHOWN = 12
+# /status health check (command_formatter); the brief uses the configured stale limit.
 STALE_SNAPSHOT_AGE = timedelta(minutes=45)
+# Default of MENTHORQ_STALE_SNAPSHOT_MINUTES (monitor_settings).
+DEFAULT_STALE_SNAPSHOT_LIMIT = timedelta(minutes=120)
+# Spot trade older than this (but within the stale limit) gets a caveat line.
 STALE_SPOT_AGE = timedelta(minutes=15)
 NOT_AVAILABLE = "n/a"
+
+# Markup of every fixed-width block. Telegram colors the words of a bare <pre>
+# block (syntax highlighting); a language class may stop that. Whether
+# "language-text" does is NOT verified against a real send: to try another,
+# change only CODE_BLOCK_OPEN (e.g. '<pre><code class="language-plaintext">').
+CODE_BLOCK_OPEN = '<pre><code class="language-text">'
+CODE_BLOCK_CLOSE = "</code></pre>"
+PANEL_LEGEND = "CR = Call Resistance, PS = Put Support, HVL = high-volatility level (gamma flip)."
 
 COMPARISON_TITLES = {
     COMPARISON_PREVIOUS: "vs previous run",
@@ -65,6 +83,11 @@ SHORT_LEVEL_LABELS = {"call_resistance": "CR", "put_support": "PS", "hvl": "HVL"
 def escape(text: str) -> str:
     """Escape text for Telegram HTML (&, <, >)."""
     return html.escape(text, quote=False)
+
+
+def code_block(text: str) -> str:
+    """Plain ``text`` escaped and wrapped in the fixed-width block markup."""
+    return CODE_BLOCK_OPEN + escape(text) + CODE_BLOCK_CLOSE
 
 
 def telegram_length(text: str) -> int:
@@ -112,6 +135,47 @@ def format_utc(instant: Optional[datetime], with_date: bool = True) -> str:
     return utc.strftime("%Y-%m-%d %H:%M UTC" if with_date else "%H:%M:%S UTC")
 
 
+def format_duration(age: timedelta) -> str:
+    """timedelta(hours=26, minutes=5) -> "1 d 2 h 5 min"; whole minutes, rounded down."""
+    total_minutes = int(age.total_seconds() // 60)
+    sign = "-" if total_minutes < 0 else ""
+    days, remainder = divmod(abs(total_minutes), 24 * 60)
+    hours, minutes = divmod(remainder, 60)
+    parts = ([f"{days} d"] if days else []) + ([f"{hours} h"] if days or hours else [])
+    return sign + " ".join(parts + [f"{minutes} min"])
+
+
+def _age_before_data_time(record: MenthorqLevelRecord, instant: Optional[datetime]) -> Optional[timedelta]:
+    return None if instant is None else record.as_of_utc - instant
+
+
+def stale_data_warning(record: MenthorqLevelRecord, limit: timedelta) -> Optional[str]:
+    """
+    Plain-text warning when the snapshot or the spot trade behind ``record``
+    is more than ``limit`` older than its data time (exactly ``limit`` is
+    not stale); None otherwise or when the instants are missing. One text
+    covers both ages.
+    """
+    snapshot_age = _age_before_data_time(record, record.snapshot_captured_at_utc)
+    spot_age = _age_before_data_time(record, record.spot_time_utc)
+    spot_stale = spot_age is not None and spot_age > limit
+    if snapshot_age is not None and snapshot_age > limit:
+        text = f"snapshot is {format_duration(snapshot_age)} older than the data time"
+        if spot_stale and spot_age is not None:
+            text += f" (spot trade {format_duration(spot_age)})"
+        return text + "; levels may be out of date."
+    if spot_stale and spot_age is not None:
+        return (f"spot comes from a trade {format_duration(spot_age)} before the data time; "
+                "distances to spot may be out of date.")
+    return None
+
+
+def stale_data_line(record: MenthorqLevelRecord, limit: timedelta) -> Optional[str]:
+    """``stale_data_warning`` as the bold "DATA STALE" HTML line; None when not stale."""
+    warning = stale_data_warning(record, limit)
+    return None if warning is None else f"<b>DATA STALE:</b> {escape(warning)}"
+
+
 def _cap(text: str) -> str:
     if len(text) <= MAXIMUM_LIST_ITEM_CHARACTERS:
         return text
@@ -152,15 +216,18 @@ class _RenderOptions:
     comparison_labels: tuple = (COMPARISON_PREVIOUS, COMPARISON_ONE_DAY, COMPARISON_SEVEN_DAYS)
 
 
-def _header(record: MenthorqLevelRecord, title: str) -> str:
+def _header(record: MenthorqLevelRecord, title: str, stale_limit: timedelta) -> str:
     mode_text = ("live: newest snapshot and its own open interest" if record.mode == MODE_LIVE
                  else "daily close: 23:59 UTC, open interest from 00:00 UTC")
     expiries = record.expirations[:MAXIMUM_EXPIRIES_SHOWN]
     expiries_text = ", ".join(expiries) if expiries else "none"
     if len(record.expirations) > len(expiries):
         expiries_text += f" (+{len(record.expirations) - len(expiries)} more)"
-    lines = [
-        f"<b>{escape(record.currency)} MenthorQ-style levels | {escape(title)}</b>",
+    lines = [f"<b>{escape(record.currency)} MenthorQ-style levels | {escape(title)}</b>"]
+    stale_line = stale_data_line(record, stale_limit)
+    if stale_line is not None:
+        lines.append(stale_line)
+    lines += [
         f"Data {escape(format_utc(record.as_of_utc))} ({escape(mode_text)})",
         f"Spot {escape(format_strike(record.spot))} (Deribit index, trade at "
         f"{escape(format_utc(record.spot_time_utc, with_date=False))})",
@@ -186,7 +253,7 @@ def _levels_table(record: MenthorqLevelRecord, daily_close: Optional[MenthorqLev
         )
     note = ("" if daily_close is None else
             "\n<i>Close = MenthorQ-style daily record (spot 23:59 UTC, OI 00:00 UTC).</i>")
-    return "<b>Key levels</b>\n<pre>" + escape("\n".join(rows)) + "</pre>" + note
+    return "<b>Key levels</b>\n" + code_block("\n".join(rows)) + note
 
 
 def regime_versus_net_gex_note(record: MenthorqLevelRecord) -> Optional[str]:
@@ -200,13 +267,12 @@ def regime_versus_net_gex_note(record: MenthorqLevelRecord) -> Optional[str]:
         return None
     gex_sign = "positive" if record.total_net_gex > 0 else "negative"
     if record.gamma_regime == GAMMA_REGIME_NEGATIVE and gex_sign == "positive":
-        regime_text = "spot below HVL = negative-gamma regime"
+        regime_text = "Spot below HVL = negative-gamma regime"
     elif record.gamma_regime == GAMMA_REGIME_POSITIVE and gex_sign == "negative":
-        regime_text = "spot above HVL = positive-gamma regime"
+        regime_text = "Spot above HVL = positive-gamma regime"
     else:
         return None
-    return (f"Not a contradiction: {regime_text}, while total net GEX (sum over all strikes) "
-            f"is {gex_sign}; these are different measures.")
+    return f"{regime_text}; total net GEX (sum over all strikes) is {gex_sign}. Different measures."
 
 
 def _regime_section(record: MenthorqLevelRecord) -> str:
@@ -219,7 +285,7 @@ def _regime_section(record: MenthorqLevelRecord) -> str:
 
 
 def comparison_block(comparison: RecordComparison) -> str:
-    """One comparison (spot, levels, net GEX, settled expiries) as a <pre> block."""
+    """One comparison (spot, levels, net GEX, settled expiries) as a code block."""
     title = COMPARISON_TITLES.get(comparison.label, comparison.label)
     reference = comparison.reference
     if reference is None:
@@ -241,7 +307,7 @@ def comparison_block(comparison: RecordComparison) -> str:
     lines.append(f"  {'Net GEX':<8}{gex_text}")
     if comparison.settled_expiries:
         lines.append(f"  Settled: {', '.join(comparison.settled_expiries)}")
-    return "<pre>" + escape("\n".join(lines)) + "</pre>"
+    return code_block("\n".join(lines))
 
 
 def _changes_section(comparisons: Sequence[RecordComparison], labels: tuple) -> str:
@@ -262,7 +328,8 @@ def _panels_section(record: MenthorqLevelRecord) -> str:
         rows.append(f"  CR {format_strike(panel.get('call_resistance'))}"
                     f"  PS {format_strike(panel.get('put_support'))}"
                     f"  HVL {format_strike(panel.get('hvl'))}")
-    return "<b>Panels</b> (per expiry)\n<pre>" + escape("\n".join(rows)) + "</pre>"
+    return ("<b>Panels</b> (per expiry)\n" + code_block("\n".join(rows))
+            + f"\n<i>{escape(PANEL_LEGEND)}</i>")
 
 
 def notable_events(
@@ -295,28 +362,25 @@ def notable_events(
     return events
 
 
-def data_caveats(record: MenthorqLevelRecord, comparisons: Sequence[RecordComparison]) -> List[str]:
-    """Plain-text caveats about the inputs of ``record``."""
+def data_caveats(
+    record: MenthorqLevelRecord, stale_limit: timedelta = DEFAULT_STALE_SNAPSHOT_LIMIT
+) -> List[str]:
+    """
+    Plain-text caveats about the inputs of ``record``. Not repeated here:
+    a snapshot or spot older than ``stale_limit`` (the "DATA STALE" line)
+    and a missing comparison record (the Changes section says so).
+    """
     caveats: List[str] = []
     if record.mode == MODE_LIVE:
-        caveats.append("Live mode: open interest from the newest snapshot. MenthorQ's open "
-                       "interest is about one day older, so its levels can differ.")
-    caveats.append("Expiry set not pinned down vs MenthorQ (no single universe matched all "
-                   "checked dates).")
-    if record.snapshot_captured_at_utc is not None and \
-            record.as_of_utc - record.snapshot_captured_at_utc > STALE_SNAPSHOT_AGE:
-        minutes = (record.as_of_utc - record.snapshot_captured_at_utc).total_seconds() / 60
-        caveats.append(f"Snapshot is {minutes:.0f} min older than the data time.")
-    if record.spot_time_utc is not None and record.as_of_utc - record.spot_time_utc > STALE_SPOT_AGE:
-        minutes = (record.as_of_utc - record.spot_time_utc).total_seconds() / 60
-        caveats.append(f"Spot comes from a trade {minutes:.0f} min before the data time.")
+        caveats.append("Live mode: newest open interest; MenthorQ's is about 1 day older.")
+    caveats.append("Expiry set not verified against MenthorQ.")
+    spot_age = _age_before_data_time(record, record.spot_time_utc)
+    if spot_age is not None and STALE_SPOT_AGE < spot_age <= stale_limit:
+        caveats.append(f"Spot comes from a trade {format_duration(spot_age)} before the data time.")
     rebuilt = rebuilt_iv_count(record)
     if rebuilt:
         caveats.append(f"IV rebuilt from mark price on {rebuilt} rows (mark_iv missing).")
     caveats.extend(record.not_computed_reasons)
-    for comparison in comparisons:
-        if comparison.reference is None:
-            caveats.append(f"No stored record for the {comparison.label} comparison.")
     return caveats
 
 
@@ -327,9 +391,10 @@ def _render_brief(
     title: str,
     options: _RenderOptions,
     omitted: Sequence[str],
+    stale_limit: timedelta,
 ) -> str:
     sections = [
-        _header(record, title),
+        _header(record, title, stale_limit),
         _levels_table(record, daily_close),
         _regime_section(record),
         _changes_section(comparisons, options.comparison_labels),
@@ -339,7 +404,7 @@ def _render_brief(
     events = notable_events(record, comparisons)
     sections.append("<b>Notable events</b>\n" + (bullet_lines(events, options.maximum_events)
                                                   if events else "- none"))
-    sections.append("<b>Data caveats</b>\n" + bullet_lines(data_caveats(record, comparisons),
+    sections.append("<b>Data caveats</b>\n" + bullet_lines(data_caveats(record, stale_limit),
                                                        options.maximum_caveats))
     if omitted:
         sections.append(f"<i>Shortened to fit Telegram: {escape(', '.join(omitted))}.</i>")
@@ -364,10 +429,12 @@ def format_brief(
     daily_close: Optional[MenthorqLevelRecord] = None,
     title: str = "Brief",
     limit: int = TELEGRAM_MESSAGE_LIMIT,
+    stale_limit: timedelta = DEFAULT_STALE_SNAPSHOT_LIMIT,
 ) -> str:
     """
-    The brief: header, key levels, gamma regime, changes vs previous / 24h /
-    7d, panels, notable events, data caveats.
+    The brief: header (with the "DATA STALE" line when it applies), key
+    levels, gamma regime, changes vs previous / 24h / 7d, panels with the
+    abbreviation legend, notable events, data caveats.
 
     Args:
         record: The latest (live) record.
@@ -375,19 +442,22 @@ def format_brief(
         daily_close: Latest daily-close record, shown as an extra column.
         title: e.g. "Weekly brief" or "On-demand brief".
         limit: Maximum ``telegram_length``.
+        stale_limit: Snapshot / spot age before the data time above which
+            the brief starts with the "DATA STALE" line
+            (``MenthorqMonitorSettings.stale_snapshot_limit``).
 
     Returns:
         Telegram HTML no longer than ``limit``.
     """
     options = _RenderOptions()
     omitted: List[str] = []
-    text = _render_brief(record, comparisons, daily_close, title, options, omitted)
+    text = _render_brief(record, comparisons, daily_close, title, options, omitted, stale_limit)
     for description, step in _SHORTENING_STEPS:
         if telegram_length(text) <= limit:
             return text
         options = step(options)
         omitted.append(description)
-        text = _render_brief(record, comparisons, daily_close, title, options, omitted)
+        text = _render_brief(record, comparisons, daily_close, title, options, omitted, stale_limit)
     if telegram_length(text) <= limit:
         return text
     # Not reachable with the item caps above; kept so an oversize text is never sent.

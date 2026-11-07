@@ -10,6 +10,9 @@ Variables (all optional; the defaults are in ``MenthorqMonitorSettings``):
   MENTHORQ_WEEKLY_BRIEF_DAY       mon | tue | wed | thu | fri | sat | sun
   MENTHORQ_WEEKLY_BRIEF_TIME_UTC  HH:MM (UTC)
   MENTHORQ_COMMAND_POLL_SECONDS   seconds between getUpdates calls (>= 5)
+  MENTHORQ_STALE_SNAPSHOT_MINUTES minutes (>= 10, default 120): a snapshot or spot
+                                  trade older than this before the data time puts
+                                  a "DATA STALE" line on the brief, /levels, /changes
 
 Urgent alert rules (see alert_rules; "percent" = percent of spot, a number
 in (0, 100] or "off"):
@@ -28,7 +31,7 @@ only that chat may use the commands.
 
 import os
 from dataclasses import dataclass
-from datetime import time
+from datetime import time, timedelta
 from pathlib import Path
 from typing import Mapping, Optional
 
@@ -43,6 +46,7 @@ from coding.core.analytics.menthorq_replication_calculator import (
 
 WEEKDAY_NAMES = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 MINIMUM_COMMAND_POLL_SECONDS = 5
+MINIMUM_STALE_SNAPSHOT_MINUTES = 10
 RULE_OFF = "off"
 
 
@@ -65,12 +69,18 @@ class MenthorqMonitorSettings:
     weekly_brief_weekday: int = 4          # Monday = 0 ... Friday = 4
     weekly_brief_time_utc: time = time(9, 0)
     command_poll_seconds: int = 20
+    stale_snapshot_minutes: int = 120
     alert_thresholds: AlertThresholds = AlertThresholds()
 
     @property
     def weekly_brief_day_name(self) -> str:
         """APScheduler day_of_week name, e.g. "fri"."""
         return WEEKDAY_NAMES[self.weekly_brief_weekday]
+
+    @property
+    def stale_snapshot_limit(self) -> timedelta:
+        """``stale_snapshot_minutes`` as a timedelta (the "DATA STALE" limit)."""
+        return timedelta(minutes=self.stale_snapshot_minutes)
 
     @classmethod
     def from_environment(
@@ -176,5 +186,8 @@ class MenthorqMonitorSettings:
             command_poll_seconds=integer("MENTHORQ_COMMAND_POLL_SECONDS",
                                          defaults.command_poll_seconds,
                                          MINIMUM_COMMAND_POLL_SECONDS, None),
+            stale_snapshot_minutes=integer("MENTHORQ_STALE_SNAPSHOT_MINUTES",
+                                           defaults.stale_snapshot_minutes,
+                                           MINIMUM_STALE_SNAPSHOT_MINUTES, None),
             alert_thresholds=thresholds,
         )

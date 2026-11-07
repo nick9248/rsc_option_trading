@@ -6,7 +6,7 @@ matplotlib on the collector path).
 
 import subprocess
 import sys
-from datetime import time, timezone
+from datetime import time, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -21,6 +21,7 @@ from coding.service.on_chain.menthorq_monitor.menthorq_monitor_job import (
     build_menthorq_monitor_job,
 )
 from coding.core.analytics.menthorq_monitor.alert_rules import AlertThresholds
+from coding.service.on_chain.menthorq_monitor.brief_formatter import DEFAULT_STALE_SNAPSHOT_LIMIT
 from coding.service.on_chain.menthorq_monitor.command_formatter import BOT_COMMANDS
 from coding.service.on_chain.menthorq_monitor.monitor_settings import MenthorqMonitorSettings
 from tests.fakes.fake_menthorq_monitor import BASE_TIME, FakeTelegram
@@ -56,10 +57,21 @@ def test_values_are_read_from_the_environment():
     ("MENTHORQ_ALERT_PUT_SUPPORT_MOVE_PERCENT", "101"),
     ("MENTHORQ_ALERT_SPOT_NEAR_WALL_PERCENT", "1%"), ("MENTHORQ_ALERT_SPOT_CROSSES_HVL", "sometimes"),
     ("MENTHORQ_ALERT_NET_GEX_SIGN_CHANGE", "2"),
+    ("MENTHORQ_STALE_SNAPSHOT_MINUTES", "9"), ("MENTHORQ_STALE_SNAPSHOT_MINUTES", "2h"),
 ])
 def test_invalid_values_raise_instead_of_falling_back(name, value):
     with pytest.raises(ValueError, match=name):
         MenthorqMonitorSettings.from_environment({name: value})
+
+
+def test_stale_snapshot_limit_default_minimum_and_value():
+    default = MenthorqMonitorSettings.from_environment({})
+    assert default.stale_snapshot_minutes == 120
+    assert default.stale_snapshot_limit == timedelta(minutes=120) == DEFAULT_STALE_SNAPSHOT_LIMIT
+    minimum = MenthorqMonitorSettings.from_environment({"MENTHORQ_STALE_SNAPSHOT_MINUTES": "10"})
+    assert minimum.stale_snapshot_limit == timedelta(minutes=10)
+    assert MenthorqMonitorSettings.from_environment(
+        {"MENTHORQ_STALE_SNAPSHOT_MINUTES": " 600 "}).stale_snapshot_minutes == 600
 
 
 def test_alert_rule_defaults_on_and_off():

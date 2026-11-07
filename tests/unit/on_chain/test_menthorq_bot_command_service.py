@@ -13,7 +13,12 @@ from html.parser import HTMLParser
 from coding.core.analytics.menthorq_monitor.level_record import MODE_DAILY_CLOSE
 from coding.service.on_chain.menthorq_monitor.bot_command_service import MenthorqBotCommandService
 from coding.service.on_chain.menthorq_monitor.brief_delivery_service import MenthorqBriefDeliveryService
-from coding.service.on_chain.menthorq_monitor.brief_formatter import TELEGRAM_MESSAGE_LIMIT, telegram_length
+from coding.service.on_chain.menthorq_monitor.brief_formatter import (
+    CODE_BLOCK_CLOSE,
+    CODE_BLOCK_OPEN,
+    TELEGRAM_MESSAGE_LIMIT,
+    telegram_length,
+)
 from coding.service.on_chain.menthorq_monitor.command_formatter import (
     BOT_COMMANDS,
     MUTE_USAGE,
@@ -33,7 +38,8 @@ from tests.fakes.fake_menthorq_monitor import (
 
 NOW = BASE_TIME + timedelta(minutes=55)          # 2026-11-06 10:05 UTC; latest record 09:10
 OWNER = "111"
-ALLOWED_TAGS = {"b", "i", "pre"}
+ALLOWED_TAGS = {"b", "i", "pre", "code"}
+OPEN, CLOSE = CODE_BLOCK_OPEN, CODE_BLOCK_CLOSE
 
 
 class _TagChecker(HTMLParser):
@@ -86,11 +92,11 @@ def test_levels_reply_by_hand():
     commands, _, _, _ = _service([make_record()])
     assert _run(commands, "/levels") == (
         "<b>BTC key levels</b> | live 2026-11-06 09:10 UTC\n"
-        "<pre>Level              Strike  vs spot      USD\n"
+        f"{OPEN}Level              Strike  vs spot      USD\n"
         "Call Resistance   110,000  +10.00%  +10,000\n"
         "HVL                95,000   -5.00%   -5,000\n"
         "Put Support        90,000  -10.00%  -10,000\n"
-        "Spot              100,000</pre>\n"
+        f"Spot              100,000{CLOSE}\n"
         "POSITIVE gamma: spot 5,000 (5.00%) above HVL.\n"
         "Total net GEX +$5.00M per 1% move."
     )
@@ -102,14 +108,27 @@ def test_levels_reply_explains_regime_versus_net_gex_and_missing_values():
     message = _run(commands, "/levels")
     assert "Put Support           n/a      n/a      n/a" in message
     assert "NEGATIVE gamma: spot 1,000 (1.00%) below HVL." in message
-    assert ("<i>Not a contradiction: spot below HVL = negative-gamma regime, while total net GEX "
-            "(sum over all strikes) is positive; these are different measures.</i>") in message
+    assert ("<i>Spot below HVL = negative-gamma regime; total net GEX (sum over all strikes) "
+            "is positive. Different measures.</i>") in message
 
 
 def test_levels_and_changes_without_a_record_say_so():
     commands, _, _, _ = _service([])
     assert _run(commands, "/levels") == "<b>BTC key levels</b>\nNo live record is stored yet."
     assert _run(commands, "/changes") == "<b>BTC changes</b>\nNo live record is stored yet."
+
+
+def test_levels_and_changes_start_with_the_stale_line_beyond_the_configured_limit():
+    # make_record: snapshot 20 min before the data time, spot trade 30 s before.
+    stale = "<b>DATA STALE:</b> snapshot is 20 min older than the data time; levels may be out of date."
+    at_limit, _, _, _ = _service([make_record()], replace(MenthorqMonitorSettings(), stale_snapshot_minutes=20))
+    assert "DATA STALE" not in _run(at_limit, "/levels")
+    assert "DATA STALE" not in _run(at_limit, "/changes")
+    beyond, _, _, _ = _service([make_record()], replace(MenthorqMonitorSettings(), stale_snapshot_minutes=19))
+    for command, title in (("/levels", "key levels"), ("/changes", "changes")):
+        lines = _run(beyond, command).split("\n")
+        assert lines[0] == f"<b>BTC {title}</b> | live 2026-11-06 09:10 UTC"
+        assert lines[1] == stale
 
 
 def _changes_history():
@@ -128,19 +147,19 @@ def test_changes_reply_by_hand_with_settled_expiry_label():
     assert _run(commands, "/changes") == (
         "<b>BTC changes</b> | live 2026-11-06 09:10 UTC\n"
         "<i>USD; level % = % of current spot.</i>\n"
-        "<pre>vs previous run (2026-11-06 08:10 UTC)\n"
+        f"{OPEN}vs previous run (2026-11-06 08:10 UTC)\n"
         "  Spot    0 (+0.00%)\n"
         "  CR      0\n"
         "  HVL     +1,000 (+1.00% of spot)\n"
         "  PS      0\n"
-        "  Net GEX +$1.00M</pre>\n"
-        "<pre>vs 24h ago (2026-11-05 09:10 UTC)\n"
+        f"  Net GEX +$1.00M{CLOSE}\n"
+        f"{OPEN}vs 24h ago (2026-11-05 09:10 UTC)\n"
         "  Spot    0 (+0.00%)\n"
         "  CR      0\n"
         "  HVL     +2,000 (+2.00% of spot)\n"
         "  PS      0\n"
         "  Net GEX -$1.00M\n"
-        "  Settled: 6NOV26</pre>\n"
+        f"  Settled: 6NOV26{CLOSE}\n"
         "vs 7d ago: no stored record\n"
         "<b>Events and expiry roll-offs</b>\n"
         "- 6NOV26 settled since the 24h record; the moves of HVL coincide with this roll-off "

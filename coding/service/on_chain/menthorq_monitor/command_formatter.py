@@ -3,8 +3,9 @@ Telegram replies of the monitor's bot commands: /levels, /changes,
 /status, /mute, /help and the hint for an unknown command. (/brief is the
 brief of brief_formatter.)
 
-Same format rules as the brief: Telegram HTML with only <b>, <i> and <pre>,
-every dynamic text escaped, ASCII only, at most ``TELEGRAM_MESSAGE_LIMIT``
+Same format rules as the brief: Telegram HTML with only <b>, <i> and the
+brief's code block, every dynamic text escaped, the same "DATA STALE" line
+under the title of /levels and /changes, ASCII only, at most ``TELEGRAM_MESSAGE_LIMIT``
 UTF-16 code units (raw HTML length, never smaller than what Telegram counts).
 """
 
@@ -24,11 +25,13 @@ from coding.core.analytics.menthorq_monitor.level_trend_calculator import (
     spot_distances,
 )
 from coding.service.on_chain.menthorq_monitor.brief_formatter import (
+    DEFAULT_STALE_SNAPSHOT_LIMIT,
     LEVEL_ORDER,
     NOT_AVAILABLE,
     STALE_SNAPSHOT_AGE,
     TELEGRAM_MESSAGE_LIMIT,
     bullet_lines,
+    code_block,
     comparison_block,
     escape,
     format_gex,
@@ -39,6 +42,7 @@ from coding.service.on_chain.menthorq_monitor.brief_formatter import (
     notable_events,
     regime_sentence,
     regime_versus_net_gex_note,
+    stale_data_line,
     telegram_length,
 )
 
@@ -77,11 +81,28 @@ def _no_record(currency: str, text: str) -> str:
     return f"{_title(currency, text, None)}\nNo live record is stored yet."
 
 
-def format_levels_reply(currency: str, record: Optional[MenthorqLevelRecord]) -> str:
+def _title_lines(
+    currency: str, text: str, record: MenthorqLevelRecord, stale_limit: timedelta
+) -> List[str]:
+    """The title, then the "DATA STALE" line when the record's data is stale."""
+    lines = [_title(currency, text, record)]
+    stale_line = stale_data_line(record, stale_limit)
+    if stale_line is not None:
+        lines.append(stale_line)
+    return lines
+
+
+def format_levels_reply(
+    currency: str,
+    record: Optional[MenthorqLevelRecord],
+    stale_limit: timedelta = DEFAULT_STALE_SNAPSHOT_LIMIT,
+) -> str:
     """
     /levels: Call Resistance, HVL and Put Support of the latest stored live
     record with their signed distance to spot (level - spot, USD and % of
-    spot), spot, the regime sentence and total net GEX.
+    spot), spot, the regime sentence and total net GEX. Starts with the
+    "DATA STALE" line when the snapshot is more than ``stale_limit`` older
+    than the record's data time.
     """
     if record is None:
         return _no_record(currency, "key levels")
@@ -94,8 +115,8 @@ def format_levels_reply(currency: str, record: Optional[MenthorqLevelRecord]) ->
                     f"{format_signed_usd(distance.distance_usd):>9}")
     rows.append(f"{'Spot':<16}{format_strike(record.spot):>9}")
     lines = [
-        _title(currency, "key levels", record),
-        "<pre>" + escape("\n".join(rows)) + "</pre>",
+        *_title_lines(currency, "key levels", record, stale_limit),
+        code_block("\n".join(rows)),
         escape(regime_sentence(record)),
         f"Total net GEX {escape(format_gex(record.total_net_gex))} per 1% move.",
     ]
@@ -110,12 +131,14 @@ def format_changes_reply(
     record: Optional[MenthorqLevelRecord],
     comparisons: Sequence[RecordComparison],
     limit: int = TELEGRAM_MESSAGE_LIMIT,
+    stale_limit: timedelta = DEFAULT_STALE_SNAPSHOT_LIMIT,
 ) -> str:
     """
     /changes: the latest stored live record vs the previous run, 24 h and
     7 d ago (one block each, settled expiries listed in the block), then
     the events, which label a level move that coincides with an expiry
-    roll-off.
+    roll-off. Starts with the "DATA STALE" line when the record is stale
+    (see ``format_levels_reply``).
     """
     if record is None:
         return _no_record(currency, "changes")
@@ -123,7 +146,7 @@ def format_changes_reply(
 
     def render(maximum_events: Optional[int]) -> str:
         return "\n".join([
-            _title(currency, "changes", record),
+            *_title_lines(currency, "changes", record, stale_limit),
             "<i>USD; level % = % of current spot.</i>",
             *[comparison_block(comparison) for comparison in comparisons],
             "<b>Events and expiry roll-offs</b>",

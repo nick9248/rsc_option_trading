@@ -211,7 +211,7 @@ class TestTabDisplay:
         tab.copy_brief_as_plain_text()
         copied = QApplication.clipboard().text()
         assert copied.startswith("BTC MenthorQ-style levels | Preview")
-        assert "<b>" not in copied and "<pre>" not in copied
+        assert "<b>" not in copied and "<pre>" not in copied and "<code" not in copied
         assert "No reference JSON given" in _cell(tab.comparison_table, 0, 0)
         tab.close()
 
@@ -267,6 +267,10 @@ def test_rich_text_keeps_pre_blocks_and_breaks_other_lines():
     text = "<b>Title</b>\nline\n<pre>a\nb</pre>\nend\n\n<b>Next</b>\n<pre>c</pre>"
     assert telegram_html_to_rich_text(text) == (
         "<b>Title</b><br>line<pre>a\nb</pre>end<br><br><b>Next</b><pre>c</pre>")
+    # The brief's code block (<pre><code class=...>) is kept whole, newlines included.
+    coded = '<b>T</b>\n<pre><code class="language-text">a\nb</code></pre>\nend'
+    assert telegram_html_to_rich_text(coded) == (
+        '<b>T</b><pre><code class="language-text">a\nb</code></pre>end')
 
 
 def test_tab_is_registered_after_the_charts_tab():
