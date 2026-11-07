@@ -21,6 +21,7 @@ from coding.core.analytics.menthorq_replication_calculator import (
     IV_OI_AGGREGATION_SUM,
     PANEL_RANKING_ABSOLUTE_NET,
     PANEL_RANKING_GROSS,
+    black76_price,
     build_priced_instruments,
     compare_with_reference,
     compute_exposure,
@@ -28,7 +29,9 @@ from coding.core.analytics.menthorq_replication_calculator import (
     compute_iv_times_open_interest,
     compute_leg_greeks,
     cumulative_by_strike,
+    fill_missing_implied_volatility,
     fit_scale_factor,
+    implied_volatility_from_mark_price,
     is_monthly_expiry,
     is_quarterly_expiry,
     nearest_strike,
@@ -54,7 +57,8 @@ ONE_YEAR_BEFORE = SETTLEMENT_27NOV26 - timedelta(days=365)
 AT_THE_MONEY_GAMMA = 0.00773336
 
 
-def _row(expiration, strike, option_type, open_interest, mark_iv, underlying_price=100.0):
+def _row(expiration, strike, option_type, open_interest, mark_iv, underlying_price=100.0,
+         mark_price=None):
     return {
         "instrument_name": f"BTC-{expiration}-{int(strike)}-{option_type}",
         "expiration": expiration,
@@ -63,7 +67,77 @@ def _row(expiration, strike, option_type, open_interest, mark_iv, underlying_pri
         "open_interest": open_interest,
         "mark_iv": mark_iv,
         "underlying_price": underlying_price,
+        "mark_price": mark_price,
     }
+
+
+# Hand calculation, Black-76 (r = 0), F = K = 100, sigma = 0.5, tau = 1:
+#   d1 = 0.25, d2 = -0.25
+#   C = 100 * (N(0.25) - N(-0.25)) = 100 * (0.598706 - 0.401294) = 19.7413
+#   (the at-the-money put is equal by parity: P = C - F + K)
+#   mark price in BTC = 19.7413 / F = 0.197413
+AT_THE_MONEY_PRICE_USD = 19.7413
+AT_THE_MONEY_MARK_PRICE_BTC = 0.197413
+
+
+class TestImpliedVolatilityFromMarkPrice:
+    def test_black76_at_the_money_matches_hand_calculation(self):
+        assert black76_price(100.0, 100.0, 1.0, 0.5, "C") == pytest.approx(
+            AT_THE_MONEY_PRICE_USD, rel=1e-5)
+        assert black76_price(100.0, 100.0, 1.0, 0.5, "P") == pytest.approx(
+            AT_THE_MONEY_PRICE_USD, rel=1e-5)
+
+    def test_black76_out_of_the_money_call_matches_hand_calculation(self):
+        # F = 80000, K = 90000, sigma = 0.40, tau = 0.25: sigma*sqrt(tau) = 0.2
+        #   d1 = ln(0.888889) / 0.2 + 0.1 = -0.488915, d2 = -0.688915
+        #   N(d1) = 0.312451, N(d2) = 0.245438
+        #   C = 80000 * 0.312451 - 90000 * 0.245438 = 2906.62
+        #   P = C - F + K = 12906.62
+        assert black76_price(80000.0, 90000.0, 0.25, 0.40, "C") == pytest.approx(2906.62, rel=1e-5)
+        assert black76_price(80000.0, 90000.0, 0.25, 0.40, "P") == pytest.approx(12906.62, rel=1e-6)
+
+    def test_inverts_the_hand_calculated_price_back_to_fifty_percent(self):
+        assert implied_volatility_from_mark_price(
+            AT_THE_MONEY_MARK_PRICE_BTC, 100.0, 100.0, 1.0, "C"
+        ) == pytest.approx(50.0, abs=1e-3)
+
+    @pytest.mark.parametrize("strike, option_type", [
+        (90000.0, "C"), (90000.0, "P"), (60000.0, "P"), (70000.0, "C"),
+    ])
+    def test_round_trip_recovers_the_volatility(self, strike, option_type):
+        # price from 40% vol, convert USD -> BTC (divide by F), invert -> 40%
+        forward = 80000.0
+        mark_price_btc = black76_price(forward, strike, 0.25, 0.40, option_type) / forward
+        assert implied_volatility_from_mark_price(
+            mark_price_btc, forward, strike, 0.25, option_type
+        ) == pytest.approx(40.0, abs=1e-6)
+
+    @pytest.mark.parametrize("arguments", [
+        (None, 100.0, 100.0, 1.0, "C"),          # no mark price
+        (0.197413, None, 100.0, 1.0, "C"),       # no forward
+        (0.197413, 100.0, 100.0, 0.0, "C"),      # expired
+        (0.05, 100.0, 50.0, 1.0, "C"),           # 5 USD < intrinsic 50
+        (1.5, 100.0, 100.0, 1.0, "C"),           # 150 USD > forward 100
+        (0.197413, 100.0, 100.0, 1.0, "X"),
+    ])
+    def test_impossible_or_missing_input_returns_none(self, arguments):
+        assert implied_volatility_from_mark_price(*arguments) is None
+
+    def test_fill_labels_every_row_and_only_rebuilds_missing_iv(self):
+        rows = [
+            _row("27NOV26", 100, "C", 1.0, 40.0, mark_price=0.5),       # mark_iv kept
+            _row("27NOV26", 100, "P", 1.0, None, mark_price=AT_THE_MONEY_MARK_PRICE_BTC),
+            _row("27NOV26", 110, "C", 1.0, None, mark_price=None),      # nothing to rebuild from
+        ]
+        filled, counts = fill_missing_implied_volatility(rows, ONE_YEAR_BEFORE)
+        assert [row["iv_source"] for row in filled] == [
+            "mark_iv", "rebuilt_from_mark_price", "missing"]
+        assert filled[0]["mark_iv"] == 40.0
+        # tau = 1 year from ONE_YEAR_BEFORE -> the at-the-money hand calculation
+        assert filled[1]["mark_iv"] == pytest.approx(50.0, abs=1e-3)
+        assert filled[2]["mark_iv"] is None
+        assert counts == {"mark_iv": 1, "rebuilt_from_mark_price": 1, "missing": 1}
+        assert rows[1]["mark_iv"] is None    # input rows are not modified
 
 
 class TestBlackScholesGamma:
@@ -222,6 +296,28 @@ class TestExposure:
         exposure = compute_exposure(instruments, 80.0, ONE_YEAR_BEFORE)
         assert exposure["strikes"][0]["call_gex"] == pytest.approx(4.94935, rel=1e-5)
 
+    def test_no_leg_with_gamma_gives_none_not_zero_or_a_strike(self):
+        # mark_iv None on every leg (e.g. 2026-08-24 without the IV fallback).
+        # Before the fix: call/put GEX 0.0, levels = lowest strike (90),
+        # HVL candidates were strikes too. Now everything is "not computed".
+        rows = [_row("27NOV26", 90, "P", 30.0, None), _row("27NOV26", 100, "C", 10.0, None),
+                _row("27NOV26", 110, "C", 5.0, None)]
+        instruments = build_priced_instruments(
+            rows, ["27NOV26"], 100.0, ONE_YEAR_BEFORE, GAMMA_UNDERLYING_INDEX
+        )
+        exposure = compute_exposure(instruments, 100.0, ONE_YEAR_BEFORE)
+        assert exposure["total_net_gex"] is None
+        assert exposure["total_gross_gex"] is None
+        assert exposure["instruments_missing_gamma"] == 3
+        assert [row["strike"] for row in exposure["strikes"]] == [90.0, 100.0, 110.0]
+        assert exposure["strikes"][0]["put_open_interest"] == 30.0   # observed OI is kept
+        for row in exposure["strikes"]:
+            assert (row["call_gex"], row["put_gex"], row["net_gex"],
+                    row["cumulative_net_gex"]) == (None, None, None, None)
+        for candidates in exposure["levels"].values():
+            assert all(value is None for value in candidates.values())
+        assert exposure["spot_sweep_profile"] == []
+
     def test_missing_forward_gives_none_gamma(self):
         rows = [_row("27NOV26", 100, "C", 10.0, 50.0, underlying_price=None)]
         instruments = build_priced_instruments(
@@ -241,6 +337,18 @@ class TestGexExpiringShares:
         assert shares["A"]["net_over_absolute_net_sum"] == pytest.approx(-37.5)
         assert shares["B"]["net_over_absolute_net_sum"] == pytest.approx(62.5)
         assert shares["A"]["gross_over_gross_sum"] == pytest.approx(41.6666667)
+
+    def test_not_computed_expiry_is_none_and_left_out_of_denominators(self):
+        # computed: A -30, B 50 -> |net| sum 80 (C excluded, not counted as 0)
+        shares = compute_gex_expiring_shares({
+            "A": {"net": -30.0, "gross": 50.0},
+            "B": {"net": 50.0, "gross": 70.0},
+            "C": {"net": None, "gross": None},
+        })
+        assert shares["B"]["net_over_absolute_net_sum"] == pytest.approx(62.5)
+        assert shares["A"]["gross_over_gross_sum"] == pytest.approx(41.6666667)
+        assert shares["C"] == {"net_over_net_sum": None, "net_over_absolute_net_sum": None,
+                               "gross_over_gross_sum": None}
 
     def test_zero_denominator_is_none(self):
         shares = compute_gex_expiring_shares({"A": {"net": 0.0, "gross": 0.0}})
@@ -268,6 +376,24 @@ class TestPanelSelection:
         assert by_gross["highest_gex"] == "E3"
         assert by_gross["second_highest_gex"] == "E5"
 
+    def test_not_computed_expiries_are_skipped_for_every_panel(self):
+        # D1, D2 (e.g. dailies without gamma) are skipped: first/next become
+        # E1/E2, ranking of the rest by |net|: E4 (9) then E3 (1).
+        not_computed = {"net": None, "gross": None}
+        totals = {
+            "D1": not_computed, "E1": {"net": -50.0, "gross": 100.0},
+            "D2": not_computed, "E2": {"net": 60.0, "gross": 120.0},
+            "E3": {"net": 1.0, "gross": 30.0}, "E4": {"net": -9.0, "gross": 10.0},
+        }
+        order = ["D1", "E1", "D2", "E2", "E3", "E4"]
+        assert select_panel_expirations(order, totals, PANEL_RANKING_ABSOLUTE_NET) == {
+            "first_expiration": "E1", "next_expiration": "E2",
+            "highest_gex": "E4", "second_highest_gex": "E3"}
+
+    def test_all_not_computed_gives_no_panels(self):
+        totals = {"D1": {"net": None, "gross": None}, "D2": {"net": None, "gross": None}}
+        assert set(select_panel_expirations(["D1", "D2"], totals).values()) == {None}
+
 
 class TestScaleFit:
     def test_exact_proportional_fit(self):
@@ -290,6 +416,22 @@ class TestReplicateMenthorq:
     def test_rejects_naive_as_of(self):
         with pytest.raises(ValueError):
             replicate_menthorq([], 100.0, datetime(2026, 11, 6, 20, 59))
+
+    def test_expiry_without_gamma_is_not_computed_end_to_end(self):
+        # 27NOV26 priced: one call, net = 0.00773336 * 10 * 100^2 * 0.01 = 7.73336.
+        # 25DEC26 has no mark_iv: totals None, share None, not a panel.
+        rows = [_row("27NOV26", 100, "C", 10.0, 50.0), _row("25DEC26", 100, "C", 10.0, None)]
+        replication = replicate_menthorq(rows, 100.0, ONE_YEAR_BEFORE)
+        assert replication["settings"]["expirations"] == ["27NOV26", "25DEC26"]
+        assert replication["gex_by_expiration"]["27NOV26"]["total_net_gex"] == pytest.approx(
+            7.73336, rel=1e-5)
+        assert replication["gex_by_expiration"]["25DEC26"]["total_net_gex"] is None
+        assert replication["gex_expiring_percent"]["27NOV26"][
+            "net_over_absolute_net_sum"] == pytest.approx(100.0)
+        assert replication["gex_expiring_percent"]["25DEC26"]["net_over_absolute_net_sum"] is None
+        assert replication["panels"][PANEL_RANKING_ABSOLUTE_NET] == {
+            "first_expiration": "27NOV26", "next_expiration": None,
+            "highest_gex": None, "second_highest_gex": None}
 
     def test_end_to_end_and_comparison(self):
         rows = [

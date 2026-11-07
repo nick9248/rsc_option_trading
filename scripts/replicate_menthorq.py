@@ -3,23 +3,39 @@ Point-in-time replay of MenthorQ's BTC (Deribit) IV*OI chart and Net GEX
 panels from the local database.
 
 Usage (from repo root):
-    .venv\\Scripts\\python -m scripts.replicate_menthorq --as-of 2026-11-06T23:59:00Z ^
-        --open-interest-at-start-of-utc-day --expiry-universe quarterly_plus_front_month ^
-        --reference outputs/menthorq_replicate/menthorq_reference_20261106T2359Z.json
+    .venv\\Scripts\\python -m scripts.replicate_menthorq --menthorq-date 2026-10-12 ^
+        --expiry-universe all ^
+        --reference outputs/menthorq_replicate/menthorq_reference_20261012T2359Z.json
 
+--menthorq-date YYYY-MM-DD replays a MenthorQ chart labelled with that date:
+as_of = 23:59 UTC of the date, open interest as of 00:00 UTC of the same date.
 MenthorQ labels its charts "15:59 EST", but its printed spot matches the
-Deribit index at about 23:59 UTC of that date (checked on three dates), and
-its open interest matches the snapshot at 00:00 UTC of the same date.
+Deribit index at about 23:59 UTC (checked on 2026-08-24, 2026-10-12 and
+2026-11-06). Its open interest is about one day older; the data only
+constrain that instant to roughly 21:00 UTC of the previous day to about
+00:20 UTC, so 00:00 UTC is a consistent choice, not a proven one.
 
-Reads only (newest snapshot and index price at or before --as-of; no
+The expiry set is not pinned down: no single universe fits all dates.
+All-expiry levels: on 2026-11-06 "monthly" or "quarterly_plus_front_month"
+fits ("all" gives Put Support 74000 and HVL 77500, MenthorQ 75000 / 79000);
+on 2026-10-12 only "all" fits (the other two give HVL 79000, MenthorQ
+83000); on 2026-08-24 every universe gives the legend levels, but only with
+IV rebuilt from mark_price (snapshots.mark_iv is NULL until 2026-08-25
+15:11 UTC; the service does this as a labelled, logged fallback).
+Panel choice on 2026-10-12 needs weeklies but no dailies ("all" picks the
+13OCT26/14OCT26 dailies; MenthorQ shows 16OCT26/23OCT26), a set this
+script does not offer.
+
+Reads only (newest snapshot and index price at or before as_of; no
 lookahead). Writes PNGs and a JSON of every number to --output-directory.
 """
 
 import argparse
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
 from pathlib import Path
+from typing import Optional, Sequence, Tuple
 
 from coding.core.analytics.menthorq_replication_calculator import (
     EXPIRY_UNIVERSE_MONTHLY,
@@ -33,6 +49,8 @@ from coding.service.on_chain.menthorq_replication_service import MenthorqReplica
 
 logger = logging.getLogger(__name__)
 
+MENTHORQ_DATA_TIME_UTC = time(23, 59)
+
 
 def parse_utc_timestamp(text: str) -> datetime:
     """ISO timestamp -> UTC-aware datetime; a timestamp without offset is taken as UTC."""
@@ -42,19 +60,25 @@ def parse_utc_timestamp(text: str) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
-def main() -> None:
-    """Parse arguments and run the replication."""
+def build_parser() -> argparse.ArgumentParser:
+    """Command-line arguments of the replay."""
     parser = argparse.ArgumentParser(
         description="Point-in-time replay of MenthorQ's BTC (Deribit) charts from the local database."
     )
-    parser.add_argument("--as-of", required=True, type=parse_utc_timestamp,
-                        help="Replay instant, ISO 8601 (UTC if no offset)")
+    instant_group = parser.add_mutually_exclusive_group(required=True)
+    instant_group.add_argument("--as-of", type=parse_utc_timestamp,
+                               help="Replay instant, ISO 8601 (UTC if no offset)")
+    instant_group.add_argument("--menthorq-date", type=date.fromisoformat,
+                               help="Date a MenthorQ chart is labelled with (YYYY-MM-DD): "
+                                    "as_of = 23:59 UTC and open interest as of 00:00 UTC of "
+                                    "that date (a consistent choice, not a proven instant)")
     parser.add_argument("--currency", default="BTC")
     parser.add_argument("--output-directory", type=Path,
                         default=Path("outputs") / "menthorq_replicate")
     parser.add_argument("--expiry-universe", choices=EXPIRY_UNIVERSES,
                         default=EXPIRY_UNIVERSE_MONTHLY,
-                        help="Expiry set used for the rendered charts")
+                        help="Expiry set used for the rendered charts (not pinned down: "
+                             "no single set fits every date)")
     parser.add_argument("--gamma-underlying", choices=GAMMA_UNDERLYINGS,
                         default=GAMMA_UNDERLYING_INDEX,
                         help="Price the gamma is evaluated at for the rendered charts "
@@ -67,18 +91,37 @@ def main() -> None:
                                           "(tests whether the reference uses older open interest)")
     open_interest_group.add_argument("--open-interest-at-start-of-utc-day", action="store_true",
                                      help="Take open interest from 00:00 UTC of the --as-of day "
-                                          "(the timing that matched MenthorQ best)")
-    arguments = parser.parse_args()
+                                          "(consistent with MenthorQ on three dates; the true "
+                                          "instant is only known to within about 3 h)")
+    return parser
+
+
+def resolve_instants(
+    parser: argparse.ArgumentParser, arguments: argparse.Namespace
+) -> Tuple[datetime, Optional[datetime]]:
+    """(as_of, open_interest_as_of) from the parsed arguments."""
+    if arguments.menthorq_date is not None:
+        if arguments.open_interest_as_of is not None or arguments.open_interest_at_start_of_utc_day:
+            parser.error("--menthorq-date already sets the open-interest instant")
+        as_of = datetime.combine(arguments.menthorq_date, MENTHORQ_DATA_TIME_UTC, tzinfo=timezone.utc)
+        return as_of, start_of_utc_day(as_of)
+    if arguments.open_interest_at_start_of_utc_day:
+        return arguments.as_of, start_of_utc_day(arguments.as_of)
+    return arguments.as_of, arguments.open_interest_as_of
+
+
+def main(argv: Optional[Sequence[str]] = None) -> None:
+    """Parse arguments and run the replication."""
+    parser = build_parser()
+    arguments = parser.parse_args(argv)
+    as_of, open_interest_as_of = resolve_instants(parser, arguments)
 
     init_logging(level="INFO", task_name="replicate_menthorq")
     reference = (json.loads(arguments.reference.read_text(encoding="utf-8"))
                  if arguments.reference else None)
-    open_interest_as_of = (start_of_utc_day(arguments.as_of)
-                           if arguments.open_interest_at_start_of_utc_day
-                           else arguments.open_interest_as_of)
     MenthorqReplicationService().run(
         currency=arguments.currency,
-        as_of=arguments.as_of,
+        as_of=as_of,
         output_directory=arguments.output_directory,
         expiry_universe=arguments.expiry_universe,
         gamma_underlying=arguments.gamma_underlying,

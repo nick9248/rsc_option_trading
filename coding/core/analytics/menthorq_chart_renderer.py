@@ -46,14 +46,19 @@ DISPLAY_HIGH_MULTIPLIER = 1.35
 MILLION = 1_000_000.0
 
 # Which candidate each drawn level line uses, chosen by comparison with
-# MenthorQ's charts labelled 2026-11-06, 2026-10-12 (tuning) and 2026-08-24
-# (hold-out), replayed at 23:59 UTC with open interest from 00:00 UTC: the
-# net-GEX extremes and the cumulative-net-GEX minimum matched 24 of 24
-# per-expiry panel levels (the two tuning dates) and 3 of 3 all-expiry
-# levels on each date when the expiry set that fits that date is used
-# (quarterly + front month on 2026-11-06, all expiries on the other two),
-# while the call-only / put-only gamma maxima (MenthorQ's published wording)
-# matched 8 of 16 per-expiry levels. The JSON output carries every candidate.
+# MenthorQ's charts labelled 2026-11-06 and 2026-10-12 (tuning), replayed at
+# 23:59 UTC with open interest from 00:00 UTC (a consistent choice; the
+# open-interest instant is only constrained to roughly 21:00 UTC of the
+# previous day to about 00:20 UTC): the net-GEX extremes and the
+# cumulative-net-GEX minimum matched 24 of 24 per-expiry panel levels and
+# 3 of 3 all-expiry levels on each date, but only with a different expiry
+# set per date (monthly or quarterly + front month on 2026-11-06, all
+# expiries on 2026-10-12; no single set fits both). The call-only /
+# put-only gamma maxima (MenthorQ's published wording) matched 8 of 16
+# per-expiry levels. The 2026-08-24 "hold-out" (3 of 3 levels on two
+# charts) is weak evidence: snapshots.mark_iv is NULL there, so it needs the
+# IV rebuilt from mark_price, and the rules were written after its legend
+# had been seen. The JSON output carries every candidate.
 DEFAULT_LEVEL_CANDIDATES = {
     "call_resistance": "net_gex_argmax_positive",
     "put_support": "net_gex_argmin_negative",
@@ -194,6 +199,8 @@ def _draw_gex_panel(
     # GEX profile line: cumulative net GEX over strikes (the HVL candidate
     # drawn), rescaled so its largest |value| spans the largest |bar| --
     # MenthorQ draws its profile on the bar axis without stating units.
+    # This rescale is an approximation, not MenthorQ's formula: within 10%
+    # on 11 of 12 transcribed profiles, 21% off on the 2026-11-06 25DEC26 one.
     cumulative = [row["cumulative_net_gex"] for row in rows]
     largest_bar = max((abs(value) for value in net_values), default=0.0)
     largest_cumulative = max((abs(value) for value in cumulative), default=0.0)
@@ -232,6 +239,12 @@ def render_gex_panels_chart(
     """
     2x2 "NET GEX Multi Expirations" figure: first, next, highest and
     second-highest |net GEX| expiry (see ``select_panel_expirations``).
+
+    The default GEX Expiring % candidate (net / sum |net|) is the best of
+    the candidates but only approximate. A review fit put its max error at
+    0.35 percentage points on 2026-10-12 and 2.1 on 2026-11-06; this code,
+    which divides by the whole expiry universe, is off by up to 2.9 points
+    (2026-10-12, "all") and 4.9 points (2026-11-06, quarterly + front month).
     """
     spot = replication["settings"]["index_price"]
     panels = replication["panels"][PANEL_RANKING_ABSOLUTE_NET]

@@ -1068,9 +1068,9 @@ class DatabaseRepository:
         Returns:
             (captured_at_utc, rows) where each row has instrument_name,
             expiration, strike, option_type, open_interest, mark_iv (percent,
-            as stored) and underlying_price (the expiry's forward). Numeric
-            NULLs stay None. None when no capture exists at or before
-            ``as_of``.
+            as stored), mark_price (in the underlying, e.g. BTC) and
+            underlying_price (the expiry's forward). Numeric NULLs stay
+            None. None when no capture exists at or before ``as_of``.
         """
         as_of_naive_utc = as_of.astimezone(timezone.utc).replace(tzinfo=None)
         with self._db_cursor() as cursor:
@@ -1083,7 +1083,7 @@ class DatabaseRepository:
                 return None
             cursor.execute("""
                 SELECT instrument_name, expiration, strike, option_type,
-                       open_interest, mark_iv, underlying_price
+                       open_interest, mark_iv, underlying_price, mark_price
                 FROM snapshots
                 WHERE currency = %s AND captured_at = %s
                 ORDER BY expiration, strike, option_type
@@ -1102,6 +1102,7 @@ class DatabaseRepository:
                 "open_interest": to_float(row[4]),
                 "mark_iv": to_float(row[5]),
                 "underlying_price": to_float(row[6]),
+                "mark_price": to_float(row[7]),
             }
             for row in fetched_rows
         ]

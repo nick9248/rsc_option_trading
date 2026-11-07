@@ -22,7 +22,10 @@ from coding.core.analytics.menthorq_replication_calculator import (
     EXPIRY_UNIVERSES,
     GAMMA_UNDERLYING_INDEX,
     GAMMA_UNDERLYINGS,
+    IV_SOURCE_MISSING,
+    IV_SOURCE_REBUILT_FROM_MARK_PRICE,
     compare_with_reference,
+    fill_missing_implied_volatility,
     replicate_menthorq,
 )
 from coding.core.database.repository import DatabaseRepository
@@ -53,6 +56,12 @@ class MenthorqReplicationService:
         ``as_of``. It exists to test whether a reference (MenthorQ) uses
         older open interest; an instrument absent from the older snapshot
         gets open interest None, not 0.
+
+        A row without ``mark_iv`` gets an IV rebuilt from its ``mark_price``
+        and forward (``fill_missing_implied_volatility``, priced at the
+        snapshot's capture time). This fallback is logged as a warning, each
+        row carries ``iv_source`` and the counts are returned as
+        ``iv_source_counts``.
 
         Raises:
             LookupError: when an input has no row at or before its instant
@@ -86,6 +95,17 @@ class MenthorqReplicationService:
                 dict(row, open_interest=older_open_interest.get(row["instrument_name"]))
                 for row in chain_rows
             ]
+        chain_rows, iv_source_counts = fill_missing_implied_volatility(chain_rows, captured_at)
+        if iv_source_counts[IV_SOURCE_REBUILT_FROM_MARK_PRICE]:
+            logger.warning(
+                "mark_iv missing on %d rows of the %s snapshot: IV rebuilt from mark_price "
+                "and the forward (Black-76, r = 0), labelled iv_source=%r",
+                iv_source_counts[IV_SOURCE_REBUILT_FROM_MARK_PRICE], captured_at.isoformat(),
+                IV_SOURCE_REBUILT_FROM_MARK_PRICE,
+            )
+        if iv_source_counts[IV_SOURCE_MISSING]:
+            logger.warning("%d rows have no IV (no mark_iv and none rebuilt); their gamma is not computed",
+                           iv_source_counts[IV_SOURCE_MISSING])
         logger.info(
             "Inputs for %s: snapshot captured %s (%d rows), index %.2f from trade at %s",
             as_of.isoformat(), captured_at.isoformat(), len(chain_rows), index_price,
@@ -95,6 +115,7 @@ class MenthorqReplicationService:
             "snapshot_captured_at_utc": captured_at,
             "open_interest_captured_at_utc": open_interest_captured_at,
             "chain_rows": chain_rows,
+            "iv_source_counts": iv_source_counts,
             "index_price": index_price,
             "index_price_time_utc": index_time,
         }
@@ -137,6 +158,16 @@ class MenthorqReplicationService:
                 replication = replicate_menthorq(
                     inputs["chain_rows"], inputs["index_price"], as_of, universe, underlying
                 )
+                not_computed = [expiration for expiration, exposure
+                                in replication["gex_by_expiration"].items()
+                                if exposure["total_net_gex"] is None]
+                if not_computed:
+                    logger.warning(
+                        "%s / gamma at %s: GEX not computed (no leg has a gamma) for %d of %d "
+                        "expiries %s; their levels are None and they are skipped for panels",
+                        universe, underlying, len(not_computed),
+                        len(replication["gex_by_expiration"]), not_computed,
+                    )
                 configurations[f"{universe}__gamma_at_{underlying}"] = {
                     "replication": replication,
                     "comparison": (
@@ -163,6 +194,7 @@ class MenthorqReplicationService:
                 "snapshot_captured_at_utc": inputs["snapshot_captured_at_utc"].isoformat(),
                 "open_interest_captured_at_utc": inputs["open_interest_captured_at_utc"].isoformat(),
                 "chain_row_count": len(inputs["chain_rows"]),
+                "iv_source_counts": inputs["iv_source_counts"],
                 "index_price": inputs["index_price"],
                 "index_price_source": "historical_trades.index_price of the newest trade at or before as_of",
                 "index_price_time_utc": inputs["index_price_time_utc"].isoformat(),

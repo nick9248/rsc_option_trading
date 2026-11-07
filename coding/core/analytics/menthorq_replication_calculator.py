@@ -19,6 +19,9 @@ Conventions (stated, not hidden):
   - Black-Scholes gamma with r = q = 0 (the convention of the rest of this
     package); Deribit settles at 08:00 UTC on the expiry date.
   - ``mark_iv`` is stored in PERCENT; it is divided by 100 for pricing.
+    Where it is NULL (BTC snapshots before 2026-08-25 15:11 UTC) the
+    service may rebuild it from ``mark_price`` (``fill_missing_implied_volatility``);
+    every row then says which source its IV came from (``iv_source``).
   - Contract multiplier is 1 BTC, so open interest is in BTC.
   - Net GEX per strike = (sum call gamma*OI - sum put gamma*OI) * S^2 * 0.01
     (USD per 1% move), exactly the existing ``GexDexCalculator`` formula,
@@ -82,6 +85,13 @@ PANEL_NAMES = (
 PANEL_RANKING_ABSOLUTE_NET = "absolute_net_gex"
 PANEL_RANKING_GROSS = "gross_gex"
 
+IV_SOURCE_MARK_IV = "mark_iv"
+IV_SOURCE_REBUILT_FROM_MARK_PRICE = "rebuilt_from_mark_price"
+IV_SOURCE_MISSING = "missing"
+IMPLIED_VOLATILITY_SEARCH_LOW = 1e-4     # decimal, 0.01% vol
+IMPLIED_VOLATILITY_SEARCH_HIGH = 10.0    # decimal, 1000% vol
+IMPLIED_VOLATILITY_TOLERANCE = 1e-10     # decimal vol
+
 
 # --------------------------------------------------------------------------
 # Expiry handling
@@ -109,8 +119,11 @@ def start_of_utc_day(instant: datetime) -> datetime:
     MenthorQ's BTC charts take open interest about one day older than their
     spot and IV: compared on 2026-08-24, 2026-10-12 and 2026-11-06 (data
     instant 23:59 UTC), open interest from the snapshot at or before 00:00
-    UTC of the same day matched their bars and levels best. This instant is
-    always at or before ``instant``, so using it adds no lookahead.
+    UTC of the same day matched their bars and levels best. The data only
+    constrain that instant to roughly 21:00 UTC of the previous day to
+    about 00:20 UTC; 00:00 is a consistent choice, not a proven one. This
+    instant is always at or before ``instant``, so using it adds no
+    lookahead.
 
     Raises:
         ValueError: when ``instant`` is naive.
@@ -211,6 +224,121 @@ def compute_leg_greeks(
         "call" if kind == "C" else "put",
     )
     return {"gamma": greeks["gamma"], "delta": greeks["delta"]}
+
+
+# --------------------------------------------------------------------------
+# Implied volatility fallback (snapshots without mark_iv)
+# --------------------------------------------------------------------------
+
+def _standard_normal_cdf(value: float) -> float:
+    return 0.5 * (1.0 + math.erf(value / math.sqrt(2.0)))
+
+
+def black76_price(
+    forward: float, strike: float, time_to_expiry_years: float,
+    volatility_decimal: float, option_type: str,
+) -> float:
+    """
+    Undiscounted Black-76 option price (r = 0) in the forward's currency
+    (USD for BTC). The put comes from put-call parity: P = C - F + K.
+    """
+    volatility_root_time = volatility_decimal * math.sqrt(time_to_expiry_years)
+    d1 = math.log(forward / strike) / volatility_root_time + 0.5 * volatility_root_time
+    d2 = d1 - volatility_root_time
+    call = forward * _standard_normal_cdf(d1) - strike * _standard_normal_cdf(d2)
+    return call if option_type.upper() == "C" else call - forward + strike
+
+
+def implied_volatility_from_mark_price(
+    mark_price_in_underlying: Optional[float],
+    forward: Optional[float],
+    strike: Optional[float],
+    time_to_expiry_years: Optional[float],
+    option_type: Optional[str],
+) -> Optional[float]:
+    """
+    Implied volatility in PERCENT (the unit of ``mark_iv``) that reproduces
+    a Deribit mark price, by bisection on ``black76_price``.
+
+    Deribit quotes option mark prices in the underlying (BTC), so the USD
+    price is ``mark_price_in_underlying * forward`` (the expiry's forward,
+    ``snapshots.underlying_price``; Deribit implies mark IV against it).
+
+    Returns None -- never a default vol -- when an input is missing or
+    non-positive, or the price is outside the no-arbitrage range
+    (intrinsic, forward for a call / strike for a put).
+    """
+    if (mark_price_in_underlying is None or forward is None or strike is None
+            or time_to_expiry_years is None):
+        return None
+    if min(mark_price_in_underlying, forward, strike, time_to_expiry_years) <= 0:
+        return None
+    kind = (option_type or "").upper()
+    if kind not in ("C", "P"):
+        return None
+    target = mark_price_in_underlying * forward
+    intrinsic = max(0.0, forward - strike) if kind == "C" else max(0.0, strike - forward)
+    upper_bound = forward if kind == "C" else strike
+    if not intrinsic < target < upper_bound:
+        return None
+
+    def price(volatility_decimal: float) -> float:
+        return black76_price(forward, strike, time_to_expiry_years, volatility_decimal, kind)
+
+    low, high = IMPLIED_VOLATILITY_SEARCH_LOW, IMPLIED_VOLATILITY_SEARCH_HIGH
+    if not price(low) <= target <= price(high):
+        return None
+    while high - low > IMPLIED_VOLATILITY_TOLERANCE:
+        middle = 0.5 * (low + high)
+        if price(middle) < target:
+            low = middle
+        else:
+            high = middle
+    return 100.0 * 0.5 * (low + high)
+
+
+def fill_missing_implied_volatility(
+    chain_rows: Sequence[Dict[str, Any]], priced_at: datetime
+) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
+    """
+    Explicit, labelled fallback for snapshots without ``mark_iv`` (BTC
+    ``snapshots.mark_iv`` is NULL until 2026-08-25 15:11 UTC, while
+    ``mark_price`` and ``underlying_price`` are stored).
+
+    A row whose ``mark_iv`` is None but whose ``mark_price`` (BTC) and
+    forward are present gets the IV inverted from that price
+    (``implied_volatility_from_mark_price``). Every returned row carries
+    ``iv_source``: "mark_iv", "rebuilt_from_mark_price" or "missing" (no IV
+    either way; ``mark_iv`` stays None).
+
+    Args:
+        chain_rows: Snapshot rows (mark_iv in percent, mark_price in BTC).
+        priced_at: The instant the mark prices refer to (the snapshot's
+            capture time); time to expiry is measured from it.
+
+    Returns:
+        (new rows, {"mark_iv": n, "rebuilt_from_mark_price": n, "missing": n}).
+    """
+    counts = {IV_SOURCE_MARK_IV: 0, IV_SOURCE_REBUILT_FROM_MARK_PRICE: 0, IV_SOURCE_MISSING: 0}
+    filled: List[Dict[str, Any]] = []
+    for row in chain_rows:
+        row = dict(row)
+        if row.get("mark_iv") is not None:
+            row["iv_source"] = IV_SOURCE_MARK_IV
+        else:
+            settlement = parse_expiry_settlement(row.get("expiration", ""))
+            rebuilt = implied_volatility_from_mark_price(
+                row.get("mark_price"), row.get("underlying_price"), row.get("strike"),
+                (settlement - priced_at).total_seconds() / SECONDS_PER_YEAR
+                if settlement is not None else None,
+                row.get("option_type"),
+            )
+            row["mark_iv"] = rebuilt
+            row["iv_source"] = (IV_SOURCE_REBUILT_FROM_MARK_PRICE if rebuilt is not None
+                                else IV_SOURCE_MISSING)
+        counts[row["iv_source"]] += 1
+        filled.append(row)
+    return filled, counts
 
 
 def build_priced_instruments(
@@ -444,10 +572,45 @@ def compute_exposure(
           "spot_sweep_profile": [(spot, net_gex)],
         }
         All GEX values are USD per 1% move.
+
+        When NO instrument has a gamma (e.g. a snapshot without mark_iv),
+        every GEX value, total and level is None ("not computed"):
+        ``GexDexCalculator`` adds a missing gamma as 0, so the pickers
+        would otherwise return the lowest strike as a level.
     """
     gex_result = GexDexCalculator(
         list(instruments), index_price, currency="BTC", as_of=as_of
     ).calculate()
+    if gex_result.instruments_missing_gamma == len(instruments):
+        return {
+            "strikes": [
+                {
+                    "strike": row.strike,
+                    "call_open_interest": row.call_oi,
+                    "put_open_interest": row.put_oi,
+                    "call_gex": None,
+                    "put_gex": None,
+                    "net_gex": None,
+                    "cumulative_net_gex": None,
+                }
+                for row in gex_result.strike_rows
+            ],
+            "total_net_gex": None,
+            "total_gross_gex": None,
+            "instruments_missing_gamma": gex_result.instruments_missing_gamma,
+            "levels": {
+                "call_resistance": {"call_gex_argmax": None, "net_gex_argmax_positive": None},
+                "put_support": {"put_gex_argmax": None, "net_gex_argmin_negative": None},
+                "hvl": {
+                    "cumulative_net_gex_argmin": None,
+                    "spot_sweep_gex_argmin": None,
+                    "spot_sweep_gex_argmin_nearest_strike": None,
+                    "spot_sweep_zero_crossing_nearest_spot": None,
+                    "cumulative_sign_change_existing": None,
+                },
+            },
+            "spot_sweep_profile": [],
+        }
     gex_scale = index_price * index_price * GEX_PER_ONE_PERCENT_MOVE
 
     strikes = [
@@ -504,7 +667,7 @@ def compute_exposure(
 
 
 def compute_gex_expiring_shares(
-    totals_by_expiration: Dict[str, Dict[str, float]]
+    totals_by_expiration: Dict[str, Dict[str, Optional[float]]]
 ) -> Dict[str, Dict[str, Optional[float]]]:
     """
     "GEX Expiring %" candidates for every expiry, in percent.
@@ -516,28 +679,39 @@ def compute_gex_expiring_shares(
     Returns:
         {expiration: {"net_over_net_sum", "net_over_absolute_net_sum",
                       "gross_over_gross_sum"}}; a candidate is None when its
-        denominator is zero.
+        denominator is zero. An expiry whose totals are None (not
+        computed) gets None shares and is left out of the denominators.
     """
-    net_sum = sum(totals["net"] for totals in totals_by_expiration.values())
-    absolute_net_sum = sum(abs(totals["net"]) for totals in totals_by_expiration.values())
-    gross_sum = sum(totals["gross"] for totals in totals_by_expiration.values())
+    computed: Dict[str, Tuple[float, float]] = {}
+    for expiration, totals in totals_by_expiration.items():
+        net, gross = totals["net"], totals["gross"]
+        if net is not None and gross is not None:
+            computed[expiration] = (net, gross)
+    net_sum = sum(net for net, _ in computed.values())
+    absolute_net_sum = sum(abs(net) for net, _ in computed.values())
+    gross_sum = sum(gross for _, gross in computed.values())
 
     def share(numerator: float, denominator: float) -> Optional[float]:
         return 100.0 * numerator / denominator if denominator else None
 
-    return {
-        expiration: {
-            "net_over_net_sum": share(totals["net"], net_sum),
-            "net_over_absolute_net_sum": share(totals["net"], absolute_net_sum),
-            "gross_over_gross_sum": share(totals["gross"], gross_sum),
+    shares: Dict[str, Dict[str, Optional[float]]] = {}
+    for expiration in totals_by_expiration:
+        if expiration not in computed:
+            shares[expiration] = {"net_over_net_sum": None, "net_over_absolute_net_sum": None,
+                                  "gross_over_gross_sum": None}
+            continue
+        net, gross = computed[expiration]
+        shares[expiration] = {
+            "net_over_net_sum": share(net, net_sum),
+            "net_over_absolute_net_sum": share(net, absolute_net_sum),
+            "gross_over_gross_sum": share(gross, gross_sum),
         }
-        for expiration, totals in totals_by_expiration.items()
-    }
+    return shares
 
 
 def select_panel_expirations(
     chronological_expirations: Sequence[str],
-    totals_by_expiration: Dict[str, Dict[str, float]],
+    totals_by_expiration: Dict[str, Dict[str, Optional[float]]],
     ranking: str = PANEL_RANKING_ABSOLUTE_NET,
 ) -> Dict[str, Optional[str]]:
     """
@@ -547,20 +721,26 @@ def select_panel_expirations(
     ``ranking`` is "absolute_net_gex" (|net GEX|) or "gross_gex" -- a
     candidate, since MenthorQ does not say which "GEX" it ranks by. The
     first/next expiries are excluded from the ranking (otherwise a panel
-    would repeat).
+    would repeat). Expiries whose totals are None (GEX not computed) are
+    skipped for every panel.
     """
-    if ranking == PANEL_RANKING_ABSOLUTE_NET:
-        def size(expiration: str) -> float:
-            return abs(totals_by_expiration[expiration]["net"])
-    elif ranking == PANEL_RANKING_GROSS:
-        def size(expiration: str) -> float:
-            return totals_by_expiration[expiration]["gross"]
-    else:
+    if ranking not in (PANEL_RANKING_ABSOLUTE_NET, PANEL_RANKING_GROSS):
         raise ValueError(f"Unknown panel ranking {ranking!r}")
 
-    first = chronological_expirations[0] if len(chronological_expirations) > 0 else None
-    following = chronological_expirations[1] if len(chronological_expirations) > 1 else None
-    remaining = sorted(chronological_expirations[2:], key=size, reverse=True)
+    size_by_expiration: Dict[str, float] = {}
+    for expiration in chronological_expirations:
+        net = totals_by_expiration[expiration]["net"]
+        gross = totals_by_expiration[expiration]["gross"]
+        if net is None or gross is None:
+            continue
+        size_by_expiration[expiration] = abs(net) if ranking == PANEL_RANKING_ABSOLUTE_NET else gross
+
+    computed = [expiration for expiration in chronological_expirations
+                if expiration in size_by_expiration]
+    first = computed[0] if len(computed) > 0 else None
+    following = computed[1] if len(computed) > 1 else None
+    remaining = sorted(computed[2:], key=lambda expiration: size_by_expiration[expiration],
+                       reverse=True)
     return {
         PANEL_FIRST_EXPIRATION: first,
         PANEL_NEXT_EXPIRATION: following,

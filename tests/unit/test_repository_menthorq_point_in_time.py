@@ -29,6 +29,7 @@ CREATE TABLE snapshots (
     option_type      CHAR(1),
     open_interest    DECIMAL(18,8),
     underlying_price DECIMAL(18,8),
+    mark_price       DECIMAL(18,8),
     mark_iv          DECIMAL(10,4)
 );
 CREATE TABLE historical_trades (
@@ -168,6 +169,7 @@ def test_snapshot_keeps_missing_numbers_as_none(repo):
     assert rows[0]["open_interest"] is None
     assert rows[0]["mark_iv"] is None
     assert rows[0]["underlying_price"] is None
+    assert rows[0]["mark_price"] is None
 
 
 def test_snapshot_is_none_when_only_later_captures_exist(repo):
