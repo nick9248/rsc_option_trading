@@ -70,7 +70,8 @@ def build_dry_run_output(service: MenthorqMonitorService, as_of: datetime) -> st
                          daily_close if daily_close.spot is not None else None,
                          title="Dry run (references replayed, not stored)")
     by_label = {comparison.label: comparison for comparison in comparisons}
-    alerts = evaluate_urgent_alerts(by_label[COMPARISON_PREVIOUS], by_label[COMPARISON_ONE_DAY])
+    alerts = evaluate_urgent_alerts(latest, by_label[COMPARISON_PREVIOUS], by_label[COMPARISON_ONE_DAY],
+                                    service.settings.alert_thresholds)
     parts = [brief, f"\n[brief length {telegram_length(brief)} of 4096]\n"]
     if alerts:
         alert_text = format_urgent_alert(latest, alerts)

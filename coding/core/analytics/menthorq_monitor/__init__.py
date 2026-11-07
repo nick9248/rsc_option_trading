@@ -1,4 +1,5 @@
 """
-MenthorQ-style level monitor: the stored record, the trend comparison and the
-urgent-alert rules. Pure (no database, network or plotting imports).
+MenthorQ-style level monitor: the stored record, the trend comparison, the
+urgent-alert rules and the alert mute. Pure (no database, network or
+plotting imports).
 """

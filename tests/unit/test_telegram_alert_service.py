@@ -54,6 +54,36 @@ class TestParseModeAndUpdates:
             assert service.get_updates(offset=None, timeout_seconds=1) is None
 
 
+class TestSetMyCommands:
+    def test_command_menu_is_posted_as_bot_command_list(self):
+        service = TelegramAlertService(token="abc123", chat_id="999")
+        with patch("coding.service.scanner.telegram_alert_service.requests.post",
+                   return_value=MagicMock(ok=True)) as mock_post:
+            assert service.set_my_commands([("brief", "Full brief"), ("mute", "Silence alerts")]) is True
+        args, kwargs = mock_post.call_args
+        assert args[0] == "https://api.telegram.org/botabc123/setMyCommands"
+        assert kwargs["json"] == {"commands": [{"command": "brief", "description": "Full brief"},
+                                               {"command": "mute", "description": "Silence alerts"}]}
+        assert kwargs["timeout"] == 10
+
+    def test_failures_return_false_never_raise_and_hide_the_token(self, caplog):
+        service = TelegramAlertService(token="secret-token", chat_id="999")
+        with patch("coding.service.scanner.telegram_alert_service.requests.post",
+                   side_effect=ConnectionError("url: /botsecret-token/setMyCommands")):
+            assert service.set_my_commands([("help", "List")]) is False
+        assert "secret-token" not in caplog.text
+        rejected = MagicMock(ok=False, status_code=400, text="Bad Request: BOT_COMMAND_INVALID")
+        with patch("coding.service.scanner.telegram_alert_service.requests.post", return_value=rejected):
+            assert service.set_my_commands([("Help!", "x")]) is False
+
+    def test_missing_token_skips_the_call(self):
+        service = TelegramAlertService(token="", chat_id="999")
+        service._token = ""
+        with patch("coding.service.scanner.telegram_alert_service.requests.post") as mock_post:
+            assert service.set_my_commands([("help", "List")]) is False
+        mock_post.assert_not_called()
+
+
 class TestSendFailurePaths:
     def test_non_200_response_returns_false(self):
         service = TelegramAlertService(token="abc123", chat_id="999")

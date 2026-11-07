@@ -1,6 +1,7 @@
 """
 Telegram delivery of the MenthorQ-style monitor: urgent alerts (after each
-hourly run), the weekly brief and the on-demand brief (/brief).
+hourly run, unless muted with /mute), the weekly brief and the on-demand
+brief (/brief).
 
 Sending reuses ``TelegramAlertService`` (one attempt, never raises). A
 message counts as delivered only when Telegram accepted it; only then is it
@@ -15,6 +16,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Callable, List, Optional
 
+from coding.core.analytics.menthorq_monitor.alert_mute import is_muted
 from coding.core.analytics.menthorq_monitor.alert_rules import (
     AlertThresholds,
     apply_cooldown,
@@ -67,23 +69,38 @@ class MenthorqBriefDeliveryService:
         self,
         monitor_service: MenthorqMonitorService,
         telegram: TelegramAlertService,
-        thresholds: AlertThresholds = AlertThresholds(),
+        thresholds: Optional[AlertThresholds] = None,
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ):
         """
         Args:
             monitor_service: Record access (and its repository for the
-                delivery log).
+                delivery log and the mute state).
             telegram: Sender (its chat is the owner chat).
-            thresholds: Urgent-alert thresholds and cooldown.
+            thresholds: Urgent-alert rules and cooldown; the settings'
+                ``alert_thresholds`` when omitted.
             clock: Wall clock (UTC-aware) for the delivery time.
         """
         self.monitor_service = monitor_service
         self.repository = monitor_service.repository
         self.settings = monitor_service.settings
         self.telegram = telegram
-        self.thresholds = thresholds
+        self.thresholds = thresholds if thresholds is not None else self.settings.alert_thresholds
         self.clock = clock
+
+    def alerts_muted(self, now: datetime) -> bool:
+        """
+        True while the owner's /mute is in force. When the state cannot be
+        read (e.g. migration 032 not applied) it is logged and alerts are
+        treated as NOT muted: a mute that cannot be read could not have been
+        saved either, and an extra alert is safer than a silently lost one.
+        """
+        try:
+            state = self.repository.get_menthorq_monitor_state(self.settings.currency)
+        except Exception:
+            logger.exception("MenthorQ monitor: mute state not readable; alerts treated as not muted")
+            return False
+        return is_muted(state, now)
 
     def build_brief(self, now: datetime, title: str) -> Optional[str]:
         """
@@ -112,11 +129,14 @@ class MenthorqBriefDeliveryService:
     def send_urgent_alerts(self, latest: MenthorqLevelRecord, now: datetime) -> List[str]:
         """
         Evaluate the urgent rules on ``latest`` and send ONE message with
-        every alert not on cooldown.
+        every alert not on cooldown. While muted nothing is sent: the held
+        back keys are recorded in ``menthorq_monitor_state`` (not as
+        delivered, so the cooldown does not start and a condition that
+        still holds after the mute is reported then).
 
         Returns:
             Keys of the alerts delivered (empty when none fired, all were on
-            cooldown, or the send failed).
+            cooldown, alerts are muted, or the send failed).
         """
         if latest.spot is None:
             logger.info("MenthorQ monitor: no alerts evaluated (latest record not computed)")
@@ -124,7 +144,7 @@ class MenthorqBriefDeliveryService:
         comparisons = {comparison.label: comparison
                        for comparison in self.monitor_service.build_comparisons(latest)}
         alerts = evaluate_urgent_alerts(
-            comparisons[COMPARISON_PREVIOUS], comparisons[COMPARISON_ONE_DAY], self.thresholds)
+            latest, comparisons[COMPARISON_PREVIOUS], comparisons[COMPARISON_ONE_DAY], self.thresholds)
         last_delivered = {
             alert.key: self.repository.get_last_menthorq_alert_delivery(latest.currency, alert.key)
             for alert in alerts
@@ -134,6 +154,14 @@ class MenthorqBriefDeliveryService:
         if skipped:
             logger.info("MenthorQ monitor: alerts on cooldown (not repeated): %s", skipped)
         if not due:
+            return []
+        if self.alerts_muted(now):
+            due_keys = [alert.key for alert in due]
+            logger.info("MenthorQ monitor: urgent alerts %s NOT sent (muted)", due_keys)
+            try:
+                self.repository.save_menthorq_suppressed_alerts(latest.currency, due_keys, self.clock())
+            except Exception:
+                logger.exception("MenthorQ monitor: could not record the muted alerts")
             return []
         message = format_urgent_alert(latest, due)
         if not self.telegram.send(message, parse_mode=TELEGRAM_PARSE_MODE):
