@@ -36,7 +36,7 @@ one IV*OI chart per listed, unsettled expiry with that expiry's own levels.
 import argparse
 import json
 import logging
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Optional, Sequence, Tuple
 
@@ -48,11 +48,12 @@ from coding.core.analytics.menthorq_replication_calculator import (
     start_of_utc_day,
 )
 from coding.core.logging.logging_setup import init_logging
-from coding.service.on_chain.menthorq_replication_service import MenthorqReplicationService
+from coding.service.on_chain.menthorq_replication_service import (
+    MenthorqReplicationService,
+    menthorq_daily_close_instants,
+)
 
 logger = logging.getLogger(__name__)
-
-MENTHORQ_DATA_TIME_UTC = time(23, 59)
 
 
 def parse_utc_timestamp(text: str) -> datetime:
@@ -106,8 +107,7 @@ def resolve_instants(
     if arguments.menthorq_date is not None:
         if arguments.open_interest_as_of is not None or arguments.open_interest_at_start_of_utc_day:
             parser.error("--menthorq-date already sets the open-interest instant")
-        as_of = datetime.combine(arguments.menthorq_date, MENTHORQ_DATA_TIME_UTC, tzinfo=timezone.utc)
-        return as_of, start_of_utc_day(as_of)
+        return menthorq_daily_close_instants(arguments.menthorq_date)
     if arguments.open_interest_at_start_of_utc_day:
         return arguments.as_of, start_of_utc_day(arguments.as_of)
     return arguments.as_of, arguments.open_interest_as_of

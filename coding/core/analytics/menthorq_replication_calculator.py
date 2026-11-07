@@ -105,6 +105,10 @@ DEFAULT_LEVEL_CANDIDATES = {
     "put_support": "net_gex_argmin_negative",
     "hvl": "cumulative_net_gex_argmin",
 }
+# GEX Expiring % candidate drawn on the panels (and listed by the GUI): net
+# GEX of the expiry / sum of |net GEX| over the universe; approximate, see
+# ``render_gex_panels_chart``.
+DEFAULT_GEX_EXPIRING_CANDIDATE = "net_over_absolute_net_sum"
 LEVEL_RULE_DESCRIPTION = (
     "Call Resistance = strike with the highest positive net GEX; Put Support = strike "
     "with the lowest negative net GEX; HVL = strike where cumulative net GEX (summed "
