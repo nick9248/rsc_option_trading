@@ -94,6 +94,7 @@ class GexDexCalculator:
         instruments: List[Dict[str, Any]],
         spot_price: float,
         currency: str = "BTC",
+        as_of: Optional[datetime] = None,
     ):
         """
         Initialize calculator with instrument data containing Greeks.
@@ -103,10 +104,16 @@ class GexDexCalculator:
             spot_price: Current underlying spot price.
             currency: Underlying currency symbol (e.g. "BTC", "ETH"). Used for unit labels.
                       GEX is always in USD; DEX is in this currency.
+            as_of: Timezone-aware UTC instant the time-to-expiry of the
+                gamma-profile re-pricing is measured from. ``None`` (the
+                default, every live caller) means "now". A point-in-time
+                replay passes the historical instant so the result does not
+                depend on the wall clock.
         """
         self.instruments = instruments
         self.spot_price = spot_price
         self.currency = currency
+        self.as_of = as_of
         self.strike_data: Dict[float, Dict[str, Any]] = {}
         # Task G2-A: reset by _aggregate_by_strike() on every calculate()
         # call; initialized here too so an instance never exposes these as
@@ -132,7 +139,9 @@ class GexDexCalculator:
         self._calculate_gex_dex()
         cumulative = self._calculate_cumulative_profiles()
         key_levels = self._detect_key_levels()
-        gamma_profile = self._calculate_gamma_profile(self.instruments, self.spot_price)
+        gamma_profile = self._calculate_gamma_profile(
+            self.instruments, self.spot_price, as_of=self.as_of
+        )
 
         return self._build_result(
             self.strike_data, cumulative, key_levels, self.spot_price, self.currency,
@@ -142,7 +151,9 @@ class GexDexCalculator:
         )
 
     @staticmethod
-    def _build_gamma_legs(instruments: List[Dict[str, Any]]) -> List[GammaLeg]:
+    def _build_gamma_legs(
+        instruments: List[Dict[str, Any]], as_of: Optional[datetime] = None
+    ) -> List[GammaLeg]:
         """
         Build ``GammaLeg`` inputs for ``GammaProfileCalculator`` from the same
         instrument dicts ``GexDexCalculator`` already receives.
@@ -157,8 +168,13 @@ class GexDexCalculator:
         fixed for bugfix_spec.md Item 5 (``MarketWideCalculator.
         _parse_expiry_datetime``) -- never a local-midnight/integer-days
         calculation.
+
+        ``as_of`` (timezone-aware UTC) is the instant time-to-expiry is
+        measured from; ``None`` means ``datetime.now(timezone.utc)`` (the
+        live behaviour). A replay must pass it, otherwise a historical chain
+        is priced with today's time-to-expiry.
         """
-        now_utc = datetime.now(timezone.utc)
+        now_utc = as_of if as_of is not None else datetime.now(timezone.utc)
         legs: List[GammaLeg] = []
 
         for item in instruments:
@@ -202,7 +218,9 @@ class GexDexCalculator:
 
     @staticmethod
     def _calculate_gamma_profile(
-        instruments: List[Dict[str, Any]], spot_price: float
+        instruments: List[Dict[str, Any]],
+        spot_price: float,
+        as_of: Optional[datetime] = None,
     ) -> Dict[str, Any]:
         """
         Re-price total dealer gamma across a spot grid to locate the actual
@@ -237,7 +255,7 @@ class GexDexCalculator:
         spot / no legs, rather than propagating.
         """
         try:
-            legs = GexDexCalculator._build_gamma_legs(instruments)
+            legs = GexDexCalculator._build_gamma_legs(instruments, as_of=as_of)
             return GammaProfileCalculator(legs, spot_price).calculate()
         except Exception:
             logger.error(

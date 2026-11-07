@@ -1020,6 +1020,93 @@ class DatabaseRepository:
                 row = cursor.fetchone()
         return float(row[0]) if row else None
 
+    def get_index_price_at_or_before(
+        self, currency: str, as_of: datetime
+    ) -> Optional[Tuple[float, datetime]]:
+        """
+        Point-in-time index (spot) price: the index price stamped on the
+        newest stored option trade whose exchange timestamp is at or before
+        ``as_of`` (no lookahead). ``historical_trades`` is used because it is
+        the only table that carries Deribit's index price at trade time with
+        sub-hour resolution; ``hourly_snapshots``/``onchain_analysis_snapshots``
+        are hourly and their rows for the current hour are written after it.
+
+        Args:
+            currency: "BTC" or "ETH".
+            as_of: Timezone-aware UTC instant.
+
+        Returns:
+            (index_price, trade_time_utc) or None when no trade exists at or
+            before ``as_of``.
+        """
+        as_of_milliseconds = int(as_of.timestamp() * 1000)
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                SELECT index_price, trade_timestamp FROM historical_trades
+                WHERE currency = %s AND index_price IS NOT NULL
+                  AND trade_timestamp <= %s
+                ORDER BY trade_timestamp DESC LIMIT 1
+            """, (currency, as_of_milliseconds))
+            row = cursor.fetchone()
+        if row is None:
+            return None
+        return float(row[0]), self._from_epoch_ms(int(row[1]))
+
+    def get_option_chain_snapshot_at_or_before(
+        self, currency: str, as_of: datetime
+    ) -> Optional[Tuple[datetime, List[Dict[str, Any]]]]:
+        """
+        The full option chain from the newest ``snapshots`` capture at or
+        before ``as_of`` (no lookahead). ``snapshots.captured_at`` is stored
+        as naive UTC, so ``as_of`` is converted to naive UTC for the query
+        and the returned capture time is made UTC-aware again.
+
+        Args:
+            currency: "BTC" or "ETH".
+            as_of: Timezone-aware UTC instant.
+
+        Returns:
+            (captured_at_utc, rows) where each row has instrument_name,
+            expiration, strike, option_type, open_interest, mark_iv (percent,
+            as stored) and underlying_price (the expiry's forward). Numeric
+            NULLs stay None. None when no capture exists at or before
+            ``as_of``.
+        """
+        as_of_naive_utc = as_of.astimezone(timezone.utc).replace(tzinfo=None)
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                SELECT MAX(captured_at) FROM snapshots
+                WHERE currency = %s AND captured_at <= %s
+            """, (currency, as_of_naive_utc))
+            captured_at = cursor.fetchone()[0]
+            if captured_at is None:
+                return None
+            cursor.execute("""
+                SELECT instrument_name, expiration, strike, option_type,
+                       open_interest, mark_iv, underlying_price
+                FROM snapshots
+                WHERE currency = %s AND captured_at = %s
+                ORDER BY expiration, strike, option_type
+            """, (currency, captured_at))
+            fetched_rows = cursor.fetchall()
+
+        def to_float(value: Any) -> Optional[float]:
+            return float(value) if value is not None else None
+
+        rows = [
+            {
+                "instrument_name": row[0],
+                "expiration": row[1],
+                "strike": to_float(row[2]),
+                "option_type": row[3],
+                "open_interest": to_float(row[4]),
+                "mark_iv": to_float(row[5]),
+                "underlying_price": to_float(row[6]),
+            }
+            for row in fetched_rows
+        ]
+        return captured_at.replace(tzinfo=timezone.utc), rows
+
     def save_futures_basis(self, rows: List[Dict[str, Any]]) -> int:
         """
         Store one hourly capture of the dated futures' basis.
