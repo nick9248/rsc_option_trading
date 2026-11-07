@@ -4,9 +4,11 @@ a monitor service whose records are fixed per instant (no input loading),
 and a tiny option-chain repository for a real chart run without a database.
 """
 
+from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+from coding.core.analytics.menthorq_monitor.alert_rules import AlertThresholds
 from coding.core.analytics.menthorq_monitor.level_record import (
     MODE_DAILY_CLOSE,
     MODE_LIVE,
@@ -59,6 +61,15 @@ def moving_records(latest_as_of: datetime = BASE_TIME) -> Dict[RecordKey, Mentho
     }
 
 
+
+# The hand-worked scenario of the preview tests: HVL > 3%, Call Resistance and
+# Put Support > 5% of spot, spot crossing HVL and net GEX sign change on,
+# spot-near-wall off (the real defaults differ: 5 / 10 / 5, crossing off).
+SCENARIO_THRESHOLDS = AlertThresholds(
+    hvl_move_percent_of_spot=3.0, call_resistance_move_percent_of_spot=5.0,
+    put_support_move_percent_of_spot=5.0, net_gex_sign_change=True,
+    spot_crosses_hvl=True, spot_near_wall_percent=None)
+
 class FixedRecordMonitorService(MenthorqMonitorService):
     """
     MenthorqMonitorService whose ``compute_record`` returns the record for
@@ -69,6 +80,8 @@ class FixedRecordMonitorService(MenthorqMonitorService):
     def __init__(self, records: Dict[RecordKey, MenthorqLevelRecord],
                  settings: Optional[MenthorqMonitorSettings] = None):
         self.fake_repository = FakeMonitorRepository()
+        if settings is None:
+            settings = replace(MenthorqMonitorSettings(), alert_thresholds=SCENARIO_THRESHOLDS)
         super().__init__(repository=self.fake_repository, settings=settings,
                          input_loader=FakeInputLoader(available=False),
                          clock=lambda: BASE_TIME)

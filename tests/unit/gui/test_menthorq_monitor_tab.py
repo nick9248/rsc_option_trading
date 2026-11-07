@@ -184,9 +184,9 @@ class TestTabDisplay:
         assert "of 4,096 characters" in tab.brief_length_label.text()
         assert tab.brief_length_label.text().startswith("Data 2026-11-06 23:59 UTC")
 
-        assert tab.alerts_table.rowCount() == 5
-        assert [_cell(tab.alerts_table, row, 4) for row in range(5)] == [
-            "YES", "no", "YES", "YES", "YES"]
+        assert tab.alerts_table.rowCount() == 6
+        assert [_cell(tab.alerts_table, row, 4) for row in range(6)] == [
+            "YES", "no", "YES", "YES", "YES", "no"]
         assert _cell(tab.alerts_table, 0, 3) == "+4.00% of spot (+4,000 USD)"
         assert "URGENT | BTC MenthorQ-style levels" in tab.alert_browser.toPlainText()
 
@@ -225,7 +225,7 @@ class TestTabDisplay:
         assert info["IV source"] == "not computed"
         assert all(_cell(tab.alerts_table, row, 3).startswith("not computed")
                    for row in range(tab.alerts_table.rowCount()))
-        assert [_cell(tab.alerts_table, row, 4) for row in range(5)] == ["no"] * 5
+        assert [_cell(tab.alerts_table, row, 4) for row in range(6)] == ["no"] * 6
         assert "No urgent alert would fire." == tab.alert_browser.toPlainText()
         assert "0.00%" not in tab.brief_browser.toPlainText()
         tab.close()

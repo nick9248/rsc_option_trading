@@ -28,6 +28,8 @@ from coding.core.analytics.menthorq_monitor.alert_rules import (
     ALERT_KEY_NET_GEX_TURNED_NEGATIVE,
     ALERT_KEY_NET_GEX_TURNED_POSITIVE,
     ALERT_KEY_PUT_SUPPORT_MOVE,
+    ALERT_KEY_SPOT_NEAR_CALL_RESISTANCE,
+    ALERT_KEY_SPOT_NEAR_PUT_SUPPORT,
     AlertThresholds,
     UrgentAlert,
     evaluate_urgent_alerts,
@@ -37,6 +39,7 @@ from coding.core.analytics.menthorq_monitor.level_trend_calculator import (
     COMPARISON_ONE_DAY,
     COMPARISON_PREVIOUS,
     RecordComparison,
+    spot_distances,
 )
 from coding.core.analytics.menthorq_replication_calculator import (
     IV_SOURCE_MARK_IV,
@@ -178,25 +181,49 @@ def alert_rule_checks(
     for rule, level_name, key, threshold in (
             ("HVL move vs 24h ago", "hvl", ALERT_KEY_HVL_MOVE, thresholds.hvl_move_percent_of_spot),
             ("Call Resistance move vs 24h ago", "call_resistance", ALERT_KEY_CALL_RESISTANCE_MOVE,
-             thresholds.wall_move_percent_of_spot),
+             thresholds.call_resistance_move_percent_of_spot),
             ("Put Support move vs 24h ago", "put_support", ALERT_KEY_PUT_SUPPORT_MOVE,
-             thresholds.wall_move_percent_of_spot)):
+             thresholds.put_support_move_percent_of_spot)):
         rows.append(AlertRuleCheck(
-            rule=rule, enabled=alerts_enabled, threshold=f"|move| > {threshold:g}% of spot",
+            rule=rule, enabled=alerts_enabled and threshold is not None,
+            threshold="off" if threshold is None else f"|move| > {threshold:g}% of spot",
             current_value=_format_level_move(day_comparison, level_name),
             would_fire=key in fired))
     rows.append(AlertRuleCheck(
-        rule="Spot crossed HVL since previous run", enabled=alerts_enabled,
-        threshold="gamma regime changed",
+        rule="Spot crossed HVL since previous run",
+        enabled=alerts_enabled and thresholds.spot_crosses_hvl,
+        threshold="gamma regime changed" if thresholds.spot_crosses_hvl else "off",
         current_value=_format_regime_change(previous_comparison),
         would_fire=bool(fired & {ALERT_KEY_CROSSED_BELOW_HVL, ALERT_KEY_CROSSED_ABOVE_HVL})))
     rows.append(AlertRuleCheck(
-        rule="Total net GEX sign change since previous run", enabled=alerts_enabled,
-        threshold="sign changed",
+        rule="Total net GEX sign change since previous run",
+        enabled=alerts_enabled and thresholds.net_gex_sign_change,
+        threshold="sign changed" if thresholds.net_gex_sign_change else "off",
         current_value=_format_net_gex_change(previous_comparison, latest),
         would_fire=bool(fired & {ALERT_KEY_NET_GEX_TURNED_NEGATIVE,
                                  ALERT_KEY_NET_GEX_TURNED_POSITIVE})))
+    near_wall = thresholds.spot_near_wall_percent
+    rows.append(AlertRuleCheck(
+        rule="Spot near Call Resistance / Put Support",
+        enabled=alerts_enabled and near_wall is not None,
+        threshold="off" if near_wall is None else f"distance <= {near_wall:g}% of spot",
+        current_value=_format_wall_distances(latest),
+        would_fire=bool(fired & {ALERT_KEY_SPOT_NEAR_CALL_RESISTANCE,
+                                 ALERT_KEY_SPOT_NEAR_PUT_SUPPORT})))
     return rows
+
+
+def _format_wall_distances(latest: MenthorqLevelRecord) -> str:
+    """"Call Resistance +5.60%, Put Support -1.00%" (of spot); missing parts "not computed"."""
+    distances = spot_distances(latest)
+    parts = []
+    for level_name, label in (("call_resistance", "Call Resistance"), ("put_support", "Put Support")):
+        percent = distances[level_name].distance_percent_of_spot
+        parts.append(f"{label} {NOT_COMPUTED}" if percent is None else f"{label} {percent:+.2f}%")
+    if all(distances[name].distance_percent_of_spot is None
+           for name in ("call_resistance", "put_support")):
+        return NOT_COMPUTED
+    return ", ".join(parts)
 
 
 def _format_age(age: Optional[timedelta]) -> str:
@@ -263,19 +290,20 @@ class MenthorqBriefPreviewService:
     def __init__(
         self,
         monitor_service: MenthorqMonitorService,
-        thresholds: AlertThresholds = AlertThresholds(),
+        thresholds: Optional[AlertThresholds] = None,
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ):
         """
         Args:
             monitor_service: Computes records (only its compute methods are
                 used, never ``store``).
-            thresholds: Urgent-alert thresholds (the collector's defaults).
+            thresholds: Urgent-alert thresholds; the settings' ``alert_thresholds``
+                (what the collector applies) when omitted.
             clock: Wall clock (UTC-aware) for the data age.
         """
         self.monitor_service = monitor_service
         self.settings = monitor_service.settings
-        self.thresholds = thresholds
+        self.thresholds = thresholds if thresholds is not None else self.settings.alert_thresholds
         self.clock = clock
 
     def build_preview(self, as_of: datetime) -> BriefPreview:
@@ -302,7 +330,7 @@ class MenthorqBriefPreviewService:
         by_label = {comparison.label: comparison for comparison in comparisons}
         previous, day = by_label[COMPARISON_PREVIOUS], by_label[COMPARISON_ONE_DAY]
         # Same guard as the delivery service: no alert on a record that was not computed.
-        alerts = (evaluate_urgent_alerts(previous, day, self.thresholds)
+        alerts = (evaluate_urgent_alerts(latest, previous, day, self.thresholds)
                   if latest.spot is not None else [])
         return BriefPreview(
             as_of_utc=latest.as_of_utc,

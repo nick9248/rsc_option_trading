@@ -42,7 +42,8 @@ class TestBuildPreview:
         assert [check.rule for check in preview.alert_checks] == [
             "HVL move vs 24h ago", "Call Resistance move vs 24h ago",
             "Put Support move vs 24h ago", "Spot crossed HVL since previous run",
-            "Total net GEX sign change since previous run"]
+            "Total net GEX sign change since previous run",
+            "Spot near Call Resistance / Put Support"]
         # HVL 91,000 -> 95,000: +4,000 = +4.00% of spot, above 3%.
         assert rows["HVL move vs 24h ago"].current_value == "+4.00% of spot (+4,000 USD)"
         assert rows["HVL move vs 24h ago"].threshold == "|move| > 3% of spot"
@@ -60,7 +61,12 @@ class TestBuildPreview:
         assert rows["Total net GEX sign change since previous run"].current_value == \
             "-$1.00M -> +$5.00M"
         assert rows["Total net GEX sign change since previous run"].would_fire
-        assert all(check.enabled for check in preview.alert_checks)
+        # Spot near a wall is off in this scenario; its value is still shown:
+        # CR 110,000 and PS 90,000 against spot 100,000 are +10.00% and -10.00%.
+        near_wall = rows["Spot near Call Resistance / Put Support"]
+        assert not near_wall.enabled and near_wall.threshold == "off" and not near_wall.would_fire
+        assert near_wall.current_value == "Call Resistance +10.00%, Put Support -10.00%"
+        assert all(check.enabled for check in preview.alert_checks if check is not near_wall)
         assert sorted(alert.key for alert in preview.alerts) == [
             "hvl_move_24h", "net_gex_turned_positive", "put_support_move_24h",
             "spot_crossed_above_hvl"]
