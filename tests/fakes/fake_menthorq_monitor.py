@@ -1,0 +1,159 @@
+"""
+Test doubles for the MenthorQ-style monitor: a record factory, an in-memory
+repository with the monitor's DatabaseRepository methods, a fake input
+loader and a Telegram fake that records messages (nothing is sent).
+
+The fakes subclass the real classes WITHOUT calling their __init__ (no
+connection pool, no .env, no network), so the type checker verifies that
+their method signatures match production.
+"""
+
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
+
+from coding.core.analytics.menthorq_monitor.level_record import (
+    MODE_LIVE,
+    MenthorqLevelRecord,
+    classify_gamma_regime,
+)
+from coding.core.database.repository import DatabaseRepository
+from coding.service.on_chain.menthorq_input_loader import MenthorqInputLoader
+from coding.service.scanner.telegram_alert_service import TelegramAlertService
+
+BASE_TIME = datetime(2026, 11, 6, 9, 10, tzinfo=timezone.utc)   # a Friday
+FAKE_CHAIN_SPOT = 100000.0
+
+
+def make_record(
+    as_of: datetime = BASE_TIME,
+    spot: Optional[float] = 100000.0,
+    call_resistance: Optional[float] = 110000.0,
+    put_support: Optional[float] = 90000.0,
+    hvl: Optional[float] = 95000.0,
+    total_net_gex: Optional[float] = 5e6,
+    expirations: Optional[List[str]] = None,
+    mode: str = MODE_LIVE,
+    **overrides: Any,
+) -> MenthorqLevelRecord:
+    """A computed live record with round numbers (override any field)."""
+    fields: Dict[str, Any] = dict(
+        currency="BTC", mode=mode, as_of_utc=as_of, computed_at_utc=as_of,
+        expiry_universe="monthly", gamma_underlying="index", spot=spot,
+        spot_time_utc=as_of - timedelta(seconds=30),
+        snapshot_captured_at_utc=as_of - timedelta(minutes=20),
+        open_interest_captured_at_utc=as_of - timedelta(minutes=20),
+        call_resistance=call_resistance, put_support=put_support, hvl=hvl,
+        total_net_gex=total_net_gex, gamma_regime=classify_gamma_regime(spot, hvl),
+        expirations=expirations if expirations is not None else ["27NOV26", "25DEC26", "29JAN27"],
+        panel_levels={}, iv_source_counts={"mark_iv": 900, "rebuilt_from_mark_price": 0, "missing": 0},
+        not_computed_reasons=[],
+    )
+    fields.update(overrides)
+    return MenthorqLevelRecord(**fields)
+
+
+class FakeMonitorRepository(DatabaseRepository):
+    """In-memory version of the monitor's DatabaseRepository methods."""
+
+    def __init__(self, records: Optional[List[MenthorqLevelRecord]] = None):
+        self.records: List[MenthorqLevelRecord] = list(records or [])
+        self.deliveries: List[Dict[str, Any]] = []
+
+    def save_menthorq_level_snapshot(self, record: MenthorqLevelRecord) -> Optional[int]:
+        if self.has_menthorq_level_snapshot(record.currency, record.mode, record.expiry_universe,
+                                            record.gamma_underlying, record.as_of_utc):
+            return None
+        self.records.append(record)
+        return len(self.records)
+
+    def has_menthorq_level_snapshot(self, currency: str, mode: str, expiry_universe: str,
+                                    gamma_underlying: str, as_of_utc: datetime) -> bool:
+        return any(r.currency == currency and r.mode == mode and r.expiry_universe == expiry_universe
+                   and r.gamma_underlying == gamma_underlying and r.as_of_utc == as_of_utc
+                   for r in self.records)
+
+    def get_menthorq_level_snapshot_at_or_before(
+        self, currency: str, mode: str, expiry_universe: str, gamma_underlying: str,
+        instant: datetime, earliest: Optional[datetime] = None, strictly_before: bool = False,
+    ) -> Optional[MenthorqLevelRecord]:
+        candidates = [
+            r for r in self.records
+            if r.currency == currency and r.mode == mode and r.expiry_universe == expiry_universe
+            and r.gamma_underlying == gamma_underlying and r.spot is not None
+            and (r.as_of_utc < instant if strictly_before else r.as_of_utc <= instant)
+            and (earliest is None or r.as_of_utc >= earliest)
+        ]
+        return max(candidates, key=lambda r: r.as_of_utc) if candidates else None
+
+    def save_menthorq_alert_delivery(self, currency: str, alert_key: str, delivered_at: datetime,
+                                     message: str, level_snapshot_id: Optional[int] = None) -> None:
+        self.deliveries.append({"currency": currency, "alert_key": alert_key,
+                                "delivered_at": delivered_at, "message": message,
+                                "level_snapshot_id": level_snapshot_id})
+
+    def get_last_menthorq_alert_delivery(self, currency: str, alert_key: str) -> Optional[datetime]:
+        times = [d["delivered_at"] for d in self.deliveries
+                 if d["currency"] == currency and d["alert_key"] == alert_key]
+        return max(times) if times else None
+
+
+class FakeInputLoader(MenthorqInputLoader):
+    """
+    MenthorqInputLoader stand-in. One monthly expiry (27NOV26): a 110,000 call
+    and a 90,000 put, 100 BTC open interest each, IV 50%, spot 100,000.
+    Records every (as_of, open_interest_as_of) it is asked for.
+    """
+
+    def __init__(self, available: bool = True):
+        self.available = available
+        self.calls: List[Any] = []
+
+    def load_inputs(
+        self, currency: str, as_of: datetime, open_interest_as_of: Optional[datetime] = None
+    ) -> Dict[str, Any]:
+        self.calls.append((as_of, open_interest_as_of))
+        if not self.available:
+            raise LookupError("No BTC option-chain snapshot at or before ...")
+        rows = [
+            {"instrument_name": "BTC-27NOV26-110000-C", "expiration": "27NOV26", "strike": 110000.0,
+             "option_type": "C", "open_interest": 100.0, "mark_iv": 50.0,
+             "underlying_price": FAKE_CHAIN_SPOT, "mark_price": 0.01, "iv_source": "mark_iv"},
+            {"instrument_name": "BTC-27NOV26-90000-P", "expiration": "27NOV26", "strike": 90000.0,
+             "option_type": "P", "open_interest": 100.0, "mark_iv": 50.0,
+             "underlying_price": FAKE_CHAIN_SPOT, "mark_price": 0.01, "iv_source": "mark_iv"},
+        ]
+        return {
+            "snapshot_captured_at_utc": as_of - timedelta(minutes=21),
+            "open_interest_captured_at_utc": (open_interest_as_of or as_of) - timedelta(minutes=21),
+            "chain_rows": rows,
+            "iv_source_counts": {"mark_iv": 2, "rebuilt_from_mark_price": 0, "missing": 0},
+            "index_price": FAKE_CHAIN_SPOT,
+            "index_price_time_utc": as_of - timedelta(seconds=5),
+        }
+
+
+class FakeTelegram(TelegramAlertService):
+    """
+    Records sent messages; ``accept`` decides whether a send succeeds.
+    ``updates`` are served by get_updates (None when ``fail_updates``).
+    """
+
+    def __init__(self, accept: bool = True, chat_id: str = "111",
+                 updates: Optional[List[Dict[str, Any]]] = None, fail_updates: bool = False):
+        self._chat_id = chat_id
+        self._token = "fake-token"
+        self.accept = accept
+        self.fail_updates = fail_updates
+        self.sent: List[Dict[str, Any]] = []
+        self.updates = list(updates or [])
+        self.get_updates_calls: List[Dict[str, Any]] = []
+
+    def send(self, message: str, parse_mode: Optional[str] = None) -> bool:
+        self.sent.append({"message": message, "parse_mode": parse_mode})
+        return self.accept
+
+    def get_updates(self, offset: Optional[int], timeout_seconds: int) -> Optional[List[Dict[str, Any]]]:
+        self.get_updates_calls.append({"offset": offset, "timeout_seconds": timeout_seconds})
+        if self.fail_updates:
+            return None
+        return [update for update in self.updates if offset is None or update["update_id"] >= offset]

@@ -1,0 +1,143 @@
+"""
+URGENT alert rules of the MenthorQ-style monitor, evaluated after each
+hourly live run.
+
+Rules (all "%" are percent of the latest spot, see level_trend_calculator):
+  - HVL moved by MORE than ``hvl_move_percent_of_spot`` vs 24 h ago.
+  - Call Resistance / Put Support moved by MORE than
+    ``wall_move_percent_of_spot`` vs 24 h ago.
+  - Spot crossed HVL (gamma regime changed) since the previous run.
+  - Total net GEX changed sign since the previous run.
+
+The default thresholds are placeholders chosen by hand, not fitted; a
+backtest is meant to replace them. An alert whose key was delivered less
+than ``cooldown`` ago is not repeated (crossings and sign flips carry their
+direction in the key, so a crossing back is a different alert).
+
+Pure: no database, network or plotting imports.
+"""
+
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import List, Mapping, Optional
+
+from coding.core.analytics.menthorq_monitor.level_record import LEVEL_LABELS
+from coding.core.analytics.menthorq_monitor.level_trend_calculator import (
+    CROSSED_ABOVE_HVL,
+    CROSSED_BELOW_HVL,
+    RecordComparison,
+)
+
+DEFAULT_HVL_MOVE_PERCENT_OF_SPOT = 3.0
+DEFAULT_WALL_MOVE_PERCENT_OF_SPOT = 5.0
+DEFAULT_ALERT_COOLDOWN = timedelta(hours=12)
+
+ALERT_KEY_HVL_MOVE = "hvl_move_24h"
+ALERT_KEY_CALL_RESISTANCE_MOVE = "call_resistance_move_24h"
+ALERT_KEY_PUT_SUPPORT_MOVE = "put_support_move_24h"
+ALERT_KEY_CROSSED_BELOW_HVL = "spot_crossed_below_hvl"
+ALERT_KEY_CROSSED_ABOVE_HVL = "spot_crossed_above_hvl"
+ALERT_KEY_NET_GEX_TURNED_NEGATIVE = "net_gex_turned_negative"
+ALERT_KEY_NET_GEX_TURNED_POSITIVE = "net_gex_turned_positive"
+
+
+@dataclass(frozen=True)
+class AlertThresholds:
+    """Thresholds of the urgent alerts (percent of spot) and the cooldown."""
+
+    hvl_move_percent_of_spot: float = DEFAULT_HVL_MOVE_PERCENT_OF_SPOT
+    wall_move_percent_of_spot: float = DEFAULT_WALL_MOVE_PERCENT_OF_SPOT
+    cooldown: timedelta = DEFAULT_ALERT_COOLDOWN
+
+
+@dataclass(frozen=True)
+class UrgentAlert:
+    """One triggered rule. ``expiry_roll`` lists expiries settled over the compared window."""
+
+    key: str
+    title: str
+    comparison_label: str
+    level_name: Optional[str] = None
+    change_usd: Optional[float] = None
+    change_percent_of_spot: Optional[float] = None
+    expiry_roll: tuple = ()
+
+
+def _level_move_alerts(
+    day_comparison: RecordComparison, thresholds: AlertThresholds
+) -> List[UrgentAlert]:
+    rules = (
+        ("hvl", ALERT_KEY_HVL_MOVE, thresholds.hvl_move_percent_of_spot),
+        ("call_resistance", ALERT_KEY_CALL_RESISTANCE_MOVE, thresholds.wall_move_percent_of_spot),
+        ("put_support", ALERT_KEY_PUT_SUPPORT_MOVE, thresholds.wall_move_percent_of_spot),
+    )
+    alerts = []
+    for level_name, key, threshold in rules:
+        change = day_comparison.level_changes.get(level_name)
+        if change is None or change.change_percent_of_spot is None:
+            continue
+        if abs(change.change_percent_of_spot) > threshold:
+            alerts.append(UrgentAlert(
+                key=key,
+                title=f"{LEVEL_LABELS[level_name]} moved more than {threshold:g}% of spot in 24h",
+                comparison_label=day_comparison.label,
+                level_name=level_name,
+                change_usd=change.change_usd,
+                change_percent_of_spot=change.change_percent_of_spot,
+                expiry_roll=tuple(day_comparison.settled_expiries),
+            ))
+    return alerts
+
+
+def evaluate_urgent_alerts(
+    previous_comparison: RecordComparison,
+    day_comparison: RecordComparison,
+    thresholds: AlertThresholds = AlertThresholds(),
+) -> List[UrgentAlert]:
+    """
+    Every rule that fires, before the cooldown is applied.
+
+    Args:
+        previous_comparison: Latest vs the previous run.
+        day_comparison: Latest vs 24 hours ago.
+        thresholds: Rule thresholds.
+    """
+    alerts = _level_move_alerts(day_comparison, thresholds)
+    previous_roll = tuple(previous_comparison.settled_expiries)
+    if previous_comparison.hvl_crossing == CROSSED_BELOW_HVL:
+        alerts.append(UrgentAlert(
+            key=ALERT_KEY_CROSSED_BELOW_HVL,
+            title="Spot crossed BELOW HVL (negative gamma regime)",
+            comparison_label=previous_comparison.label, expiry_roll=previous_roll))
+    elif previous_comparison.hvl_crossing == CROSSED_ABOVE_HVL:
+        alerts.append(UrgentAlert(
+            key=ALERT_KEY_CROSSED_ABOVE_HVL,
+            title="Spot crossed ABOVE HVL (positive gamma regime)",
+            comparison_label=previous_comparison.label, expiry_roll=previous_roll))
+    if previous_comparison.net_gex_sign_flipped and previous_comparison.reference is not None:
+        turned_negative = (previous_comparison.reference.total_net_gex or 0.0) > 0
+        alerts.append(UrgentAlert(
+            key=ALERT_KEY_NET_GEX_TURNED_NEGATIVE if turned_negative else ALERT_KEY_NET_GEX_TURNED_POSITIVE,
+            title=f"Total net GEX turned {'NEGATIVE' if turned_negative else 'POSITIVE'}",
+            comparison_label=previous_comparison.label,
+            change_usd=previous_comparison.net_gex_change, expiry_roll=previous_roll))
+    return alerts
+
+
+def apply_cooldown(
+    alerts: List[UrgentAlert],
+    last_delivered_by_key: Mapping[str, Optional[datetime]],
+    now: datetime,
+    cooldown: timedelta = DEFAULT_ALERT_COOLDOWN,
+) -> List[UrgentAlert]:
+    """
+    Drop alerts whose key was delivered less than ``cooldown`` before
+    ``now`` (an alert delivered exactly ``cooldown`` ago may repeat).
+    """
+    kept = []
+    for alert in alerts:
+        last = last_delivered_by_key.get(alert.key)
+        if last is not None and now - last < cooldown:
+            continue
+        kept.append(alert)
+    return kept

@@ -196,6 +196,13 @@ SYNC_TABLES = [
         "conflict_target": "(futures_instrument, timestamp) DO NOTHING",
     },
     {
+        # MenthorQ-style level monitor (migration 031). Rows are never changed after insertion.
+        "name": "menthorq_level_snapshots",
+        "watermark_col": "computed_at",
+        "watermark_type": "timestamp",
+        "conflict_target": "(currency, mode, expiry_universe, gamma_underlying, as_of_utc) DO NOTHING",
+    },
+    {
         # Hourly DVOL candle closes. The daemon re-checks the last 48 hours every
         # cycle and corrects values that were captured while a candle was forming,
         # so only the last 72 hours are re-read (older history never changes, and

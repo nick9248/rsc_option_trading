@@ -23,6 +23,37 @@ class TestSendSuccess:
         assert kwargs["timeout"] == 10
 
 
+class TestParseModeAndUpdates:
+    def test_parse_mode_is_sent_only_when_given(self):
+        service = TelegramAlertService(token="abc123", chat_id="999")
+        with patch("coding.service.scanner.telegram_alert_service.requests.post",
+                   return_value=MagicMock(ok=True)) as mock_post:
+            service.send("<b>x</b>", parse_mode="HTML")
+        assert mock_post.call_args[1]["json"] == {"chat_id": "999", "text": "<b>x</b>", "parse_mode": "HTML"}
+
+    def test_get_updates_returns_the_result_list_and_passes_the_offset(self):
+        service = TelegramAlertService(token="abc123", chat_id="999")
+        response = MagicMock(ok=True)
+        response.json.return_value = {"ok": True, "result": [{"update_id": 5}]}
+        with patch("coding.service.scanner.telegram_alert_service.requests.get",
+                   return_value=response) as mock_get:
+            assert service.get_updates(offset=5, timeout_seconds=10) == [{"update_id": 5}]
+        args, kwargs = mock_get.call_args
+        assert args[0] == "https://api.telegram.org/botabc123/getUpdates"
+        assert kwargs["params"]["offset"] == 5 and kwargs["params"]["timeout"] == 10
+        assert kwargs["timeout"] == 20
+
+    def test_get_updates_failures_return_none_and_hide_the_token(self, caplog):
+        service = TelegramAlertService(token="secret-token", chat_id="999")
+        with patch("coding.service.scanner.telegram_alert_service.requests.get",
+                   side_effect=ConnectionError("url: /botsecret-token/getUpdates")):
+            assert service.get_updates(offset=None, timeout_seconds=1) is None
+        assert "secret-token" not in caplog.text
+        conflict = MagicMock(ok=False, status_code=409, text="Conflict")
+        with patch("coding.service.scanner.telegram_alert_service.requests.get", return_value=conflict):
+            assert service.get_updates(offset=None, timeout_seconds=1) is None
+
+
 class TestSendFailurePaths:
     def test_non_200_response_returns_false(self):
         service = TelegramAlertService(token="abc123", chat_id="999")

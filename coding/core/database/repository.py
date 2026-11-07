@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from psycopg2.extras import Json, execute_values
 
 from coding.core.analytics.market_wide_calculator import DERIBIT_SETTLEMENT_HOUR_UTC
+from coding.core.analytics.menthorq_monitor.level_record import MenthorqLevelRecord
 from coding.core.analytics.results.delta_flow_results import FlowBucket
 from coding.core.analytics.results.expiry_results import ExpirationAnalysisResult
 from coding.core.analytics.results.gex_dex_results import GexDexResult
@@ -1107,6 +1108,148 @@ class DatabaseRepository:
             for row in fetched_rows
         ]
         return captured_at.replace(tzinfo=timezone.utc), rows
+
+    # ------------------------------------------------------------------
+    # MenthorQ-style level monitor (migration 031)
+    # ------------------------------------------------------------------
+
+    _MENTHORQ_LEVEL_COLUMNS = (
+        "id, currency, mode, as_of_utc, computed_at, expiry_universe, gamma_underlying, "
+        "spot, spot_time_utc, snapshot_captured_at_utc, open_interest_captured_at_utc, "
+        "call_resistance, put_support, hvl, total_net_gex, gamma_regime, expirations, "
+        "panel_levels, iv_source_counts, not_computed_reasons"
+    )
+
+    @staticmethod
+    def _menthorq_level_record_from_row(row: Tuple[Any, ...]) -> MenthorqLevelRecord:
+        """A ``menthorq_level_snapshots`` row (``_MENTHORQ_LEVEL_COLUMNS`` order) as a record."""
+        def to_float(value: Any) -> Optional[float]:
+            return float(value) if value is not None else None
+
+        def to_utc(value: Optional[datetime]) -> Optional[datetime]:
+            # timestamptz comes back in the session time zone; normalise to UTC.
+            return value.astimezone(timezone.utc) if value is not None else None
+
+        return MenthorqLevelRecord(
+            record_id=row[0], currency=row[1], mode=row[2],
+            as_of_utc=row[3].astimezone(timezone.utc),          # NOT NULL column
+            computed_at_utc=row[4].astimezone(timezone.utc),    # NOT NULL column
+            expiry_universe=row[5], gamma_underlying=row[6],
+            spot=to_float(row[7]), spot_time_utc=to_utc(row[8]),
+            snapshot_captured_at_utc=to_utc(row[9]),
+            open_interest_captured_at_utc=to_utc(row[10]), call_resistance=to_float(row[11]),
+            put_support=to_float(row[12]), hvl=to_float(row[13]),
+            total_net_gex=to_float(row[14]), gamma_regime=row[15],
+            expirations=list(row[16]), panel_levels=dict(row[17]),
+            iv_source_counts=dict(row[18]), not_computed_reasons=list(row[19]),
+        )
+
+    def save_menthorq_level_snapshot(self, record: MenthorqLevelRecord) -> Optional[int]:
+        """
+        Store one monitor run in ``menthorq_level_snapshots``.
+
+        Returns:
+            The new row id, or None when a row with the same (currency,
+            mode, expiry_universe, gamma_underlying, as_of_utc) already
+            exists (it is kept unchanged).
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO menthorq_level_snapshots (
+                    currency, mode, as_of_utc, computed_at, expiry_universe, gamma_underlying,
+                    spot, spot_time_utc, snapshot_captured_at_utc, open_interest_captured_at_utc,
+                    call_resistance, put_support, hvl, total_net_gex, gamma_regime,
+                    expirations, panel_levels, iv_source_counts, not_computed_reasons)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (currency, mode, expiry_universe, gamma_underlying, as_of_utc) DO NOTHING
+                RETURNING id
+                """,
+                (
+                    record.currency, record.mode, record.as_of_utc, record.computed_at_utc,
+                    record.expiry_universe, record.gamma_underlying, record.spot,
+                    record.spot_time_utc, record.snapshot_captured_at_utc,
+                    record.open_interest_captured_at_utc, record.call_resistance,
+                    record.put_support, record.hvl, record.total_net_gex, record.gamma_regime,
+                    Json(record.expirations), Json(record.panel_levels),
+                    Json(record.iv_source_counts), Json(record.not_computed_reasons),
+                ),
+            )
+            row = cursor.fetchone()
+        return int(row[0]) if row else None
+
+    def has_menthorq_level_snapshot(
+        self, currency: str, mode: str, expiry_universe: str, gamma_underlying: str,
+        as_of_utc: datetime,
+    ) -> bool:
+        """True when a run with exactly this key is stored."""
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT 1 FROM menthorq_level_snapshots
+                WHERE currency = %s AND mode = %s AND expiry_universe = %s
+                  AND gamma_underlying = %s AND as_of_utc = %s
+                """,
+                (currency, mode, expiry_universe, gamma_underlying, as_of_utc),
+            )
+            return cursor.fetchone() is not None
+
+    def get_menthorq_level_snapshot_at_or_before(
+        self, currency: str, mode: str, expiry_universe: str, gamma_underlying: str,
+        instant: datetime, earliest: Optional[datetime] = None, strictly_before: bool = False,
+    ) -> Optional[MenthorqLevelRecord]:
+        """
+        Newest computed run (spot not NULL) at or before ``instant``
+        (strictly before with ``strictly_before``) and, when ``earliest`` is
+        given, not older than it.
+
+        Returns:
+            The record, or None when no such row exists.
+        """
+        comparison = "<" if strictly_before else "<="
+        query = (
+            f"SELECT {self._MENTHORQ_LEVEL_COLUMNS} FROM menthorq_level_snapshots "
+            "WHERE currency = %s AND mode = %s AND expiry_universe = %s "
+            "AND gamma_underlying = %s AND spot IS NOT NULL "
+            f"AND as_of_utc {comparison} %s"
+        )
+        parameters: List[Any] = [currency, mode, expiry_universe, gamma_underlying, instant]
+        if earliest is not None:
+            query += " AND as_of_utc >= %s"
+            parameters.append(earliest)
+        query += " ORDER BY as_of_utc DESC LIMIT 1"
+        with self._db_cursor() as cursor:
+            cursor.execute(query, tuple(parameters))
+            row = cursor.fetchone()
+        return self._menthorq_level_record_from_row(row) if row else None
+
+    def save_menthorq_alert_delivery(
+        self, currency: str, alert_key: str, delivered_at: datetime, message: str,
+        level_snapshot_id: Optional[int] = None,
+    ) -> None:
+        """Record one delivered monitor message (alert cooldown and weekly-brief bookkeeping)."""
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO menthorq_alert_deliveries
+                    (currency, alert_key, delivered_at, level_snapshot_id, message)
+                VALUES (%s, %s, %s, %s, %s)
+                """,
+                (currency, alert_key, delivered_at, level_snapshot_id, message),
+            )
+
+    def get_last_menthorq_alert_delivery(self, currency: str, alert_key: str) -> Optional[datetime]:
+        """When a message with ``alert_key`` was last delivered (UTC-aware), or None."""
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT MAX(delivered_at) FROM menthorq_alert_deliveries
+                WHERE currency = %s AND alert_key = %s
+                """,
+                (currency, alert_key),
+            )
+            row = cursor.fetchone()
+        return row[0].astimezone(timezone.utc) if row and row[0] is not None else None
 
     def save_futures_basis(self, rows: List[Dict[str, Any]]) -> int:
         """
