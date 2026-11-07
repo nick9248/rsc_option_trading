@@ -18,7 +18,9 @@ from coding.core.analytics.menthorq_chart_renderer import (
     render_iv_times_open_interest_chart,
 )
 from coding.core.analytics.menthorq_replication_calculator import (
+    EXPIRY_UNIVERSE_MONTHLY,
     EXPIRY_UNIVERSES,
+    GAMMA_UNDERLYING_INDEX,
     GAMMA_UNDERLYINGS,
     compare_with_reference,
     replicate_menthorq,
@@ -102,8 +104,8 @@ class MenthorqReplicationService:
         currency: str,
         as_of: datetime,
         output_directory: Path,
-        expiry_universe: str,
-        gamma_underlying: str,
+        expiry_universe: str = EXPIRY_UNIVERSE_MONTHLY,
+        gamma_underlying: str = GAMMA_UNDERLYING_INDEX,
         reference: Optional[Dict[str, Any]] = None,
         open_interest_as_of: Optional[datetime] = None,
     ) -> Dict[str, Any]:
@@ -114,8 +116,10 @@ class MenthorqReplicationService:
             currency: "BTC" (MenthorQ's Deribit charts are BTC).
             as_of: Timezone-aware UTC replay instant.
             output_directory: Folder for the PNGs and JSON (created if missing).
-            expiry_universe: Universe used for the rendered charts.
-            gamma_underlying: "index" or "forward" for the rendered charts.
+            expiry_universe: Universe used for the rendered charts
+                (default "monthly", as in ``replicate_menthorq``).
+            gamma_underlying: "index" (default, as in ``replicate_menthorq``)
+                or "forward" for the rendered charts.
             reference: Optional numbers read off MenthorQ, compared with
                 every candidate configuration.
             open_interest_as_of: Optional earlier instant to take open

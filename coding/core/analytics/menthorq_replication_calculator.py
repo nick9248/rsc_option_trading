@@ -37,7 +37,7 @@ import calendar
 import logging
 import math
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from coding.core.analytics.black_scholes_calculator import BlackScholesCalculator
 from coding.core.analytics.gamma_profile_calculator import GammaProfileCalculator
@@ -161,7 +161,7 @@ def compute_leg_greeks(
     strike: Optional[float],
     time_to_expiry_years: Optional[float],
     implied_volatility_decimal: Optional[float],
-    option_type: str,
+    option_type: Optional[str],
 ) -> Optional[Dict[str, float]]:
     """
     Black-Scholes gamma and delta (r = q = 0) for one leg.
@@ -180,8 +180,10 @@ def compute_leg_greeks(
     Returns:
         {"gamma": ..., "delta": ...} or None.
     """
-    inputs = (underlying_price, strike, time_to_expiry_years, implied_volatility_decimal)
-    if any(value is None or value <= 0 for value in inputs):
+    if (underlying_price is None or strike is None or time_to_expiry_years is None
+            or implied_volatility_decimal is None):
+        return None
+    if min(underlying_price, strike, time_to_expiry_years, implied_volatility_decimal) <= 0:
         return None
     kind = (option_type or "").upper()
     if kind not in ("C", "P"):
@@ -304,7 +306,7 @@ def compute_iv_times_open_interest(
 # --------------------------------------------------------------------------
 
 def strike_of_maximum(
-    values_by_strike: Dict[float, Optional[float]], require_positive: bool = False
+    values_by_strike: Mapping[float, Optional[float]], require_positive: bool = False
 ) -> Optional[float]:
     """
     Strike with the largest value (None values ignored). With
@@ -324,7 +326,7 @@ def strike_of_maximum(
 
 
 def strike_of_minimum(
-    values_by_strike: Dict[float, Optional[float]], require_negative: bool = False
+    values_by_strike: Mapping[float, Optional[float]], require_negative: bool = False
 ) -> Optional[float]:
     """
     Strike with the smallest value (None values ignored). With
@@ -657,7 +659,7 @@ def replicate_menthorq(
 
 def fit_scale_factor(
     ours: Sequence[float], theirs: Sequence[float]
-) -> Optional[Dict[str, float]]:
+) -> Optional[Dict[str, Optional[float]]]:
     """
     Least-squares scale through the origin, theirs ~= scale * ours.
 
@@ -794,12 +796,13 @@ def compare_with_reference(
             net_by_strike = {row["strike"]: row["net_gex"] for row in exposure["strikes"]}
             bars = panel_reference.get("net_gex_bars", {})
             ours_bars = [net_by_strike.get(float(strike_text)) for strike_text in bars]
-            if bars and all(value is not None for value in ours_bars):
+            present_bars = [value for value in ours_bars if value is not None]
+            if bars and len(present_bars) == len(ours_bars):
                 entry["net_gex_bars"] = {
                     "reference": bars,
-                    "ours_usd_per_1pct": dict(zip(bars, ours_bars)),
+                    "ours_usd_per_1pct": dict(zip(bars, present_bars)),
                     "scale_fit_to_usd_per_1pct": fit_scale_factor(
-                        ours_bars, list(bars.values())
+                        present_bars, list(bars.values())
                     ),
                 }
         panels_comparison[panel_name] = entry

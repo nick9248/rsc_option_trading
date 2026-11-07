@@ -19,7 +19,7 @@ from pathlib import Path
 from coding.core.analytics.menthorq_replication_calculator import (
     EXPIRY_UNIVERSE_MONTHLY,
     EXPIRY_UNIVERSES,
-    GAMMA_UNDERLYING_FORWARD,
+    GAMMA_UNDERLYING_INDEX,
     GAMMA_UNDERLYINGS,
 )
 from coding.core.logging.logging_setup import init_logging
@@ -38,7 +38,9 @@ def parse_utc_timestamp(text: str) -> datetime:
 
 def main() -> None:
     """Parse arguments and run the replication."""
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[1])
+    parser = argparse.ArgumentParser(
+        description="Point-in-time replay of MenthorQ's BTC (Deribit) charts from the local database."
+    )
     parser.add_argument("--as-of", required=True, type=parse_utc_timestamp,
                         help="Replay instant, ISO 8601 (UTC if no offset)")
     parser.add_argument("--currency", default="BTC")
@@ -48,8 +50,9 @@ def main() -> None:
                         default=EXPIRY_UNIVERSE_MONTHLY,
                         help="Expiry set used for the rendered charts")
     parser.add_argument("--gamma-underlying", choices=GAMMA_UNDERLYINGS,
-                        default=GAMMA_UNDERLYING_FORWARD,
-                        help="Price the gamma is evaluated at for the rendered charts")
+                        default=GAMMA_UNDERLYING_INDEX,
+                        help="Price the gamma is evaluated at for the rendered charts "
+                             "(default: index)")
     parser.add_argument("--reference", type=Path, default=None,
                         help="JSON of MenthorQ numbers to compare against")
     parser.add_argument("--open-interest-as-of", type=parse_utc_timestamp, default=None,
