@@ -39,7 +39,8 @@ class TelegramConfigCheck(HealthCheck):
         except Exception as exc:
             return [CheckResult(
                 name="Telegram config", status=CheckStatus.FAIL,
-                message=f"Telegram API unreachable: {exc}",
+                # requests puts the URL, which contains the token, in its error text.
+                message=f"Telegram API unreachable: {str(exc).replace(token, '<bot token>')}",
             )]
 
         if not response.ok:

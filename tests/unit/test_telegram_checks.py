@@ -47,3 +47,20 @@ def test_config_fail_when_token_rejected(monkeypatch, tmp_path):
     check = TelegramConfigCheck(requests_module=_FakeRequests(_FakeResponse(ok=False, status_code=401, text="Unauthorized")), env_path=empty_env)
     results = check.run(repo=None)
     assert results[0].status == CheckStatus.FAIL
+
+
+class _FailingRequests:
+    def get(self, url, timeout):
+        raise ConnectionError(f"Max retries exceeded with url: {url}")
+
+
+def test_unreachable_message_hides_the_token(monkeypatch, tmp_path):
+    monkeypatch.setenv("OSF_TELEGRAM_BOT_TOKEN", "secret-token")
+    monkeypatch.setenv("OSF_TELEGRAM_CHAT_ID", "12345")
+    empty_env = tmp_path / ".env"
+    empty_env.write_text("")
+    check = TelegramConfigCheck(requests_module=_FailingRequests(), env_path=empty_env)
+    results = check.run(repo=None)
+    assert results[0].status == CheckStatus.FAIL
+    assert "secret-token" not in results[0].message
+    assert "/bot<bot token>/getMe" in results[0].message

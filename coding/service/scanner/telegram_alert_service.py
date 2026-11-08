@@ -53,6 +53,18 @@ class TelegramAlertService:
         """The configured chat id ("" when not configured)."""
         return self._chat_id
 
+    def _without_token(self, error: object) -> str:
+        """
+        Return the text of ``error`` with the bot token replaced by
+        "<bot token>". requests puts the request URL, which contains the
+        token, into its exception text, so every logged request error must
+        pass through here.
+        """
+        text = str(error)
+        if not self._token:
+            return text
+        return text.replace(self._token, "<bot token>")
+
     def send(self, message: str, parse_mode: Optional[str] = None) -> bool:
         """
         Send `message` to the configured chat.
@@ -86,7 +98,7 @@ class TelegramAlertService:
                 return False
             return True
         except Exception as exc:
-            logger.warning("TelegramAlertService: send failed: %s", exc)
+            logger.warning("TelegramAlertService: send failed: %s", self._without_token(exc))
             return False
 
     def set_my_commands(self, commands: Sequence[Tuple[str, str]]) -> bool:
@@ -114,8 +126,7 @@ class TelegramAlertService:
                 return False
             return True
         except Exception as exc:
-            logger.warning("TelegramAlertService: setMyCommands failed: %s",
-                           str(exc).replace(self._token, "<bot token>"))
+            logger.warning("TelegramAlertService: setMyCommands failed: %s", self._without_token(exc))
             return False
 
     def get_updates(self, offset: Optional[int], timeout_seconds: int) -> Optional[List[Dict[str, Any]]]:
@@ -155,7 +166,5 @@ class TelegramAlertService:
                 return None
             return body["result"]
         except Exception as exc:
-            # requests puts the URL (which contains the bot token) in its error text.
-            logger.warning("TelegramAlertService: getUpdates failed: %s",
-                           str(exc).replace(self._token, "<bot token>"))
+            logger.warning("TelegramAlertService: getUpdates failed: %s", self._without_token(exc))
             return None

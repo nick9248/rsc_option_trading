@@ -100,6 +100,16 @@ class TestSendFailurePaths:
             result = service.send("hello")
         assert result is False
 
+    def test_network_exception_text_never_logs_the_token(self, caplog):
+        service = TelegramAlertService(token="secret-token", chat_id="999")
+        error_text = ("HTTPSConnectionPool(host='api.telegram.org'): Max retries exceeded "
+                      "with url: /botsecret-token/sendMessage")
+        with caplog.at_level("WARNING"),              patch("coding.service.scanner.telegram_alert_service.requests.post",
+                   side_effect=ConnectionError(error_text)):
+            assert service.send("hello") is False
+        assert "secret-token" not in caplog.text
+        assert "/bot<bot token>/sendMessage" in caplog.text
+
     def test_missing_credentials_returns_false_without_network_call(self):
         with patch("coding.service.scanner.telegram_alert_service.load_dotenv"), \
              patch("coding.service.scanner.telegram_alert_service.os.getenv", return_value=""):
