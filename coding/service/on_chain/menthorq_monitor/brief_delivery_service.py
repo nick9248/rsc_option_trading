@@ -228,11 +228,19 @@ class MenthorqBriefDeliveryService:
             return False
         return self._deliver(DELIVERY_KEY_WEEKLY_BRIEF, message, None)
 
-    def send_on_demand_brief(self, now: Optional[datetime] = None) -> bool:
-        """Send the brief now (the /brief command); says so when no record exists."""
+    def build_on_demand_brief(self, now: Optional[datetime] = None) -> str:
+        """The /brief reply at ``now`` (the clock when omitted); says so when no record exists."""
         now = now or self.clock()
         message = self.build_brief(now, "On-demand brief")
         if message is None:
             message = (f"<b>{escape(self.settings.currency)} MenthorQ-style levels</b>\n"
                        "No live record is stored yet.")
+        return message
+
+    def deliver_on_demand_brief(self, message: str) -> bool:
+        """Send a built /brief reply and record it as delivered when Telegram accepted it."""
         return self._deliver(DELIVERY_KEY_ON_DEMAND_BRIEF, message, None)
+
+    def send_on_demand_brief(self, now: Optional[datetime] = None) -> bool:
+        """Build and send the brief now; says so when no record exists."""
+        return self.deliver_on_demand_brief(self.build_on_demand_brief(now))

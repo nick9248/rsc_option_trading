@@ -1,11 +1,13 @@
 """
-The monitor's bot commands besides /brief: /levels, /changes, /status,
-/mute, /help and the hint for an unknown command. Each handler builds its
-reply from the stored records (command_formatter) and sends it to the owner
-chat with ``TelegramAlertService`` (one attempt, never raises).
+The monitor's bot commands: /brief, /levels, /changes, /status, /mute,
+/help and the hint for an unknown command. Each handler builds its reply
+from the stored records (command_formatter; /brief from the delivery
+service) and sends it to the owner chat with ``TelegramAlertService`` (one
+attempt, never raises).
 
 Replies are not written to ``menthorq_alert_deliveries`` (they are answers,
-not alerts) and are never muted: /mute only silences urgent alerts.
+not alerts), except /brief, which is recorded as ``on_demand_brief``.
+Replies are never muted: /mute only silences urgent alerts.
 A reply that cannot be built (e.g. the database is down) is logged and
 answered with a short "failed" line instead of silence.
 """
@@ -71,7 +73,9 @@ class MenthorqBotCommandService:
     def handlers(self) -> Dict[str, CommandHandler]:
         """Command -> handler, for ``TelegramCommandListener``."""
         return {
-            "/brief": lambda arguments: self.delivery_service.send_on_demand_brief(),
+            "/brief": lambda arguments: self.reply(
+                "/brief", self.delivery_service.build_on_demand_brief,
+                send=self.delivery_service.deliver_on_demand_brief),
             "/levels": lambda arguments: self.reply("/levels", self.build_levels_reply),
             "/changes": lambda arguments: self.reply("/changes", self.build_changes_reply),
             "/status": lambda arguments: self.reply("/status", self.build_status_reply),
@@ -83,10 +87,20 @@ class MenthorqBotCommandService:
         """The short help hint for a command the bot does not know."""
         return self.reply(command, lambda: format_unknown_command_reply(command))
 
-    def reply(self, command: str, build: Callable[[], str]) -> bool:
+    def reply(
+        self, command: str, build: Callable[[], str],
+        send: Optional[Callable[[str], bool]] = None,
+    ) -> bool:
         """
         Build a reply and send it; a build error is logged and answered
         with a "failed" line.
+
+        Args:
+            command: The command, for the log and the "failed" line.
+            build: Builds the reply text.
+            send: Sends a successfully built reply (e.g. /brief, which also
+                records the delivery); a plain Telegram send when omitted.
+                The "failed" line is always sent plainly.
 
         Returns:
             True when Telegram accepted the reply.
@@ -96,7 +110,11 @@ class MenthorqBotCommandService:
         except Exception:
             logger.exception("MenthorQ monitor: reply to %s could not be built", command)
             message = format_command_failed_reply(command)
-        accepted = self.telegram.send(message, parse_mode=TELEGRAM_PARSE_MODE)
+            send = None
+        if send is None:
+            accepted = self.telegram.send(message, parse_mode=TELEGRAM_PARSE_MODE)
+        else:
+            accepted = send(message)
         if not accepted:
             logger.warning("MenthorQ monitor: reply to %s NOT delivered (Telegram send failed)", command)
         return accepted

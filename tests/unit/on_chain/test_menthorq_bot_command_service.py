@@ -378,6 +378,19 @@ def test_brief_handler_sends_the_on_demand_brief():
     commands, _, telegram, _ = _service([make_record()])
     commands.handlers()["/brief"]("")
     assert "On-demand brief" in telegram.sent[-1]["message"]
+    assert [delivery["alert_key"] for delivery in commands.repository.deliveries] == ["on_demand_brief"]
+
+
+def test_brief_that_cannot_be_built_gets_the_failed_reply(monkeypatch):
+    commands, repository, telegram, _ = _service([make_record()])
+
+    def broken(*arguments):
+        raise RuntimeError("database down")
+
+    monkeypatch.setattr(repository, "get_menthorq_level_snapshot_at_or_before", broken)
+    assert commands.handlers()["/brief"]("") is True
+    assert telegram.sent[-1] == {"message": "/brief failed (see the collector log).", "parse_mode": "HTML"}
+    assert repository.deliveries == []    # a failure line is not recorded as a delivered brief
 
 
 def _owner_update(update_id, text, chat_id=OWNER):
