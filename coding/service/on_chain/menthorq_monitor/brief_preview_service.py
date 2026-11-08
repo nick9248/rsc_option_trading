@@ -42,11 +42,7 @@ from coding.core.analytics.menthorq_monitor.level_trend_calculator import (
     RecordComparison,
     spot_distances,
 )
-from coding.core.analytics.menthorq_replication_calculator import (
-    IV_SOURCE_MARK_IV,
-    IV_SOURCE_MISSING,
-    IV_SOURCE_REBUILT_FROM_MARK_PRICE,
-)
+from coding.core.analytics.menthorq_replication_calculator import iv_source_text
 from coding.core.database.repository import DatabaseRepository
 from coding.service.on_chain.menthorq_monitor.brief_formatter import (
     data_caveats,
@@ -240,22 +236,6 @@ def _format_age(age: Optional[timedelta]) -> str:
     return NOT_COMPUTED if age is None else format_duration(age)
 
 
-def iv_source_summary(iv_source_counts: Dict[str, int]) -> str:
-    """
-    {"mark_iv": 900, "rebuilt_from_mark_price": 3, "missing": 1} ->
-    "mark_iv 900, rebuilt from mark_price 3, missing 1 (of 904 rows)";
-    empty -> "not computed". (Written here rather than reusing
-    menthorq_chart_summary, which imports the chart renderer: this package
-    stays free of matplotlib.)
-    """
-    if not iv_source_counts:
-        return NOT_COMPUTED
-    total = sum(iv_source_counts.values())
-    return (f"mark_iv {iv_source_counts.get(IV_SOURCE_MARK_IV, 0):,}, "
-            f"rebuilt from mark_price {iv_source_counts.get(IV_SOURCE_REBUILT_FROM_MARK_PRICE, 0):,}, "
-            f"missing {iv_source_counts.get(IV_SOURCE_MISSING, 0):,} (of {total:,} rows)")
-
-
 def _utc_or_not_computed(instant: Optional[datetime]) -> str:
     return NOT_COMPUTED if instant is None else format_utc(instant)
 
@@ -277,7 +257,7 @@ def info_rows(
         ("Data age at Run (now - snapshot)", _format_age(record_age)),
         ("Index price", spot_text),
         ("Open interest from", _utc_or_not_computed(latest.open_interest_captured_at_utc)),
-        ("IV source", iv_source_summary(latest.iv_source_counts)),
+        ("IV source", iv_source_text(latest.iv_source_counts)),
         ("Universe / gamma at", f"{latest.expiry_universe} / {latest.gamma_underlying}"),
         ("Expiries", ", ".join(latest.expirations) if latest.expirations else NOT_COMPUTED),
         ("Daily-close column", NOT_COMPUTED if daily_close is None

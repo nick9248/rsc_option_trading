@@ -14,15 +14,16 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from coding.core.analytics.menthorq_chart_renderer import PANEL_TITLES
+from coding.core.analytics.menthorq_monitor.level_record import LEVEL_LABELS
 from coding.core.analytics.menthorq_replication_calculator import (
     DEFAULT_GEX_EXPIRING_CANDIDATE,
     DEFAULT_LEVEL_CANDIDATES,
     EXPIRY_UNIVERSE_ALL,
-    IV_SOURCE_MARK_IV,
     IV_SOURCE_MISSING,
     IV_SOURCE_REBUILT_FROM_MARK_PRICE,
     PANEL_NAMES,
     PANEL_RANKING_ABSOLUTE_NET,
+    iv_source_text,
     parse_expiry_settlement,
     select_drawn_levels,
 )
@@ -38,7 +39,6 @@ RUN_MODE_DESCRIPTIONS = {
     "menthorq_daily_close": "MenthorQ daily close",
     "live": "Live (newest stored snapshot)",
 }
-LEVEL_LABELS = {"call_resistance": "Call Resistance", "put_support": "Put Support", "hvl": "HVL"}
 
 
 def _primary_replication(output: Dict[str, Any]) -> Dict[str, Any]:
@@ -157,16 +157,6 @@ def levels_rows(
                 rows.append(_level_row("This expiry only", entry["expiration"],
                                        entry["levels"], spot))
     return rows
-
-
-def iv_source_text(iv_source_counts: Dict[str, int]) -> str:
-    """'mark_iv (all 1,234 rows)' or the per-source counts when mixed."""
-    total = sum(iv_source_counts.values())
-    if iv_source_counts.get(IV_SOURCE_MARK_IV, 0) == total:
-        return f"mark_iv (all {total:,} rows)"
-    return (f"mark_iv {iv_source_counts.get(IV_SOURCE_MARK_IV, 0):,}, "
-            f"rebuilt from mark_price {iv_source_counts.get(IV_SOURCE_REBUILT_FROM_MARK_PRICE, 0):,}, "
-            f"missing {iv_source_counts.get(IV_SOURCE_MISSING, 0):,} of {total:,} rows")
 
 
 def info_line(output: Dict[str, Any]) -> str:

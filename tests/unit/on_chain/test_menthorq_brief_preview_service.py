@@ -17,7 +17,6 @@ from coding.service.on_chain.menthorq_monitor.brief_preview_service import (
     PREVIEW_TITLE,
     MenthorqBriefPreviewService,
     generated_chart_files,
-    iv_source_summary,
     monitor_output_directory,
     preview_as_of_for_daily_close,
     telegram_html_to_plain_text,
@@ -110,7 +109,7 @@ class TestBuildPreview:
         assert rows["Data age at Run (now - snapshot)"] == "2 h 20 min"  # 11:10 - 08:50
         assert rows["Index price"] == "100,000 (trade at 2026-11-06 09:09 UTC)"
         assert rows["Open interest from"] == "2026-11-06 08:50 UTC"
-        assert rows["IV source"] == "mark_iv 900, rebuilt from mark_price 0, missing 0 (of 900 rows)"
+        assert rows["IV source"] == "mark_iv (all 900 rows)"      # the shared iv_source_text wording
         assert rows["Expiries"] == "27NOV26, 25DEC26, 29JAN27"
         assert rows["Daily-close column"] == "2026-11-05 (23:59 UTC, open interest 00:00 UTC)"
         assert any("Live mode" in warning for warning in preview.warnings)
@@ -210,7 +209,8 @@ class TestHelpers:
         assert preview_as_of_for_daily_close(date(2026, 11, 6)) == datetime(
             2026, 11, 6, 23, 59, tzinfo=timezone.utc)
 
-    def test_iv_source_summary(self):
-        assert iv_source_summary({}) == "not computed"
-        assert iv_source_summary({"mark_iv": 900, "rebuilt_from_mark_price": 3, "missing": 1}) == \
+    def test_iv_source_row_uses_the_shared_text(self):
+        from coding.core.analytics.menthorq_replication_calculator import iv_source_text
+        assert iv_source_text({}) == "not computed"
+        assert iv_source_text({"mark_iv": 900, "rebuilt_from_mark_price": 3, "missing": 1}) == \
             "mark_iv 900, rebuilt from mark_price 3, missing 1 (of 904 rows)"

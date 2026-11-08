@@ -135,6 +135,25 @@ DAILY_CLOSE_DATA_TIME_UTC = time(23, 59)
 LEVEL_NAMES = ("call_resistance", "put_support", "hvl")
 
 
+def iv_source_text(iv_source_counts: Mapping[str, int]) -> str:
+    """
+    Where the IVs came from, for display (the chart summary, the replay
+    report, the monitor preview):
+    {} or no rows at all -> "not computed";
+    {"mark_iv": 940, ...0} -> "mark_iv (all 940 rows)";
+    {"mark_iv": 900, "rebuilt_from_mark_price": 3, "missing": 1} ->
+    "mark_iv 900, rebuilt from mark_price 3, missing 1 (of 904 rows)".
+    """
+    total = sum(iv_source_counts.values())
+    if total == 0:
+        return "not computed"
+    if iv_source_counts.get(IV_SOURCE_MARK_IV, 0) == total:
+        return f"mark_iv (all {total:,} rows)"
+    return (f"mark_iv {iv_source_counts.get(IV_SOURCE_MARK_IV, 0):,}, "
+            f"rebuilt from mark_price {iv_source_counts.get(IV_SOURCE_REBUILT_FROM_MARK_PRICE, 0):,}, "
+            f"missing {iv_source_counts.get(IV_SOURCE_MISSING, 0):,} (of {total:,} rows)")
+
+
 # --------------------------------------------------------------------------
 # Expiry handling
 # --------------------------------------------------------------------------

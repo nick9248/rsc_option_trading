@@ -18,7 +18,6 @@ from coding.core.analytics.menthorq_chart_renderer import (
     render_iv_times_open_interest_chart,
     render_net_dex_chart,
 )
-from coding.core.analytics.menthorq_chart_summary import iv_source_text
 from coding.core.analytics.menthorq_replication_calculator import (
     DAILY_CLOSE_DATA_TIME_UTC,
     DEFAULT_LEVEL_CANDIDATES,
@@ -29,6 +28,7 @@ from coding.core.analytics.menthorq_replication_calculator import (
     GAMMA_UNDERLYINGS,
     compare_with_reference,
     compute_expiry_iv_times_open_interest,
+    iv_source_text,
     replicate_menthorq,
     start_of_utc_day,
 )

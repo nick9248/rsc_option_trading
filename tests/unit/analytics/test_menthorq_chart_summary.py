@@ -16,9 +16,9 @@ from coding.core.analytics.menthorq_chart_summary import (
     data_warnings,
     expiry_choices,
     info_line,
-    iv_source_text,
     levels_rows,
 )
+from coding.core.analytics.menthorq_replication_calculator import iv_source_text
 
 
 def _candidates(call_resistance, put_support, hvl):
@@ -129,9 +129,14 @@ def test_info_line_names_every_input_instant():
     assert "IV source: mark_iv (all 940 rows)" in text
 
 
-def test_iv_source_text_when_mixed():
+def test_iv_source_text_when_mixed_all_mark_iv_or_empty():
+    # one shared helper (menthorq_replication_calculator) for the charts, the replay and the preview
     assert iv_source_text({"mark_iv": 1, "rebuilt_from_mark_price": 900, "missing": 3}) == (
-        "mark_iv 1, rebuilt from mark_price 900, missing 3 of 904 rows")
+        "mark_iv 1, rebuilt from mark_price 900, missing 3 (of 904 rows)")
+    assert iv_source_text({"mark_iv": 940, "rebuilt_from_mark_price": 0, "missing": 0}) == \
+        "mark_iv (all 940 rows)"
+    assert iv_source_text({}) == "not computed"
+    assert iv_source_text({"mark_iv": 0, "rebuilt_from_mark_price": 0, "missing": 0}) == "not computed"
 
 
 def test_warnings_for_rebuilt_iv_missing_gex_open_interest_currency_and_reference_date():
