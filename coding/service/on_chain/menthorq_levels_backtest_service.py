@@ -224,15 +224,27 @@ class MenthorqLevelsBacktestService:
         Add next-1d / next-3d outcomes (hourly index samples after as_of)
         and the trailing 1d realized volatility (the 24 h up to as_of).
         A window with any missing or stale sample gives None.
+
+        The hourly forward samples are read once per day (the longest
+        horizon) and sliced for each horizon. A day without an index price
+        gets None everywhere without any query (every window starts or ends
+        at that price, so none could be computed).
         """
         latest = self.repository.get_index_price_at_or_before(currency, datetime.now(timezone.utc))
         data_end = latest[1] if latest else datetime.min.replace(tzinfo=timezone.utc)
+        longest_horizon_hours = max(OUTCOME_HORIZONS_HOURS.values())
         for row in rows:
             as_of = datetime.fromisoformat(row["as_of_utc"])
+            if row["index_price"] is None:
+                forward_samples: List[Optional[float]] = [None] * longest_horizon_hours
+                trailing: List[Optional[float]] = [None]
+            else:
+                forward_samples = [self._price_at(currency, as_of + timedelta(hours=step), data_end)
+                                   for step in range(1, longest_horizon_hours + 1)]
+                trailing = [self._price_at(currency, as_of - timedelta(hours=step), data_end)
+                            for step in range(24, 0, -1)] + [row["index_price"]]
             for horizon, hours in OUTCOME_HORIZONS_HOURS.items():
-                prices = [row["index_price"]] + [
-                    self._price_at(currency, as_of + timedelta(hours=step), data_end)
-                    for step in range(1, hours + 1)]
+                prices = [row["index_price"]] + forward_samples[:hours]
                 outcome = forward_price_outcomes(prices, step_hours=1)
                 row[f"next_{horizon}_realized_volatility_annualized_percent"] = \
                     outcome["realized_volatility_annualized_percent"]
@@ -241,8 +253,6 @@ class MenthorqLevelsBacktestService:
                 row[f"next_{horizon}_minimum_price"] = outcome["minimum_price"]
                 row[f"next_{horizon}_final_price"] = (
                     prices[-1] if outcome["maximum_price"] is not None else None)
-            trailing = [self._price_at(currency, as_of - timedelta(hours=step), data_end)
-                        for step in range(24, 0, -1)] + [row["index_price"]]
             row["trailing_1d_realized_volatility_annualized_percent"] = forward_price_outcomes(
                 trailing, step_hours=1)["realized_volatility_annualized_percent"]
 

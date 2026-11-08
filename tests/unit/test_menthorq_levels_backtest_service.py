@@ -96,3 +96,84 @@ def test_forward_outcomes_stop_at_the_end_of_the_data(rows):
     assert last["next_1d_absolute_log_return_percent"] == 0.0
     assert last["next_3d_realized_volatility_annualized_percent"] is None
     assert last["next_3d_final_price"] is None
+
+
+class VaryingPriceRepository:
+    """Index price that changes every hour, with a gap (stale samples) and an end of data.
+    Counts the index-price queries."""
+
+    start = datetime(2026, 10, 1, 0, 0, tzinfo=timezone.utc)
+    data_end = datetime(2026, 10, 9, 5, 0, tzinfo=timezone.utc)
+    gap = (datetime(2026, 10, 5, 2, 0, tzinfo=timezone.utc), datetime(2026, 10, 5, 6, 0, tzinfo=timezone.utc))
+
+    def __init__(self):
+        self.index_price_queries = 0
+
+    def get_index_price_at_or_before(self, currency, as_of):
+        self.index_price_queries += 1
+        instant = min(as_of, self.data_end)
+        if self.gap[0] <= instant < self.gap[1]:
+            instant = self.gap[0] - timedelta(hours=3)        # newest trade 3+ h old: stale sample
+        hours = int((instant - self.start).total_seconds() // 3600)
+        return 80000.0 + 37.0 * hours + (hours % 5) * 11.0, instant - timedelta(seconds=7)
+
+
+def _old_add_price_outcomes(service, currency, rows):
+    """The implementation before the single-fetch change (one query per sample per horizon)."""
+    from coding.core.analytics.menthorq_levels_backtest_calculator import forward_price_outcomes
+    from coding.service.on_chain.menthorq_levels_backtest_service import OUTCOME_HORIZONS_HOURS
+
+    latest = service.repository.get_index_price_at_or_before(currency, datetime.now(timezone.utc))
+    data_end = latest[1] if latest else datetime.min.replace(tzinfo=timezone.utc)
+    for row in rows:
+        as_of = datetime.fromisoformat(row["as_of_utc"])
+        for horizon, hours in OUTCOME_HORIZONS_HOURS.items():
+            prices = [row["index_price"]] + [
+                service._price_at(currency, as_of + timedelta(hours=step), data_end)
+                for step in range(1, hours + 1)]
+            outcome = forward_price_outcomes(prices, step_hours=1)
+            row[f"next_{horizon}_realized_volatility_annualized_percent"] = \
+                outcome["realized_volatility_annualized_percent"]
+            row[f"next_{horizon}_absolute_log_return_percent"] = outcome["absolute_log_return_percent"]
+            row[f"next_{horizon}_maximum_price"] = outcome["maximum_price"]
+            row[f"next_{horizon}_minimum_price"] = outcome["minimum_price"]
+            row[f"next_{horizon}_final_price"] = prices[-1] if outcome["maximum_price"] is not None else None
+        trailing = [service._price_at(currency, as_of - timedelta(hours=step), data_end)
+                    for step in range(24, 0, -1)] + [row["index_price"]]
+        row["trailing_1d_realized_volatility_annualized_percent"] = forward_price_outcomes(
+            trailing, step_hours=1)["realized_volatility_annualized_percent"]
+
+
+def test_single_fetch_outcomes_are_identical_to_the_old_logic_with_fewer_queries():
+    """8 days 1..8 Oct (23:59): 3 Oct has no index price (not computed); 4 Oct's 1d/3d
+    windows cross the 5 Oct gap; 6..8 Oct's 3d window runs past the data end."""
+    def base_rows():
+        rows = []
+        for day in range(1, 9):
+            as_of = datetime(2026, 10, day, 23, 59, tzinfo=timezone.utc)
+            price = None if day == 3 else 80000.0 + day * 100.0
+            rows.append({"date": as_of.date().isoformat(), "as_of_utc": as_of.isoformat(), "index_price": price})
+        return rows
+
+    old_repository, new_repository = VaryingPriceRepository(), VaryingPriceRepository()
+    old_rows, new_rows = base_rows(), base_rows()
+    _old_add_price_outcomes(MenthorqLevelsBacktestService(old_repository), "BTC", old_rows)
+    MenthorqLevelsBacktestService(new_repository).add_price_outcomes("BTC", new_rows)
+
+    assert new_rows == old_rows
+    # Samples after the data end (9 Oct 04:59:53) are not queried. Forward samples within
+    # it: 1..5 Oct all; 6 Oct 53 h; 7 Oct 29 h; 8 Oct 5 h. Trailing: always 24.
+    # Old (1d + 3d + trailing per day, 3 Oct included): 1 + 5*(24+72+24) + (24+53+24)
+    #   + (24+29+24) + (5+5+24) = 1 + 600 + 101 + 77 + 34 = 813.
+    # New (3d + trailing per priced day, 3 Oct skipped): 1 + 4*(72+24) + (53+24) + (29+24)
+    #   + (5+24) = 1 + 384 + 77 + 53 + 29 = 544.
+    assert old_repository.index_price_queries == 813
+    assert new_repository.index_price_queries == 544
+    # the cases the series is built to cover really occur
+    by_date = {row["date"]: row for row in new_rows}
+    assert by_date["2026-10-03"]["next_1d_final_price"] is None
+    assert by_date["2026-10-03"]["trailing_1d_realized_volatility_annualized_percent"] is None
+    assert by_date["2026-10-04"]["next_1d_realized_volatility_annualized_percent"] is None   # gap
+    assert by_date["2026-10-01"]["next_3d_realized_volatility_annualized_percent"] is not None
+    assert by_date["2026-10-07"]["next_1d_final_price"] is not None
+    assert by_date["2026-10-07"]["next_3d_final_price"] is None                               # data end
