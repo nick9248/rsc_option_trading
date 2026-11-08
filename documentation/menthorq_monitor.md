@@ -97,8 +97,8 @@ positive total net GEX.
 | `MENTHORQ_EXPIRY_UNIVERSE` | monthly | all, monthly, quarterly_plus_front_month |
 | `MENTHORQ_LIVE_RUN_MINUTE` | 10 | minute past each hour of the live run |
 | `MENTHORQ_WEEKLY_BRIEF_DAY` | fri | mon to sun |
-| `MENTHORQ_WEEKLY_BRIEF_TIME_UTC` | 09:00 | HH:MM |
-| `MENTHORQ_COMMAND_POLL_SECONDS` | 20 | at least 5 |
+| `MENTHORQ_WEEKLY_BRIEF_TIME_UTC` | 09:00 | HH:MM, UTC (a value with an offset is refused) |
+| `MENTHORQ_COMMAND_POLL_SECONDS` | 20 | at least 12 (the 10 s long-poll wait + 2 s) |
 | `MENTHORQ_STALE_SNAPSHOT_MINUTES` | 120 | at least 10; stale-data limit, see below |
 | `MENTHORQ_ALERT_*` | see the rules table | alert rules |
 

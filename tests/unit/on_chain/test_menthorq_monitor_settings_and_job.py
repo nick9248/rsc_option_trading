@@ -23,7 +23,11 @@ from coding.service.on_chain.menthorq_monitor.menthorq_monitor_job import (
 from coding.core.analytics.menthorq_monitor.alert_rules import AlertThresholds
 from coding.service.on_chain.menthorq_monitor.brief_formatter import DEFAULT_STALE_SNAPSHOT_LIMIT
 from coding.service.on_chain.menthorq_monitor.command_formatter import BOT_COMMANDS
-from coding.service.on_chain.menthorq_monitor.monitor_settings import MenthorqMonitorSettings
+from coding.service.on_chain.menthorq_monitor.monitor_settings import (
+    MINIMUM_COMMAND_POLL_SECONDS,
+    MenthorqMonitorSettings,
+)
+from coding.service.on_chain.menthorq_monitor.telegram_command_listener import LONG_POLL_SECONDS
 from tests.fakes.fake_menthorq_monitor import BASE_TIME, FakeTelegram
 
 REPOSITORY_ROOT = Path(__file__).parents[3]
@@ -71,6 +75,22 @@ def test_values_are_read_from_the_environment():
 def test_invalid_values_raise_instead_of_falling_back(name, value):
     with pytest.raises(ValueError, match=name):
         MenthorqMonitorSettings.from_environment({name: value})
+
+
+def test_command_poll_minimum_is_the_long_poll_wait_plus_two_seconds():
+    # LONG_POLL_SECONDS = 10 -> minimum 12; 11 would make APScheduler skip runs.
+    assert LONG_POLL_SECONDS == 10 and MINIMUM_COMMAND_POLL_SECONDS == 12
+    assert MenthorqMonitorSettings.from_environment(
+        {"MENTHORQ_COMMAND_POLL_SECONDS": "12"}).command_poll_seconds == 12
+    for too_short in ("11", "5"):
+        with pytest.raises(ValueError, match=r"MENTHORQ_COMMAND_POLL_SECONDS=\d+ is outside 12\.\.None"):
+            MenthorqMonitorSettings.from_environment({"MENTHORQ_COMMAND_POLL_SECONDS": too_short})
+
+
+@pytest.mark.parametrize("value", ["09:00+02:00", "09:00Z", "09:00+00:00", "07:30-05:00"])
+def test_weekly_brief_time_with_an_offset_is_refused(value):
+    with pytest.raises(ValueError, match="UTC only, format HH:MM"):
+        MenthorqMonitorSettings.from_environment({"MENTHORQ_WEEKLY_BRIEF_TIME_UTC": value})
 
 
 def test_stale_snapshot_limit_default_minimum_and_value():

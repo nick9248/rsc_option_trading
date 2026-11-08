@@ -15,8 +15,9 @@ steal the production bot's updates or send duplicate alerts.
   MENTHORQ_EXPIRY_UNIVERSE        all | monthly | quarterly_plus_front_month
   MENTHORQ_LIVE_RUN_MINUTE        0-59, minute past each hour of the live run
   MENTHORQ_WEEKLY_BRIEF_DAY       mon | tue | wed | thu | fri | sat | sun
-  MENTHORQ_WEEKLY_BRIEF_TIME_UTC  HH:MM (UTC)
-  MENTHORQ_COMMAND_POLL_SECONDS   seconds between getUpdates calls (>= 5)
+  MENTHORQ_WEEKLY_BRIEF_TIME_UTC  HH:MM (UTC; a value with an offset is refused)
+  MENTHORQ_COMMAND_POLL_SECONDS   seconds between getUpdates calls (>= the listener's
+                                  long-poll wait + 2 = 12)
   MENTHORQ_STALE_SNAPSHOT_MINUTES minutes (>= 10, default 120): a snapshot or spot
                                   trade older than this before the data time, or a
                                   stored record's snapshot older than this before
@@ -52,9 +53,12 @@ from coding.core.analytics.menthorq_replication_calculator import (
     EXPIRY_UNIVERSES,
     GAMMA_UNDERLYING_INDEX,
 )
+from coding.service.on_chain.menthorq_monitor.telegram_command_listener import LONG_POLL_SECONDS
 
 WEEKDAY_NAMES = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
-MINIMUM_COMMAND_POLL_SECONDS = 5
+# Each poll blocks for the long-poll wait; a shorter interval only makes
+# APScheduler skip runs (max_instances=1). 2 s margin for the request itself.
+MINIMUM_COMMAND_POLL_SECONDS = LONG_POLL_SECONDS + 2
 MINIMUM_STALE_SNAPSHOT_MINUTES = 10
 RULE_OFF = "off"
 
@@ -183,6 +187,9 @@ class MenthorqMonitorSettings:
                 brief_time = time.fromisoformat(time_text)
             except ValueError:
                 raise ValueError(f"MENTHORQ_WEEKLY_BRIEF_TIME_UTC={time_text!r} is not HH:MM") from None
+            if brief_time.tzinfo is not None:
+                raise ValueError(f"MENTHORQ_WEEKLY_BRIEF_TIME_UTC={time_text!r} has an offset; "
+                                 "UTC only, format HH:MM")
 
         return cls(
             monitor_enabled=flag("MENTHORQ_MONITOR_ENABLED", defaults.monitor_enabled),
