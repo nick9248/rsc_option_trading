@@ -11,9 +11,8 @@ Automated crypto options trading for BTC and ETH on Deribit. The long-term goal 
 | **Data collection daemon** | Runs 24/7 on a Hetzner VPS (systemd). Every 30 minutes it collects trades, book summaries, on-chain analysis, DVOL, funding rate, daily OHLCV, dated-futures basis and the owner's own Deribit account (read-only). |
 | **On-chain analysis** | GEX/DEX by strike, max pain, put/call ratios, volatility surface, buy/sell flow (computed on demand from stored trades), dealer inventory, exposure profiles. |
 | **Morning note** | Turns the on-chain analysis into a scored executive summary (`synthesis_logic.md`). |
-| **Scanners and forward tests** | Straddle, iron condor and butterfly scanners; forward-test harnesses that record predictions and resolve them at settlement. |
 | **Health checks** | One shared check registry, run locally (`scripts/validate_system.py`) and on the VPS (`scripts/check_vps_health.py`, hourly cron). |
-| **Desktop GUI** | PySide6 app: API connection, snapshot, on-chain analysis, database sync, system health and automation tabs, plus the MenthorQ charts and MenthorQ monitor tabs. |
+| **Desktop GUI** | PySide6 app: API connection, snapshot, on-chain analysis, database sync, system health, MenthorQ Charts and MenthorQ Monitor tabs. |
 
 No code in this repo places real orders.
 
@@ -24,7 +23,7 @@ No code in this repo places real orders.
 ```
 coding/
 ├── core/       models, calculators, API client, database repository, health models
-├── service/    orchestration: data collection, on-chain, scanners, health, Deribit clients
+├── service/    orchestration: data collection, on-chain, health, Deribit clients
 ├── gui/        PySide6 app (no business logic; calls services)
 └── pipelines/  fetch-and-process helpers
 

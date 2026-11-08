@@ -205,7 +205,7 @@ Every 30 minutes, the `ProspectiveCollector` runs for BTC and ETH:
 |------|------|-------|
 | 1 | Recent trades | `historical_trades` |
 | 2 | Book summary (all instruments) | `snapshots` |
-| 3 | On-chain analysis (max pain, OI, GEX/DEX, volatility, skew) and forward-test predictions | `onchain_analysis_snapshots`, `volatility_skew_history`, `forward_test_predictions` |
+| 3 | On-chain analysis (max pain, OI, GEX/DEX, volatility, skew) | `onchain_analysis_snapshots`, `volatility_skew_history` |
 | 4 | DVOL (final close of the last 48 hourly candles) | `dvol_history` |
 | 5 | Dated-futures basis | `futures_basis` |
 | 6 | The owner's Deribit account, read-only (skipped without credentials) | `account_snapshots`, `position_snapshots`, `user_trades`, `orders`, `settlements` |
@@ -215,15 +215,16 @@ Every 30 minutes, the `ProspectiveCollector` runs for BTC and ETH:
 | 10 | Daily open-interest anchor (08:00 UTC hour only) | `daily_oi_snapshots` |
 | after | Hourly aggregation | `hourly_snapshots` |
 | after | Volatility reconstruction | `onchain_volatility_snapshots` |
-| after | Straddle, iron condor and butterfly scanners | `straddle_scan_history`, `defined_risk_scan_history` |
 
 The tables `max_pain`, `open_interest`, `volume`, `gex_dex`, `levels`, `volatility_index_history` and `buy_sell_flow_metrics` no longer exist (migrations 024, 027, 028).
+
+The strategy finder (straddle, iron condor and butterfly scanners) and the forward tests were removed on 2026-11-08. Their tables `straddle_scan_history`, `defined_risk_scan_history` and `forward_test_predictions` still exist with their history, but nothing writes or syncs them any more.
 
 ---
 
 ## 7. Synced Tables
 
-The sync script pulls these 20 tables (`SYNC_TABLES` in `scripts/sync_from_vps.py`) from the VPS to the local PC. `health_check_runs` stays on the VPS.
+The sync script pulls these 18 tables (`SYNC_TABLES` in `scripts/sync_from_vps.py`) from the VPS to the local PC. `health_check_runs` stays on the VPS.
 
 | Table | Watermark Column | Conflict Handling |
 |-------|-----------------|-------------------|
@@ -235,7 +236,6 @@ The sync script pulls these 20 tables (`SYNC_TABLES` in `scripts/sync_from_vps.p
 | `funding_rate_history` | `date` | `(instrument_name, timestamp)` |
 | `ohlcv_history` | `date` | `(instrument_name, timestamp)` |
 | `onchain_volatility_snapshots` | `reconstructed_at` | `(snapshot_hour, currency, expiration)` |
-| `forward_test_predictions` | `created_at` | none |
 | `daily_oi_snapshots` | `created_at` | none |
 | `account_snapshots` | `snapshot_hour` | `(currency, snapshot_hour)` |
 | `position_snapshots` | `snapshot_hour` | `(snapshot_hour, instrument_name)` |
@@ -245,8 +245,7 @@ The sync script pulls these 20 tables (`SYNC_TABLES` in `scripts/sync_from_vps.p
 | `futures_basis` | `timestamp` | `(futures_instrument, timestamp)` |
 | `dvol_history` | `timestamp` | none |
 | `volatility_skew_history` | `snapshot_hour` | none |
-| `straddle_scan_history` | `scan_time` | none |
-| `defined_risk_scan_history` | `scan_time` | none |
+| `menthorq_level_snapshots` | `computed_at` | `(currency, mode, expiry_universe, gamma_underlying, as_of_utc)` |
 
 ---
 
@@ -258,7 +257,7 @@ How fresh each table must be is set in `coding/service/health/table_registry.py`
 
 | Tables | Warn after | Fail after | Why |
 |--------|-----------|-----------|-----|
-| Hourly tables (`historical_trades`, `snapshots`, `hourly_snapshots`, `onchain_analysis_snapshots`, `onchain_volatility_snapshots`, `volatility_skew_history`, `flow_delta_hourly`, `straddle_scan_history`, `defined_risk_scan_history`, `forward_test_predictions`, `futures_basis`, `funding_rate_history`, `account_snapshots`) | 2 h | 6 h | Written every collection cycle |
+| Hourly tables (`historical_trades`, `snapshots`, `hourly_snapshots`, `onchain_analysis_snapshots`, `onchain_volatility_snapshots`, `volatility_skew_history`, `flow_delta_hourly`, `futures_basis`, `funding_rate_history`, `account_snapshots`) | 2 h | 6 h | Written every collection cycle |
 | `dvol_history` | 3 h | 6 h | Only completed hourly candles are stored |
 | `ohlcv_history` | 48 h | 120 h | Daily candle |
 | `daily_oi_snapshots` | 36 h | 72 h | Written once a day |
@@ -317,7 +316,7 @@ Further keys the code reads (set only if the feature is wanted): `client_id` and
 
 ### What healthy output looks like
 
-Every check of the VPS environment passes: daemon service active, API reachable, each table in `table_registry.py` fresh and complete, no missing cycles, scanner and forward tests active. The exact lines depend on the registry; run `python -m scripts.check_vps_health` on the VPS to see them. Each hourly run is also stored in the `health_check_runs` table, so you can look at the history.
+Every check of the VPS environment passes: daemon service active, API reachable, each table in `table_registry.py` fresh and complete, no missing cycles. The exact lines depend on the registry; run `python -m scripts.check_vps_health` on the VPS to see them. Each hourly run is also stored in the `health_check_runs` table, so you can look at the history.
 
 ### If a check fails
 
