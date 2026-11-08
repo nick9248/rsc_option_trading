@@ -374,11 +374,12 @@ def fill_missing_implied_volatility(
     ``snapshots.mark_iv`` is NULL until 2026-08-25 15:11 UTC, while
     ``mark_price`` and ``underlying_price`` are stored).
 
-    A row whose ``mark_iv`` is None but whose ``mark_price`` (BTC) and
-    forward are present gets the IV inverted from that price
+    A row whose ``mark_iv`` is None, 0 or negative (``compute_leg_greeks``
+    gives no gamma for it) but whose ``mark_price`` (BTC) and forward are
+    present gets the IV inverted from that price
     (``implied_volatility_from_mark_price``). Every returned row carries
-    ``iv_source``: "mark_iv", "rebuilt_from_mark_price" or "missing" (no IV
-    either way; ``mark_iv`` stays None).
+    ``iv_source``: "mark_iv", "rebuilt_from_mark_price" or "missing" (no
+    usable IV either way; ``mark_iv`` is set to None).
 
     Args:
         chain_rows: Snapshot rows (mark_iv in percent, mark_price in BTC).
@@ -392,7 +393,8 @@ def fill_missing_implied_volatility(
     filled: List[Dict[str, Any]] = []
     for row in chain_rows:
         row = dict(row)
-        if row.get("mark_iv") is not None:
+        mark_iv = row.get("mark_iv")
+        if mark_iv is not None and mark_iv > 0:
             row["iv_source"] = IV_SOURCE_MARK_IV
         else:
             settlement = parse_expiry_settlement(row.get("expiration", ""))

@@ -144,6 +144,25 @@ class TestImpliedVolatilityFromMarkPrice:
         assert counts == {"mark_iv": 1, "rebuilt_from_mark_price": 1, "missing": 1}
         assert rows[1]["mark_iv"] is None    # input rows are not modified
 
+    def test_zero_or_negative_mark_iv_is_treated_as_missing(self):
+        # compute_leg_greeks gives no gamma for IV <= 0, so such a row must not count as "mark_iv"
+        rows = [
+            _row("27NOV26", 100, "P", 1.0, 0.0, mark_price=AT_THE_MONEY_MARK_PRICE_BTC),   # rebuilt
+            _row("27NOV26", 100, "C", 1.0, -5.0, mark_price=AT_THE_MONEY_MARK_PRICE_BTC),  # rebuilt
+            _row("27NOV26", 110, "C", 1.0, 0.0, mark_price=None),       # nothing to rebuild from
+            _row("27NOV26", 120, "P", 1.0, -1.0, mark_price=None),      # nothing to rebuild from
+            _row("27NOV26", 100, "C", 1.0, 40.0, mark_price=0.5),       # valid, kept
+        ]
+        filled, counts = fill_missing_implied_volatility(rows, ONE_YEAR_BEFORE)
+        assert [row["iv_source"] for row in filled] == [
+            "rebuilt_from_mark_price", "rebuilt_from_mark_price", "missing", "missing", "mark_iv"]
+        # S = K = 100, tau = 1, mark price 0.197413 BTC -> 50% (the at-the-money hand calculation)
+        assert filled[0]["mark_iv"] == pytest.approx(50.0, abs=1e-3)
+        assert filled[1]["mark_iv"] == pytest.approx(50.0, abs=1e-3)
+        assert filled[2]["mark_iv"] is None and filled[3]["mark_iv"] is None
+        assert counts == {"mark_iv": 1, "rebuilt_from_mark_price": 2, "missing": 2}
+        assert sum(counts.values()) == len(rows)
+
 
 class TestBlackScholesGamma:
     def test_at_the_money_gamma_and_delta_match_hand_calculation(self):
