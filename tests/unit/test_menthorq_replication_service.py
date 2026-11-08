@@ -4,6 +4,7 @@ point-in-time guards, the older-open-interest option, and the MenthorQ
 daily-close and live entry points (hand-calculated levels).
 """
 
+import json
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, cast
 
@@ -47,7 +48,7 @@ class FakeRepository:
 
 
 def test_open_interest_taken_from_older_snapshot_and_missing_stays_none():
-    inputs = MenthorqReplicationService(FakeRepository()).load_inputs("BTC", AS_OF, EARLIER)
+    inputs = MenthorqReplicationService(cast(Any, FakeRepository())).load_inputs("BTC", AS_OF, EARLIER)
     by_name = {row["instrument_name"]: row for row in inputs["chain_rows"]}
     assert by_name["A"]["open_interest"] == 200.0
     assert by_name["A"]["mark_iv"] == 40.0          # IV still from AS_OF
@@ -75,7 +76,7 @@ class FakeRepositoryWithoutMarkIv(FakeRepository):
 
 def test_missing_mark_iv_is_rebuilt_from_mark_price_and_labelled(caplog):
     with caplog.at_level("WARNING"):
-        inputs = MenthorqReplicationService(FakeRepositoryWithoutMarkIv()).load_inputs("BTC", AS_OF)
+        inputs = MenthorqReplicationService(cast(Any, FakeRepositoryWithoutMarkIv())).load_inputs("BTC", AS_OF)
     by_name = {row["instrument_name"]: row for row in inputs["chain_rows"]}
     assert by_name["A"]["mark_iv"] == pytest.approx(50.0, abs=1e-3)
     assert by_name["A"]["iv_source"] == "rebuilt_from_mark_price"
@@ -86,19 +87,19 @@ def test_missing_mark_iv_is_rebuilt_from_mark_price_and_labelled(caplog):
 
 
 def test_open_interest_after_as_of_is_rejected_as_lookahead():
-    service = MenthorqReplicationService(FakeRepository())
+    service = MenthorqReplicationService(cast(Any, FakeRepository()))
     with pytest.raises(ValueError):
         service.load_inputs("BTC", EARLIER, AS_OF)
 
 
 def test_missing_index_price_raises_instead_of_using_a_default():
-    service = MenthorqReplicationService(FakeRepository(has_index=False))
+    service = MenthorqReplicationService(cast(Any, FakeRepository(has_index=False)))
     with pytest.raises(LookupError):
         service.load_inputs("BTC", AS_OF)
 
 
 def test_missing_snapshot_raises():
-    service = MenthorqReplicationService(FakeRepository())
+    service = MenthorqReplicationService(cast(Any, FakeRepository()))
     with pytest.raises(LookupError):
         service.load_inputs("BTC", EARLIER - timedelta(days=1))
 
@@ -241,3 +242,128 @@ def test_daily_close_instants():
         datetime(2026, 8, 24, 23, 59, tzinfo=timezone.utc),
         datetime(2026, 8, 24, 0, 0, tzinfo=timezone.utc),
     )
+
+
+# --------------------------------------------------------------------------
+# Output layouts: "flat" (default) and "nested" (MenthorQ Charts tab)
+# --------------------------------------------------------------------------
+
+# 23:59 UTC replay with open interest from 00:00 UTC of 6 Nov 2026.
+DAILY_CLOSE_STEM = "btc_20261106T2359Z_open_interest_20261106T0000Z"
+# RecordingRepository lists only 27NOV26, a monthly expiry: three chart kinds
+# for the monthly universe and the all-listed variant, one per-expiry chart.
+EXPECTED_NESTED_FILES = sorted([
+    f"01_iv_times_open_interest/{DAILY_CLOSE_STEM}_iv_times_open_interest.png",
+    f"01_iv_times_open_interest/{DAILY_CLOSE_STEM}_iv_times_open_interest_all_listed_expiries.png",
+    f"02_iv_times_open_interest_per_expiry/{DAILY_CLOSE_STEM}_iv_times_open_interest_27NOV26.png",
+    f"03_net_gex_panels/{DAILY_CLOSE_STEM}_net_gex_panels.png",
+    f"03_net_gex_panels/{DAILY_CLOSE_STEM}_net_gex_panels_all_listed_expiries.png",
+    f"04_net_dex/{DAILY_CLOSE_STEM}_net_dex.png",
+    f"04_net_dex/{DAILY_CLOSE_STEM}_net_dex_all_listed_expiries.png",
+    "README.txt",
+    "replication.json",
+])
+
+
+def _daily_close(directory, **keywords):
+    """Daily close of 6 Nov 2026 on a repository whose snapshot is newer than any request."""
+    repository = RecordingRepository(captured_at=datetime(2026, 12, 1, tzinfo=timezone.utc))
+    return _service(repository).run_menthorq_daily_close(
+        "BTC", date(2026, 11, 6), directory, now=LATEST_CAPTURE, **keywords)
+
+
+def _files_under(directory):
+    return sorted(path.relative_to(directory).as_posix()
+                  for path in directory.rglob("*") if path.is_file())
+
+
+def test_flat_layout_is_the_default_and_unchanged(tmp_path):
+    output = _daily_close(tmp_path)
+    assert _files_under(tmp_path) == sorted(
+        [name.split("/")[-1] for name in EXPECTED_NESTED_FILES if name.endswith(".png")]
+        + [f"{DAILY_CLOSE_STEM}_replication.json"])
+    assert output["charts"]["net_gex_panels"] == f"{DAILY_CLOSE_STEM}_net_gex_panels.png"
+    assert output["per_expiry_iv_times_open_interest"][0]["chart"] == (
+        f"{DAILY_CLOSE_STEM}_iv_times_open_interest_27NOV26.png")
+    assert "chart_layout" not in output
+
+
+def test_nested_layout_writes_the_dated_subfolders(tmp_path):
+    output = _daily_close(tmp_path, chart_layout="nested")
+    date_folder = tmp_path / "2026-11-06"
+    assert _files_under(tmp_path) == [f"2026-11-06/{name}" for name in EXPECTED_NESTED_FILES]
+
+    assert output["chart_layout"] == "nested"
+    assert output["charts"] == {
+        "iv_times_open_interest":
+            f"01_iv_times_open_interest/{DAILY_CLOSE_STEM}_iv_times_open_interest.png",
+        "net_gex_panels": f"03_net_gex_panels/{DAILY_CLOSE_STEM}_net_gex_panels.png",
+        "net_dex": f"04_net_dex/{DAILY_CLOSE_STEM}_net_dex.png",
+        "iv_times_open_interest_all_listed_expiries":
+            f"01_iv_times_open_interest/{DAILY_CLOSE_STEM}_iv_times_open_interest_all_listed_expiries.png",
+        "net_gex_panels_all_listed_expiries":
+            f"03_net_gex_panels/{DAILY_CLOSE_STEM}_net_gex_panels_all_listed_expiries.png",
+        "net_dex_all_listed_expiries":
+            f"04_net_dex/{DAILY_CLOSE_STEM}_net_dex_all_listed_expiries.png",
+    }
+    # Every chart reference in the written JSON resolves from the date folder.
+    written = json.loads((date_folder / "replication.json").read_text(encoding="utf-8"))
+    references = list(written["charts"].values()) + [
+        entry["chart"] for entry in written["per_expiry_iv_times_open_interest"]]
+    assert len(references) == 7
+    assert all((date_folder / reference).stat().st_size > 0 for reference in references)
+
+
+def test_nested_numbers_equal_the_flat_ones(tmp_path):
+    flat = json.loads(json.dumps(_daily_close(tmp_path / "flat"), default=str))
+    nested = json.loads(json.dumps(_daily_close(tmp_path / "nested", chart_layout="nested"),
+                                   default=str))
+    assert nested.pop("chart_layout") == "nested"
+    for output in (flat, nested):
+        output["charts"] = {key: name.split("/")[-1] for key, name in output["charts"].items()}
+        for entry in output["per_expiry_iv_times_open_interest"]:
+            entry["chart"] = entry["chart"].split("/")[-1]
+    assert nested == flat
+
+
+def test_nested_readme_lists_the_folders_and_run_settings(tmp_path):
+    _daily_close(tmp_path, chart_layout="nested")
+    readme = (tmp_path / "2026-11-06" / "README.txt").read_bytes()
+    assert readme.isascii()
+    lines = readme.decode("ascii").splitlines()
+    assert lines[0] == "MenthorQ-style charts, BTC, menthorq_daily_close, 2026-11-06"
+    for expected in (
+        "  As of (spot and IV):  2026-11-06 23:59:00 UTC",
+        "  Snapshot captured:    2026-11-06 23:59:00 UTC",
+        "  Open interest:        snapshot at or before 2026-11-06 00:00:00 UTC, "
+        "captured 2026-11-06 00:00:00 UTC",
+        "  Index price:          100.00 (trade at 2026-11-06 23:58:30 UTC)",
+        "  IV source:            mark_iv (all 2 rows)",
+        "  Expiry universes:     monthly (file names without suffix) and all listed "
+        "(suffix _all_listed_expiries)",
+        "  Gamma at:             index",
+        "  01_iv_times_open_interest/            IV*OI over all expiries of the universe (2 files)",
+        "  02_iv_times_open_interest_per_expiry/ IV*OI of one listed expiry per chart (1 files)",
+        "  03_net_gex_panels/                    Net GEX, four expiry panels (2 files)",
+        "  04_net_dex/                           Net DEX over all expiries of the universe (2 files)",
+    ):
+        assert expected in lines
+
+
+def test_nested_rerun_overwrites_its_files_and_keeps_other_files(tmp_path):
+    _daily_close(tmp_path, chart_layout="nested")
+    date_folder = tmp_path / "2026-11-06"
+    (date_folder / "my_notes.txt").write_text("keep me", encoding="utf-8")
+    (date_folder / "03_net_gex_panels" / "my_copy.png").write_bytes(b"keep")
+    readme_before = (date_folder / "README.txt").read_bytes()
+
+    _daily_close(tmp_path, chart_layout="nested")
+    assert _files_under(date_folder) == sorted(
+        EXPECTED_NESTED_FILES + ["my_notes.txt", "03_net_gex_panels/my_copy.png"])
+    assert (date_folder / "my_notes.txt").read_text(encoding="utf-8") == "keep me"
+    assert (date_folder / "README.txt").read_bytes() == readme_before
+
+
+def test_unknown_chart_layout_is_rejected(tmp_path):
+    with pytest.raises(ValueError, match="chart_layout"):
+        _daily_close(tmp_path, chart_layout="tree")

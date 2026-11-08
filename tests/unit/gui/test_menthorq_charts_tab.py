@@ -1,18 +1,19 @@
 """
-Unit tests for the MenthorQ Charts tab (offscreen Qt, no database).
+Unit tests for the minimal MenthorQ Charts tab (offscreen Qt, no database).
 
-- The worker makes exactly one service call (daily close or live) and
-  reports errors instead of raising.
+- The tab has one Generate button, a status line, warnings and a folder
+  link: no selectors, no chart viewer.
+- The worker makes exactly one service call with the fixed settings (BTC,
+  daily close, monthly, gamma at index, nested layout) and reports errors
+  as one "Class: message" line instead of raising.
 - Building the tab and showing a result never touches the database: the
   module imports no repository/psycopg2, and DatabaseRepository is made to
   fail if anything constructs it.
-- A real service result (fake in-memory repository, PNGs in tmp_path) is
-  shown: expiry selector, levels table with "not computed", warnings,
-  comparison table and the chart image.
+- A real service result (fake in-memory repository, files in tmp_path) is
+  shown: chart count, "not computed" warning, folder link and Open folder.
 """
 
 import ast
-import json
 import os
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -24,16 +25,18 @@ import pytest
 pytest.importorskip("PySide6")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QTableWidget
+from PySide6.QtCore import QUrl
+from PySide6.QtWidgets import QApplication, QComboBox, QDateEdit, QLineEdit, QTableWidget, QTabWidget
 
 from coding.gui.tabs import menthorq_charts_tab as tab_module
-from coding.gui.tabs.menthorq_charts_tab import ChartRequest, MenthorqChartsTab, MenthorqChartsWorker
+from coding.gui.tabs.menthorq_charts_tab import MenthorqChartsTab, MenthorqChartsWorker
 from coding.service.on_chain.menthorq_replication_service import (
     MenthorqReplicationService,
     last_complete_utc_day,
 )
 
 CAPTURED_AT = datetime(2026, 11, 6, 23, 50, tzinfo=timezone.utc)
+MENTHORQ_DATE = date(2026, 11, 6)
 
 
 @pytest.fixture(scope="module")
@@ -67,63 +70,53 @@ class FakeRepository:
 
 @pytest.fixture(scope="module")
 def generated(tmp_path_factory):
-    """A real service result with its PNGs, generated without a database."""
+    """A real nested service result with its files, generated without a database."""
     directory = tmp_path_factory.mktemp("menthorq_gui")
-    reference = {"timestamp_utc": "2026-11-06T23:59:00Z", "spot_price": 101.0,
-                 "iv_times_open_interest": {"levels": {"call_resistance": 100, "put_support": 95,
-                                                       "hvl": 90}},
-                 "gex_panels": {}}
     output = MenthorqReplicationService(cast(Any, FakeRepository())).run_menthorq_daily_close(
-        "BTC", date(2026, 11, 6), directory, expiry_universe="all", reference=reference,
+        "BTC", MENTHORQ_DATE, directory, chart_layout="nested",
         now=datetime(2026, 11, 7, 12, 0, tzinfo=timezone.utc))
-    return directory, output, reference
+    return directory / "2026-11-06", output
 
 
-def _cell(table: QTableWidget, row: int, column: int) -> str:
-    """Text of a table cell (fails clearly when the cell was never set)."""
-    item = table.item(row, column)
-    assert item is not None, f"cell ({row}, {column}) is empty"
-    return item.text()
-
-
-def _request(mode, reference_path=None, output_directory=Path("unused")):
-    return ChartRequest(currency="BTC", mode=mode, menthorq_date=date(2026, 11, 6),
-                        expiry_universe="monthly", gamma_underlying="index",
-                        reference_path=reference_path, output_directory=output_directory)
+def _success(folder, output):
+    return {"output": output, "folder": folder, "date": MENTHORQ_DATE}
 
 
 class TestWorker:
-    def test_daily_close_makes_one_service_call_with_the_reference(self, qapp, tmp_path):
-        reference_path = tmp_path / "reference.json"
-        reference_path.write_text(json.dumps({"spot_price": 75752}), encoding="utf-8")
+    def test_generate_makes_one_service_call_with_the_fixed_settings(self, qapp, tmp_path):
         with patch.object(tab_module, "MenthorqReplicationService") as service_class:
             service_class.return_value.run_menthorq_daily_close.return_value = {"fake": 1}
-            worker = MenthorqChartsWorker(_request("menthorq_daily_close", reference_path, tmp_path))
+            worker = MenthorqChartsWorker(MENTHORQ_DATE, tmp_path)
             results = []
             worker.succeeded.connect(results.append)
             worker.run()
         service_class.return_value.run_menthorq_daily_close.assert_called_once_with(
-            "BTC", date(2026, 11, 6), tmp_path, expiry_universe="monthly",
-            gamma_underlying="index", reference={"spot_price": 75752})
-        service_class.return_value.run_live.assert_not_called()
-        assert results == [{"output": {"fake": 1}, "reference": {"spot_price": 75752}}]
+            "BTC", MENTHORQ_DATE, tmp_path, expiry_universe="monthly",
+            gamma_underlying="index", chart_layout="nested")
+        assert results == [{"output": {"fake": 1}, "folder": tmp_path / "2026-11-06",
+                            "date": MENTHORQ_DATE}]
 
-    def test_live_calls_run_live(self, qapp, tmp_path):
+    def test_errors_are_emitted_not_raised(self, qapp, tmp_path):
         with patch.object(tab_module, "MenthorqReplicationService") as service_class:
-            worker = MenthorqChartsWorker(_request("live", None, tmp_path))
-            worker.run()
-        service_class.return_value.run_live.assert_called_once_with(
-            "BTC", tmp_path, expiry_universe="monthly", gamma_underlying="index", reference=None)
-        service_class.return_value.run_menthorq_daily_close.assert_not_called()
-
-    def test_errors_are_emitted_not_raised(self, qapp):
-        with patch.object(tab_module, "MenthorqReplicationService") as service_class:
-            service_class.return_value.run_live.side_effect = LookupError("No BTC snapshot")
-            worker = MenthorqChartsWorker(_request("live"))
+            service_class.return_value.run_menthorq_daily_close.side_effect = LookupError(
+                "No BTC snapshot")
+            worker = MenthorqChartsWorker(MENTHORQ_DATE, tmp_path)
             errors = []
             worker.failed.connect(errors.append)
             worker.run()
         assert errors == ["LookupError: No BTC snapshot"]
+
+    def test_generate_button_starts_a_worker_for_the_last_complete_utc_day(self, qapp, tmp_path):
+        tab = MenthorqChartsTab()
+        tab.output_directory = tmp_path
+        with patch.object(tab_module, "MenthorqChartsWorker") as worker_class:
+            tab.generate_button.click()
+        expected_date = last_complete_utc_day(datetime.now(timezone.utc))
+        worker_class.assert_called_once_with(expected_date, tmp_path)
+        worker_class.return_value.start.assert_called_once_with()
+        assert not tab.generate_button.isEnabled()
+        assert tab.status_label.text().startswith(f"Generating the charts for {expected_date}")
+        tab.close()
 
 
 class TestNoDatabaseAccessInGui:
@@ -140,91 +133,51 @@ class TestNoDatabaseAccessInGui:
 
     def test_building_the_tab_and_showing_a_result_never_constructs_a_repository(
             self, qapp, generated):
-        directory, output, reference = generated
+        folder, output = generated
         with patch("coding.core.database.repository.DatabaseRepository.__init__",
                    side_effect=AssertionError("database accessed from the GUI")):
             tab = MenthorqChartsTab()
-            tab.output_directory = directory
-            tab._on_generation_succeeded({"output": output, "reference": reference})
-            for index in range(tab.chart_combo.count()):
-                tab.chart_combo.setCurrentIndex(index)
+            tab._on_generation_succeeded(_success(folder, output))
             tab.close()
 
 
 class TestTabDisplay:
-    def test_defaults(self, qapp):
+    def test_only_one_button_and_no_selectors_or_viewers(self, qapp):
         tab = MenthorqChartsTab()
-        newest = last_complete_utc_day(datetime.now(timezone.utc))
-        selected = tab.date_edit.date()
-        assert (selected.year(), selected.month(), selected.day()) == (
-            newest.year, newest.month, newest.day)
-        assert tab.date_edit.maximumDate() == tab.date_edit.date()
-        assert tab.date_edit.isEnabled()
-        tab.mode_combo.setCurrentIndex(tab.mode_combo.findData("live"))
-        assert not tab.date_edit.isEnabled()
-        assert [tab.currency_combo.itemData(i) for i in range(tab.currency_combo.count())] == [
-            "BTC", "ETH"]
-        assert tab.build_request().reference_path is None
+        for widget_class in (QComboBox, QDateEdit, QLineEdit, QTableWidget, QTabWidget):
+            assert tab.findChildren(widget_class) == [], widget_class.__name__
+        assert tab.generate_button.text() == "Generate"
+        assert not tab.open_folder_button.isEnabled()
+        assert tab.status_label.text() == "No charts generated yet."
         tab.close()
 
-    def test_result_fills_selector_tables_warnings_and_image(self, qapp, generated):
-        directory, output, reference = generated
+    def test_result_shows_count_warnings_and_folder(self, qapp, generated):
+        folder, output = generated
         tab = MenthorqChartsTab()
-        tab.output_directory = directory
-        tab._on_generation_succeeded({"output": output, "reference": reference})
+        tab._on_generation_succeeded(_success(folder, output))
 
-        assert [tab.expiry_combo.itemText(i) for i in range(tab.expiry_combo.count())] == [
-            "27NOV26", "4DEC26"]
-        assert "snapshot captured 2026-11-06 23:50:00 UTC" in tab.info_label.text()
-        assert "open interest from snapshot 2026-11-06 00:00:00 UTC" in tab.info_label.text()
+        # 3 chart kinds x (monthly, all listed) + one per listed expiry (27NOV26, 4DEC26).
+        assert tab.status_label.text() == (
+            "Generated 8 charts for 2026-11-06 (BTC, MenthorQ daily close).")
         assert not tab.warning_label.isHidden()
         assert "GEX not computed for 1 expiry (4DEC26)" in tab.warning_label.text()
+        assert "1 rows have no open interest" in tab.warning_label.text()
+        assert "not validated" not in tab.warning_label.text()   # BTC only
 
-        # IV*OI all expiries: one row, hand-calculated levels (see the service test).
-        assert tab.levels_table.rowCount() == 1
-        assert [_cell(tab.levels_table, 0, column) for column in range(2, 6)] == [
-            "100", "90", "90", "100.00"]
-        assert len(tab.displayed_pixmaps) == 1
-        assert tab.save_button.isEnabled()
-
-        # One expiry whose GEX was not computed: shown as such, never 0.
-        tab.chart_combo.setCurrentIndex(tab.chart_combo.findData("iv_times_open_interest_expiry"))
-        tab.expiry_combo.setCurrentText("4DEC26")
-        assert [_cell(tab.levels_table, 0, column) for column in range(2, 5)] == [
-            "not computed"] * 3
-        assert _cell(tab.levels_table, 0, 1) == "2026-12-04"
-
-        # Net GEX panels: the single computed expiry carries -100% of the GEX.
-        tab.chart_combo.setCurrentIndex(tab.chart_combo.findData("net_gex_panels"))
-        assert _cell(tab.levels_table, 0, 6) == "-100.00%"
-        assert _cell(tab.levels_table, 1, 1) == ""          # no second expiry
-        assert _cell(tab.levels_table, 1, 2) == "not computed"
-
-        # All charts: several images, save-as disabled.
-        tab.chart_combo.setCurrentIndex(tab.chart_combo.findData("all"))
-        assert len(tab.displayed_pixmaps) == 5
-        assert not tab.save_button.isEnabled()
-
-        comparison = {_cell(tab.comparison_table, row, 0):
-                      [_cell(tab.comparison_table, row, column) for column in range(1, 4)]
-                      for row in range(tab.comparison_table.rowCount())}
-        assert comparison["Spot"] == ["100.00", "101.00", "-1.00"]
-        assert comparison["All expiries: Put Support"] == ["90.00", "95.00", "-5.00"]
+        assert QUrl.fromLocalFile(str(folder)).toString() in tab.folder_link_label.text()
+        assert tab.open_folder_button.isEnabled()
+        with patch.object(tab_module, "QDesktopServices") as desktop:
+            tab.open_folder_button.click()
+            tab.folder_link_label.linkActivated.emit("ignored")
+        assert desktop.openUrl.call_count == 2
+        desktop.openUrl.assert_called_with(QUrl.fromLocalFile(str(folder)))
         tab.close()
 
-    def test_failure_shows_message_and_re_enables_generate(self, qapp):
+    def test_failure_shows_one_error_line_and_re_enables_generate(self, qapp):
         tab = MenthorqChartsTab()
         tab.generate_button.setEnabled(False)
         tab._on_generation_failed("LookupError: No BTC snapshot at or before ...")
         assert tab.generate_button.isEnabled()
-        assert "Generation failed: LookupError" in tab.warning_label.text()
-        assert tab.status_label.text() == "Error"
+        assert tab.status_label.text() == (
+            "Generation failed: LookupError: No BTC snapshot at or before ...")
         tab.close()
-
-    def test_log_handler_removed_on_close(self, qapp):
-        import logging
-        tab = MenthorqChartsTab()
-        target = logging.getLogger(tab_module.GUI_LOG_LOGGER_NAME)
-        assert tab.gui_handler in target.handlers
-        tab.close()
-        assert tab.gui_handler not in target.handlers
