@@ -61,8 +61,13 @@ or its snapshot is more than 45 min older than the run.
   (migration 032), so it survives a restart and ends on its own when that instant passes.
 - While muted, the alerts that would have been sent are not written to `menthorq_alert_deliveries`,
   so their 12h cooldown does not start. Their keys and time are written to
-  `menthorq_monitor_state.last_suppressed_*` and logged. An alert whose condition still holds once
-  the mute ends is sent at the next hourly run.
+  `menthorq_monitor_state.last_suppressed_*` and logged.
+- Muted or failed EVENT alerts (net GEX sign flip, spot crossing HVL) are NOT replayed. They are
+  detected only by comparing the newest record with the previous hourly record, so once the next
+  run has a newer previous record the event is no longer seen. The 24h level-move alerts (and spot
+  near a wall, data stale) are re-evaluated every run: one whose condition still holds after the
+  mute ends, or after a failed send, is sent at the next hourly run. The current state is always
+  in `/brief` and `/levels`.
 - If the state cannot be read (for example, migration 032 is not applied), alerts are treated as
   NOT muted and the error is logged.
 

@@ -264,7 +264,9 @@ def format_mute_set_reply(currency: str, muted_until: datetime, duration_text: s
     """/mute <duration> saved."""
     return (f"<b>{escape(currency)} URGENT alerts muted</b> until "
             f"{escape(format_utc(muted_until))} ({escape(duration_text)}).\n"
-            "Command replies and the weekly brief are still sent. /mute off ends it early.")
+            "Command replies and the weekly brief are still sent. /mute off ends it early.\n"
+            "Sign flips and HVL crossings during the mute are not sent later; /brief and "
+            "/levels show the current state.")
 
 
 def format_mute_cleared_reply(currency: str) -> str:

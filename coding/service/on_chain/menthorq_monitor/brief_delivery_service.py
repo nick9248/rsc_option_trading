@@ -7,9 +7,17 @@ Sending reuses ``TelegramAlertService`` (one attempt, never raises). A
 message counts as delivered only when Telegram accepted it; only then is it
 written to ``menthorq_alert_deliveries``. That table drives the 12 h alert
 cooldown and the once-per-week rule of the weekly brief, and it is the
-retry: an undelivered weekly brief is tried again at the next hourly run
-(within ``WEEKLY_BRIEF_CATCH_UP``), an undelivered alert is re-evaluated at
-the next run.
+retry of the weekly brief: an undelivered one is tried again at the next
+hourly run (within ``WEEKLY_BRIEF_CATCH_UP``).
+
+Urgent alerts are NOT replayed. Each run evaluates the rules on the newest
+record only. The state rules (the 24 h level moves, spot near a wall, data
+stale) are re-evaluated every run, so one that failed or was muted is sent
+at a later run while its condition still holds. The EVENT rules (net GEX
+sign flip, spot crossing HVL) compare the newest record with the previous
+hourly one only, so an event that failed to send or fell inside a mute is
+lost: a later run no longer sees it. The current state is always in
+/brief and /levels.
 """
 
 import logging
@@ -198,8 +206,11 @@ class MenthorqBriefDeliveryService:
         Evaluate the urgent rules on ``latest`` and send ONE message with
         every alert not on cooldown. While muted nothing is sent: the held
         back keys are recorded in ``menthorq_monitor_state`` (not as
-        delivered, so the cooldown does not start and a condition that
-        still holds after the mute is reported then).
+        delivered, so the cooldown does not start). A 24 h level move (or
+        another state rule) that still holds after the mute is reported
+        then; a held-back EVENT alert (net GEX sign flip, spot crossing HVL)
+        is not replayed, because the next run compares with a newer
+        previous record.
 
         When the data behind ``latest`` is stale (``stale_data_warning``
         with ``now``), the movement rules are NOT evaluated (their moves

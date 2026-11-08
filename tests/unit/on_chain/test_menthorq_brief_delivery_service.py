@@ -153,6 +153,26 @@ def test_muted_alerts_are_not_sent_but_recorded_and_resume_after_the_mute():
     assert len(telegram.sent) == 1
 
 
+def test_muted_sign_flip_event_is_not_replayed_after_the_mute():
+    """Documented limit: net GEX +5M (08:10) -> -1M (09:10) flips while muted; at 10:10 the
+    previous record is the 09:10 one (-1M), so the event is no longer seen and nothing is sent."""
+    previous, day_ago, latest = _crossing_history()
+    previous = replace(previous, total_net_gex=5e6)
+    latest = replace(latest, total_net_gex=-1e6)
+    service, repository, telegram, clock = _delivery([previous, day_ago, latest])
+    service.thresholds = AlertThresholds(hvl_move_percent_of_spot=None)   # only the sign flip on
+    repository.save_menthorq_alert_mute("BTC", FRIDAY_0910 + timedelta(hours=1), FRIDAY_0910)
+    assert service.send_urgent_alerts(latest, FRIDAY_0910) == []
+    state = repository.get_menthorq_monitor_state("BTC")
+    assert state is not None and state.last_suppressed_alert_keys == ["net_gex_turned_negative"]
+
+    clock["now"] = FRIDAY_0910 + timedelta(hours=1)
+    next_run = make_record(as_of=clock["now"], spot=94000.0, hvl=95000.0, total_net_gex=-1e6)
+    repository.records.append(next_run)
+    assert service.send_urgent_alerts(next_run, clock["now"]) == []
+    assert telegram.sent == []
+
+
 def test_unreadable_mute_state_sends_the_alert_and_logs(caplog):
     previous, day_ago, latest = _crossing_history()
     service, repository, telegram, _ = _delivery([previous, day_ago, latest])
