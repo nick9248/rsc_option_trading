@@ -188,7 +188,7 @@ def monitor_health_problems(status: MonitorStatus) -> List[str]:
     since_run = status.now - live.computed_at_utc
     if since_run > HOURLY_JOB_EXPECTED_WITHIN:
         problems.append(f"hourly job has not run for {format_age(since_run)}")
-    if live.spot is None:
+    if not live.has_levels:
         reason = live.not_computed_reasons[0] if live.not_computed_reasons else "reason not stored"
         problems.append(f"latest live run not computed: {reason}")
     elif live.snapshot_captured_at_utc is not None and \
@@ -201,7 +201,7 @@ def monitor_health_problems(status: MonitorStatus) -> List[str]:
 def _run_line(label: str, run: Optional[MenthorqLevelRecord], now: datetime) -> str:
     if run is None:
         return f"{label}: none stored"
-    computed = "computed" if run.spot is not None else "NOT computed"
+    computed = "computed" if run.has_levels else "NOT computed"
     return (f"{label}: {format_utc(run.as_of_utc)} ({format_age(now - run.as_of_utc)} ago), "
             f"{computed}")
 

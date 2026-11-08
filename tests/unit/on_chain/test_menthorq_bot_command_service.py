@@ -34,6 +34,7 @@ from tests.fakes.fake_menthorq_monitor import (
     FakeMonitorRepository,
     FakeTelegram,
     make_record,
+    make_record_without_levels,
 )
 
 NOW = BASE_TIME + timedelta(minutes=55)          # 2026-11-06 10:05 UTC; latest record 09:10
@@ -249,9 +250,9 @@ def test_status_reply_muted_with_last_alert_and_held_back_alert():
 
 
 def test_status_reply_reports_problems():
-    stale_failed = make_record(as_of=NOW - timedelta(hours=3), spot=None, hvl=None,
-                               snapshot_captured_at_utc=None,
-                               not_computed_reasons=["inputs not available: no snapshot"])
+    stale_failed = make_record_without_levels(as_of=NOW - timedelta(hours=3), spot=None,
+                                              snapshot_captured_at_utc=None,
+                                              not_computed_reasons=["inputs not available: no snapshot"])
     commands, _, _, _ = _service([stale_failed])
     message = _run(commands, "/status")
     assert ("Health: PROBLEM: hourly job has not run for 3.0 h; latest live run not computed: "
@@ -260,6 +261,15 @@ def test_status_reply_reports_problems():
     assert "Daily close: none stored" in message
     assert "Data age: n/a (no computed live run)" in message
     assert "Hourly job ran in the last 2h: NO" in message
+
+
+def test_status_says_problem_when_the_latest_live_run_has_spot_but_no_levels():
+    # Inputs loaded (spot, snapshot 20 min old, run 55 min ago) but no level computed.
+    without_levels = make_record_without_levels(not_computed_reasons=["HVL not computed: no net GEX by strike"])
+    commands, _, _, _ = _service([without_levels])
+    message = _run(commands, "/status")
+    assert "Health: PROBLEM: latest live run not computed: HVL not computed: no net GEX by strike" in message
+    assert "Live run: 2026-11-06 09:10 UTC (55 min ago), NOT computed" in message
 
 
 def test_status_reply_with_stale_snapshot_unreadable_state_and_alerts_off():

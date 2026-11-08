@@ -122,7 +122,7 @@ def evaluate_urgent_alerts_of_record(
         now: Wall clock to judge a stored record against; None judges
             against the record's own data time only.
     """
-    if latest.spot is None:
+    if not latest.has_levels:
         return UrgentAlertEvaluation(alerts=[], stale_warning=None)
     stale_warning = stale_data_warning(latest, stale_limit, now)
     if stale_warning is not None:
@@ -253,7 +253,7 @@ class MenthorqBriefDeliveryService:
             Keys of the alerts delivered (empty when none fired, all were on
             cooldown, alerts are muted, or the send failed).
         """
-        if latest.spot is None:
+        if not latest.has_levels:
             logger.info("MenthorQ monitor: no alerts evaluated (latest record not computed)")
             return []
         evaluation = evaluate_urgent_alerts_of_record(

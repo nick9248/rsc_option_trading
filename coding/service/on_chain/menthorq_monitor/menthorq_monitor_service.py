@@ -198,7 +198,7 @@ class MenthorqMonitorService:
         ``DAILY_CLOSE_BACKFILL_DAYS`` ended UTC days (yesterday and the six
         days before it) that is not stored as COMPUTED yet, oldest first, so
         a collector that was down for a few days fills the gap. A stored
-        not-computed row (spot NULL, e.g. the snapshots of that day were
+        not-computed row (no levels, e.g. the snapshots of that day were
         synced late) is retried every run; a computed result replaces it
         (``save_menthorq_level_snapshot``). Today is never computed (it has
         not ended). Each record uses only data at or before its own 23:59
@@ -266,7 +266,7 @@ class MenthorqMonitorService:
                               (COMPARISON_SEVEN_DAYS, COMPARISON_OFFSET[COMPARISON_SEVEN_DAYS])):
             reference = self.compute_record(latest.mode, latest.as_of_utc - offset)
             comparisons.append(compare_records(
-                latest, reference if reference.spot is not None else None, label))
+                latest, reference if reference.has_levels else None, label))
         return comparisons
 
     def latest_record(self, mode: str, now: datetime) -> Optional[MenthorqLevelRecord]:

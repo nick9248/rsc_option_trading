@@ -21,6 +21,7 @@ from tests.fakes.fake_menthorq_monitor import (
     FakeInputLoader,
     FakeMonitorRepository,
     make_record,
+    make_record_without_levels,
 )
 
 AS_OF = BASE_TIME   # 2026-11-06 09:10 UTC
@@ -173,8 +174,9 @@ def test_a_stored_not_computed_daily_close_is_retried_and_replaced():
 
 
 def test_a_not_computed_retry_leaves_the_not_computed_row_unchanged():
-    not_computed = make_record(as_of=daily_close_as_of(date(2026, 11, 6)), mode=MODE_DAILY_CLOSE,
-                               spot=None, not_computed_reasons=["first reason"])
+    not_computed = make_record_without_levels(as_of=daily_close_as_of(date(2026, 11, 6)),
+                                              mode=MODE_DAILY_CLOSE, spot=None,
+                                              not_computed_reasons=["first reason"])
     computed_days = [_daily_close(date(2026, 10, 31) + timedelta(days=offset)) for offset in range(6)]
     repository = FakeMonitorRepository(computed_days + [not_computed])
     service = _service(repository, FakeInputLoader(available=False))

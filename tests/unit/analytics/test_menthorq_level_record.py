@@ -11,9 +11,32 @@ from coding.core.analytics.menthorq_monitor.level_record import (
     build_level_record,
     build_not_computed_record,
     classify_gamma_regime,
+    has_levels_sql_condition,
 )
 from coding.core.analytics.menthorq_replication_calculator import replicate_menthorq
-from tests.fakes.fake_menthorq_monitor import BASE_TIME, FakeInputLoader
+from tests.fakes.fake_menthorq_monitor import (
+    BASE_TIME,
+    FakeInputLoader,
+    make_record,
+    make_record_without_levels,
+)
+
+
+def test_has_levels_needs_one_level_or_total_net_gex_and_ignores_spot():
+    assert make_record().has_levels
+    assert not make_record_without_levels(spot=100000.0).has_levels   # spot alone: not computed
+    assert not make_record_without_levels(spot=None).has_levels
+    for column, value in (("call_resistance", 110000.0), ("put_support", 90000.0),
+                          ("hvl", 95000.0), ("total_net_gex", -1.0)):
+        assert make_record_without_levels(**{column: value}).has_levels, column
+    # a zero is a computed value, not a missing one
+    assert make_record_without_levels(total_net_gex=0.0).has_levels
+
+
+def test_has_levels_sql_condition_names_the_four_columns():
+    assert has_levels_sql_condition("EXCLUDED") == (
+        "(EXCLUDED.call_resistance IS NOT NULL OR EXCLUDED.put_support IS NOT NULL "
+        "OR EXCLUDED.hvl IS NOT NULL OR EXCLUDED.total_net_gex IS NOT NULL)")
 
 
 def test_gamma_regime_boundaries():

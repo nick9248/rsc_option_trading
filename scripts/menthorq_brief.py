@@ -61,7 +61,7 @@ def build_dry_run_output(service: MenthorqMonitorService, as_of: datetime) -> st
     comparisons = service.build_replayed_comparisons(latest)
     daily_close = service.compute_daily_close_record((as_of - timedelta(days=1)).date())
     brief = format_brief(latest, comparisons,
-                         daily_close if daily_close.spot is not None else None,
+                         daily_close if daily_close.has_levels else None,
                          title="Dry run (references replayed, not stored)",
                          stale_limit=service.settings.stale_snapshot_limit)
     # The collector's own rule set (not computed -> none; stale -> data_stale only).

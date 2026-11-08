@@ -324,7 +324,7 @@ class MenthorqBriefPreviewService:
         comparisons = service.build_replayed_comparisons(latest)
         daily_close_record = service.compute_daily_close_record(
             (latest.as_of_utc - timedelta(days=1)).date())
-        daily_close = daily_close_record if daily_close_record.spot is not None else None
+        daily_close = daily_close_record if daily_close_record.has_levels else None
         stale_limit = self.settings.stale_snapshot_limit
         brief = format_brief(latest, comparisons, daily_close, title=PREVIEW_TITLE,
                              stale_limit=stale_limit)

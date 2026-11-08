@@ -14,7 +14,10 @@ from psycopg2.extras import Json, execute_values
 
 from coding.core.analytics.market_wide_calculator import DERIBIT_SETTLEMENT_HOUR_UTC
 from coding.core.analytics.menthorq_monitor.alert_mute import MenthorqMonitorState
-from coding.core.analytics.menthorq_monitor.level_record import MenthorqLevelRecord
+from coding.core.analytics.menthorq_monitor.level_record import (
+    MenthorqLevelRecord,
+    has_levels_sql_condition,
+)
 from coding.core.analytics.results.delta_flow_results import FlowBucket
 from coding.core.analytics.results.expiry_results import ExpirationAnalysisResult
 from coding.core.analytics.results.gex_dex_results import GexDexResult
@@ -1151,9 +1154,9 @@ class DatabaseRepository:
 
         When a row with the same (currency, mode, expiry_universe,
         gamma_underlying, as_of_utc) exists, it is replaced only if it was
-        NOT computed (spot NULL) and ``record`` is computed (spot not None):
-        a computed row is never overwritten, and a not-computed retry does
-        not rewrite a not-computed row. The replacement gets the new
+        NOT computed (no levels, ``MenthorqLevelRecord.has_levels``) and
+        ``record`` is computed: a row with levels is never overwritten, and
+        a not-computed retry does not rewrite a not-computed row. The replacement gets the new
         ``computed_at``, so the incremental VPS sync picks it up.
 
         Returns:
@@ -1162,7 +1165,7 @@ class DatabaseRepository:
         """
         with self._db_cursor() as cursor:
             cursor.execute(
-                """
+                f"""
                 INSERT INTO menthorq_level_snapshots (
                     currency, mode, as_of_utc, computed_at, expiry_universe, gamma_underlying,
                     spot, spot_time_utc, snapshot_captured_at_utc, open_interest_captured_at_utc,
@@ -1180,7 +1183,8 @@ class DatabaseRepository:
                     gamma_regime = EXCLUDED.gamma_regime, expirations = EXCLUDED.expirations,
                     panel_levels = EXCLUDED.panel_levels, iv_source_counts = EXCLUDED.iv_source_counts,
                     not_computed_reasons = EXCLUDED.not_computed_reasons
-                WHERE menthorq_level_snapshots.spot IS NULL AND EXCLUDED.spot IS NOT NULL
+                WHERE NOT {has_levels_sql_condition('menthorq_level_snapshots')}
+                  AND {has_levels_sql_condition('EXCLUDED')}
                 RETURNING id
                 """,
                 (
@@ -1201,15 +1205,17 @@ class DatabaseRepository:
         as_of_utc: datetime,
     ) -> bool:
         """
-        True when a COMPUTED run (spot not NULL) with exactly this key is
-        stored. A stored not-computed row does not count, so it is retried.
+        True when a COMPUTED run (with levels, ``has_levels``) with exactly
+        this key is stored. A stored not-computed row does not count, so it
+        is retried.
         """
         with self._db_cursor() as cursor:
             cursor.execute(
-                """
+                f"""
                 SELECT 1 FROM menthorq_level_snapshots
                 WHERE currency = %s AND mode = %s AND expiry_universe = %s
-                  AND gamma_underlying = %s AND as_of_utc = %s AND spot IS NOT NULL
+                  AND gamma_underlying = %s AND as_of_utc = %s
+                  AND {has_levels_sql_condition('menthorq_level_snapshots')}
                 """,
                 (currency, mode, expiry_universe, gamma_underlying, as_of_utc),
             )
@@ -1220,7 +1226,7 @@ class DatabaseRepository:
         instant: datetime, earliest: Optional[datetime] = None, strictly_before: bool = False,
     ) -> Optional[MenthorqLevelRecord]:
         """
-        Newest computed run (spot not NULL) at or before ``instant``
+        Newest computed run (with levels, ``has_levels``) at or before ``instant``
         (strictly before with ``strictly_before``) and, when ``earliest`` is
         given, not older than it.
 
@@ -1231,7 +1237,8 @@ class DatabaseRepository:
         query = (
             f"SELECT {self._MENTHORQ_LEVEL_COLUMNS} FROM menthorq_level_snapshots "
             "WHERE currency = %s AND mode = %s AND expiry_universe = %s "
-            "AND gamma_underlying = %s AND spot IS NOT NULL "
+            "AND gamma_underlying = %s "
+            f"AND {has_levels_sql_condition('menthorq_level_snapshots')} "
             f"AND as_of_utc {comparison} %s"
         )
         parameters: List[Any] = [currency, mode, expiry_universe, gamma_underlying, instant]
@@ -1287,8 +1294,8 @@ class DatabaseRepository:
         self, currency: str, mode: str, expiry_universe: str, gamma_underlying: str,
     ) -> Optional[MenthorqLevelRecord]:
         """
-        The newest stored run of ``mode``, computed or not (a run whose
-        inputs were missing has spot NULL), or None when no run is stored.
+        The newest stored run of ``mode``, computed or not (a not-computed
+        run has no levels, ``has_levels`` False), or None when no run is stored.
         """
         with self._db_cursor() as cursor:
             cursor.execute(

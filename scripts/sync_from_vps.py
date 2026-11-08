@@ -196,9 +196,12 @@ SYNC_TABLES = [
         "conflict_target": "(futures_instrument, timestamp) DO NOTHING",
     },
     {
-        # MenthorQ-style level monitor (migration 031). A computed row is never changed;
-        # a NOT-computed row (spot NULL) is replaced on the VPS by a computed one with a
-        # new computed_at, so the watermark sees it and the same rule replaces it here.
+        # MenthorQ-style level monitor (migration 031). A computed row (one with levels)
+        # is never changed; a NOT-computed row (call_resistance, put_support, hvl and
+        # total_net_gex all NULL) is replaced on the VPS by a computed one with a new
+        # computed_at, so the watermark sees it and the same rule replaces it here. The
+        # condition is the repository's (has_levels_sql_condition in level_record.py;
+        # a test keeps the two equal).
         "name": "menthorq_level_snapshots",
         "watermark_col": "computed_at",
         "watermark_type": "timestamp",
@@ -213,7 +216,12 @@ SYNC_TABLES = [
             "gamma_regime = EXCLUDED.gamma_regime, expirations = EXCLUDED.expirations, "
             "panel_levels = EXCLUDED.panel_levels, iv_source_counts = EXCLUDED.iv_source_counts, "
             "not_computed_reasons = EXCLUDED.not_computed_reasons "
-            "WHERE menthorq_level_snapshots.spot IS NULL AND EXCLUDED.spot IS NOT NULL"
+            "WHERE NOT (menthorq_level_snapshots.call_resistance IS NOT NULL "
+            "OR menthorq_level_snapshots.put_support IS NOT NULL "
+            "OR menthorq_level_snapshots.hvl IS NOT NULL "
+            "OR menthorq_level_snapshots.total_net_gex IS NOT NULL) "
+            "AND (EXCLUDED.call_resistance IS NOT NULL OR EXCLUDED.put_support IS NOT NULL "
+            "OR EXCLUDED.hvl IS NOT NULL OR EXCLUDED.total_net_gex IS NOT NULL)"
         ),
     },
     {

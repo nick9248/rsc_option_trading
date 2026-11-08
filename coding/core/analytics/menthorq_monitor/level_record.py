@@ -34,6 +34,19 @@ GAMMA_REGIME_AT_HVL = "at_hvl"       # spot exactly on HVL
 
 LEVEL_NAMES = ("call_resistance", "put_support", "hvl")
 LEVEL_LABELS = {"call_resistance": "Call Resistance", "put_support": "Put Support", "hvl": "HVL"}
+# A run counts as COMPUTED when at least one of these is set (``has_levels``).
+# Spot alone does not count: a run can load its inputs and still compute nothing.
+LEVEL_PRESENCE_COLUMNS = ("call_resistance", "put_support", "hvl", "total_net_gex")
+
+
+def has_levels_sql_condition(row_reference: str) -> str:
+    """
+    The SQL form of ``MenthorqLevelRecord.has_levels`` for the
+    ``menthorq_level_snapshots`` row ``row_reference`` (a table name or
+    ``EXCLUDED``), e.g. ``(EXCLUDED.call_resistance IS NOT NULL OR ...)``.
+    """
+    return "(" + " OR ".join(f"{row_reference}.{column} IS NOT NULL"
+                             for column in LEVEL_PRESENCE_COLUMNS) + ")"
 
 
 @dataclass
@@ -70,6 +83,16 @@ class MenthorqLevelRecord:
         if level_name not in LEVEL_NAMES:
             raise ValueError(f"Unknown level {level_name!r}")
         return getattr(self, level_name)
+
+    @property
+    def has_levels(self) -> bool:
+        """
+        True when the run is COMPUTED: at least one of Call Resistance, Put
+        Support, HVL and total net GEX is set (``LEVEL_PRESENCE_COLUMNS``).
+        The one definition of "computed" for storing, retrying, health and
+        alerts.
+        """
+        return any(getattr(self, column) is not None for column in LEVEL_PRESENCE_COLUMNS)
 
 
 def classify_gamma_regime(spot: Optional[float], hvl: Optional[float]) -> Optional[str]:

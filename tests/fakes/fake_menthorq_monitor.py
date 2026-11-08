@@ -53,6 +53,21 @@ def make_record(
     return MenthorqLevelRecord(**fields)
 
 
+def make_record_without_levels(
+    as_of: datetime = BASE_TIME, spot: Optional[float] = 100000.0, **overrides: Any,
+) -> MenthorqLevelRecord:
+    """
+    A NOT-computed record (``has_levels`` False): the four level columns
+    None; spot set by default (inputs loaded, nothing computed from them).
+    """
+    fields: Dict[str, Any] = dict(call_resistance=None, put_support=None, hvl=None,
+                                  total_net_gex=None,
+                                  not_computed_reasons=["total net GEX not computed: no leg has "
+                                                        "both gamma and open interest"])
+    fields.update(overrides)
+    return make_record(as_of=as_of, spot=spot, **fields)
+
+
 class FakeMonitorRepository(DatabaseRepository):
     """In-memory version of the monitor's DatabaseRepository methods."""
 
@@ -77,7 +92,7 @@ class FakeMonitorRepository(DatabaseRepository):
         if index is None:
             self.records.append(record)
             return len(self.records)
-        if self.records[index].spot is None and record.spot is not None:
+        if not self.records[index].has_levels and record.has_levels:
             self.records[index] = record
             return index + 1
         return None
@@ -86,7 +101,7 @@ class FakeMonitorRepository(DatabaseRepository):
                                              gamma_underlying: str, as_of_utc: datetime) -> bool:
         return any(r.currency == currency and r.mode == mode and r.expiry_universe == expiry_universe
                    and r.gamma_underlying == gamma_underlying and r.as_of_utc == as_of_utc
-                   and r.spot is not None
+                   and r.has_levels
                    for r in self.records)
 
     def get_menthorq_level_snapshot_at_or_before(
@@ -96,7 +111,7 @@ class FakeMonitorRepository(DatabaseRepository):
         candidates = [
             r for r in self.records
             if r.currency == currency and r.mode == mode and r.expiry_universe == expiry_universe
-            and r.gamma_underlying == gamma_underlying and r.spot is not None
+            and r.gamma_underlying == gamma_underlying and r.has_levels
             and (r.as_of_utc < instant if strictly_before else r.as_of_utc <= instant)
             and (earliest is None or r.as_of_utc >= earliest)
         ]

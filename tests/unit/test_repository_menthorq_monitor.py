@@ -15,7 +15,7 @@ import pytest
 
 from coding.core.database.config import ConnectionPool, DatabaseConfig
 from coding.core.database.repository import DatabaseRepository
-from tests.fakes.fake_menthorq_monitor import BASE_TIME, make_record
+from tests.fakes.fake_menthorq_monitor import BASE_TIME, make_record, make_record_without_levels
 
 MIGRATION = Path(__file__).parents[2] / "migrations" / "031_add_menthorq_monitor_tables.sql"
 
@@ -89,14 +89,14 @@ def _row_count_and_spot(repo):
 
 
 def test_a_not_computed_row_is_replaced_by_a_computed_one_and_never_the_reverse(repo):
-    not_computed = make_record(spot=None, hvl=None, total_net_gex=None, not_computed_reasons=["no snapshot"])
+    not_computed = make_record_without_levels(spot=None, not_computed_reasons=["no snapshot"])
     first_id = repo.save_menthorq_level_snapshot(not_computed)
     assert isinstance(first_id, int)
     assert not repo.has_computed_menthorq_level_snapshot("BTC", "live", "monthly", "index", BASE_TIME)
 
     # a second not-computed attempt does not rewrite the not-computed row
-    assert repo.save_menthorq_level_snapshot(
-        make_record(spot=None, not_computed_reasons=["other"], computed_at_utc=BASE_TIME + timedelta(hours=1))) is None
+    assert repo.save_menthorq_level_snapshot(make_record_without_levels(
+        spot=None, not_computed_reasons=["other"], computed_at_utc=BASE_TIME + timedelta(hours=1))) is None
 
     later = BASE_TIME + timedelta(hours=2)
     assert repo.save_menthorq_level_snapshot(make_record(computed_at_utc=later)) == first_id   # replaced in place
@@ -113,8 +113,10 @@ def test_a_not_computed_row_is_replaced_by_a_computed_one_and_never_the_reverse(
 
 
 def test_lookup_is_point_in_time_and_skips_not_computed_rows(repo):
-    for hours_back, spot in ((0, 100000.0), (1, 99000.0), (2, None), (26, 97000.0)):
+    for hours_back, spot in ((0, 100000.0), (1, 99000.0), (26, 97000.0)):
         repo.save_menthorq_level_snapshot(make_record(as_of=BASE_TIME - timedelta(hours=hours_back), spot=spot))
+    # -2 h: inputs loaded (spot set) but no level computed -> not computed, skipped
+    repo.save_menthorq_level_snapshot(make_record_without_levels(as_of=BASE_TIME - timedelta(hours=2), spot=98000.0))
     repo.save_menthorq_level_snapshot(make_record(as_of=BASE_TIME + timedelta(hours=1), spot=1.0))  # later row
 
     at = repo.get_menthorq_level_snapshot_at_or_before("BTC", "live", "monthly", "index", BASE_TIME)
@@ -124,12 +126,34 @@ def test_lookup_is_point_in_time_and_skips_not_computed_rows(repo):
     assert before.spot == 99000.0
     skipped = repo.get_menthorq_level_snapshot_at_or_before(
         "BTC", "live", "monthly", "index", BASE_TIME - timedelta(hours=2))
-    assert skipped.spot == 97000.0                       # the NULL-spot row at -2 h is skipped
+    assert skipped.spot == 97000.0                       # the row without levels at -2 h is skipped
     windowed = repo.get_menthorq_level_snapshot_at_or_before(
         "BTC", "live", "monthly", "index", BASE_TIME - timedelta(hours=24),
         earliest=BASE_TIME - timedelta(hours=25))
     assert windowed is None                              # -26 h is outside the window
     assert repo.get_menthorq_level_snapshot_at_or_before("BTC", "live", "all", "index", BASE_TIME) is None
+
+
+def test_a_row_with_spot_but_no_levels_counts_as_not_computed(repo):
+    # spot is set (inputs loaded) but CR, PS, HVL and total net GEX are all None
+    without_levels = make_record_without_levels(spot=100000.0)
+    first_id = repo.save_menthorq_level_snapshot(without_levels)
+    assert isinstance(first_id, int)
+    assert not repo.has_computed_menthorq_level_snapshot("BTC", "live", "monthly", "index", BASE_TIME)
+    assert repo.get_menthorq_level_snapshot_at_or_before("BTC", "live", "monthly", "index", BASE_TIME) is None
+    latest_run = repo.get_latest_menthorq_level_run("BTC", "live", "monthly", "index")
+    assert latest_run is not None and latest_run.spot == 100000.0 and not latest_run.has_levels
+
+    # a computed run (here only total net GEX set) replaces it in place
+    later = BASE_TIME + timedelta(hours=1)
+    only_net_gex = make_record_without_levels(total_net_gex=-2e6, computed_at_utc=later,
+                                              not_computed_reasons=[])
+    assert repo.save_menthorq_level_snapshot(only_net_gex) == first_id
+    assert repo.has_computed_menthorq_level_snapshot("BTC", "live", "monthly", "index", BASE_TIME)
+    # ... and a row with one level is never overwritten again
+    assert repo.save_menthorq_level_snapshot(make_record(computed_at_utc=later + timedelta(hours=1))) is None
+    loaded = repo.get_menthorq_level_snapshot_at_or_before("BTC", "live", "monthly", "index", BASE_TIME)
+    assert (loaded.total_net_gex, loaded.hvl, loaded.computed_at_utc) == (-2e6, None, later)
 
 
 def test_invalid_mode_is_rejected_by_the_table(repo):
