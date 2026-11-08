@@ -6,7 +6,7 @@ Shows, on the PC, what the MenthorQ-style monitor in the collector would produce
 
 ## Controls
 
-Same as the MenthorQ Charts tab: **Currency**, **Mode** (MenthorQ daily close for a **Date (UTC)**, default the last complete UTC day, or Live), **Expiry universe**, **Gamma at**, and an optional **Compare with reference JSON**. **Run** does everything below in a background thread (about 5 seconds on the local database).
+**Currency**, **Mode** (MenthorQ daily close for a **Date (UTC)**, default the last complete UTC day, or Live), **Expiry universe**, **Gamma at**, and an optional **Compare with reference JSON**. **Run** does everything below in a background thread (about 5 seconds on the local database).
 
 ## What a Run does
 

@@ -46,7 +46,7 @@ from PySide6.QtWidgets import (
 
 from coding.core.analytics.menthorq_chart_summary import comparison_rows, data_warnings, info_line
 from coding.gui.components.log_viewer import GuiLogHandler, LogViewer
-from coding.gui.tabs.menthorq_charts_tab import (
+from coding.gui.components.menthorq_widgets import (
     COMPARISON_COLUMN_LABELS,
     CURRENCIES,
     EXPIRY_UNIVERSE_CHOICES,
@@ -54,9 +54,12 @@ from coding.gui.tabs.menthorq_charts_tab import (
     MODES,
     NOT_COMPUTED,
     ChartScrollArea,
-    MenthorqChartsTab,
+    choice_combo,
     format_comparison_value,
     format_difference,
+    panel_frame,
+    read_only_table,
+    secondary_button,
 )
 from coding.gui.theme.colors import Colors
 from coding.service.on_chain.menthorq_monitor.brief_preview_service import (
@@ -269,16 +272,16 @@ class MenthorqMonitorTab(QWidget):
 
     def _create_run_frame(self) -> QFrame:
         """Inputs of a Run: currency, mode, date, universe, gamma, reference, Run."""
-        frame = MenthorqChartsTab._frame()
+        frame = panel_frame()
         layout = QGridLayout(frame)
         layout.setContentsMargins(16, 12, 16, 12)
         layout.setHorizontalSpacing(10)
         layout.setVerticalSpacing(8)
 
-        self.currency_combo = MenthorqChartsTab._combo((currency, currency) for currency in CURRENCIES)
+        self.currency_combo = choice_combo((currency, currency) for currency in CURRENCIES)
         self.currency_combo.setToolTip(
             "The monitor runs on BTC. ETH uses the BTC-fitted formulas unchanged (not validated).")
-        self.mode_combo = MenthorqChartsTab._combo(MODES)
+        self.mode_combo = choice_combo(MODES)
         self.mode_combo.setToolTip(
             "Daily close: charts at 23:59 UTC with open interest from 00:00 UTC; the brief as "
             "Telegram would have had it at 23:59 UTC of that date.\n"
@@ -291,11 +294,11 @@ class MenthorqMonitorTab(QWidget):
         self.date_edit.setMaximumDate(newest_qdate)
         self.date_edit.setDate(newest_qdate)
         self.date_edit.setToolTip("UTC date; at most the last complete UTC day.")
-        self.expiry_universe_combo = MenthorqChartsTab._combo(EXPIRY_UNIVERSE_CHOICES)
+        self.expiry_universe_combo = choice_combo(EXPIRY_UNIVERSE_CHOICES)
         self.expiry_universe_combo.setToolTip("Expiries in the levels (charts and brief). The "
                                               "collector uses MENTHORQ_EXPIRY_UNIVERSE, default "
                                               "monthly.")
-        self.gamma_underlying_combo = MenthorqChartsTab._combo(GAMMA_UNDERLYING_CHOICES)
+        self.gamma_underlying_combo = choice_combo(GAMMA_UNDERLYING_CHOICES)
         self.gamma_underlying_combo.setToolTip("Price the gamma is evaluated at.")
 
         for column, (label, widget) in enumerate((
@@ -311,9 +314,9 @@ class MenthorqMonitorTab(QWidget):
         self.reference_edit.setReadOnly(True)
         self.reference_edit.setPlaceholderText("optional: MenthorQ numbers to compare the charts with")
         reference_row.addWidget(self.reference_edit, 1)
-        self.browse_reference_button = MenthorqChartsTab._secondary_button("Browse...")
+        self.browse_reference_button = secondary_button("Browse...")
         reference_row.addWidget(self.browse_reference_button)
-        self.clear_reference_button = MenthorqChartsTab._secondary_button("Clear")
+        self.clear_reference_button = secondary_button("Clear")
         reference_row.addWidget(self.clear_reference_button)
         reference_row.addSpacing(12)
         self.run_button = QPushButton("Run")
@@ -329,7 +332,7 @@ class MenthorqMonitorTab(QWidget):
 
     def _create_folder_frame(self) -> QFrame:
         """Link to the output folder of the last Run, and an Open folder button."""
-        frame = MenthorqChartsTab._frame()
+        frame = panel_frame()
         layout = QHBoxLayout(frame)
         layout.setContentsMargins(16, 8, 16, 8)
         layout.addWidget(QLabel("Output folder"))
@@ -338,7 +341,7 @@ class MenthorqMonitorTab(QWidget):
         self.folder_link_label.setOpenExternalLinks(False)
         self.folder_link_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY};")
         layout.addWidget(self.folder_link_label, 1)
-        self.open_folder_button = MenthorqChartsTab._secondary_button("Open folder")
+        self.open_folder_button = secondary_button("Open folder")
         self.open_folder_button.setEnabled(False)
         layout.addWidget(self.open_folder_button)
         return frame
@@ -374,7 +377,7 @@ class MenthorqMonitorTab(QWidget):
 
         save_row = QHBoxLayout()
         save_row.addStretch()
-        self.save_button = MenthorqChartsTab._secondary_button("Save PNG as...")
+        self.save_button = secondary_button("Save PNG as...")
         self.save_button.setEnabled(False)
         save_row.addWidget(self.save_button)
         layout.addLayout(save_row)
@@ -424,7 +427,7 @@ class MenthorqMonitorTab(QWidget):
         self.brief_length_label = QLabel("")
         self.brief_length_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY};")
         brief_top.addWidget(self.brief_length_label, 1)
-        self.copy_button = MenthorqChartsTab._secondary_button("Copy as plain text")
+        self.copy_button = secondary_button("Copy as plain text")
         self.copy_button.setEnabled(False)
         brief_top.addWidget(self.copy_button)
         brief_layout.addLayout(brief_top)
@@ -442,7 +445,7 @@ class MenthorqMonitorTab(QWidget):
         alerts_note.setWordWrap(True)
         alerts_note.setStyleSheet(f"color: {Colors.TEXT_SECONDARY};")
         alerts_layout.addWidget(alerts_note)
-        self.alerts_table = MenthorqChartsTab._create_table(ALERT_COLUMN_LABELS)
+        self.alerts_table = read_only_table(ALERT_COLUMN_LABELS)
         alerts_layout.addWidget(self.alerts_table, 1)
         alert_message_label = QLabel("Urgent message that would be sent")
         alert_message_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY};")
@@ -455,7 +458,7 @@ class MenthorqMonitorTab(QWidget):
         info_page = QWidget()
         info_layout = QVBoxLayout(info_page)
         info_layout.setContentsMargins(8, 8, 8, 8)
-        self.info_table = MenthorqChartsTab._create_table(INFO_COLUMN_LABELS)
+        self.info_table = read_only_table(INFO_COLUMN_LABELS)
         info_layout.addWidget(self.info_table, 2)
         caveats_label = QLabel("Warnings and data caveats")
         caveats_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY};")
@@ -464,7 +467,7 @@ class MenthorqMonitorTab(QWidget):
         info_layout.addWidget(self.caveats_browser, 1)
         tabs.addTab(info_page, "Info")
 
-        self.comparison_table = MenthorqChartsTab._create_table(COMPARISON_COLUMN_LABELS)
+        self.comparison_table = read_only_table(COMPARISON_COLUMN_LABELS)
         tabs.addTab(self.comparison_table, "Compare with MenthorQ")
         self.log_viewer = LogViewer()
         tabs.addTab(self.log_viewer, "Output")
