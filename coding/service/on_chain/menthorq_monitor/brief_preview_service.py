@@ -32,7 +32,6 @@ from coding.core.analytics.menthorq_monitor.alert_rules import (
     ALERT_KEY_SPOT_NEAR_PUT_SUPPORT,
     AlertThresholds,
     UrgentAlert,
-    evaluate_urgent_alerts,
 )
 from coding.core.analytics.menthorq_monitor.level_record import MenthorqLevelRecord
 from coding.core.analytics.menthorq_monitor.level_trend_calculator import (
@@ -53,11 +52,11 @@ from coding.service.on_chain.menthorq_monitor.brief_formatter import (
     format_duration,
     format_gex,
     format_strike,
-    format_urgent_alert,
     format_utc,
     stale_data_warning,
     telegram_length,
 )
+from coding.service.on_chain.menthorq_monitor.brief_delivery_service import evaluate_urgent_alerts_of_record
 from coding.service.on_chain.menthorq_monitor.menthorq_monitor_service import (
     MenthorqMonitorService,
     daily_close_as_of,
@@ -330,9 +329,16 @@ class MenthorqBriefPreviewService:
 
         by_label = {comparison.label: comparison for comparison in comparisons}
         previous, day = by_label[COMPARISON_PREVIOUS], by_label[COMPARISON_ONE_DAY]
-        # Same guard as the delivery service: no alert on a record that was not computed.
-        alerts = (evaluate_urgent_alerts(latest, previous, day, self.thresholds)
-                  if latest.spot is not None else [])
+        # The collector's own rule set (not computed -> none; stale -> data_stale only).
+        # The record is recomputed at as_of, so its data time is the "now" of that run.
+        evaluation = evaluate_urgent_alerts_of_record(
+            latest, lambda: comparisons, self.thresholds, stale_limit)
+        alerts = evaluation.alerts
+        checks = alert_rule_checks(latest, previous, day, alerts, self.thresholds,
+                                   self.settings.alerts_enabled)
+        if evaluation.stale_warning is not None:
+            checks = [replace(check, current_value=f"{check.current_value} (paused: data stale)")
+                      for check in checks]
         return BriefPreview(
             as_of_utc=latest.as_of_utc,
             brief_html=brief,
@@ -341,9 +347,8 @@ class MenthorqBriefPreviewService:
             daily_close=daily_close,
             comparisons=comparisons,
             alerts=alerts,
-            alert_checks=alert_rule_checks(latest, previous, day, alerts, self.thresholds,
-                                           self.settings.alerts_enabled),
-            urgent_alert_html=format_urgent_alert(latest, alerts) if alerts else None,
+            alert_checks=checks,
+            urgent_alert_html=evaluation.message(latest, alerts) if alerts else None,
             info_rows=info_rows(latest, daily_close, self.clock()),
             warnings=warnings,
         )

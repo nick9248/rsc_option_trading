@@ -121,6 +121,22 @@ class TestBuildPreview:
         assert stale.brief_html.split("\n")[1] == f"<b>DATA STALE:</b> {warning}"
         assert stale.warnings[0] == f"DATA STALE: {warning}"
 
+    def test_stale_record_previews_the_data_stale_alert_like_production(self):
+        """Limit 19 min, snapshot 20 min before the data time: stale. The movement rules
+        (HVL +4%, PS +6%, crossing, sign flip would all fire when fresh) are paused, and the
+        preview shows the data_stale message the collector would send."""
+        _, preview = _preview(moving_records(), replace(MenthorqMonitorSettings(), stale_snapshot_minutes=19))
+        assert [alert.key for alert in preview.alerts] == ["data_stale"]
+        assert not any(check.would_fire for check in preview.alert_checks)
+        rows = {check.rule: check for check in preview.alert_checks}
+        assert rows["HVL move vs 24h ago"].current_value == \
+            "+4.00% of spot (+4,000 USD) (paused: data stale)"
+        assert preview.urgent_alert_html is not None
+        assert preview.urgent_alert_html.split("\n")[0] == \
+            "<b>URGENT | BTC MenthorQ monitor data is STALE</b>"
+        assert "Snapshot is 20 min older than the data time" in preview.urgent_alert_html
+        assert "Movement alerts are paused until fresh data arrives." in preview.urgent_alert_html
+
     def test_alerts_disabled_shows_enabled_no(self):
         settings = replace(MenthorqMonitorSettings(), alerts_enabled=False)
         _, preview = _preview(moving_records(), settings)

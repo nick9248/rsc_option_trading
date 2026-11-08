@@ -14,13 +14,15 @@ the next run.
 
 import logging
 import threading
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Sequence
 
 from coding.core.analytics.menthorq_monitor.alert_mute import is_muted
 from coding.core.analytics.menthorq_monitor.alert_rules import (
     ALERT_KEY_DATA_STALE,
     AlertThresholds,
+    UrgentAlert,
     apply_cooldown,
     evaluate_urgent_alerts,
 )
@@ -32,6 +34,7 @@ from coding.core.analytics.menthorq_monitor.level_record import (
 from coding.core.analytics.menthorq_monitor.level_trend_calculator import (
     COMPARISON_ONE_DAY,
     COMPARISON_PREVIOUS,
+    RecordComparison,
 )
 from coding.service.on_chain.menthorq_monitor.brief_formatter import (
     escape,
@@ -67,6 +70,60 @@ def latest_weekly_brief_instant(now: datetime, settings: MenthorqMonitorSettings
     if candidate > utc_now:
         candidate -= timedelta(days=7)
     return candidate
+
+
+@dataclass(frozen=True)
+class UrgentAlertEvaluation:
+    """
+    The urgent alerts of one record before the cooldown. ``stale_warning``
+    is set when the record's data is stale: then ``alerts`` is the single
+    ``data_stale`` alert and the movement rules were not evaluated.
+    """
+
+    alerts: List[UrgentAlert]
+    stale_warning: Optional[str]
+
+    def message(self, latest: MenthorqLevelRecord, due: Sequence[UrgentAlert]) -> str:
+        """The URGENT message for the ``due`` alerts (those that passed the cooldown)."""
+        if self.stale_warning is not None:
+            return format_stale_data_alert(latest, self.stale_warning)
+        return format_urgent_alert(latest, due)
+
+
+def evaluate_urgent_alerts_of_record(
+    latest: MenthorqLevelRecord,
+    comparisons: Callable[[], Sequence[RecordComparison]],
+    thresholds: AlertThresholds,
+    stale_limit: timedelta,
+    now: Optional[datetime] = None,
+) -> UrgentAlertEvaluation:
+    """
+    The one rule set of the collector and of the GUI preview: no alert for a
+    record that was not computed; while the data is stale
+    (``stale_data_warning`` with ``now``) one ``data_stale`` alert instead of
+    the movement rules (their moves would be spurious); otherwise
+    ``evaluate_urgent_alerts`` on the previous-run and 24 h comparisons.
+
+    Args:
+        latest: The record to evaluate.
+        comparisons: Builds the comparisons (called only when needed).
+        thresholds: Which rules are on and their thresholds.
+        stale_limit: The DATA STALE limit.
+        now: Wall clock to judge a stored record against; None judges
+            against the record's own data time only.
+    """
+    if latest.spot is None:
+        return UrgentAlertEvaluation(alerts=[], stale_warning=None)
+    stale_warning = stale_data_warning(latest, stale_limit, now)
+    if stale_warning is not None:
+        stale_alert = UrgentAlert(key=ALERT_KEY_DATA_STALE,
+                                  title="Data stale: movement alerts paused", comparison_label="latest")
+        return UrgentAlertEvaluation(alerts=[stale_alert], stale_warning=stale_warning)
+    by_label = {comparison.label: comparison for comparison in comparisons()}
+    return UrgentAlertEvaluation(
+        alerts=evaluate_urgent_alerts(latest, by_label[COMPARISON_PREVIOUS],
+                                      by_label[COMPARISON_ONE_DAY], thresholds),
+        stale_warning=None)
 
 
 class MenthorqBriefDeliveryService:
@@ -156,20 +213,13 @@ class MenthorqBriefDeliveryService:
         if latest.spot is None:
             logger.info("MenthorQ monitor: no alerts evaluated (latest record not computed)")
             return []
-        stale_warning = stale_data_warning(latest, self.settings.stale_snapshot_limit, now)
-        if stale_warning is not None:
-            logger.warning("MenthorQ monitor: data stale (%s); movement alerts paused", stale_warning)
-            last = self.repository.get_last_menthorq_alert_delivery(latest.currency, ALERT_KEY_DATA_STALE)
-            if last is not None and now - last < self.thresholds.cooldown:
-                logger.info("MenthorQ monitor: alerts on cooldown (not repeated): %s",
-                            [ALERT_KEY_DATA_STALE])
-                return []
-            return self._send_urgent(latest, [ALERT_KEY_DATA_STALE],
-                                     format_stale_data_alert(latest, stale_warning), now)
-        comparisons = {comparison.label: comparison
-                       for comparison in self.monitor_service.build_comparisons(latest)}
-        alerts = evaluate_urgent_alerts(
-            latest, comparisons[COMPARISON_PREVIOUS], comparisons[COMPARISON_ONE_DAY], self.thresholds)
+        evaluation = evaluate_urgent_alerts_of_record(
+            latest, lambda: self.monitor_service.build_comparisons(latest), self.thresholds,
+            self.settings.stale_snapshot_limit, now)
+        if evaluation.stale_warning is not None:
+            logger.warning("MenthorQ monitor: data stale (%s); movement alerts paused",
+                           evaluation.stale_warning)
+        alerts = evaluation.alerts
         last_delivered = {
             alert.key: self.repository.get_last_menthorq_alert_delivery(latest.currency, alert.key)
             for alert in alerts
@@ -181,7 +231,7 @@ class MenthorqBriefDeliveryService:
         if not due:
             return []
         return self._send_urgent(latest, [alert.key for alert in due],
-                                 format_urgent_alert(latest, due), now)
+                                 evaluation.message(latest, due), now)
 
     def _send_urgent(
         self, latest: MenthorqLevelRecord, keys: List[str], message: str, now: datetime

@@ -92,7 +92,10 @@ test. They were chosen by hand, not fitted by a backtest.
   than `MENTHORQ_STALE_SNAPSHOT_MINUTES` before its data time or before now), the movement rules
   are not evaluated (their moves would be spurious). One `data_stale` alert is sent instead
   (which snapshot, how old, "movement alerts are paused until fresh data arrives"), with the same
-  12h cooldown and `/mute`, and a warning is logged. `/status` lists it as the last alert.
+  12h cooldown and `/mute`, and a warning is logged. `/status` lists it as the last alert. The GUI
+  preview uses the same rule (one shared function, `evaluate_urgent_alerts_of_record`): on a stale
+  record no rule row says it would fire (each value is marked `paused: data stale`) and the urgent
+  message shown is the `data_stale` one.
 - An alert over a window in which an expiry settled says that the move coincides with the roll-off.
 
 The brief and `/levels` add one line when the gamma regime (spot vs HVL) and the sign of total net
