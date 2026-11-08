@@ -31,6 +31,7 @@ from coding.core.analytics.menthorq_monitor.level_trend_calculator import (
     COMPARISON_ONE_DAY,
     COMPARISON_PREVIOUS,
     COMPARISON_SEVEN_DAYS,
+    ONE_DAY_COMPARISON_OFFSET,
     RecordComparison,
     compare_records,
 )
@@ -54,7 +55,7 @@ COMPARISON_TOLERANCE = {
 }
 COMPARISON_OFFSET = {
     COMPARISON_PREVIOUS: timedelta(0),
-    COMPARISON_ONE_DAY: timedelta(hours=24),
+    COMPARISON_ONE_DAY: ONE_DAY_COMPARISON_OFFSET,
     COMPARISON_SEVEN_DAYS: timedelta(days=7),
 }
 

@@ -75,7 +75,9 @@ test. They were chosen by hand, not fitted by a backtest.
 - A percent setting takes a number in (0, 100] or `off`. An invalid value raises an error and the
   monitor does not start (the collector logs it). A typo never silently falls back to the default.
 - Cooldown: an alert key delivered less than 12h ago is not sent again. A crossing and a sign flip
-  carry their direction in the key.
+  carry their direction in the key. The three "vs 24h ago" move alerts use at least 24h (the
+  comparison window): one move stays visible in that comparison for 24h, so a 12h cooldown would
+  report it twice. Delivered 23h59 ago: held; 24h ago: may repeat.
 - Stale data: when the latest live record is stale by the DATA STALE rule below (snapshot older
   than `MENTHORQ_STALE_SNAPSHOT_MINUTES` before its data time or before now), the movement rules
   are not evaluated (their moves would be spurious). One `data_stale` alert is sent instead

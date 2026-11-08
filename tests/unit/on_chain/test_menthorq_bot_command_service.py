@@ -347,7 +347,7 @@ def test_help_reply_lists_commands_and_rule_states():
         "- Total net GEX sign change: ON\n"
         "- Spot crosses HVL: OFF\n"
         "- Spot near Call Resistance / Put Support: OFF\n"
-        "- Cooldown per alert: 12h"
+        "- Cooldown per alert: 12h (24h moves: 24h)"
     )
 
 

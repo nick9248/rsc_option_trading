@@ -19,7 +19,8 @@ A percent threshold of None switches that rule off.
 The thresholds are chosen by hand, not fitted; a backtest is meant to
 replace them. An alert whose key was delivered less than ``cooldown`` ago
 is not repeated (crossings and sign flips carry their direction in the key,
-so a crossing back is a different alert).
+so a crossing back is a different alert). The three 24 h level-move alerts
+use at least the 24 h comparison window as cooldown (``cooldown_for_key``).
 
 Pure: no database, network or plotting imports.
 """
@@ -32,6 +33,7 @@ from coding.core.analytics.menthorq_monitor.level_record import LEVEL_LABELS, Me
 from coding.core.analytics.menthorq_monitor.level_trend_calculator import (
     CROSSED_ABOVE_HVL,
     CROSSED_BELOW_HVL,
+    ONE_DAY_COMPARISON_OFFSET,
     RecordComparison,
     spot_distances,
 )
@@ -52,6 +54,10 @@ ALERT_KEY_SPOT_NEAR_CALL_RESISTANCE = "spot_near_call_resistance"
 ALERT_KEY_SPOT_NEAR_PUT_SUPPORT = "spot_near_put_support"
 # Sent instead of the movement alerts while the latest record's data is stale.
 ALERT_KEY_DATA_STALE = "data_stale"
+# A level move vs 24 h ago stays true for the whole comparison window after the
+# move, so these keys are held for at least that window (one move, one alert).
+LEVEL_MOVE_ALERT_KEYS = (ALERT_KEY_HVL_MOVE, ALERT_KEY_CALL_RESISTANCE_MOVE, ALERT_KEY_PUT_SUPPORT_MOVE)
+LEVEL_MOVE_ALERT_COOLDOWN = ONE_DAY_COMPARISON_OFFSET
 URGENT_ALERT_KEYS = (
     ALERT_KEY_HVL_MOVE, ALERT_KEY_CALL_RESISTANCE_MOVE, ALERT_KEY_PUT_SUPPORT_MOVE,
     ALERT_KEY_CROSSED_BELOW_HVL, ALERT_KEY_CROSSED_ABOVE_HVL,
@@ -94,7 +100,8 @@ class AlertThresholds:
             f"Total net GEX sign change: {'ON' if self.net_gex_sign_change else 'OFF'}",
             f"Spot crosses HVL: {'ON' if self.spot_crosses_hvl else 'OFF'}",
             near_wall,
-            f"Cooldown per alert: {self.cooldown.total_seconds() / 3600:g}h",
+            f"Cooldown per alert: {self.cooldown.total_seconds() / 3600:g}h "
+            f"(24h moves: {cooldown_for_key(ALERT_KEY_HVL_MOVE, self.cooldown).total_seconds() / 3600:g}h)",
         ]
 
 
@@ -201,6 +208,17 @@ def evaluate_urgent_alerts(
     return alerts
 
 
+def cooldown_for_key(key: str, cooldown: timedelta) -> timedelta:
+    """
+    The cooldown of one alert key: the configured ``cooldown``, but at least
+    the 24 h comparison window for the 24 h level-move keys (their condition
+    stays true for that whole window after one move).
+    """
+    if key in LEVEL_MOVE_ALERT_KEYS:
+        return max(cooldown, LEVEL_MOVE_ALERT_COOLDOWN)
+    return cooldown
+
+
 def apply_cooldown(
     alerts: List[UrgentAlert],
     last_delivered_by_key: Mapping[str, Optional[datetime]],
@@ -208,13 +226,14 @@ def apply_cooldown(
     cooldown: timedelta = DEFAULT_ALERT_COOLDOWN,
 ) -> List[UrgentAlert]:
     """
-    Drop alerts whose key was delivered less than ``cooldown`` before
-    ``now`` (an alert delivered exactly ``cooldown`` ago may repeat).
+    Drop alerts whose key was delivered less than its cooldown
+    (``cooldown_for_key``) before ``now`` (an alert delivered exactly that
+    long ago may repeat).
     """
     kept = []
     for alert in alerts:
         last = last_delivered_by_key.get(alert.key)
-        if last is not None and now - last < cooldown:
+        if last is not None and now - last < cooldown_for_key(alert.key, cooldown):
             continue
         kept.append(alert)
     return kept

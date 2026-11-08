@@ -19,7 +19,7 @@ Pure: no database, network or plotting imports.
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
 from coding.core.analytics.menthorq_monitor.level_record import (
@@ -33,6 +33,9 @@ from coding.core.analytics.menthorq_replication_calculator import parse_expiry_s
 COMPARISON_PREVIOUS = "previous"
 COMPARISON_ONE_DAY = "24h"
 COMPARISON_SEVEN_DAYS = "7d"
+# How far back the "24h" comparison looks (its reference record is at or before
+# latest minus this offset).
+ONE_DAY_COMPARISON_OFFSET = timedelta(hours=24)
 
 CROSSED_BELOW_HVL = "crossed_below_hvl"   # positive -> negative gamma
 CROSSED_ABOVE_HVL = "crossed_above_hvl"   # negative -> positive gamma
