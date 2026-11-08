@@ -19,7 +19,7 @@ from coding.core.analytics.menthorq_monitor.level_record import (
 )
 from coding.core.database.repository import DatabaseRepository
 from coding.service.on_chain.menthorq_input_loader import MenthorqInputLoader
-from coding.service.scanner.telegram_alert_service import TelegramAlertService
+from coding.service.notifications.telegram_alert_service import TelegramAlertService
 
 BASE_TIME = datetime(2026, 11, 6, 9, 10, tzinfo=timezone.utc)   # a Friday
 FAKE_CHAIN_SPOT = 100000.0

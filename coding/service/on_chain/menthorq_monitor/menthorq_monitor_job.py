@@ -38,7 +38,7 @@ from coding.service.on_chain.menthorq_monitor.telegram_command_listener import (
     TelegramCommandListener,
     resolve_owner_user_id,
 )
-from coding.service.scanner.telegram_alert_service import TelegramAlertService
+from coding.service.notifications.telegram_alert_service import TelegramAlertService
 
 logger = logging.getLogger(__name__)
 

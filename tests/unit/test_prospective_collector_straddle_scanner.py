@@ -116,7 +116,7 @@ def test_collect_hour_records_all_scan_history_and_sends_nothing_to_telegram():
     write straddle, iron condor and butterfly scan history rows through the real
     forward-test harnesses, and make no Telegram request at all."""
     from coding.service.data_collection.prospective_collector import ProspectiveCollector
-    from coding.service.scanner.telegram_alert_service import TelegramAlertService
+    from coding.service.notifications.telegram_alert_service import TelegramAlertService
 
     hour = datetime(2026, 7, 13, 14, 0, 0)
     straddle_scan = {

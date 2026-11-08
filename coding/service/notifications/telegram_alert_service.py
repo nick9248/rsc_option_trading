@@ -3,8 +3,9 @@ Generic Telegram Bot API sender, used by the MenthorQ monitor
 (coding/service/on_chain/menthorq_monitor/) for its alerts, briefs and
 command replies.
 
-It was first written for the long-straddle scanner's alerts; that alert
-workflow has been removed. Shaped after (but not sharing any code with) the
+It was first written for the long-straddle scanner's alerts (it lived in
+coding/service/scanner/ until that alert workflow was removed; it now sits
+in this feature-neutral package). Shaped after (but not sharing any code with) the
 deleted displacement TelegramAlertService (removed in the 2026-07-13
 foundation cleanup). It sends the plain text its caller builds and does no
 formatting of its own.

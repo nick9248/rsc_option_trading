@@ -203,7 +203,8 @@ data time, for example:
 The usual cause is a collector that stopped writing snapshots (or a local database that was not
 synced from the VPS), so the newest snapshot is hours behind the time the brief was asked for.
 
-The bot token and the owner chat are the scanner's `OSF_TELEGRAM_BOT_TOKEN` and `OSF_TELEGRAM_CHAT_ID`.
+The bot token and the owner chat are `OSF_TELEGRAM_BOT_TOKEN` and `OSF_TELEGRAM_CHAT_ID`, read by
+`TelegramAlertService` (coding/service/notifications/telegram_alert_service.py).
 Only one process can poll a bot token. If another process polls the same token, Telegram answers 409,
 and that is logged.
 

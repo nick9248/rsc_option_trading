@@ -41,7 +41,7 @@ from coding.service.on_chain.menthorq_monitor.command_formatter import (
 )
 from coding.service.on_chain.menthorq_monitor.menthorq_monitor_service import MenthorqMonitorService
 from coding.service.on_chain.menthorq_monitor.telegram_command_listener import CommandHandler
-from coding.service.scanner.telegram_alert_service import TelegramAlertService
+from coding.service.notifications.telegram_alert_service import TelegramAlertService
 
 logger = logging.getLogger(__name__)
 
