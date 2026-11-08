@@ -3,7 +3,7 @@ Unit tests for DatabaseRepository.get_iv_percentile_with_window.
 
 Mocked cursor only -- no live database. Verifies the zero/NULL atm_iv
 exclusion (data-quality fix) and the n_obs/window_days transparency fields
-(short-history fix) described in straddle scanner increment 2.
+(short-history fix).
 """
 
 from datetime import datetime

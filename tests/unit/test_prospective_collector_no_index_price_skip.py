@@ -22,7 +22,6 @@ def _make_collector():
     collector.api = MagicMock()
     collector.api.get_index_price.side_effect = Exception("index price fetch failed")
     collector.repo = MagicMock()
-    collector._forward_harness = MagicMock()
     return collector
 
 

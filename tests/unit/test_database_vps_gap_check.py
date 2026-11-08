@@ -43,15 +43,13 @@ def test_no_rows_fails():
 def test_run_isolates_one_table_failure_and_rolls_back():
     class _MultiTableCursor:
         def execute(self, query, params=None):
-            if "straddle_scan_history" in query:
+            if "hourly_snapshots" in query:
                 raise Exception("relation does not exist")
             self._last_query = query
 
         def fetchall(self):
             if "onchain_analysis_snapshots" in self._last_query:
                 return [("BTC", 48)]
-            if "hourly_snapshots" in self._last_query:
-                return [("BTC", 30)]
             return []
 
         def close(self):
@@ -85,11 +83,10 @@ def test_run_isolates_one_table_failure_and_rolls_back():
     results = DatabaseVpsGapCheck().run(repo)
 
     by_name = {r.name: r for r in results}
-    assert "straddle_scan_history continuity" in by_name
-    assert by_name["straddle_scan_history continuity"].status == CheckStatus.FAIL
-    assert "continuity check failed" in by_name["straddle_scan_history continuity"].message
+    assert "hourly_snapshots continuity" in by_name
+    assert by_name["hourly_snapshots continuity"].status == CheckStatus.FAIL
+    assert "continuity check failed" in by_name["hourly_snapshots continuity"].message
 
     assert by_name["onchain_analysis_snapshots continuity (BTC)"].status == CheckStatus.PASS
-    assert by_name["hourly_snapshots continuity (BTC)"].status == CheckStatus.WARN
 
     assert conn.rolled_back is True

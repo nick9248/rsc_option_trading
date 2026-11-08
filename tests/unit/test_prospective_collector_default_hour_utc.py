@@ -21,7 +21,6 @@ def _make_collector():
     collector.repo = MagicMock()
     collector.aggregation_service = MagicMock()
     collector.aggregation_service.aggregate_unaggregated_hours.return_value = {"snapshots_created": 0}
-    collector._forward_harness = MagicMock()
     collector._volatility_reconstruction = MagicMock()
     return collector
 

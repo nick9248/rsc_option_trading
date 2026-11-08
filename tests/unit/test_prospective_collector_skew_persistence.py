@@ -23,7 +23,6 @@ def _make_collector():
     collector.api = MagicMock()
     collector.api.get_index_price.return_value = 70_000.0
     collector.repo = MagicMock()
-    collector._forward_harness = MagicMock()
     return collector
 
 
@@ -159,7 +158,6 @@ class TestEndToEndAgainstRealSaveVolatilitySkew:
         collector.api = MagicMock()
         collector.api.get_index_price.return_value = 70_000.0
         collector.repo = DatabaseRepository.__new__(DatabaseRepository)
-        collector._forward_harness = MagicMock()
         return collector
 
     def test_real_save_volatility_skew_executes_without_raising(self, instruments):

@@ -190,7 +190,7 @@ class TestInsertRows:
 
 
 MUTABLE_TABLE = {
-    "name": "straddle_scan_history",
+    "name": "orders",
     "watermark_col": "captured_at",
     "watermark_type": "bigint",
     "conflict_target": None,
@@ -208,7 +208,7 @@ class TestUpsertRows:
         assert "ON CONFLICT (captured_at) DO UPDATE SET value = EXCLUDED.value" in sql
         assert "WHERE (t.value) IS DISTINCT FROM (EXCLUDED.value)" in sql
         assert sql.endswith("RETURNING 1")
-        assert "INSERT INTO straddle_scan_history AS t" in sql
+        assert "INSERT INTO orders AS t" in sql
         assert mock_execute_values.call_args.kwargs == {"fetch": True}
 
     def test_empty_input_writes_nothing(self):

@@ -55,7 +55,6 @@ def _make_collector():
     collector.api = MagicMock()
     collector.api.get_index_price.return_value = 70_000.0
     collector.repo = MagicMock()
-    collector._forward_harness = MagicMock()
     return collector
 
 
@@ -198,7 +197,6 @@ class TestEndToEndAgainstRealSaveOnchainSnapshot:
         # GEX/DEX float arithmetic this class exercises end to end.
         collector.api.get_index_price.return_value = 70_000.0
         collector.repo = DatabaseRepository.__new__(DatabaseRepository)
-        collector._forward_harness = MagicMock()
         return collector
 
     def test_real_save_onchain_snapshot_executes_without_raising(self, instruments):

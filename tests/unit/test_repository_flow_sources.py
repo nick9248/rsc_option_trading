@@ -1,7 +1,6 @@
 """Tests for the repository reads behind the Flow Charts and the futures-basis write.
 
-They run on a throw-away database created for each test (see
-test_repository_defined_risk_scan_history.py) and are skipped when the local
+They run on a throw-away database created for each test and are skipped when the local
 PostgreSQL server is not reachable. Only the columns these methods use are created.
 """
 import uuid
