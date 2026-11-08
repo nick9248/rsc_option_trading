@@ -26,9 +26,10 @@ def test_has_levels_needs_one_level_or_total_net_gex_and_ignores_spot():
     assert make_record().has_levels
     assert not make_record_without_levels(spot=100000.0).has_levels   # spot alone: not computed
     assert not make_record_without_levels(spot=None).has_levels
-    for column, value in (("call_resistance", 110000.0), ("put_support", 90000.0),
-                          ("hvl", 95000.0), ("total_net_gex", -1.0)):
-        assert make_record_without_levels(**{column: value}).has_levels, column
+    assert make_record_without_levels(call_resistance=110000.0).has_levels
+    assert make_record_without_levels(put_support=90000.0).has_levels
+    assert make_record_without_levels(hvl=95000.0).has_levels
+    assert make_record_without_levels(total_net_gex=-1.0).has_levels
     # a zero is a computed value, not a missing one
     assert make_record_without_levels(total_net_gex=0.0).has_levels
 

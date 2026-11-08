@@ -6,7 +6,7 @@ outcomes never read past the end of the data.
 """
 
 from datetime import date, datetime, timedelta, timezone
-from typing import Optional, Tuple
+from typing import Optional, Tuple, cast
 
 import pytest
 
@@ -189,7 +189,7 @@ def test_primary_universe_is_only_a_label_and_every_universe_is_analysed(tmp_pat
 
     analyses = {}
     for label in ("monthly", "all"):
-        MenthorqLevelsBacktestService(FakeRepository()).run(
+        MenthorqLevelsBacktestService(cast(DatabaseRepository, FakeRepository())).run(
             "BTC", STALE_DAY, LAST_DAY, tmp_path / label, primary_universe=label)
         analyses[label] = json.loads((tmp_path / label / "btc_backtest_analysis.json").read_text(encoding="utf-8"))
 
