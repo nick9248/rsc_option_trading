@@ -6,7 +6,9 @@ Level rules are the ones verified on three MenthorQ dates (see
 ``menthorq_replication_calculator.DEFAULT_LEVEL_CANDIDATES``): Call
 Resistance = strike with the highest positive net GEX, Put Support = strike
 with the lowest negative net GEX, HVL = strike where cumulative net GEX
-(from the lowest strike up) is lowest. Gamma at the index price. Panels are
+(from the lowest strike up) is lowest; the record leaves HVL (and the gamma
+regime) None when that strike is the lowest or highest of the chain
+(``HVL_AT_CHAIN_EDGE_REASON``). Gamma at the index price. Panels are
 MenthorQ's four "NET GEX Multi Expirations" panels, ranked by |net GEX|.
 
 Pure: no database, network or plotting imports.
@@ -34,6 +36,11 @@ GAMMA_REGIME_NEGATIVE = "negative"   # spot below HVL
 GAMMA_REGIME_AT_HVL = "at_hvl"       # spot exactly on HVL
 
 LEVEL_LABELS = {"call_resistance": "Call Resistance", "put_support": "Put Support", "hvl": "HVL"}
+# The monitor stores no HVL when the cumulative net GEX minimum sits at the
+# lowest or highest strike of the chain: the curve only falls or only rises,
+# so the "HVL" is just the chain edge and would jump with every new listing
+# or expiry (false HVL-move and crossing alerts).
+HVL_AT_CHAIN_EDGE_REASON = "HVL at the edge of the chain (cumulative net GEX has no turning point)"
 # A run counts as COMPUTED when at least one of these is set (``has_levels``).
 # Spot alone does not count: a run can load its inputs and still compute nothing.
 LEVEL_PRESENCE_COLUMNS = ("call_resistance", "put_support", "hvl", "total_net_gex")
@@ -116,6 +123,7 @@ def _not_computed_reasons(
     panels: Dict[str, Optional[str]],
     iv_source_counts: Dict[str, int],
     rows_without_open_interest: int,
+    hvl_at_chain_edge: bool,
 ) -> List[str]:
     reasons: List[str] = []
     if not replication["settings"]["expirations"]:
@@ -126,7 +134,9 @@ def _not_computed_reasons(
         reasons.append("Call Resistance not computed: no strike with positive net GEX")
     if levels["put_support"] is None:
         reasons.append("Put Support not computed: no strike with negative net GEX")
-    if levels["hvl"] is None:
+    if hvl_at_chain_edge:
+        reasons.append(HVL_AT_CHAIN_EDGE_REASON)
+    elif levels["hvl"] is None:
         reasons.append("HVL not computed: no net GEX by strike")
     for expiration, exposure in replication["gex_by_expiration"].items():
         if exposure["total_net_gex"] is None:
@@ -170,7 +180,14 @@ def build_level_record(
         raise ValueError(f"Unknown mode {mode!r}")
     settings = replication["settings"]
     levels = select_drawn_levels(replication["iv_times_open_interest"]["levels"])
-    total_net_gex = replication["iv_times_open_interest"]["all_expiries_exposure"]["total_net_gex"]
+    all_expiries_exposure = replication["iv_times_open_interest"]["all_expiries_exposure"]
+    total_net_gex = all_expiries_exposure["total_net_gex"]
+    # The cumulative net GEX runs over these strikes (the all-expiry set).
+    chain_strikes = [row["strike"] for row in all_expiries_exposure["strikes"]]
+    hvl_at_chain_edge = (levels["hvl"] is not None and bool(chain_strikes)
+                         and levels["hvl"] in (min(chain_strikes), max(chain_strikes)))
+    if hvl_at_chain_edge:
+        levels = {**levels, "hvl": None}
     panels = replication["panels"][PANEL_RANKING_ABSOLUTE_NET]
     expiring_percent = replication["gex_expiring_percent"]
 
@@ -219,7 +236,7 @@ def build_level_record(
         iv_source_counts=iv_source_counts,
         not_computed_reasons=_not_computed_reasons(
             levels, total_net_gex, replication, panels, iv_source_counts,
-            rows_without_open_interest,
+            rows_without_open_interest, hvl_at_chain_edge,
         ),
     )
 

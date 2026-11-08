@@ -192,7 +192,8 @@ class FakeMonitorRepository(DatabaseRepository):
 class FakeInputLoader(MenthorqInputLoader):
     """
     MenthorqInputLoader stand-in. One monthly expiry (27NOV26): a 110,000 call
-    and a 90,000 put, 100 BTC open interest each, IV 50%, spot 100,000.
+    and a 90,000 put, 100 BTC open interest each, plus an 80,000 call with no
+    open interest (so HVL 90,000 is not at the chain edge), IV 50%, spot 100,000.
     Records every (as_of, open_interest_as_of) it is asked for. The capture
     times are the given ages before their instants (defaults: 21 min for the
     snapshots, 5 s for the index trade).
@@ -220,12 +221,17 @@ class FakeInputLoader(MenthorqInputLoader):
             {"instrument_name": "BTC-27NOV26-90000-P", "expiration": "27NOV26", "strike": 90000.0,
              "option_type": "P", "open_interest": 100.0, "mark_iv": 50.0,
              "underlying_price": FAKE_CHAIN_SPOT, "mark_price": 0.01, "iv_source": "mark_iv"},
+            # A listed strike without open interest (net GEX 0) below the put, so
+            # the cumulative net GEX minimum (90,000) is not at the chain edge.
+            {"instrument_name": "BTC-27NOV26-80000-C", "expiration": "27NOV26", "strike": 80000.0,
+             "option_type": "C", "open_interest": 0.0, "mark_iv": 50.0,
+             "underlying_price": FAKE_CHAIN_SPOT, "mark_price": 0.2, "iv_source": "mark_iv"},
         ]
         return {
             "snapshot_captured_at_utc": as_of - self.snapshot_age,
             "open_interest_captured_at_utc": (open_interest_as_of or as_of) - self.open_interest_age,
             "chain_rows": rows,
-            "iv_source_counts": {"mark_iv": 2, "rebuilt_from_mark_price": 0, "missing": 0},
+            "iv_source_counts": {"mark_iv": 3, "rebuilt_from_mark_price": 0, "missing": 0},
             "index_price": FAKE_CHAIN_SPOT,
             "index_price_time_utc": as_of - self.index_age,
         }
