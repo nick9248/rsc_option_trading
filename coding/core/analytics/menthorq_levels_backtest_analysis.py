@@ -400,8 +400,8 @@ def alert_threshold_table(
     spots = column(rows, "index_price")
     for level in ("call_resistance", "put_support"):
         levels = column(rows, f"{universe}_{level}")
-        signed_distances = [percent_of(lvl - spot, spot) if lvl is not None and spot is not None else None
-                            for lvl, spot in zip(levels, spots)]
+        signed_distances = [percent_of(level_value - spot, spot) if level_value is not None and spot is not None else None
+                            for level_value, spot in zip(levels, spots)]
         distances = [None if distance is None else abs(distance) for distance in signed_distances]
         for within in (0.5, 1.0, 2.0):
             inside = [None if distance is None else distance <= within for distance in distances]
