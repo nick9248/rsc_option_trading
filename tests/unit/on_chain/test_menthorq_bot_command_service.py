@@ -407,7 +407,8 @@ def test_brief_that_cannot_be_built_gets_the_failed_reply(monkeypatch):
 
 def _owner_update(update_id, text, chat_id=OWNER):
     return {"update_id": update_id,
-            "message": {"text": text, "chat": {"id": int(chat_id)}, "from": {"username": "u"},
+            "message": {"text": text, "chat": {"id": int(chat_id)},
+                        "from": {"id": int(chat_id), "username": "u"},   # a private chat: user id = chat id
                         "date": int((NOW - timedelta(seconds=3)).timestamp())}}
 
 

@@ -213,6 +213,34 @@ def test_commands_enabled_without_owner_chat_schedule_no_polling_and_warn_once(c
     assert "Telegram OFF" not in caplog.text      # the switch is on; the warning names the cause
 
 
+def test_owner_user_id_is_read_and_validated():
+    assert MenthorqMonitorSettings.from_environment({}).owner_user_id is None
+    assert MenthorqMonitorSettings.from_environment({"MENTHORQ_OWNER_USER_ID": " 111 "}).owner_user_id == 111
+    for invalid in ("abc", "-5", "0", "1.5"):
+        with pytest.raises(ValueError, match="MENTHORQ_OWNER_USER_ID"):
+            MenthorqMonitorSettings.from_environment({"MENTHORQ_OWNER_USER_ID": invalid})
+
+
+def test_group_chat_without_owner_user_id_schedules_no_polling_and_warns_once(caplog):
+    with caplog.at_level("INFO"):
+        job = build_menthorq_monitor_job(repository=MagicMock(), settings=ALL_ON,
+                                         telegram=FakeTelegram(chat_id="-1001234"))
+        assert job is not None and job.command_listener is None
+        scheduler = BackgroundScheduler(timezone=timezone.utc)
+        job.register(scheduler)
+    assert COMMAND_POLL_JOB_ID not in {scheduled.id for scheduled in scheduler.get_jobs()}
+    warnings = [record for record in caplog.records if record.levelname == "WARNING"]
+    assert len(warnings) == 1 and "MENTHORQ_OWNER_USER_ID" in warnings[0].getMessage()
+
+
+def test_group_chat_with_owner_user_id_schedules_polling():
+    settings = MenthorqMonitorSettings(monitor_enabled=True, alerts_enabled=True, commands_enabled=True,
+                                       owner_user_id=111)
+    job = build_menthorq_monitor_job(repository=MagicMock(), settings=settings,
+                                     telegram=FakeTelegram(chat_id="-1001234"))
+    assert job is not None and job.command_listener is not None
+
+
 def test_jobs_registered_with_utc_cron_triggers():
     job = build_menthorq_monitor_job(repository=MagicMock(), settings=ALL_ON,
                                      telegram=FakeTelegram())

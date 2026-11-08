@@ -8,8 +8,15 @@ the existing service; no extra thread or process. Each call long-polls
 for at most ``LONG_POLL_SECONDS``.
 
 Rules:
-  - Only the owner chat (the configured OSF_TELEGRAM_CHAT_ID) may run a
-    command; any other chat is rejected and logged, and gets no reply.
+  - Only the OWNER may run a command: the message must come from the owner
+    chat (the configured OSF_TELEGRAM_CHAT_ID) AND its sender
+    (``message["from"]["id"]``) must be the owner user. In a private chat
+    (positive chat id) the owner user id is the chat id itself; in a group
+    or supergroup (negative chat id) every member writes into the same
+    chat, so the owner user id must be configured (MENTHORQ_OWNER_USER_ID,
+    ``resolve_owner_user_id``). Any other chat or sender is rejected and
+    logged, and gets no reply; a message without a sender ("from") is
+    ignored.
   - A command older than ``MAXIMUM_COMMAND_AGE`` (e.g. sent while the
     service was down) is skipped, so a restart does not replay a backlog.
   - An owner command without a handler goes to ``unknown_command_handler``
@@ -27,8 +34,9 @@ Rules:
     it. A restart therefore never re-runs a command that was already
     handled (the offset is kept in memory only). Commands sent while the
     service was down are lost too; the owner sends them again.
-  - Without an owner chat id one warning is logged at construction and
-    ``poll_once`` does nothing (the job does not even schedule polling).
+  - Without an owner chat id, or without an owner user id (a group chat
+    without MENTHORQ_OWNER_USER_ID), one warning is logged at construction
+    and ``poll_once`` does nothing (the job does not even schedule polling).
   - Getting updates fails if a webhook is set on the bot or another process
     polls the same bot token (Telegram answers 409); that is logged.
 """
@@ -48,6 +56,25 @@ MAXIMUM_COMMAND_AGE = timedelta(minutes=10)
 CommandHandler = Callable[[str], object]
 
 
+def resolve_owner_user_id(owner_chat_id: str, configured_owner_user_id: Optional[int]) -> Optional[str]:
+    """
+    The Telegram user id whose commands are run: the chat id itself for a
+    private chat (a positive chat id: there the user id equals the chat
+    id), else (a group or supergroup, negative id) the configured
+    MENTHORQ_OWNER_USER_ID. None when neither gives one.
+
+    Args:
+        owner_chat_id: The owner chat id (OSF_TELEGRAM_CHAT_ID), "" when unset.
+        configured_owner_user_id: MENTHORQ_OWNER_USER_ID, None when unset.
+    """
+    text = str(owner_chat_id).strip()
+    if text.isdigit() and int(text) > 0:
+        return text
+    if configured_owner_user_id is not None:
+        return str(configured_owner_user_id)
+    return None
+
+
 class TelegramCommandListener:
     """Dispatches owner-only bot commands to handlers."""
 
@@ -60,11 +87,14 @@ class TelegramCommandListener:
         long_poll_seconds: int = LONG_POLL_SECONDS,
         unknown_command_handler: Optional[CommandHandler] = None,
         command_menu: Sequence[Tuple[str, str]] = (),
+        configured_owner_user_id: Optional[int] = None,
     ):
         """
         Args:
             telegram: Bot API access (its token is used for getUpdates).
             owner_chat_id: The only chat id whose commands are run.
+            configured_owner_user_id: MENTHORQ_OWNER_USER_ID (needed for a
+                group chat; see ``resolve_owner_user_id``).
             handlers: Command (lower case, with the slash, e.g. "/brief") ->
                 callable run with the command's argument text.
             clock: Wall clock (UTC-aware) for the command-age rule.
@@ -85,8 +115,12 @@ class TelegramCommandListener:
         self._offset: Optional[int] = None
         self._pending_updates_skipped = False
         self._bot_username: Optional[str] = None   # this bot's getMe username, once known
+        self._owner_user_id = resolve_owner_user_id(self._owner_chat_id, configured_owner_user_id)
         if not self._owner_chat_id:
             logger.warning("TelegramCommandListener: no owner chat id configured; commands disabled")
+        elif self._owner_user_id is None:
+            logger.warning("TelegramCommandListener: owner chat %s is a group chat and no "
+                           "MENTHORQ_OWNER_USER_ID is configured; commands disabled", self._owner_chat_id)
 
     def skip_pending_updates(self) -> bool:
         """
@@ -163,7 +197,7 @@ class TelegramCommandListener:
             Number of commands answered (known or unknown). Never raises (a
             handler error is logged).
         """
-        if not self._owner_chat_id:
+        if not self._owner_chat_id or self._owner_user_id is None:
             return 0   # warned once at construction
         self.register_command_menu()
         self.resolve_bot_username()
@@ -198,10 +232,20 @@ class TelegramCommandListener:
             return False
         chat = message.get("chat") or {}
         chat_id = str(chat.get("id", "")).strip()
+        sender = message.get("from")
+        if not isinstance(sender, dict) or "id" not in sender:
+            logger.info("TelegramCommandListener: ignoring %s from chat %s: no sender", command,
+                        chat_id or "unknown")
+            return False
+        sender_name = sender.get("username")
         if chat_id != self._owner_chat_id:
-            sender = (message.get("from") or {}).get("username")
             logger.warning("TelegramCommandListener: REJECTED %s from chat %s (user %s): not the owner chat",
-                           command, chat_id or "unknown", sender or "unknown")
+                           command, chat_id or "unknown", sender_name or "unknown")
+            return False
+        sender_id = str(sender["id"]).strip()
+        if sender_id != self._owner_user_id:
+            logger.warning("TelegramCommandListener: REJECTED %s in the owner chat from user %s (%s): "
+                           "not the owner user", command, sender_id, sender_name or "unknown")
             return False
         sent_at = message.get("date")
         if isinstance(sent_at, (int, float)):

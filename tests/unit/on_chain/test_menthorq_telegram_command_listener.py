@@ -8,7 +8,10 @@ sent).
 import logging
 from datetime import datetime, timedelta, timezone
 
-from coding.service.on_chain.menthorq_monitor.telegram_command_listener import TelegramCommandListener
+from coding.service.on_chain.menthorq_monitor.telegram_command_listener import (
+    TelegramCommandListener,
+    resolve_owner_user_id,
+)
 from tests.fakes.fake_menthorq_monitor import FakeTelegram
 
 NOW = datetime(2026, 11, 6, 9, 10, tzinfo=timezone.utc)
@@ -16,13 +19,16 @@ OWNER = "111"
 MENU = (("brief", "Full brief"), ("mute", "Silence alerts"))
 
 
-def _update(update_id, text, chat_id=OWNER, sent=NOW - timedelta(seconds=5), username="owner"):
+def _update(update_id, text, chat_id=OWNER, sent=NOW - timedelta(seconds=5), username="owner",
+            sender_id=None):
+    """A message update; the sender id defaults to the chat id (a private chat)."""
+    sender = {"id": int(sender_id if sender_id is not None else chat_id), "username": username}
     return {"update_id": update_id,
-            "message": {"text": text, "chat": {"id": int(chat_id)}, "from": {"username": username},
+            "message": {"text": text, "chat": {"id": int(chat_id)}, "from": sender,
                         "date": int(sent.timestamp())}}
 
 
-def _listener(updates, owner=OWNER, with_unknown=True, menu=MENU, started=True):
+def _listener(updates, owner=OWNER, with_unknown=True, menu=MENU, started=True, owner_user_id=None):
     """The listener and its fake Telegram. ``started``: the first poll (which skips
     what was pending at start) has already run on an empty queue, and ``updates``
     arrive after it; otherwise ``updates`` are queued before the first poll."""
@@ -36,6 +42,7 @@ def _listener(updates, owner=OWNER, with_unknown=True, menu=MENU, started=True):
         unknown_command_handler=(lambda command: calls.append(("unknown", command)))
         if with_unknown else None,
         command_menu=menu,
+        configured_owner_user_id=owner_user_id,
     )
     if started:
         listener.poll_once()
@@ -60,6 +67,63 @@ def test_other_chat_is_rejected_and_logged_for_known_and_unknown_commands(caplog
     assert "REJECTED /mute from chat 999 (user stranger)" in caplog.text
     assert "REJECTED /start from chat 999 (user stranger)" in caplog.text
     assert telegram.sent == []          # no reply to strangers
+
+
+GROUP_CHAT = "-1001234"
+OWNER_USER = 111
+OTHER_MEMBER = 222
+
+
+class TestSenderIsTheOwnerUser:
+    """The sender (message["from"]["id"]) must be the owner user, not just the chat."""
+
+    def test_private_chat_owner_is_accepted(self):
+        # chat id 111 > 0: a private chat, the owner user id is 111 itself
+        listener, _, calls = _listener([_update(5, "/brief")])
+        assert listener.poll_once() == 1 and calls == [("brief", "")]
+
+    def test_another_sender_in_a_group_chat_is_refused(self, caplog):
+        listener, telegram, calls = _listener(
+            [_update(5, "/mute off", chat_id=GROUP_CHAT, sender_id=OTHER_MEMBER, username="member")],
+            owner=GROUP_CHAT, owner_user_id=OWNER_USER)
+        with caplog.at_level(logging.WARNING):
+            assert listener.poll_once() == 0
+        assert calls == [] and telegram.sent == []
+        assert "REJECTED /mute in the owner chat from user 222 (member): not the owner user" in caplog.text
+
+    def test_group_chat_with_the_configured_owner_user_is_accepted(self):
+        listener, _, calls = _listener(
+            [_update(5, "/mute 24h", chat_id=GROUP_CHAT, sender_id=OWNER_USER)],
+            owner=GROUP_CHAT, owner_user_id=OWNER_USER)
+        assert listener.poll_once() == 1 and calls == [("mute", "24h")]
+
+    def test_private_chat_refuses_a_different_sender(self):
+        # Cannot happen in a real private chat; the rule holds anyway.
+        listener, _, calls = _listener([_update(5, "/brief", sender_id=OTHER_MEMBER)])
+        assert listener.poll_once() == 0 and calls == []
+
+    def test_a_message_without_a_sender_is_ignored(self):
+        update = _update(5, "/brief")
+        del update["message"]["from"]
+        listener, _, calls = _listener([update])
+        assert listener.poll_once() == 0 and calls == []
+
+    def test_group_chat_without_owner_user_id_disables_commands_with_one_warning(self, caplog):
+        with caplog.at_level(logging.WARNING):
+            listener, telegram, calls = _listener([], owner=GROUP_CHAT, started=False)
+            telegram.updates = [_update(5, "/brief", chat_id=GROUP_CHAT, sender_id=OWNER_USER)]
+            for _ in range(3):
+                assert listener.poll_once() == 0
+        assert calls == [] and telegram.get_updates_calls == []        # never polls
+        warnings = [record for record in caplog.records if record.levelname == "WARNING"]
+        assert len(warnings) == 1 and "MENTHORQ_OWNER_USER_ID" in warnings[0].getMessage()
+
+    def test_owner_user_id_rule_by_hand(self):
+        assert resolve_owner_user_id("111", None) == "111"            # private chat
+        assert resolve_owner_user_id(" 111 ", 999) == "111"           # private: the chat id wins
+        assert resolve_owner_user_id("-1001234", 111) == "111"        # group: the configured id
+        assert resolve_owner_user_id("-1001234", None) is None        # group without it
+        assert resolve_owner_user_id("", None) is None
 
 
 class TestBotSuffix:

@@ -34,7 +34,10 @@ from coding.service.on_chain.menthorq_monitor.brief_delivery_service import Ment
 from coding.service.on_chain.menthorq_monitor.command_formatter import BOT_COMMANDS
 from coding.service.on_chain.menthorq_monitor.menthorq_monitor_service import MenthorqMonitorService
 from coding.service.on_chain.menthorq_monitor.monitor_settings import MenthorqMonitorSettings
-from coding.service.on_chain.menthorq_monitor.telegram_command_listener import TelegramCommandListener
+from coding.service.on_chain.menthorq_monitor.telegram_command_listener import (
+    TelegramCommandListener,
+    resolve_owner_user_id,
+)
 from coding.service.scanner.telegram_alert_service import TelegramAlertService
 
 logger = logging.getLogger(__name__)
@@ -196,11 +199,16 @@ def build_menthorq_monitor_job(
     if settings.commands_enabled and not telegram.chat_id.strip():
         logger.warning("MenthorQ monitor: MENTHORQ_COMMANDS_ENABLED=1 but no owner chat id "
                        "(OSF_TELEGRAM_CHAT_ID) is configured; bot command polling NOT scheduled")
+    elif settings.commands_enabled and resolve_owner_user_id(telegram.chat_id, settings.owner_user_id) is None:
+        logger.warning("MenthorQ monitor: MENTHORQ_COMMANDS_ENABLED=1 but the owner chat %s is a group "
+                       "chat and no owner user id (MENTHORQ_OWNER_USER_ID) is configured; bot command "
+                       "polling NOT scheduled", telegram.chat_id.strip())
     elif settings.commands_enabled:
         command_service = MenthorqBotCommandService(monitor_service, delivery_service, telegram)
         listener = TelegramCommandListener(
             telegram, telegram.chat_id, command_service.handlers(),
             unknown_command_handler=command_service.reply_to_unknown_command,
             command_menu=BOT_COMMANDS,
+            configured_owner_user_id=settings.owner_user_id,
         )
     return MenthorqMonitorJob(settings, monitor_service, delivery_service, listener)

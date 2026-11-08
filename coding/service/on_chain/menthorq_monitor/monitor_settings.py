@@ -41,7 +41,12 @@ in (0, 100] or "off"):
 
 The Telegram bot token and the owner chat id come from the environment
 (OSF_TELEGRAM_BOT_TOKEN / OSF_TELEGRAM_CHAT_ID, see TelegramAlertService);
-only that chat may use the commands.
+only the owner user in that chat may use the commands:
+  MENTHORQ_OWNER_USER_ID          the owner's Telegram user id (positive integer).
+                                  Not needed for a private chat (positive chat id:
+                                  the user id is the chat id). REQUIRED for a group
+                                  or supergroup chat (negative chat id): without it
+                                  the commands are disabled (one warning at start-up).
 """
 
 import os
@@ -89,6 +94,7 @@ class MenthorqMonitorSettings:
     command_poll_seconds: int = 20
     stale_snapshot_minutes: int = 120
     alert_thresholds: AlertThresholds = AlertThresholds()
+    owner_user_id: Optional[int] = None    # MENTHORQ_OWNER_USER_ID; needed for a group chat only
 
     @property
     def weekly_brief_day_name(self) -> str:
@@ -196,7 +202,16 @@ class MenthorqMonitorSettings:
                 raise ValueError(f"MENTHORQ_WEEKLY_BRIEF_TIME_UTC={time_text!r} has an offset; "
                                  "UTC only, format HH:MM")
 
+        owner_user_text = environment.get("MENTHORQ_OWNER_USER_ID", "").strip()
+        owner_user_id = defaults.owner_user_id
+        if owner_user_text:
+            if not owner_user_text.isdigit() or int(owner_user_text) <= 0:
+                raise ValueError(f"MENTHORQ_OWNER_USER_ID={owner_user_text!r} is not a positive integer "
+                                 "(a Telegram user id)")
+            owner_user_id = int(owner_user_text)
+
         return cls(
+            owner_user_id=owner_user_id,
             monitor_enabled=flag("MENTHORQ_MONITOR_ENABLED", defaults.monitor_enabled),
             alerts_enabled=flag("MENTHORQ_ALERTS_ENABLED", defaults.alerts_enabled),
             commands_enabled=flag("MENTHORQ_COMMANDS_ENABLED", defaults.commands_enabled),

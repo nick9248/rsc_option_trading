@@ -18,8 +18,13 @@ set on the VPS only). Its jobs, all in UTC:
 
 ## Bot commands
 
-Only the owner chat (`OSF_TELEGRAM_CHAT_ID`) can run a command. A command from any other chat is logged
-as `REJECTED` and gets no reply. A command older than 10 minutes is skipped. At its first poll the
+Only the owner can run a command: the message must come from the owner chat (`OSF_TELEGRAM_CHAT_ID`)
+and its sender (`from.id`) must be the owner user. For a private chat (positive chat id) the owner user
+id is the chat id itself, so nothing else is needed. For a group or supergroup (negative chat id) every
+member writes into the same chat, so `MENTHORQ_OWNER_USER_ID` (the owner's Telegram user id) is
+required; without it the collector logs one warning at start-up and does not schedule command polling.
+A command from any other chat or any other sender is logged as `REJECTED` and gets no reply; a message
+without a sender is ignored. A command older than 10 minutes is skipped. At its first poll the
 listener sends the command menu to Telegram once (`setMyCommands`). If that fails, it logs the
 failure and the commands still work.
 
@@ -149,6 +154,7 @@ positive total net GEX.
 | `MENTHORQ_WEEKLY_BRIEF_TIME_UTC` | 09:00 | HH:MM, UTC (a value with an offset is refused) |
 | `MENTHORQ_COMMAND_POLL_SECONDS` | 20 | at least 12 (the 10 s long-poll wait + 2 s) |
 | `MENTHORQ_STALE_SNAPSHOT_MINUTES` | 120 | at least 10; stale-data limit, see below |
+| `MENTHORQ_OWNER_USER_ID` | unset | owner's Telegram user id (positive integer); required only when `OSF_TELEGRAM_CHAT_ID` is a group chat (negative id) |
 | `MENTHORQ_ALERT_*` | see the rules table | alert rules |
 
 All three switches are off by default, so a local debug run of the collector neither writes
