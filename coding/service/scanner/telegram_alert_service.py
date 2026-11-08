@@ -47,6 +47,7 @@ class TelegramAlertService:
         self._token = token
         self._chat_id = chat_id
         self._base_url = f"https://api.telegram.org/bot{self._token}"
+        self._bot_username: Optional[str] = None   # getMe result, cached once known
 
     @property
     def chat_id(self) -> str:
@@ -128,6 +129,38 @@ class TelegramAlertService:
         except Exception as exc:
             logger.warning("TelegramAlertService: setMyCommands failed: %s", self._without_token(exc))
             return False
+
+    def get_bot_username(self) -> Optional[str]:
+        """
+        This bot's username (Bot API getMe), e.g. "MenthorBot". A success is
+        cached for the life of this object, so Telegram is asked once.
+
+        Returns:
+            The username, or None on any failure (missing token, network
+            error, non-2xx, malformed body); a failure is not cached.
+            Never raises.
+        """
+        if self._bot_username is not None:
+            return self._bot_username
+        if not self._token:
+            logger.warning("TelegramAlertService: missing bot token, skipping getMe")
+            return None
+        try:
+            response = requests.get(f"{self._base_url}/getMe", timeout=10)
+            if not response.ok:
+                logger.warning("TelegramAlertService: getMe returned %s: %s",
+                               response.status_code, response.text)
+                return None
+            body = response.json()
+            username = (body.get("result") or {}).get("username") if body.get("ok") else None
+            if not isinstance(username, str) or not username:
+                logger.warning("TelegramAlertService: unexpected getMe body: %s", body)
+                return None
+            self._bot_username = username
+            return username
+        except Exception as exc:
+            logger.warning("TelegramAlertService: getMe failed: %s", self._without_token(exc))
+            return None
 
     def get_updates(self, offset: Optional[int], timeout_seconds: int) -> Optional[List[Dict[str, Any]]]:
         """

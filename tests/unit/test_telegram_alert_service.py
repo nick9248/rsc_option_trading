@@ -162,3 +162,41 @@ class TestEnvFallback:
 
         assert "explicit-token" in mock_post.call_args[0][0]
         assert mock_post.call_args[1]["json"]["chat_id"] == "explicit-chat"
+
+
+class TestGetBotUsername:
+    def test_username_is_read_from_get_me_and_cached(self):
+        service = TelegramAlertService(token="abc123", chat_id="999")
+        response = MagicMock(ok=True)
+        response.json.return_value = {"ok": True, "result": {"id": 1, "is_bot": True, "username": "MenthorBot"}}
+        with patch("coding.service.scanner.telegram_alert_service.requests.get",
+                   return_value=response) as mock_get:
+            assert service.get_bot_username() == "MenthorBot"
+            assert service.get_bot_username() == "MenthorBot"
+        assert mock_get.call_count == 1
+        assert mock_get.call_args[0][0] == "https://api.telegram.org/botabc123/getMe"
+
+    def test_failures_return_none_are_not_cached_and_hide_the_token(self, caplog):
+        service = TelegramAlertService(token="secret-token", chat_id="999")
+        with patch("coding.service.scanner.telegram_alert_service.requests.get",
+                   side_effect=ConnectionError("url: /botsecret-token/getMe")):
+            assert service.get_bot_username() is None
+        assert "secret-token" not in caplog.text
+        malformed = MagicMock(ok=True)
+        malformed.json.return_value = {"ok": True, "result": {}}
+        with patch("coding.service.scanner.telegram_alert_service.requests.get", return_value=malformed):
+            assert service.get_bot_username() is None
+        unauthorized = MagicMock(ok=False, status_code=401, text="Unauthorized")
+        with patch("coding.service.scanner.telegram_alert_service.requests.get", return_value=unauthorized):
+            assert service.get_bot_username() is None
+        good = MagicMock(ok=True)
+        good.json.return_value = {"ok": True, "result": {"username": "MenthorBot"}}
+        with patch("coding.service.scanner.telegram_alert_service.requests.get", return_value=good):
+            assert service.get_bot_username() == "MenthorBot"   # asked again after a failure
+
+    def test_missing_token_asks_nothing(self):
+        service = TelegramAlertService(token="explicit-token", chat_id="999")
+        service._token = ""   # the missing-token case without reading .env
+        with patch("coding.service.scanner.telegram_alert_service.requests.get") as mock_get:
+            assert service.get_bot_username() is None
+        mock_get.assert_not_called()

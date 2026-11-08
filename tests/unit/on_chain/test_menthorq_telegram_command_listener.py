@@ -62,6 +62,47 @@ def test_other_chat_is_rejected_and_logged_for_known_and_unknown_commands(caplog
     assert telegram.sent == []          # no reply to strangers
 
 
+class TestBotSuffix:
+    """The fake bot is @MenthorBot (getMe)."""
+
+    def test_a_command_addressed_to_another_bot_is_ignored(self, caplog):
+        caplog.set_level(logging.DEBUG)
+        listener, _, calls = _listener([_update(5, "/mute@AnotherBot 24h"), _update(6, "/levelz@OtherBot")])
+        assert listener.poll_once() == 0
+        assert calls == []                       # neither run nor answered with the hint
+        ignored = [record for record in caplog.records if "addressed to @AnotherBot" in record.message]
+        assert len(ignored) == 1 and ignored[0].levelname == "DEBUG"
+
+    def test_the_suffix_of_this_bot_is_accepted_without_case(self):
+        listener, _, calls = _listener([_update(5, "/mute@menthorbot 24h")])
+        assert listener.poll_once() == 1
+        assert calls == [("mute", "24h")]
+
+    def test_username_is_asked_once_and_cached(self):
+        listener, telegram, _ = _listener([_update(5, "/brief")])
+        listener.poll_once()
+        listener.poll_once()
+        assert telegram.get_bot_username_calls == 1
+
+    def test_unknown_username_ignores_suffixed_commands_but_runs_plain_ones(self, caplog):
+        telegram = FakeTelegram(updates=[])
+        telegram.bot_username = None             # getMe fails
+        calls = []
+        listener = TelegramCommandListener(
+            telegram, OWNER, {"/brief": lambda arguments: calls.append(("brief", arguments))},
+            clock=lambda: NOW)
+        listener.poll_once()                     # first poll: skips the (empty) backlog
+        telegram.updates = [_update(5, "/brief@MenthorBot"), _update(6, "/brief")]
+        assert listener.poll_once() == 1
+        assert calls == [("brief", "")]
+        assert "bot username unknown" in caplog.text
+        # getMe works again: asked at the next poll, then the suffix is accepted
+        telegram.bot_username = "MenthorBot"
+        telegram.updates = [_update(7, "/brief@MenthorBot later")]
+        assert listener.poll_once() == 1
+        assert calls[-1] == ("brief", "later")
+
+
 def test_stale_command_after_downtime_is_skipped_known_or_unknown():
     listener, _, calls = _listener([_update(8, "/brief", sent=NOW - timedelta(minutes=11)),
                                     _update(9, "/foo", sent=NOW - timedelta(minutes=11))])

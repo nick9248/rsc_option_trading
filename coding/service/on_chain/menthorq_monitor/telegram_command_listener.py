@@ -14,6 +14,11 @@ Rules:
     service was down) is skipped, so a restart does not replay a backlog.
   - An owner command without a handler goes to ``unknown_command_handler``
     (a short help hint).
+  - A command addressed to a bot ("/mute@SomeBot") runs only when that is
+    THIS bot (its username from getMe, asked once and cached; compared
+    without case). Addressed to another bot it is ignored (logged at DEBUG).
+    While the username is unknown (getMe failed; asked again at the next
+    poll) every addressed command is ignored and plain ones still run.
   - The first poll registers the command menu with Telegram
     (setMyCommands) once; a failure is logged and polling goes on.
   - At the first poll (each start of the collector) every pending update
@@ -79,6 +84,7 @@ class TelegramCommandListener:
         self._menu_registration_attempted = False
         self._offset: Optional[int] = None
         self._pending_updates_skipped = False
+        self._bot_username: Optional[str] = None   # this bot's getMe username, once known
         if not self._owner_chat_id:
             logger.warning("TelegramCommandListener: no owner chat id configured; commands disabled")
 
@@ -128,6 +134,25 @@ class TelegramCommandListener:
             logger.warning("TelegramCommandListener: command menu NOT registered; commands still work")
         return accepted
 
+    def resolve_bot_username(self) -> Optional[str]:
+        """
+        This bot's username, asked from Telegram (getMe) until it is known,
+        then cached. None while unknown. Never raises.
+        """
+        if self._bot_username is None:
+            try:
+                username = self._telegram.get_bot_username()
+            except Exception:
+                logger.exception("TelegramCommandListener: getMe failed")
+                username = None
+            if username:
+                self._bot_username = username
+                logger.info("TelegramCommandListener: this bot is @%s", username)
+            else:
+                logger.warning("TelegramCommandListener: bot username unknown (getMe failed): "
+                               "commands addressed with @<bot> are ignored until it is known")
+        return self._bot_username
+
     def poll_once(self) -> int:
         """
         Fetch pending updates and run the owner's commands. The first
@@ -141,6 +166,7 @@ class TelegramCommandListener:
         if not self._owner_chat_id:
             return 0   # warned once at construction
         self.register_command_menu()
+        self.resolve_bot_username()
         if not self._pending_updates_skipped:
             self._pending_updates_skipped = self.skip_pending_updates()
             if not self._pending_updates_skipped:
@@ -162,8 +188,14 @@ class TelegramCommandListener:
         if not text.startswith("/"):
             return False
         parts = text.split(maxsplit=1)
-        command = parts[0].split("@")[0].lower()
+        command, _, addressed_to = parts[0].partition("@")
+        command = command.lower()
         arguments = parts[1].strip() if len(parts) > 1 else ""
+        if addressed_to and (self._bot_username is None
+                             or addressed_to.lower() != self._bot_username.lower()):
+            logger.debug("TelegramCommandListener: ignoring %s addressed to @%s (this bot: %s)",
+                         command, addressed_to, f"@{self._bot_username}" if self._bot_username else "unknown")
+            return False
         chat = message.get("chat") or {}
         chat_id = str(chat.get("id", "")).strip()
         if chat_id != self._owner_chat_id:

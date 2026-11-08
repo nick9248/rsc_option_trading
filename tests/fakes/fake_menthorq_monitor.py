@@ -236,7 +236,8 @@ class FakeTelegram(TelegramAlertService):
     Records sent messages; ``accept`` decides whether a send succeeds.
     ``updates`` are served by get_updates (None when ``fail_updates``; a
     negative offset keeps and returns only the last updates, like Telegram);
-    set_my_commands calls are kept in ``registered_commands``.
+    set_my_commands calls are kept in ``registered_commands``; getMe answers
+    ``bot_username`` (None: getMe fails).
     """
 
     def __init__(self, accept: bool = True, chat_id: str = "111",
@@ -250,6 +251,8 @@ class FakeTelegram(TelegramAlertService):
         self.get_updates_calls: List[Dict[str, Any]] = []
         self.registered_commands: List[List[Tuple[str, str]]] = []
         self.accept_commands = True
+        self.bot_username: Optional[str] = "MenthorBot"   # None: getMe fails
+        self.get_bot_username_calls = 0
 
     def send(self, message: str, parse_mode: Optional[str] = None) -> bool:
         self.sent.append({"message": message, "parse_mode": parse_mode})
@@ -258,6 +261,10 @@ class FakeTelegram(TelegramAlertService):
     def set_my_commands(self, commands: Sequence[Tuple[str, str]]) -> bool:
         self.registered_commands.append(list(commands))
         return self.accept_commands
+
+    def get_bot_username(self) -> Optional[str]:
+        self.get_bot_username_calls += 1
+        return self.bot_username
 
     def get_updates(self, offset: Optional[int], timeout_seconds: int) -> Optional[List[Dict[str, Any]]]:
         self.get_updates_calls.append({"offset": offset, "timeout_seconds": timeout_seconds})

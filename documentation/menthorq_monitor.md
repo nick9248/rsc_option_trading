@@ -23,6 +23,11 @@ as `REJECTED` and gets no reply. A command older than 10 minutes is skipped. At 
 listener sends the command menu to Telegram once (`setMyCommands`). If that fails, it logs the
 failure and the commands still work.
 
+A command addressed to a bot (`/mute@SomeBot 24h`) runs only when that bot is this one (its
+username from `getMe`, asked at the first poll and cached; compared without case). A command for
+another bot is ignored (logged at DEBUG). If `getMe` fails, addressed commands are ignored, plain
+ones (`/mute 24h`) still run, and `getMe` is asked again at the next poll.
+
 At its first poll after each start the listener also skips everything Telegram still holds
 (`getUpdates` with offset -1, no wait: Telegram returns only the newest update and forgets the older
 ones; the listener continues after it and logs `skipped the pending updates up to update_id N`).
