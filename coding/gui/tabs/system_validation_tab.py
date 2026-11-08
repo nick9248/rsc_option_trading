@@ -88,8 +88,8 @@ class SystemValidationTab(QWidget):
 
         desc = QLabel(
             "Every module in one place: API, database (local freshness/gaps/"
-            "completeness + VPS sync/continuity), scanner activity, Telegram "
-            "bot config, forward-test harnesses, IV-percentile window "
+            "completeness + VPS sync/continuity), daemon service, Telegram "
+            "bot config, IV-percentile window "
             "freshness, and morning note synthesis."
         )
         desc.setWordWrap(True)

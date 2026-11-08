@@ -77,8 +77,7 @@ class GexDexCalculator:
       strike axis, NOT a re-priced dealer-gamma flip -- bugfix_spec.md Item
       2's live audit found it can (and did) sit on the OPPOSITE side of spot
       from the actual Zero Gamma Level. ``repository.save_onchain_snapshot``
-      persists this value into the LIVE ``hvl_level`` DB column read by the
-      straddle regime gate and IC/BF scanners, and ``synthesis.py``
+      persists this value into the LIVE ``hvl_level`` DB column, and ``synthesis.py``
       (morning-note rendering) also reads it directly -- that is why this
       attribute keeps its old, misleading name rather than being renamed.
     - Zero Gamma Level (the actual gamma flip, ``GexDexKeyLevels.

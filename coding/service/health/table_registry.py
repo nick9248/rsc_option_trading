@@ -51,12 +51,6 @@ TABLE_SPECS: Tuple[TableSpec, ...] = (
     # Stores the hour that has just closed, written by the cycle after it: at the top of an hour
     # the newest bucket is already 2 hours old.
     _hourly("flow_delta_hourly", "snapshot_hour", warn_hours=3.0),
-    _hourly("straddle_scan_history", "scan_time",
-            required=("strike", "cost_usd", "breakeven_down", "breakeven_up",
-                      "iv_percentile", "iv_percentile_n_obs", "iv_percentile_window_days")),
-    _hourly("defined_risk_scan_history", "scan_time"),
-    _hourly("forward_test_predictions", "snapshot_hour",
-            required=("signal_direction", "signal_score", "signal_confidence", "spot_price_at_prediction")),
     _hourly("futures_basis", "timestamp"),
     # MenthorQ-style level monitor (migration 031): one live row per hour plus one daily-close
     # row per day. Optional: written only with MENTHORQ_MONITOR_ENABLED=1 (VPS). A row whose levels

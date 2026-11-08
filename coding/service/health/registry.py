@@ -10,12 +10,8 @@ from coding.service.health.checkers.daemon_checker import DaemonServiceCheck
 from coding.service.health.checkers.database_local_checker import DatabaseLocalFreshnessCheck
 from coding.service.health.checkers.database_sync_gap_checker import DatabaseSyncGapCheck
 from coding.service.health.checkers.database_vps_gap_checker import DatabaseVpsGapCheck
-from coding.service.health.checkers.forward_test_checker import (
-    OnChainForwardTestCheck, StraddleForwardTestCheck,
-)
 from coding.service.health.checkers.iv_percentile_checker import IvPercentileWindowCheck
 from coding.service.health.checkers.morning_note_checker import MorningNoteSmokeTestCheck
-from coding.service.health.checkers.scanner_checker import ScannerActivityCheck
 from coding.service.health.checkers.telegram_checker import TelegramConfigCheck
 
 logger = logging.getLogger(__name__)
@@ -25,11 +21,8 @@ CHECKERS: List[HealthCheck] = [
     DatabaseLocalFreshnessCheck(),
     DatabaseVpsGapCheck(),
     DatabaseSyncGapCheck(),
-    ScannerActivityCheck(),
     DaemonServiceCheck(),
     TelegramConfigCheck(),
-    OnChainForwardTestCheck(),
-    StraddleForwardTestCheck(),
     IvPercentileWindowCheck(),
     MorningNoteSmokeTestCheck(),
 ]

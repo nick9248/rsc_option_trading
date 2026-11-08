@@ -1,7 +1,3 @@
 """
-Scanner services.
+Scanner services. Only the Telegram alert service remains (used by the MenthorQ monitor).
 """
-
-from .straddle_scan_service import StraddleScanService
-
-__all__ = ["StraddleScanService"]

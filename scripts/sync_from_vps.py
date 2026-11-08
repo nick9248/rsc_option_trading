@@ -136,16 +136,6 @@ SYNC_TABLES = [
         "conflict_target": "(snapshot_hour, currency, expiration) DO NOTHING",
     },
     {
-        # Rows are updated on the VPS after insertion (resolved_at and the outcome
-        # columns are filled in when the forecast horizon passes), so the whole
-        # table is re-read every sync and local rows that differ are updated.
-        "name": "forward_test_predictions",
-        "watermark_col": "created_at",
-        "watermark_type": "timestamp",
-        "conflict_target": None,
-        "upsert_key": ["currency", "snapshot_hour"],
-    },
-    {
         # The VPS rewrites open_interest/mark_iv/underlying_price in place when the
         # same (date, hour) is analysed again (ON CONFLICT ... DO UPDATE), and an
         # update does not change created_at, so a watermark would never see it.
@@ -248,21 +238,6 @@ SYNC_TABLES = [
         "conflict_target": None,
         "upsert_key": ["snapshot_hour", "currency", "expiration"],
         "lookback_hours": 6,  # recomputed only within its own hour
-    },
-    {
-        # Alert flags and expiry settlement results are written after insertion.
-        "name": "straddle_scan_history",
-        "watermark_col": "scan_time",
-        "watermark_type": "timestamp",
-        "conflict_target": None,
-        "upsert_key": ["currency", "expiration", "scan_time"],
-    },
-    {
-        "name": "defined_risk_scan_history",
-        "watermark_col": "scan_time",
-        "watermark_type": "timestamp",
-        "conflict_target": None,
-        "upsert_key": ["currency", "expiration", "structure_type", "scan_time"],
     },
 ]
 
