@@ -137,7 +137,7 @@ class MenthorqMonitorService:
                     settings.gamma_underlying, reason)
         replication = replicate_menthorq(
             inputs["chain_rows"], inputs["index_price"], as_of,
-            settings.expiry_universe, settings.gamma_underlying,
+            settings.expiry_universe, settings.gamma_underlying, currency=settings.currency,
         )
         return build_level_record(replication, inputs, settings.currency, mode, as_of, self.clock())
 

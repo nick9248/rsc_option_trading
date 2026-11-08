@@ -375,6 +375,29 @@ class TestPerExpiryLevels:
         assert "own net GEX" in november["level_rule"]
         assert replication["net_dex_all_expiries"]["levels"]["put_support"] is None
 
+    def test_currency_reaches_the_gex_calculator_and_the_unit_labels(self, monkeypatch):
+        # GexDexCalculator only stores the currency as a label (GexDexResult.currency);
+        # GEX stays USD, so the ETH numbers equal the BTC ones.
+        from coding.core.analytics import menthorq_replication_calculator as calculator
+        seen_currencies = []
+        real_calculator = calculator.GexDexCalculator
+
+        class RecordingCalculator(real_calculator):
+            def __init__(self, *arguments, **keywords):
+                seen_currencies.append(keywords["currency"])
+                super().__init__(*arguments, **keywords)
+        monkeypatch.setattr(calculator, "GexDexCalculator", RecordingCalculator)
+        rows = [_row("27NOV26", 100, "C", 10.0, 50.0), _row("25DEC26", 100, "P", 4.0, 50.0)]
+        ether = replicate_menthorq(rows, 100.0, ONE_YEAR_BEFORE, EXPIRY_UNIVERSE_ALL, currency="ETH")
+        assert seen_currencies == ["ETH"] * 3          # all expiries + one per expiry (2)
+        assert ether["settings"]["currency"] == "ETH"
+        assert ether["settings"]["gex_units"] == "USD per 1% move: gamma * OI(ETH) * S^2 * 0.01"
+        assert ether["settings"]["dex_units"] == "USD: delta at the expiry's forward * OI(ETH) * index price"
+        bitcoin = replicate_menthorq(rows, 100.0, ONE_YEAR_BEFORE, EXPIRY_UNIVERSE_ALL)   # default BTC
+        assert seen_currencies[3:] == ["BTC"] * 3 and bitcoin["settings"]["currency"] == "BTC"
+        assert ether["gex_by_expiration"] == bitcoin["gex_by_expiration"]
+        assert real_calculator([], 100.0, currency="ETH").calculate().currency == "ETH"
+
     def test_expiry_without_gamma_has_no_levels(self):
         rows = [_row("27NOV26", 100, "C", 10.0, None)]
         replication = replicate_menthorq(rows, 100.0, ONE_YEAR_BEFORE, EXPIRY_UNIVERSE_ALL)

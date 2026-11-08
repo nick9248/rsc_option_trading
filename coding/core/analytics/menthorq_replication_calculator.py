@@ -619,11 +619,14 @@ def compute_spot_sweep_profile(
 # --------------------------------------------------------------------------
 
 def compute_exposure(
-    instruments: Sequence[Dict[str, Any]], index_price: float, as_of: datetime
+    instruments: Sequence[Dict[str, Any]], index_price: float, as_of: datetime,
+    currency: str = "BTC",
 ) -> Dict[str, Any]:
     """
     Per-strike call/put/net GEX and every level candidate for one set of
     priced instruments, using ``GexDexCalculator`` for the GEX arithmetic.
+    ``currency`` is passed to ``GexDexCalculator``, which uses it only as a
+    label (GEX is USD whatever the currency); the numbers do not depend on it.
 
     Returns:
         {
@@ -650,7 +653,7 @@ def compute_exposure(
         strike as a level.
     """
     gex_result = GexDexCalculator(
-        list(instruments), index_price, currency="BTC", as_of=as_of
+        list(instruments), index_price, currency=currency, as_of=as_of
     ).calculate()
     has_exposure = any(item.get("gamma") is not None and item.get("open_interest") is not None
                        for item in instruments)
@@ -958,6 +961,7 @@ def replicate_menthorq(
     as_of: datetime,
     expiry_universe: str = EXPIRY_UNIVERSE_MONTHLY,
     gamma_underlying: str = GAMMA_UNDERLYING_INDEX,
+    currency: str = "BTC",
 ) -> Dict[str, Any]:
     """
     Compute everything both MenthorQ charts show, with candidate formulas.
@@ -969,6 +973,9 @@ def replicate_menthorq(
         as_of: Timezone-aware UTC evaluation instant.
         expiry_universe: Which expiries count (see ``select_expiry_universe``).
         gamma_underlying: "index" or "forward" (see module docstring).
+        currency: Underlying ("BTC", "ETH"): the unit labels
+            (``settings``) and ``GexDexCalculator``'s label; no number
+            depends on it.
 
     Returns:
         JSON-serialisable dict with "settings", "iv_times_open_interest"
@@ -997,7 +1004,7 @@ def replicate_menthorq(
     all_instruments = build_priced_instruments(
         chain_rows, expirations, index_price, as_of, gamma_underlying
     )
-    all_expiries_exposure = compute_exposure(all_instruments, index_price, as_of)
+    all_expiries_exposure = compute_exposure(all_instruments, index_price, as_of, currency)
     all_expiries_levels = all_expiries_exposure["levels"]
     all_expiries_levels["call_resistance"]["call_iv_oi_argmax"] = strike_of_maximum(
         {strike: values["call"] for strike, values in primary_iv_oi.items()},
@@ -1013,7 +1020,7 @@ def replicate_menthorq(
         expiry_instruments = [item for item in all_instruments
                               if item["expiration"] == expiration]
         gex_by_expiration[expiration] = compute_exposure(
-            expiry_instruments, index_price, as_of
+            expiry_instruments, index_price, as_of, currency
         )
 
     totals = {
@@ -1036,8 +1043,9 @@ def replicate_menthorq(
             "expiry_universe": expiry_universe,
             "gamma_underlying": gamma_underlying,
             "expirations": expirations,
-            "gex_units": "USD per 1% move: gamma * OI(BTC) * S^2 * 0.01",
-            "dex_units": "USD: delta at the expiry's forward * OI(BTC) * index price",
+            "currency": currency,
+            "gex_units": f"USD per 1% move: gamma * OI({currency}) * S^2 * 0.01",
+            "dex_units": f"USD: delta at the expiry's forward * OI({currency}) * index price",
         },
         "net_dex_all_expiries": {
             "delta_underlying": DELTA_UNDERLYING_FORWARD,

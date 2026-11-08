@@ -241,7 +241,8 @@ class MenthorqReplicationService:
         for universe in EXPIRY_UNIVERSES:
             for underlying in GAMMA_UNDERLYINGS:
                 replication = replicate_menthorq(
-                    inputs["chain_rows"], inputs["index_price"], as_of, universe, underlying
+                    inputs["chain_rows"], inputs["index_price"], as_of, universe, underlying,
+                    currency=currency,
                 )
                 not_computed = [expiration for expiration, exposure
                                 in replication["gex_by_expiration"].items()

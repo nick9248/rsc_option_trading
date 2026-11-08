@@ -133,10 +133,11 @@ class MenthorqLevelsBacktestService:
             current = {"as_of": as_of, "inputs": inputs, "summaries": {}}
             for universe in universes:
                 summary = summarize_replication(replicate_menthorq(
-                    inputs["chain_rows"], inputs["index_price"], as_of, universe, GAMMA_UNDERLYING_INDEX))
+                    inputs["chain_rows"], inputs["index_price"], as_of, universe, GAMMA_UNDERLYING_INDEX,
+                    currency=currency))
                 current["summaries"][universe] = summary
                 row.update(self._universe_columns(universe, summary, inputs["index_price"]))
-                row.update(self._attribution_columns(universe, summary, previous, as_of))
+                row.update(self._attribution_columns(universe, summary, previous, as_of, currency))
             rows.append(row)
             previous = current
             day += timedelta(days=1)
@@ -164,7 +165,8 @@ class MenthorqLevelsBacktestService:
 
     @staticmethod
     def _attribution_columns(
-        universe: str, summary: Dict[str, Any], previous: Optional[Dict[str, Any]], as_of: datetime
+        universe: str, summary: Dict[str, Any], previous: Optional[Dict[str, Any]], as_of: datetime,
+        currency: str,
     ) -> Dict[str, Any]:
         """Settled/added expiries vs the previous day and the counterfactual levels."""
         names = [f"{universe}_{level}_without_settled" for level in LEVEL_NAMES]
@@ -184,7 +186,7 @@ class MenthorqLevelsBacktestService:
             kept_rows = [row for row in previous_inputs["chain_rows"] if row["expiration"] not in settled]
             without = summarize_replication(replicate_menthorq(
                 kept_rows, previous_inputs["index_price"], previous["as_of"], universe,
-                GAMMA_UNDERLYING_INDEX))
+                GAMMA_UNDERLYING_INDEX, currency=currency))
         else:
             without = previous_summary
         gex_key = "total_net_gex_gamma_open_interest_spot"
