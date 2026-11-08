@@ -114,3 +114,20 @@ def test_predictive_tests_run_the_full_fixed_battery_and_find_a_planted_effect()
     regime_test = next(test for test in tests if test["test"] == "spot_below_hvl__next_1d_realized_volatility")
     assert regime_test["estimate"] == pytest.approx(40.0, abs=1.0)
     assert regime_test["confidence_interval_95"][0] > 30.0
+
+
+def test_settlement_share_is_reported_as_signed_and_absolute_median():
+    rows = make_rows()
+    for row, share in zip(rows, [None, -0.8, -0.6, 0.1]):
+        row["u_total_net_gex_settlement_share"] = share
+    summary = trend_summary(rows, "u")["total_net_gex_gamma_open_interest_spot"]
+    assert summary["settlement_day_count"] == 3
+    assert summary["settlement_share_of_change_signed_median"] == pytest.approx(-0.6)
+    assert summary["settlement_share_of_change_absolute_median"] == pytest.approx(0.6)
+    assert "settlement_share_of_change_median" not in summary      # the ambiguous name is gone
+
+
+def test_settlement_share_medians_without_settlement_days_are_none():
+    summary = trend_summary(make_rows(), "u")["total_net_gex_gamma_open_interest_spot"]
+    assert summary["settlement_share_of_change_signed_median"] is None
+    assert summary["settlement_share_of_change_absolute_median"] is None

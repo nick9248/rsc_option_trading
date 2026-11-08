@@ -40,6 +40,7 @@ from coding.core.analytics.menthorq_levels_backtest_calculator import (
     percent_of,
     regime_flips,
     sign_changes,
+    signed_median,
     state_entries,
 )
 
@@ -104,8 +105,9 @@ def trend_summary(rows: Sequence[Dict[str, Any]], universe: str) -> Dict[str, An
         "one_day": absolute_distribution(total_one_day),
         "seven_day": absolute_distribution(total_seven_day),
         "settlement_day_count": len(shares),
-        "settlement_share_of_change_median": (
-            absolute_distribution(shares)["median"] if shares else None),
+        # Signed: a negative share means removing the settled expiry moves net GEX the other way.
+        "settlement_share_of_change_signed_median": signed_median(shares),
+        "settlement_share_of_change_absolute_median": absolute_distribution(shares)["median"],
         "settlement_share_of_change_values": shares,
     }
     return summary

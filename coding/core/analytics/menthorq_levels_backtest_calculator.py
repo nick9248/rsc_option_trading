@@ -223,6 +223,19 @@ def absolute_distribution(values: Iterable[Optional[float]]) -> Dict[str, Option
     }
 
 
+def signed_median(values: Iterable[Optional[float]]) -> Optional[float]:
+    """
+    Median of the values WITH their sign (None ignored; linear
+    interpolation for an even count), e.g. [-0.8, -0.6, 0.1] -> -0.6.
+    None when there is no value. ``absolute_distribution`` gives the
+    median of |value| instead.
+    """
+    present = sorted(value for value in values if value is not None)
+    if not present:
+        return None
+    return interpolated_percentile(present, 50)
+
+
 def forward_price_outcomes(prices: Sequence[Optional[float]], step_hours: float) -> Dict[str, Optional[float]]:
     """
     Outcomes of the price path that STARTS at the evaluation instant

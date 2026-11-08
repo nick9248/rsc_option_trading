@@ -25,6 +25,7 @@ from coding.core.analytics.menthorq_levels_backtest_calculator import (
     regime_flips,
     settlement_share_of_change,
     sign_changes,
+    signed_median,
     state_entries,
     summarize_replication,
 )
@@ -170,3 +171,12 @@ def test_summarize_replication_converts_units_and_keeps_missing_panels_none():
     assert summary["expirations_not_computed"] == ["27NOV26"]
     assert summary["panels"]["first_expiration"] == {
         "expiration": None, "call_resistance": None, "put_support": None, "hvl": None}
+
+
+def test_signed_median_keeps_the_sign_unlike_the_absolute_median():
+    # sorted [-0.8, -0.6, 0.1] -> middle -0.6; |values| sorted [0.1, 0.6, 0.8] -> 0.6
+    assert signed_median([-0.8, -0.6, 0.1]) == pytest.approx(-0.6)
+    assert absolute_distribution([-0.8, -0.6, 0.1])["median"] == pytest.approx(0.6)
+    # even count: midpoint of -1.0 and 3.0 = 1.0; None ignored
+    assert signed_median([3.0, None, -1.0]) == pytest.approx(1.0)
+    assert signed_median([]) is None and signed_median([None]) is None
