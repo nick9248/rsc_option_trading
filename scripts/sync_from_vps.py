@@ -21,7 +21,7 @@ import subprocess
 from datetime import datetime, timedelta
 
 import psycopg2
-from psycopg2.extras import execute_values
+from psycopg2.extras import Json, execute_values
 from dotenv import load_dotenv
 from pathlib import Path
 
@@ -257,6 +257,39 @@ def get_columns(cur, table_name: str) -> list[str]:
     return [row[0] for row in cur.fetchall() if row[0] != "id"]
 
 
+def get_json_columns(cur, table_name: str) -> set[str]:
+    """Names of the table's json and jsonb columns.
+
+    psycopg2 reads those columns as Python dict/list, and writing them back needs
+    psycopg2.extras.Json (a dict cannot be adapted, a list would become an array).
+    Real array columns (text[] etc.) report data_type 'ARRAY' and are not included.
+    """
+    cur.execute("""
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = %s AND data_type IN ('json', 'jsonb')
+    """, (table_name,))
+    return {row[0] for row in cur.fetchall()}
+
+
+def wrap_json_values(rows: list, columns: list, json_columns: set[str]) -> list:
+    """Return the rows with each dict/list value of a json/jsonb column wrapped in Json.
+
+    None stays None (NULL); other columns are left untouched.
+    """
+    json_indexes = [index for index, column in enumerate(columns) if column in json_columns]
+    if not json_indexes:
+        return rows
+    wrapped_rows = []
+    for row in rows:
+        values = list(row)
+        for index in json_indexes:
+            if isinstance(values[index], (dict, list)):
+                values[index] = Json(values[index])
+        wrapped_rows.append(tuple(values))
+    return wrapped_rows
+
+
 def get_local_watermark(cur, table: dict):
     """Get the max watermark value on the local DB (None if table is empty)."""
     col = table["watermark_col"]
@@ -449,12 +482,14 @@ def sync_table(vps_conn, local_conn, table: dict) -> tuple[int, str]:
         else:
             local_max = get_local_watermark(local_cur, table)
             write_rows = insert_rows
+        # The local column types decide how values are written (json/jsonb need wrapping).
+        json_columns = get_json_columns(local_cur, table["name"])
 
         # Copy rows from VPS, committing batch by batch
         batch_number = 0
         for rows in iter_new_row_batches(vps_conn, table, columns, local_max, FETCH_BATCH_SIZE):
             fetched += len(rows)
-            inserted += write_rows(local_cur, table, columns, rows)
+            inserted += write_rows(local_cur, table, columns, wrap_json_values(rows, columns, json_columns))
             local_conn.commit()
             batch_number += 1
             if batch_number % LOG_EVERY_BATCHES == 0:

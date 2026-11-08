@@ -251,6 +251,92 @@ def test_lookback_window_refreshes_recent_rows_and_leaves_older_history_alone(so
     assert "6 rows checked" in message  # the 6 hours after (newest - 6 h)
 
 
+def _apply_migration_031(*connections):
+    """Create menthorq_level_snapshots (jsonb columns) exactly as migration 031 does."""
+    from pathlib import Path
+
+    migration = (Path(__file__).parents[2] / "migrations" / "031_add_menthorq_monitor_tables.sql").read_text(encoding="utf8")
+    for connection in connections:
+        with connection.cursor() as cursor:
+            cursor.execute(migration)
+        connection.commit()
+
+
+def _insert_level_snapshot(source, as_of_utc, computed_at, expirations, panel_levels):
+    with source.cursor() as cursor:
+        cursor.execute(
+            "INSERT INTO menthorq_level_snapshots (currency, mode, as_of_utc, computed_at, expiry_universe, "
+            "gamma_underlying, hvl, expirations, panel_levels, iv_source_counts, not_computed_reasons) "
+            "VALUES ('BTC', 'live', %s, %s, 'all', 'spot', 100000, %s::jsonb, %s::jsonb, %s::jsonb, %s::jsonb)",
+            (as_of_utc, computed_at, expirations, panel_levels, '{"mark_iv": 12}', "[]"),
+        )
+
+
+def _copied_level_json(copy):
+    with copy.cursor() as cursor:
+        cursor.execute(
+            "SELECT as_of_utc, expirations, panel_levels, iv_source_counts, not_computed_reasons "
+            "FROM menthorq_level_snapshots ORDER BY as_of_utc"
+        )
+        return cursor.fetchall()
+
+
+def test_jsonb_columns_of_menthorq_level_snapshots_are_copied_unchanged(source_and_copy):
+    """psycopg2 reads jsonb as Python list/dict; without wrapping, a dict cannot be
+    adapted and a list would be sent as a text[] array. Initial and incremental sync."""
+    from datetime import datetime, timezone
+
+    source, copy = source_and_copy
+    _apply_migration_031(source, copy)
+    table = next(entry for entry in sync_from_vps.SYNC_TABLES if entry["name"] == "menthorq_level_snapshots")
+    first = datetime(2026, 11, 1, 23, 59, tzinfo=timezone.utc)
+    second = datetime(2026, 11, 2, 23, 59, tzinfo=timezone.utc)
+    _insert_level_snapshot(source, first, first, '["2026-11-27", "2026-12-25"]', '{"0dte": {"hvl": 99000}, "all": null}')
+
+    assert sync_table(source, copy, table) == (1, "+1 rows")
+
+    _insert_level_snapshot(source, second, second, "[]", '{"all": {"call_resistance": 110000}}')
+    assert sync_table(source, copy, table) == (1, "+1 rows")  # incremental (watermark) path
+
+    assert _copied_level_json(copy) == [
+        (first, ["2026-11-27", "2026-12-25"], {"0dte": {"hvl": 99000}, "all": None}, {"mark_iv": 12}, []),
+        (second, [], {"all": {"call_resistance": 110000}}, {"mark_iv": 12}, []),
+    ]
+
+
+def test_upsert_path_copies_jsonb_and_keeps_real_array_columns(source_and_copy):
+    """An upsert table with a jsonb column and a text[] column: jsonb values
+    are wrapped, the array stays an array, None stays NULL, and a changed jsonb value is updated."""
+    source, copy = source_and_copy
+    for connection in (source, copy):
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "CREATE TABLE mixed (id serial PRIMARY KEY, name text, version bigint, payload jsonb, "
+                "tags text[], UNIQUE (name))"
+            )
+        connection.commit()
+    with source.cursor() as cursor:
+        cursor.execute(
+            "INSERT INTO mixed (name, version, payload, tags) VALUES "
+            "('a', 1, '{\"x\": [1, 2]}', ARRAY['p', 'q']), ('b', 2, NULL, NULL)"
+        )
+    table = {"name": "mixed", "watermark_col": "version", "watermark_type": "bigint",
+             "conflict_target": None, "upsert_key": ["name"]}
+
+    assert sync_table(source, copy, table) == (2, "2 new or updated (2 rows checked)")
+    with source.cursor() as cursor:
+        cursor.execute("UPDATE mixed SET payload = '{\"x\": [3]}' WHERE name = 'a'")
+    assert sync_table(source, copy, table) == (1, "1 new or updated (2 rows checked)")
+    assert sync_table(source, copy, table) == (0, "up to date (2 rows checked)")
+
+    with copy.cursor() as cursor:
+        cursor.execute("SELECT name, payload, tags, pg_typeof(tags)::text FROM mixed ORDER BY name")
+        assert cursor.fetchall() == [
+            ("a", {"x": [3]}, ["p", "q"], "text[]"),
+            ("b", None, None, "text[]"),
+        ]
+
+
 def test_migration_027_guard_ignores_the_hour_still_forming_but_blocks_real_gaps(source_and_copy):
     """Migration 027 drops volatility_index_history only if every COMPLETED hour of it
     is in dvol_history. The hour still forming is ignored."""
