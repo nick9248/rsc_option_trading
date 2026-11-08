@@ -360,15 +360,16 @@ class TestSyncTable:
 
 
 class TestTableMissingOnTheVps:
-    """A table configured for sync that the VPS does not have yet is skipped, loudly."""
+    """A table marked optional that the VPS does not have yet is skipped, loudly; any other
+    missing table is an error (a schema fault must not be hidden)."""
 
-    def test_it_is_skipped_and_nothing_is_read_or_written(self, caplog):
+    def test_an_optional_table_is_skipped_and_nothing_is_read_or_written(self, caplog):
         vps = FakeVpsConnection([])
         vps.columns = []   # information_schema knows no such table
         local = MagicMock()
 
         with patch.object(sync_from_vps, "execute_values") as write:
-            count, message = sync_table(vps, local, TABLE)
+            count, message = sync_table(vps, local, dict(TABLE, optional=True))
 
         assert count == 0
         assert message.startswith(sync_from_vps.SKIPPED_PREFIX)
@@ -378,6 +379,27 @@ class TestTableMissingOnTheVps:
         # only the column lookup reached the VPS; no data page was requested
         assert len(vps.queries) == 1 and "information_schema" in vps.queries[0][0]
         assert any("not found on the VPS" in record.message for record in caplog.records)
+
+    def test_a_table_not_marked_optional_is_an_error(self, caplog):
+        vps = FakeVpsConnection([])
+        vps.columns = []
+        local = MagicMock()
+
+        with patch.object(sync_from_vps, "execute_values") as write:
+            count, message = sync_table(vps, local, TABLE)   # no "optional" key
+
+        assert count == -1
+        assert message.startswith("ERROR: table not found on the VPS")
+        assert not message.startswith(sync_from_vps.SKIPPED_PREFIX)
+        write.assert_not_called()
+        assert any(record.levelname == "ERROR" and "schema fault" in record.message
+                   for record in caplog.records)
+
+    def test_optional_false_is_an_error_too(self):
+        vps = FakeVpsConnection([])
+        vps.columns = []
+        count, _ = sync_table(vps, MagicMock(), dict(TABLE, optional=False))
+        assert count == -1
 
     def test_an_existing_table_is_not_marked_skipped(self, monkeypatch):
         vps = FakeVpsConnection(_rows_with_ties([2]))

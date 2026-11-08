@@ -74,6 +74,9 @@ TUNNEL_WAIT_SEC = 3          # Seconds to wait for tunnel to establish
 #                  the newest local watermark instead of the whole table. Use it when
 #                  rows are only ever changed shortly after insertion. Timestamp
 #                  watermarks only.
+# optional       : optional, default False. True only for a table whose migration may
+#                  not be applied on the VPS yet: missing there, it is SKIPPED (logged).
+#                  Any other table missing on the VPS is an error (a schema fault).
 # ─────────────────────────────────────────────
 SYNC_TABLES = [
     {
@@ -203,6 +206,7 @@ SYNC_TABLES = [
         # condition is the repository's (has_levels_sql_condition in level_record.py;
         # a test keeps the two equal).
         "name": "menthorq_level_snapshots",
+        "optional": True,   # migration 031 is applied on the VPS only when the monitor is deployed
         "watermark_col": "computed_at",
         "watermark_type": "timestamp",
         "conflict_target": (
@@ -263,8 +267,8 @@ SYNC_TABLES = [
 ]
 
 
-# Status message prefix of a table that is configured for sync but does not exist on the VPS
-# (for example a new table whose migration has not been applied there yet).
+# Status message prefix of a table marked "optional" that does not exist on the VPS
+# (its migration has not been applied there yet).
 SKIPPED_PREFIX = "SKIPPED: "
 
 
@@ -470,8 +474,9 @@ def sync_table(vps_conn, local_conn, table: dict) -> tuple[int, str]:
     from the beginning of that range. The local database is a read-only mirror: rows
     deleted on the VPS are not removed locally.
 
-    A table that does not exist on the VPS is skipped, not failed: nothing is read or
-    written, and the returned message starts with SKIPPED_PREFIX so the caller can log it.
+    A table that does not exist on the VPS is skipped only when it is marked "optional"
+    in SYNC_TABLES: nothing is read or written, and the returned message starts with
+    SKIPPED_PREFIX so the caller can log it. Any other missing table is an error (-1).
     """
     vps_cur = None
     local_cur = None
@@ -485,7 +490,11 @@ def sync_table(vps_conn, local_conn, table: dict) -> tuple[int, str]:
         columns = get_columns(vps_cur, table["name"])
         vps_cur.close()  # nothing may stay open on the VPS connection while paging
         if not columns:
-            logger.warning(f"Table {table['name']} not found on the VPS: skipped "
+            if not table.get("optional", False):
+                logger.error(f"Table {table['name']} not found on the VPS (schema fault: it is "
+                             f"not marked optional)")
+                return -1, "ERROR: table not found on the VPS (not marked optional: check the VPS schema)"
+            logger.warning(f"Optional table {table['name']} not found on the VPS: skipped "
                            f"(apply its migration on the VPS to sync it)")
             return 0, (f"{SKIPPED_PREFIX}table not found on the VPS "
                        f"(apply its migration there to sync it)")
@@ -633,7 +642,7 @@ def run():
         logger.info(f"  Total rows synced: {total_rows:,}")
         logger.info(f"  Tables synced: {len(SYNC_TABLES) - len(skipped)}")
         if skipped:
-            logger.warning(f"  Tables SKIPPED (not on the VPS): {', '.join(skipped)}")
+            logger.warning(f"  Optional tables SKIPPED (not on the VPS): {', '.join(skipped)}")
 
         if errors:
             logger.error(f"\nERRORS ({len(errors)}):")

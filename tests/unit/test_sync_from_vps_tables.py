@@ -98,6 +98,16 @@ class TestLiveTablesAreSynced:
         assert len(names) == len(set(names))
 
 
+class TestOptionalTables:
+    def test_only_the_menthorq_tables_are_optional(self):
+        optional = {entry["name"] for entry in SYNC_TABLES if entry.get("optional")}
+        assert optional == {"menthorq_level_snapshots"}
+
+    def test_optional_is_a_boolean_when_present(self):
+        for entry in SYNC_TABLES:
+            assert isinstance(entry.get("optional", False), bool), entry["name"]
+
+
 class TestMenthorqLevelSnapshotsReplaceRule:
     def test_the_sync_replaces_a_row_with_the_repository_s_has_levels_rule(self):
         # The script cannot import coding/ when run as a file, so it spells the SQL out.
