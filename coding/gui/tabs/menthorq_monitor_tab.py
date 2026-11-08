@@ -4,7 +4,7 @@ produce, without sending or storing anything.
 
 A Run (in a worker thread, so the window never freezes):
   - generates the MenthorQ-style charts (``MenthorqReplicationService``) into
-    a dated folder under outputs/menthorq_replicate/gui/,
+    a dated folder under outputs/menthorq_replicate/gui/monitor/,
   - builds the Telegram brief and the urgent-alert check
     (``MenthorqBriefPreviewService``: records replayed from the snapshots,
     nothing stored, nothing sent),
@@ -80,7 +80,7 @@ from coding.service.on_chain.menthorq_replication_service import (
 logger = logging.getLogger(__name__)
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_OUTPUT_BASE_DIRECTORY = REPOSITORY_ROOT / "outputs" / "menthorq_replicate" / "gui"
+DEFAULT_OUTPUT_BASE_DIRECTORY = REPOSITORY_ROOT / "outputs" / "menthorq_replicate" / "gui" / "monitor"
 REFERENCE_DIRECTORY = REPOSITORY_ROOT / "outputs" / "menthorq_replicate"
 
 # The replication service's and the monitor package's messages go to this tab's log.

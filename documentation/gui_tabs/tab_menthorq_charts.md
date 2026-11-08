@@ -14,7 +14,7 @@ The settings are fixed: BTC, MenthorQ daily close of the last complete UTC day (
 
 ## What it saves
 
-`outputs/menthorq_replicate/gui/<YYYY-MM-DD>/` (gitignored), the service's "nested" layout:
+`outputs/menthorq_replicate/gui/charts/<YYYY-MM-DD>/` (gitignored), the service's "nested" layout:
 
 ```
 01_iv_times_open_interest/             IV*OI over all expiries (monthly and _all_listed_expiries)

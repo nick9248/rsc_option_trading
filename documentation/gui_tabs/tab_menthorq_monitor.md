@@ -10,7 +10,7 @@ Shows, on the PC, what the MenthorQ-style monitor in the collector would produce
 
 ## What a Run does
 
-1. **Charts**: `MenthorqReplicationService` (as in the Charts tab) writes the PNGs and the `*_replication.json` to a dated folder: `outputs/menthorq_replicate/gui/<YYYY-MM-DD>/` for a daily close, `outputs/menthorq_replicate/gui/live_<YYYYMMDDTHHMM>Z/` (run time, UTC) for Live.
+1. **Charts**: `MenthorqReplicationService` (as in the Charts tab) writes the PNGs and the `*_replication.json` to a dated folder: `outputs/menthorq_replicate/gui/monitor/<YYYY-MM-DD>/` for a daily close, `outputs/menthorq_replicate/gui/monitor/live_<YYYYMMDDTHHMM>Z/` (run time, UTC) for Live.
 2. **Brief**: `MenthorqBriefPreviewService` builds the brief with the same formatter Telegram gets (`format_brief`, HTML with `<b>`, `<i>`, `<pre>`). As in `scripts/menthorq_brief.py --dry-run`, the earlier records (previous run, 24 h, 7 d) and the previous date's daily close are recomputed from the snapshots at their own instants, not read from the monitor table. The brief instant is 23:59 UTC of the date (daily close) or now (Live). The brief record is always a live record (newest snapshot and its own open interest), as in the collector. The charts of a daily close use open interest from 00:00 UTC instead.
 3. **Alert check**: every urgent-alert rule with the collector's thresholds (`AlertThresholds` defaults: HVL 3%, walls 5% of spot vs 24 h; HVL crossing and net-GEX sign change vs the previous run), before the 12 h cooldown.
 

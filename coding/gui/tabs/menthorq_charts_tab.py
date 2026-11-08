@@ -41,7 +41,7 @@ from coding.service.on_chain.menthorq_replication_service import (
 logger = logging.getLogger(__name__)
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_OUTPUT_DIRECTORY = REPOSITORY_ROOT / "outputs" / "menthorq_replicate" / "gui"
+DEFAULT_OUTPUT_DIRECTORY = REPOSITORY_ROOT / "outputs" / "menthorq_replicate" / "gui" / "charts"
 
 CURRENCY = "BTC"
 DESCRIPTION = ("BTC, MenthorQ daily close of the last complete UTC day (spot and IV at 23:59 UTC, "
