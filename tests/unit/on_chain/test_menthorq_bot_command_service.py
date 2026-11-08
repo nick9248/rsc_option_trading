@@ -72,7 +72,8 @@ def _valid(message: str) -> str:
 def _service(records, settings=None):
     repository = FakeMonitorRepository(records)
     telegram = FakeTelegram()
-    settings = settings or MenthorqMonitorSettings()
+    # The bot commands run only in the production configuration (both Telegram switches on).
+    settings = settings or MenthorqMonitorSettings(alerts_enabled=True, commands_enabled=True)
     monitor = MenthorqMonitorService(repository=repository, settings=settings,
                                      input_loader=FakeInputLoader())
     clock = {"now": NOW}
@@ -240,7 +241,7 @@ def test_status_reply_reports_problems():
 
 def test_status_reply_with_stale_snapshot_unreadable_state_and_alerts_off():
     old_snapshot = make_record(snapshot_captured_at_utc=BASE_TIME - timedelta(minutes=50))
-    settings = replace(MenthorqMonitorSettings(), alerts_enabled=False)
+    settings = MenthorqMonitorSettings(alerts_enabled=False, commands_enabled=True)
     commands, repository, _, _ = _service([old_snapshot], settings=settings)
     message = _run(commands, "/status")
     assert "Health: PROBLEM: snapshot 50 min older than the latest run" in message

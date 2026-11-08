@@ -35,6 +35,15 @@ def test_defaults_when_nothing_is_set():
     assert settings.weekly_brief_day_name == "fri"
     assert settings.weekly_brief_time_utc == time(9, 0)
     assert settings.expiry_universe == "monthly"
+    # Computing and storing is on; both Telegram parts are opt-in (production .env sets them).
+    assert settings.monitor_enabled is True
+    assert settings.alerts_enabled is False and settings.commands_enabled is False
+
+
+def test_telegram_switches_are_read_from_the_environment():
+    settings = MenthorqMonitorSettings.from_environment(
+        {"MENTHORQ_ALERTS_ENABLED": "1", "MENTHORQ_COMMANDS_ENABLED": "1"})
+    assert settings.alerts_enabled is True and settings.commands_enabled is True
 
 
 def test_values_are_read_from_the_environment():
@@ -97,7 +106,8 @@ def test_alert_rules_are_read_from_the_environment():
 
 
 def test_built_job_uses_the_settings_thresholds_and_all_commands():
-    settings = MenthorqMonitorSettings.from_environment({"MENTHORQ_ALERT_SPOT_CROSSES_HVL": "1"})
+    settings = MenthorqMonitorSettings.from_environment({"MENTHORQ_ALERT_SPOT_CROSSES_HVL": "1",
+                                                         "MENTHORQ_COMMANDS_ENABLED": "1"})
     telegram = FakeTelegram()
     job = build_menthorq_monitor_job(repository=MagicMock(), settings=settings, telegram=telegram)
     assert job is not None and job.command_listener is not None
@@ -115,8 +125,44 @@ def test_disabled_monitor_builds_no_job():
                                       settings=MenthorqMonitorSettings(monitor_enabled=False)) is None
 
 
+ALL_ON = MenthorqMonitorSettings(alerts_enabled=True, commands_enabled=True)
+
+
+def test_default_settings_register_only_the_hourly_records_job(caplog):
+    job = build_menthorq_monitor_job(repository=MagicMock(), telegram=FakeTelegram(),
+                                     settings=MenthorqMonitorSettings.from_environment({}))
+    assert job is not None and job.command_listener is None
+    scheduler = BackgroundScheduler(timezone=timezone.utc)
+    with caplog.at_level("INFO"):
+        job.register(scheduler)
+    assert {scheduled.id for scheduled in scheduler.get_jobs()} == {HOURLY_JOB_ID}
+    off_lines = [record for record in caplog.records if "Telegram OFF" in record.getMessage()]
+    assert len(off_lines) == 1 and off_lines[0].levelname == "INFO"
+    assert "MENTHORQ_ALERTS_ENABLED=1" in off_lines[0].getMessage()
+    assert "MENTHORQ_COMMANDS_ENABLED=1" in off_lines[0].getMessage()
+
+
+def test_only_the_switched_off_part_is_named(caplog):
+    job = build_menthorq_monitor_job(repository=MagicMock(), telegram=FakeTelegram(),
+                                     settings=MenthorqMonitorSettings(alerts_enabled=True))
+    assert job is not None
+    with caplog.at_level("INFO"):
+        job.register(BackgroundScheduler(timezone=timezone.utc))
+    off_lines = [record.getMessage() for record in caplog.records if "Telegram OFF" in record.getMessage()]
+    assert len(off_lines) == 1
+    assert "MENTHORQ_COMMANDS_ENABLED=1" in off_lines[0] and "MENTHORQ_ALERTS_ENABLED" not in off_lines[0]
+
+
+def test_both_switches_on_log_no_off_line(caplog):
+    job = build_menthorq_monitor_job(repository=MagicMock(), settings=ALL_ON, telegram=FakeTelegram())
+    assert job is not None
+    with caplog.at_level("INFO"):
+        job.register(BackgroundScheduler(timezone=timezone.utc))
+    assert "Telegram OFF" not in caplog.text
+
+
 def test_jobs_registered_with_utc_cron_triggers():
-    job = build_menthorq_monitor_job(repository=MagicMock(), settings=MenthorqMonitorSettings(),
+    job = build_menthorq_monitor_job(repository=MagicMock(), settings=ALL_ON,
                                      telegram=FakeTelegram())
     assert job is not None
     scheduler = BackgroundScheduler(timezone=timezone.utc)
@@ -144,7 +190,7 @@ def test_hourly_steps_are_isolated():
     monitor = MagicMock()
     monitor.run_live.side_effect = RuntimeError("database down")
     delivery = MagicMock()
-    job = MenthorqMonitorJob(MenthorqMonitorSettings(), monitor, delivery, clock=lambda: BASE_TIME)
+    job = MenthorqMonitorJob(ALL_ON, monitor, delivery, clock=lambda: BASE_TIME)
     job.run_hourly()                                   # does not raise
     monitor.run_daily_close_if_missing.assert_called_once_with(BASE_TIME)
     delivery.send_urgent_alerts.assert_not_called()    # no live record -> no alert evaluation

@@ -1,7 +1,9 @@
 """
 The MenthorQ-style monitor's jobs inside the collector (unified_scheduler).
 
-Registered on the collector's APScheduler (all times UTC):
+Registered on the collector's APScheduler (all times UTC; the weekly brief
+only with MENTHORQ_ALERTS_ENABLED=1, the polling only with
+MENTHORQ_COMMANDS_ENABLED=1, both off by default):
   - ``menthorq_monitor_hourly``  every hour at MENTHORQ_LIVE_RUN_MINUTE: store
     the live record, store yesterday's daily-close record if missing, send
     urgent alerts, catch up a missed weekly brief.
@@ -115,20 +117,32 @@ class MenthorqMonitorJob:
             replace_existing=True, max_instances=1, coalesce=True,
             misfire_grace_time=MISFIRE_GRACE_SECONDS,
         )
-        scheduler.add_job(
-            func=self.run_weekly_brief,
-            trigger=CronTrigger(day_of_week=settings.weekly_brief_day_name,
-                                hour=settings.weekly_brief_time_utc.hour,
-                                minute=settings.weekly_brief_time_utc.minute,
-                                timezone=timezone.utc),
-            id=WEEKLY_BRIEF_JOB_ID, name="MenthorQ-style weekly brief",
-            replace_existing=True, max_instances=1, coalesce=True,
-            misfire_grace_time=MISFIRE_GRACE_SECONDS,
-        )
-        logger.info("[OK] MenthorQ monitor scheduled: hourly at :%02d UTC, weekly brief %s %s UTC "
-                    "(alerts %s)", settings.live_run_minute, settings.weekly_brief_day_name,
-                    settings.weekly_brief_time_utc.strftime("%H:%M"),
-                    "on" if settings.alerts_enabled else "off")
+        if settings.alerts_enabled:
+            scheduler.add_job(
+                func=self.run_weekly_brief,
+                trigger=CronTrigger(day_of_week=settings.weekly_brief_day_name,
+                                    hour=settings.weekly_brief_time_utc.hour,
+                                    minute=settings.weekly_brief_time_utc.minute,
+                                    timezone=timezone.utc),
+                id=WEEKLY_BRIEF_JOB_ID, name="MenthorQ-style weekly brief",
+                replace_existing=True, max_instances=1, coalesce=True,
+                misfire_grace_time=MISFIRE_GRACE_SECONDS,
+            )
+            logger.info("[OK] MenthorQ monitor scheduled: hourly at :%02d UTC, weekly brief %s %s UTC",
+                        settings.live_run_minute, settings.weekly_brief_day_name,
+                        settings.weekly_brief_time_utc.strftime("%H:%M"))
+        else:
+            logger.info("[OK] MenthorQ monitor scheduled: hourly at :%02d UTC (records only)",
+                        settings.live_run_minute)
+        switched_off = []
+        if not settings.alerts_enabled:
+            switched_off.append("urgent alerts and weekly brief (set MENTHORQ_ALERTS_ENABLED=1)")
+        if self.command_listener is None:
+            switched_off.append("bot commands (set MENTHORQ_COMMANDS_ENABLED=1)")
+        if switched_off:
+            logger.info("MenthorQ monitor: Telegram OFF for %s; records are still computed and "
+                        "stored. Only the production collector should enable these.",
+                        " and ".join(switched_off))
         if self.command_listener is not None:
             scheduler.add_job(
                 func=self.poll_commands,

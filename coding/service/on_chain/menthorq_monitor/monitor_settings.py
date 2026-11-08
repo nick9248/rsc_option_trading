@@ -2,9 +2,16 @@
 Settings of the MenthorQ-style monitor, read from the environment (.env).
 
 Variables (all optional; the defaults are in ``MenthorqMonitorSettings``):
-  MENTHORQ_MONITOR_ENABLED        1/0  hourly computation and storage
-  MENTHORQ_ALERTS_ENABLED         1/0  urgent alerts and the weekly brief (Telegram)
-  MENTHORQ_COMMANDS_ENABLED       1/0  the bot commands (Telegram getUpdates polling)
+  MENTHORQ_MONITOR_ENABLED        1/0  hourly computation and storage (default 1)
+  MENTHORQ_ALERTS_ENABLED         1/0  urgent alerts and the weekly brief (Telegram),
+                                       default 0
+  MENTHORQ_COMMANDS_ENABLED       1/0  the bot commands (Telegram getUpdates polling),
+                                       default 0
+
+The two Telegram switches are opt-in: only the production collector (the VPS
+.env sets both to 1) may talk to the bot. A local debug run of the collector
+with the defaults never polls getUpdates or sends a message, so it cannot
+steal the production bot's updates or send duplicate alerts.
   MENTHORQ_EXPIRY_UNIVERSE        all | monthly | quarterly_plus_front_month
   MENTHORQ_LIVE_RUN_MINUTE        0-59, minute past each hour of the live run
   MENTHORQ_WEEKLY_BRIEF_DAY       mon | tue | wed | thu | fri | sat | sun
@@ -60,8 +67,8 @@ class MenthorqMonitorSettings:
     """
 
     monitor_enabled: bool = True
-    alerts_enabled: bool = True
-    commands_enabled: bool = True
+    alerts_enabled: bool = False           # opt-in, see the module docstring
+    commands_enabled: bool = False         # opt-in, see the module docstring
     currency: str = "BTC"
     expiry_universe: str = EXPIRY_UNIVERSE_MONTHLY
     gamma_underlying: str = GAMMA_UNDERLYING_INDEX

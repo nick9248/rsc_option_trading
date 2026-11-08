@@ -11,9 +11,9 @@ It has no process of its own. Its jobs, all in UTC:
 
 | Job id | When | What |
 |---|---|---|
-| `menthorq_monitor_hourly` | every hour at `MENTHORQ_LIVE_RUN_MINUTE` | stores the live record, stores yesterday's daily-close record if it is missing, sends urgent alerts, catches up a missed weekly brief |
-| `menthorq_weekly_brief` | `MENTHORQ_WEEKLY_BRIEF_DAY` at `MENTHORQ_WEEKLY_BRIEF_TIME_UTC` | sends the weekly brief once per week |
-| `menthorq_command_poll` | every `MENTHORQ_COMMAND_POLL_SECONDS` | polls Telegram for bot commands (getUpdates) |
+| `menthorq_monitor_hourly` | every hour at `MENTHORQ_LIVE_RUN_MINUTE` | stores the live record, stores yesterday's daily-close record if it is missing, sends urgent alerts and catches up a missed weekly brief (both only with `MENTHORQ_ALERTS_ENABLED=1`) |
+| `menthorq_weekly_brief` | `MENTHORQ_WEEKLY_BRIEF_DAY` at `MENTHORQ_WEEKLY_BRIEF_TIME_UTC` | sends the weekly brief once per week; registered only with `MENTHORQ_ALERTS_ENABLED=1` |
+| `menthorq_command_poll` | every `MENTHORQ_COMMAND_POLL_SECONDS` | polls Telegram for bot commands (getUpdates); registered only with `MENTHORQ_COMMANDS_ENABLED=1` |
 
 ## Bot commands
 
@@ -87,8 +87,8 @@ positive total net GEX.
 | Variable | Default | Meaning |
 |---|---|---|
 | `MENTHORQ_MONITOR_ENABLED` | 1 | hourly computation and storage |
-| `MENTHORQ_ALERTS_ENABLED` | 1 | urgent alerts and the weekly brief |
-| `MENTHORQ_COMMANDS_ENABLED` | 1 | bot commands (getUpdates polling) |
+| `MENTHORQ_ALERTS_ENABLED` | 0 | urgent alerts and the weekly brief (opt-in, VPS only) |
+| `MENTHORQ_COMMANDS_ENABLED` | 0 | bot commands (getUpdates polling; opt-in, VPS only) |
 | `MENTHORQ_EXPIRY_UNIVERSE` | monthly | all, monthly, quarterly_plus_front_month |
 | `MENTHORQ_LIVE_RUN_MINUTE` | 10 | minute past each hour of the live run |
 | `MENTHORQ_WEEKLY_BRIEF_DAY` | fri | mon to sun |
@@ -96,6 +96,12 @@ positive total net GEX.
 | `MENTHORQ_COMMAND_POLL_SECONDS` | 20 | at least 5 |
 | `MENTHORQ_STALE_SNAPSHOT_MINUTES` | 120 | at least 10; stale-data limit, see below |
 | `MENTHORQ_ALERT_*` | see the rules table | alert rules |
+
+The two Telegram switches are off by default so that a local debug run of the collector never
+becomes a second consumer of the production bot (409 conflicts, stolen updates, duplicate alerts).
+With either off, the collector logs one INFO line at start-up (`MenthorQ monitor: Telegram OFF
+for ...`) naming the variable to set. The records are computed and stored either way. The dry-run
+CLI and the GUI preview never send anything.
 
 An invalid value of any of these variables (for example `MENTHORQ_STALE_SNAPSHOT_MINUTES=9`) stops
 only the MenthorQ monitor from starting; the collector logs the error and runs on.
@@ -133,10 +139,13 @@ Migration 032 depends on 031 being applied first. Both are idempotent (`IF NOT E
 2. On the VPS, as a separate step and only when asked: pull the code, then run
    `python scripts/run_migration.py migrations/031_add_menthorq_monitor_tables.sql` (if not yet
    applied) and `python scripts/run_migration.py migrations/032_add_menthorq_monitor_state.sql`.
-3. Set any `MENTHORQ_ALERT_*` overrides in the VPS `.env`. Without them the defaults above apply.
+3. In the VPS `.env`, set `MENTHORQ_ALERTS_ENABLED=1` and `MENTHORQ_COMMANDS_ENABLED=1`. Both
+   default to 0: without them the VPS sends no alert, no weekly brief and answers no command.
+   Set any `MENTHORQ_ALERT_*` overrides there too. Without them the defaults above apply.
 4. Restart the collector: `sudo systemctl restart option-trading`. The log should show
-   `MenthorQ monitor scheduled`, `MenthorQ bot command polling every 20 s` and, at the first poll,
-   `command menu registered (6 commands)`.
+   `MenthorQ monitor scheduled: hourly at :10 UTC, weekly brief fri 09:00 UTC`,
+   `MenthorQ bot command polling every 20 s` and, at the first poll,
+   `command menu registered (6 commands)`. It must NOT show `Telegram OFF`.
 5. In Telegram, send `/help` and then `/status`.
 
 `menthorq_monitor_state` is per-deployment alert state and is not in `scripts/sync_from_vps.py`.
