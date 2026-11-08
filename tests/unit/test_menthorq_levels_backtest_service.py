@@ -69,11 +69,36 @@ def rows():
 
 def test_missing_and_stale_days_are_not_computed_with_a_reason(rows):
     assert [row["date"] for row in rows] == ["2026-10-27", "2026-10-28", "2026-10-29", "2026-10-30"]
-    assert rows[0]["status"] == "not_computed" and "day incomplete" in rows[0]["reason"]
-    # 28 Oct: the open-interest snapshot at/before 00:00 UTC is 1 day 0:10 old
-    assert rows[1]["status"] == "not_computed" and "open-interest snapshot" in rows[1]["reason"]
+    # 27 Oct: the newest snapshot at/before 23:59 is 26 Oct 23:50 = 24 h 9 min = 1449 min old
+    # (the monitor's wording: one shared stale_input_reasons)
+    assert rows[0]["status"] == "not_computed"
+    assert rows[0]["reason"] == "snapshot 1449 min older than 23:59 UTC (limit 60)"
+    # 28 Oct: the open-interest snapshot at/before 00:00 UTC is 26 Oct 23:50 = 1 day 0:10 = 1450 min old
+    assert rows[1]["status"] == "not_computed"
+    assert rows[1]["reason"] == "open-interest snapshot 1450 min older than 00:00 UTC (limit 60)"
     assert rows[1]["index_price"] is None
     assert rows[2]["status"] == "computed"
+
+
+@pytest.mark.parametrize("ages", [
+    {"snapshot_age": timedelta(minutes=61)},
+    {"open_interest_age": timedelta(minutes=75), "index_age": timedelta(minutes=90, seconds=30)},
+    {"snapshot_age": timedelta(minutes=60)},                     # exactly the limit: computed
+])
+def test_the_backtest_refuses_the_same_days_as_the_monitor_with_the_same_reasons(ages):
+    from tests.fakes.fake_menthorq_monitor import FakeInputLoader
+    from coding.service.on_chain.menthorq_monitor.menthorq_monitor_service import MenthorqMonitorService
+    loader = FakeInputLoader(**ages)
+    day = date(2026, 11, 6)
+    monitor_record = MenthorqMonitorService(repository=cast(DatabaseRepository, object()),
+                                            input_loader=loader).compute_daily_close_record(day)
+    backtest = MenthorqLevelsBacktestService(cast(DatabaseRepository, object()))
+    backtest.replication_service.load_inputs = loader.load_inputs   # same fake inputs
+    backtest_inputs = backtest._load_day_inputs("BTC", datetime(2026, 11, 6, 23, 59, tzinfo=timezone.utc))
+    if monitor_record.has_levels:
+        assert "reason" not in backtest_inputs
+    else:
+        assert backtest_inputs["reason"] == "; ".join(monitor_record.not_computed_reasons)
 
 
 def test_level_change_from_a_settled_expiry_is_attributed_to_it(rows):

@@ -34,9 +34,12 @@ from coding.core.analytics.menthorq_levels_backtest_calculator import (
     settlement_share_of_change,
     summarize_replication,
 )
+from coding.core.analytics.menthorq_monitor.input_age import (
+    DAILY_CLOSE_MAXIMUM_INPUT_AGE,
+    stale_input_reasons,
+)
 from coding.core.analytics.menthorq_replication_calculator import (
     DAILY_CLOSE_DATA_TIME_UTC,
-    DAILY_CLOSE_MAXIMUM_INPUT_AGE,
     EXPIRY_UNIVERSE_ALL,
     EXPIRY_UNIVERSE_MONTHLY,
     GAMMA_UNDERLYING_INDEX,
@@ -76,22 +79,16 @@ class MenthorqLevelsBacktestService:
     # ------------------------------------------------------------------
 
     def _load_day_inputs(self, currency: str, as_of: datetime) -> Dict[str, Any]:
-        """Inputs of one day, or {"reason": ...} when they are missing or stale."""
+        """
+        Inputs of one day, or {"reason": ...} when they are missing or stale
+        (``stale_input_reasons``, the monitor's daily-close check).
+        """
         open_interest_as_of = start_of_utc_day(as_of)
         try:
             inputs = self.replication_service.load_inputs(currency, as_of, open_interest_as_of)
         except LookupError as error:
             return {"reason": str(error)}
-        reasons = []
-        snapshot_age = as_of - inputs["snapshot_captured_at_utc"]
-        if snapshot_age > DAILY_CLOSE_MAXIMUM_INPUT_AGE:
-            reasons.append(f"newest snapshot is {snapshot_age} before as_of (day incomplete in the DB)")
-        open_interest_age = open_interest_as_of - inputs["open_interest_captured_at_utc"]
-        if open_interest_age > DAILY_CLOSE_MAXIMUM_INPUT_AGE:
-            reasons.append(f"open-interest snapshot is {open_interest_age} before 00:00 UTC")
-        index_age = as_of - inputs["index_price_time_utc"]
-        if index_age > DAILY_CLOSE_MAXIMUM_INPUT_AGE:
-            reasons.append(f"index price is from a trade {index_age} before as_of")
+        reasons = stale_input_reasons(inputs, as_of, open_interest_as_of, DAILY_CLOSE_MAXIMUM_INPUT_AGE)
         if reasons:
             return {"reason": "; ".join(reasons)}
         return inputs

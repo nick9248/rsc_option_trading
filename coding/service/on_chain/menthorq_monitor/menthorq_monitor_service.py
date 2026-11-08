@@ -14,7 +14,8 @@ Two modes (column ``mode``):
     any missing record of the last 7 ended days, and retries a
     not-computed one when a newer snapshot has arrived); not
     computed from an input more than 60 min older than its instant
-    (``DAILY_CLOSE_MAXIMUM_INPUT_AGE``, shared with the backtest).
+    (``stale_input_reasons`` and ``DAILY_CLOSE_MAXIMUM_INPUT_AGE`` in
+    core/analytics/menthorq_monitor/input_age.py, shared with the backtest).
 
 Reuses ``MenthorqInputLoader`` and ``replicate_menthorq`` (no chart import).
 """
@@ -23,6 +24,10 @@ import logging
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional
 
+from coding.core.analytics.menthorq_monitor.input_age import (
+    DAILY_CLOSE_MAXIMUM_INPUT_AGE,
+    stale_input_reasons,
+)
 from coding.core.analytics.menthorq_monitor.level_record import (
     MODE_DAILY_CLOSE,
     MODE_LIVE,
@@ -40,7 +45,6 @@ from coding.core.analytics.menthorq_monitor.level_trend_calculator import (
 )
 from coding.core.analytics.menthorq_replication_calculator import (
     DAILY_CLOSE_DATA_TIME_UTC,
-    DAILY_CLOSE_MAXIMUM_INPUT_AGE,
     replicate_menthorq,
     start_of_utc_day,
 )
@@ -69,31 +73,6 @@ COMPARISON_OFFSET = {
 def daily_close_as_of(utc_date: date) -> datetime:
     """23:59 UTC of ``utc_date``: the MenthorQ-style data instant."""
     return datetime.combine(utc_date, DAILY_CLOSE_DATA_TIME_UTC, tzinfo=timezone.utc)
-
-
-def stale_input_reasons(
-    inputs: Dict[str, Any], as_of: datetime, open_interest_as_of: datetime,
-    maximum_age: timedelta,
-) -> List[str]:
-    """
-    One reason per loaded input older than ``maximum_age`` before its own
-    instant: the snapshot and the index trade before ``as_of``, the
-    open-interest snapshot before ``open_interest_as_of``. Ages are whole
-    minutes, rounded down; exactly ``maximum_age`` is not too old.
-    """
-    limit_minutes = int(maximum_age.total_seconds() // 60)
-    checks = (
-        ("snapshot", inputs["snapshot_captured_at_utc"], as_of),
-        ("open-interest snapshot", inputs["open_interest_captured_at_utc"], open_interest_as_of),
-        ("index trade", inputs["index_price_time_utc"], as_of),
-    )
-    reasons = []
-    for name, captured_at, instant in checks:
-        age = instant - captured_at
-        if age > maximum_age:
-            reasons.append(f"{name} {int(age.total_seconds() // 60)} min older than "
-                           f"{instant.astimezone(timezone.utc):%H:%M} UTC (limit {limit_minutes})")
-    return reasons
 
 
 def live_as_of(now: datetime) -> datetime:

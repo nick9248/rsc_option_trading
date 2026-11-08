@@ -315,11 +315,14 @@ class TestDailyCloseInputAge:
         record = _service(loader=FakeInputLoader(snapshot_age=timedelta(hours=3))).compute_live_record(AS_OF)
         assert record.spot == SPOT and record.not_computed_reasons[0].startswith("panel")
 
-    def test_the_backtest_uses_the_same_constant(self):
-        from coding.core.analytics.menthorq_replication_calculator import DAILY_CLOSE_MAXIMUM_INPUT_AGE
+    def test_the_backtest_uses_the_same_constant_and_check(self):
+        from coding.core.analytics.menthorq_monitor import input_age
         from coding.service.on_chain import menthorq_levels_backtest_service
-        assert menthorq_levels_backtest_service.DAILY_CLOSE_MAXIMUM_INPUT_AGE is DAILY_CLOSE_MAXIMUM_INPUT_AGE
-        assert DAILY_CLOSE_MAXIMUM_INPUT_AGE == timedelta(minutes=60)
+        from coding.service.on_chain.menthorq_monitor import menthorq_monitor_service
+        for module in (menthorq_levels_backtest_service, menthorq_monitor_service):
+            assert module.DAILY_CLOSE_MAXIMUM_INPUT_AGE is input_age.DAILY_CLOSE_MAXIMUM_INPUT_AGE
+            assert module.stale_input_reasons is input_age.stale_input_reasons
+        assert input_age.DAILY_CLOSE_MAXIMUM_INPUT_AGE == timedelta(minutes=60)
 
 
 def test_storing_the_same_run_twice_keeps_one_row():
