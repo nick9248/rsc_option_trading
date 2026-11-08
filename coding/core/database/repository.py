@@ -1229,15 +1229,26 @@ class DatabaseRepository:
         level_snapshot_id: Optional[int] = None,
     ) -> None:
         """Record one delivered monitor message (alert cooldown and weekly-brief bookkeeping)."""
+        self.save_menthorq_alert_deliveries(currency, [alert_key], delivered_at, message, level_snapshot_id)
+
+    def save_menthorq_alert_deliveries(
+        self, currency: str, alert_keys: List[str], delivered_at: datetime, message: str,
+        level_snapshot_id: Optional[int] = None,
+    ) -> None:
+        """
+        Record one delivered message under several alert keys in ONE
+        transaction: either every key is saved or, on an error, none.
+        """
         with self._db_cursor() as cursor:
-            cursor.execute(
-                """
-                INSERT INTO menthorq_alert_deliveries
-                    (currency, alert_key, delivered_at, level_snapshot_id, message)
-                VALUES (%s, %s, %s, %s, %s)
-                """,
-                (currency, alert_key, delivered_at, level_snapshot_id, message),
-            )
+            for alert_key in alert_keys:
+                cursor.execute(
+                    """
+                    INSERT INTO menthorq_alert_deliveries
+                        (currency, alert_key, delivered_at, level_snapshot_id, message)
+                    VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (currency, alert_key, delivered_at, level_snapshot_id, message),
+                )
 
     def get_last_menthorq_alert_delivery(self, currency: str, alert_key: str) -> Optional[datetime]:
         """When a message with ``alert_key`` was last delivered (UTC-aware), or None."""

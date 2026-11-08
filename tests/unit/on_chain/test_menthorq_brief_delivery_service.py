@@ -284,3 +284,25 @@ def test_weekly_brief_from_two_threads_at_once_is_sent_exactly_once():
     assert sorted(results) == [False, True]
     assert len(telegram.sent) == 1
     assert [d["alert_key"] for d in repository.deliveries] == [DELIVERY_KEY_WEEKLY_BRIEF]
+
+
+def test_urgent_keys_are_recorded_together_or_not_at_all():
+    """Two alerts in one message: HVL 89,000 -> 95,000 = 6.38% of spot, and the net GEX
+    sign flip (+5M previous -> -1M latest)."""
+    previous, day_ago, latest = _crossing_history()
+    previous = replace(previous, total_net_gex=5e6)
+    latest = replace(latest, total_net_gex=-1e6)
+    service, repository, telegram, _ = _delivery([previous, day_ago, latest])
+    repository.fail_deliveries = True
+
+    try:
+        service.send_urgent_alerts(latest, FRIDAY_0910)
+        raised = False
+    except RuntimeError:
+        raised = True
+    assert raised and len(telegram.sent) == 1 and repository.deliveries == []   # none partially recorded
+
+    repository.fail_deliveries = False
+    assert service.send_urgent_alerts(latest, FRIDAY_0910) == ["hvl_move_24h", "net_gex_turned_negative"]
+    assert len({d["delivered_at"] for d in repository.deliveries}) == 1
+    assert [d["alert_key"] for d in repository.deliveries] == ["hvl_move_24h", "net_gex_turned_negative"]

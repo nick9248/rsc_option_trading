@@ -61,6 +61,7 @@ class FakeMonitorRepository(DatabaseRepository):
         self.deliveries: List[Dict[str, Any]] = []
         self.states: Dict[str, MenthorqMonitorState] = {}
         self.fail_state = False   # True: the state methods raise (table missing)
+        self.fail_deliveries = False   # True: save_menthorq_alert_deliveries raises, saving nothing
 
     def save_menthorq_level_snapshot(self, record: MenthorqLevelRecord) -> Optional[int]:
         if self.has_menthorq_level_snapshot(record.currency, record.mode, record.expiry_universe,
@@ -93,6 +94,13 @@ class FakeMonitorRepository(DatabaseRepository):
         self.deliveries.append({"currency": currency, "alert_key": alert_key,
                                 "delivered_at": delivered_at, "message": message,
                                 "level_snapshot_id": level_snapshot_id})
+
+    def save_menthorq_alert_deliveries(self, currency: str, alert_keys: List[str], delivered_at: datetime,
+                                       message: str, level_snapshot_id: Optional[int] = None) -> None:
+        if self.fail_deliveries:
+            raise RuntimeError("database down")   # like the real one: nothing is saved
+        for alert_key in alert_keys:
+            self.save_menthorq_alert_delivery(currency, alert_key, delivered_at, message, level_snapshot_id)
 
     def get_last_menthorq_alert_delivery(self, currency: str, alert_key: str) -> Optional[datetime]:
         times = [d["delivered_at"] for d in self.deliveries

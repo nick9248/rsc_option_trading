@@ -114,3 +114,22 @@ def test_alert_deliveries_last_time(repo):
     repo.save_menthorq_alert_delivery("ETH", "hvl_move_24h", BASE_TIME + timedelta(hours=1), "c")
     last = repo.get_last_menthorq_alert_delivery("BTC", "hvl_move_24h")
     assert last == BASE_TIME and last.tzinfo == timezone.utc
+
+
+def _delivery_keys(repo):
+    with repo._db_cursor() as cursor:
+        cursor.execute("SELECT alert_key FROM menthorq_alert_deliveries ORDER BY id")
+        return [row[0] for row in cursor.fetchall()]
+
+
+def test_several_delivery_keys_are_saved_in_one_transaction(repo):
+    repo.save_menthorq_alert_deliveries("BTC", ["hvl_move_24h", "net_gex_turned_negative"], BASE_TIME, "m", 3)
+    assert _delivery_keys(repo) == ["hvl_move_24h", "net_gex_turned_negative"]
+    assert repo.get_last_menthorq_alert_delivery("BTC", "net_gex_turned_negative") == BASE_TIME
+
+
+def test_a_failing_key_rolls_back_every_key_of_the_message(repo):
+    too_long = "x" * 81                       # alert_key is varchar(80): the second INSERT fails
+    with pytest.raises(psycopg2.errors.StringDataRightTruncation):
+        repo.save_menthorq_alert_deliveries("BTC", ["hvl_move_24h", too_long], BASE_TIME, "m")
+    assert _delivery_keys(repo) == []         # the first key was rolled back too

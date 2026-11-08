@@ -238,8 +238,9 @@ class MenthorqBriefDeliveryService:
     ) -> List[str]:
         """
         Send one urgent ``message`` for ``keys`` unless muted (then the keys
-        are recorded as held back), and record each key as delivered when
-        Telegram accepted it.
+        are recorded as held back), and record every key as delivered, in
+        one transaction, when Telegram accepted it. When that write fails
+        it raises (the job logs it) and no key is recorded.
 
         Returns:
             ``keys`` when delivered, else empty.
@@ -254,10 +255,9 @@ class MenthorqBriefDeliveryService:
         if not self.telegram.send(message, parse_mode=TELEGRAM_PARSE_MODE):
             logger.warning("MenthorQ monitor: urgent alerts %s NOT delivered (Telegram send failed)", keys)
             return []
-        delivered_at = self.clock()
-        for key in keys:
-            self.repository.save_menthorq_alert_delivery(
-                latest.currency, key, delivered_at, message, latest.record_id)
+        # All keys in one transaction: a failure records none (the next run may resend).
+        self.repository.save_menthorq_alert_deliveries(
+            latest.currency, list(keys), self.clock(), message, latest.record_id)
         logger.info("MenthorQ monitor: urgent alerts delivered: %s", keys)
         return list(keys)
 
