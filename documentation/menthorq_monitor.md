@@ -106,6 +106,11 @@ test. They were chosen by hand, not fitted by a backtest.
   preview uses the same rule (one shared function, `evaluate_urgent_alerts_of_record`): on a stale
   record no rule row says it would fire (each value is marked `paused: data stale`) and the urgent
   message shown is the `data_stale` one.
+- Not computed: a latest live record without levels (no Call Resistance, Put Support, HVL or total
+  net GEX, for example no snapshot at all) is treated like stale data: the same `data_stale` alert,
+  cooldown and `/mute`, with the stored reasons in the message (`Monitor has no usable data:
+  <reasons>`, at most three, then how many more), and the movement alerts are paused. Losing every
+  input is therefore never silent. The GUI preview and the dry-run script show the same alert.
 - An alert over a window in which an expiry settled says that the move coincides with the roll-off.
 
 The brief and `/levels` add one line when the gamma regime (spot vs HVL) and the sign of total net

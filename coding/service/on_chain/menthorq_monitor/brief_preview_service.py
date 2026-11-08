@@ -334,7 +334,7 @@ class MenthorqBriefPreviewService:
 
         by_label = {comparison.label: comparison for comparison in comparisons}
         previous, day = by_label[COMPARISON_PREVIOUS], by_label[COMPARISON_ONE_DAY]
-        # The collector's own rule set (not computed -> none; stale -> data_stale only).
+        # The collector's own rule set (not computed or stale -> data_stale only).
         # The record is recomputed at as_of, so its data time is the "now" of that run.
         evaluation = evaluate_urgent_alerts_of_record(
             latest, lambda: comparisons, self.thresholds, stale_limit)

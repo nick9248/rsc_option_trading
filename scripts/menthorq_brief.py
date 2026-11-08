@@ -64,7 +64,7 @@ def build_dry_run_output(service: MenthorqMonitorService, as_of: datetime) -> st
                          daily_close if daily_close.has_levels else None,
                          title="Dry run (references replayed, not stored)",
                          stale_limit=service.settings.stale_snapshot_limit)
-    # The collector's own rule set (not computed -> none; stale -> data_stale only).
+    # The collector's own rule set (not computed or stale -> data_stale only).
     # The record is recomputed at as_of, so its data time is the "now" of that run.
     evaluation = evaluate_urgent_alerts_of_record(
         latest, lambda: comparisons, service.settings.alert_thresholds,

@@ -189,6 +189,24 @@ def stale_data_warning(
     return None
 
 
+MAXIMUM_NOT_COMPUTED_REASONS_SHOWN = 3
+
+
+def no_usable_data_warning(record: MenthorqLevelRecord) -> str:
+    """
+    Plain-text warning for a record without levels (``has_levels`` False):
+    "monitor has no usable data: <reasons>", at most
+    ``MAXIMUM_NOT_COMPUTED_REASONS_SHOWN`` reasons, each capped, then how
+    many more there are.
+    """
+    reasons = record.not_computed_reasons
+    shown = [_cap(reason) for reason in reasons[:MAXIMUM_NOT_COMPUTED_REASONS_SHOWN]]
+    text = "; ".join(shown) if shown else "reason not stored"
+    if len(reasons) > len(shown):
+        text += f"; and {len(reasons) - len(shown)} more"
+    return f"monitor has no usable data: {text}"
+
+
 def stale_data_line(
     record: MenthorqLevelRecord, limit: timedelta, now: Optional[datetime] = None
 ) -> Optional[str]:

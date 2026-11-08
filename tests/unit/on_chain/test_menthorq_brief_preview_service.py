@@ -163,7 +163,10 @@ class TestBuildPreview:
 
     def test_missing_data_is_not_computed_never_zero(self):
         _, preview = _preview({})
-        assert preview.alerts == [] and preview.urgent_alert_html is None
+        # no levels: the collector's data_stale alert with the reason, no movement rule
+        assert [alert.key for alert in preview.alerts] == ["data_stale"]
+        assert preview.urgent_alert_html is not None
+        assert "Monitor has no usable data: inputs not available" in preview.urgent_alert_html
         assert not any(check.would_fire for check in preview.alert_checks)
         assert all(check.current_value.startswith("not computed")
                    for check in preview.alert_checks)

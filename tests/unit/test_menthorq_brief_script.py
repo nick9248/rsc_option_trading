@@ -41,8 +41,11 @@ def test_stale_data_shows_only_the_data_stale_alert_like_the_collector():
                             "Movement alerts are paused until fresh data arrives.")
 
 
-def test_not_computed_record_shows_no_alert():
+def test_not_computed_record_shows_the_no_usable_data_alert():
+    # Same rule as the collector: losing every input is reported, never silent.
     service = MenthorqMonitorService(repository=FakeMonitorRepository(),
                                      input_loader=FakeInputLoader(available=False))
     output = build_dry_run_output(service, BASE_TIME)
-    assert "no urgent alert would fire" in output and "URGENT" not in output
+    assert "no urgent alert would fire" not in output
+    assert "<b>URGENT | BTC MenthorQ monitor data is STALE</b>" in output
+    assert "Monitor has no usable data: inputs not available: No BTC option-chain snapshot" in output

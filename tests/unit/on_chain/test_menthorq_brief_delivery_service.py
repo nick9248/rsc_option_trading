@@ -26,6 +26,7 @@ from tests.fakes.fake_menthorq_monitor import (
     FakeMonitorRepository,
     FakeTelegram,
     make_record,
+    make_record_without_levels,
 )
 
 FRIDAY_0910 = BASE_TIME   # 2026-11-06 is a Friday
@@ -76,10 +77,56 @@ def test_failed_send_is_not_recorded_so_the_next_run_retries():
     assert service.send_urgent_alerts(latest, FRIDAY_0910) != []
 
 
-def test_not_computed_latest_record_evaluates_no_alert():
-    service, _, telegram, _ = _delivery([])
-    assert service.send_urgent_alerts(make_record(spot=None, hvl=None), FRIDAY_0910) == []
-    assert telegram.sent == []
+NO_USABLE_DATA_ALERT = (
+    "<b>URGENT | BTC MenthorQ monitor data is STALE</b>\n"
+    "Record 2026-11-06 09:10 UTC | snapshot n/a\n"
+    "Monitor has no usable data: inputs not available: No BTC option-chain snapshot at or before "
+    "2026-11-06T09:10:00+00:00\n"
+    "Movement alerts are paused until fresh data arrives.\n"
+    "<i>Check the collector (snapshots). /mute 24h silences these alerts.</i>"
+)
+
+
+class TestNotComputedLatestRecord:
+    """A latest live record without levels is treated like stale data: one data_stale alert
+    with the not-computed reasons, movement alerts paused, same cooldown and mute."""
+
+    def _no_inputs_record(self):
+        return make_record_without_levels(
+            spot=None, spot_time_utc=None, snapshot_captured_at_utc=None,
+            open_interest_captured_at_utc=None,
+            not_computed_reasons=["inputs not available: No BTC option-chain snapshot at or before "
+                                  "2026-11-06T09:10:00+00:00"])
+
+    def test_no_inputs_sends_the_data_stale_alert_with_the_reason(self, caplog):
+        previous, day_ago, _ = _crossing_history()   # fresh history that would fire hvl_move_24h
+        latest = self._no_inputs_record()
+        service, repository, telegram, _ = _delivery([previous, day_ago, latest])
+        assert service.send_urgent_alerts(latest, FRIDAY_0910) == ["data_stale"]
+        assert [message["message"] for message in telegram.sent] == [NO_USABLE_DATA_ALERT]
+        assert [delivery["alert_key"] for delivery in repository.deliveries] == ["data_stale"]
+        assert any("movement alerts paused" in record.getMessage()
+                   for record in caplog.records if record.levelname == "WARNING")
+
+    def test_spot_without_levels_names_at_most_three_reasons(self):
+        latest = make_record_without_levels(not_computed_reasons=[f"reason {number}" for number in range(1, 6)])
+        service, _, telegram, _ = _delivery([latest])
+        assert service.send_urgent_alerts(latest, FRIDAY_0910) == ["data_stale"]
+        assert ("Monitor has no usable data: reason 1; reason 2; reason 3; and 2 more\n"
+                in telegram.sent[0]["message"])
+
+    def test_it_shares_the_data_stale_cooldown_and_mute(self):
+        latest = self._no_inputs_record()
+        service, repository, telegram, clock = _delivery([latest])
+        repository.save_menthorq_alert_mute("BTC", FRIDAY_0910 + timedelta(hours=1), FRIDAY_0910)
+        assert service.send_urgent_alerts(latest, FRIDAY_0910) == []          # muted: held back
+        state = repository.get_menthorq_monitor_state("BTC")
+        assert state is not None and state.last_suppressed_alert_keys == ["data_stale"]
+        clock["now"] = FRIDAY_0910 + timedelta(hours=1)                     # mute over
+        assert service.send_urgent_alerts(latest, clock["now"]) == ["data_stale"]
+        clock["now"] = FRIDAY_0910 + timedelta(hours=12, minutes=59)        # 11 h 59 min later
+        assert service.send_urgent_alerts(latest, clock["now"]) == []
+        assert len(telegram.sent) == 1
 
 
 def test_latest_weekly_brief_instant_by_hand():

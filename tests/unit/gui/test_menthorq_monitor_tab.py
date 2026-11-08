@@ -226,7 +226,7 @@ class TestTabDisplay:
         assert all(_cell(tab.alerts_table, row, 3).startswith("not computed")
                    for row in range(tab.alerts_table.rowCount()))
         assert [_cell(tab.alerts_table, row, 4) for row in range(6)] == ["no"] * 6
-        assert "No urgent alert would fire." == tab.alert_browser.toPlainText()
+        assert "Monitor has no usable data: inputs not available" in tab.alert_browser.toPlainText()
         assert "0.00%" not in tab.brief_browser.toPlainText()
         tab.close()
 

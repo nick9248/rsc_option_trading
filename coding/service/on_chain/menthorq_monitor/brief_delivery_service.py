@@ -51,6 +51,7 @@ from coding.service.on_chain.menthorq_monitor.brief_formatter import (
     format_brief,
     format_stale_data_alert,
     format_urgent_alert,
+    no_usable_data_warning,
     stale_data_warning,
 )
 from coding.service.on_chain.menthorq_monitor.menthorq_monitor_service import MenthorqMonitorService
@@ -86,8 +87,9 @@ def latest_weekly_brief_instant(now: datetime, settings: MenthorqMonitorSettings
 class UrgentAlertEvaluation:
     """
     The urgent alerts of one record before the cooldown. ``stale_warning``
-    is set when the record's data is stale: then ``alerts`` is the single
-    ``data_stale`` alert and the movement rules were not evaluated.
+    is set when the record's data is stale or the record has no levels
+    (not computed): then ``alerts`` is the single ``data_stale`` alert and
+    the movement rules were not evaluated.
     """
 
     alerts: List[UrgentAlert]
@@ -108,11 +110,14 @@ def evaluate_urgent_alerts_of_record(
     now: Optional[datetime] = None,
 ) -> UrgentAlertEvaluation:
     """
-    The one rule set of the collector and of the GUI preview: no alert for a
-    record that was not computed; while the data is stale
-    (``stale_data_warning`` with ``now``) one ``data_stale`` alert instead of
-    the movement rules (their moves would be spurious); otherwise
-    ``evaluate_urgent_alerts`` on the previous-run and 24 h comparisons.
+    The one rule set of the collector and of the GUI preview: for a record
+    that was not computed (no levels, ``has_levels``) one ``data_stale``
+    alert saying why ("monitor has no usable data: <reasons>"), so losing
+    every input is never silent; while the data is stale
+    (``stale_data_warning`` with ``now``) the same ``data_stale`` alert with
+    the age; in both cases the movement rules are not evaluated (their
+    moves would be spurious). Otherwise ``evaluate_urgent_alerts`` on the
+    previous-run and 24 h comparisons.
 
     Args:
         latest: The record to evaluate.
@@ -122,9 +127,8 @@ def evaluate_urgent_alerts_of_record(
         now: Wall clock to judge a stored record against; None judges
             against the record's own data time only.
     """
-    if not latest.has_levels:
-        return UrgentAlertEvaluation(alerts=[], stale_warning=None)
-    stale_warning = stale_data_warning(latest, stale_limit, now)
+    stale_warning = (no_usable_data_warning(latest) if not latest.has_levels
+                     else stale_data_warning(latest, stale_limit, now))
     if stale_warning is not None:
         stale_alert = UrgentAlert(key=ALERT_KEY_DATA_STALE,
                                   title="Data stale: movement alerts paused", comparison_label="latest")
@@ -245,22 +249,20 @@ class MenthorqBriefDeliveryService:
         previous record.
 
         When the data behind ``latest`` is stale (``stale_data_warning``
-        with ``now``), the movement rules are NOT evaluated (their moves
-        would be spurious); one ``data_stale`` alert is sent instead, under
-        the same cooldown and mute rules.
+        with ``now``) or ``latest`` has no levels (not computed: every input
+        lost), the movement rules are NOT evaluated (their moves would be
+        spurious); one ``data_stale`` alert with the age or the not-computed
+        reasons is sent instead, under the same cooldown and mute rules.
 
         Returns:
             Keys of the alerts delivered (empty when none fired, all were on
             cooldown, alerts are muted, or the send failed).
         """
-        if not latest.has_levels:
-            logger.info("MenthorQ monitor: no alerts evaluated (latest record not computed)")
-            return []
         evaluation = evaluate_urgent_alerts_of_record(
             latest, lambda: self.monitor_service.build_comparisons(latest), self.thresholds,
             self.settings.stale_snapshot_limit, now)
         if evaluation.stale_warning is not None:
-            logger.warning("MenthorQ monitor: data stale (%s); movement alerts paused",
+            logger.warning("MenthorQ monitor: data stale or not computed (%s); movement alerts paused",
                            evaluation.stale_warning)
         alerts = evaluation.alerts
         last_delivered = {alert.key: self.last_delivery(alert.key) for alert in alerts}
