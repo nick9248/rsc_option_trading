@@ -111,7 +111,9 @@ class TestOptionalTables:
 class TestMenthorqLevelSnapshotsReplaceRule:
     def test_the_sync_replaces_a_row_with_the_repository_s_has_levels_rule(self):
         # The script cannot import coding/ when run as a file, so it spells the SQL out.
-        conflict_target = _find("menthorq_level_snapshots")["conflict_target"]
+        entry = _find("menthorq_level_snapshots")
+        assert entry is not None
+        conflict_target = entry["conflict_target"]
         assert conflict_target.endswith(
             f"WHERE NOT {has_levels_sql_condition('menthorq_level_snapshots')} "
             f"AND {has_levels_sql_condition('EXCLUDED')}")
