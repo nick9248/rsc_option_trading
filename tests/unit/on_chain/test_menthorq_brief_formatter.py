@@ -25,6 +25,7 @@ from coding.service.on_chain.menthorq_monitor.brief_formatter import (
     format_strike,
     format_urgent_alert,
     regime_versus_net_gex_note,
+    regime_sentence,
     stale_data_line,
     stale_data_warning,
     telegram_length,
@@ -317,3 +318,10 @@ class TestWallClockStaleness:
                         format_changes_reply("BTC", record, [], stale_limit=self.LIMIT, now=now)):
             assert message.split("\n")[1].startswith("<b>DATA STALE:</b> snapshot is 3 d 0 h 20 min older than now")
         assert "DATA STALE" not in format_levels_reply("BTC", record, stale_limit=self.LIMIT)
+
+
+def test_regime_sentence_shows_not_computed_instead_of_a_zero_percent():
+    # spot 100,000, HVL 95,000: gap 5,000 = 5.00% of spot
+    assert regime_sentence(make_record(spot=100000.0, hvl=95000.0)) ==         "POSITIVE gamma: spot 5,000 (5.00%) above HVL."
+    # spot 0 (no usable spot): the distance exists (95,000) but its percent of spot does not
+    assert regime_sentence(make_record(spot=0.0, hvl=95000.0)) ==         "NEGATIVE gamma: spot 95,000 (not computed) below HVL."

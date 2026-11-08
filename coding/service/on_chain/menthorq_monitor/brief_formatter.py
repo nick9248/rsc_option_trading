@@ -235,7 +235,9 @@ def regime_sentence(record: MenthorqLevelRecord) -> str:
     distance = spot_distances(record)["hvl"]
     if record.gamma_regime is None or distance.distance_usd is None:
         return "Gamma regime not computed (spot or HVL missing)."
-    gap = f"{format_strike(abs(distance.distance_usd))} ({abs(distance.distance_percent_of_spot or 0.0):.2f}%)"
+    percent = distance.distance_percent_of_spot
+    percent_text = "not computed" if percent is None else f"{abs(percent):.2f}%"
+    gap = f"{format_strike(abs(distance.distance_usd))} ({percent_text})"
     if record.gamma_regime == GAMMA_REGIME_POSITIVE:
         return f"POSITIVE gamma: spot {gap} above HVL."
     if record.gamma_regime == GAMMA_REGIME_NEGATIVE:
