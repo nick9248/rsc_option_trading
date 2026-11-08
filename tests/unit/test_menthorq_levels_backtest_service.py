@@ -180,3 +180,25 @@ def test_single_fetch_outcomes_are_identical_to_the_old_logic_with_fewer_queries
     assert by_date["2026-10-01"]["next_3d_realized_volatility_annualized_percent"] is not None
     assert by_date["2026-10-07"]["next_1d_final_price"] is not None
     assert by_date["2026-10-07"]["next_3d_final_price"] is None                               # data end
+
+
+def test_primary_universe_is_only_a_label_and_every_universe_is_analysed(tmp_path):
+    """run() with "monthly" and with "all" as primary universe gives the same numbers;
+    only the label differs, and the JSON says the label selects nothing."""
+    import json
+
+    analyses = {}
+    for label in ("monthly", "all"):
+        MenthorqLevelsBacktestService(FakeRepository()).run(
+            "BTC", STALE_DAY, LAST_DAY, tmp_path / label, primary_universe=label)
+        analyses[label] = json.loads((tmp_path / label / "btc_backtest_analysis.json").read_text(encoding="utf-8"))
+
+    for label, analysis in analyses.items():
+        assert analysis["primary_universe_label"] == label
+        assert "primary_universe" not in analysis
+        assert analysis["universes_analysed"] == ["monthly", "all"]
+        assert set(analysis["trend"]) == set(analysis["predictive_tests"]) == set(analysis["alerts"]) \
+            == {"monthly", "all"}
+        assert analysis["primary_universe_label_note"].startswith("label only")
+    for key in ("coverage", "trend", "predictive_tests", "alerts", "test_count"):
+        assert analyses["monthly"][key] == analyses["all"][key], key

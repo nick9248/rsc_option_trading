@@ -268,6 +268,15 @@ class MenthorqLevelsBacktestService:
         Build rows, outcomes and analysis; write ``{currency}_daily_levels.csv``,
         ``{currency}_daily_levels.json`` and ``{currency}_backtest_analysis.json``.
 
+        Every universe in ``BACKTEST_UNIVERSES`` is computed and analysed
+        (trend, predictive tests, alert table per universe), whatever
+        ``primary_universe`` says.
+
+        Args:
+            primary_universe: A LABEL only: written to the JSON as
+                ``primary_universe_label`` (which universe the reader should
+                treat as the headline); it selects or changes no number.
+
         Returns:
             The analysis dict (also written to JSON).
         """
@@ -281,7 +290,10 @@ class MenthorqLevelsBacktestService:
             "currency": currency,
             "first_date": first_date.isoformat(),
             "last_date": last_date.isoformat(),
-            "primary_universe": primary_universe,
+            "primary_universe_label": primary_universe,
+            "universes_analysed": list(BACKTEST_UNIVERSES),
+            "primary_universe_label_note": ("label only: trend, predictive_tests and alerts are computed "
+                                            "for every universe in universes_analysed"),
             "convention": ("as_of 23:59 UTC; spot = historical_trades.index_price of the newest trade at "
                            "or before as_of; open interest from the snapshot at or before 00:00 UTC of the "
                            "same date; IV from the snapshot at or before as_of (rebuilt from mark_price "
