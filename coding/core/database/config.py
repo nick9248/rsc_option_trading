@@ -56,11 +56,17 @@ class DatabaseConfig:
 
 class ConnectionPool:
     """
-    Singleton connection pool for database connections.
+    Singleton connection pool for database connections (one pool per process).
+
+    Thread-safe: the collector's APScheduler runs its jobs in worker threads
+    (prospective and trade collection, the MenthorQ hourly job, the weekly brief
+    and the command poll: at most 5 at once, each holding one connection at a
+    time), so the pool is a psycopg2 ThreadedConnectionPool. The default maximum
+    of 10 connections covers those 5 jobs with room to spare.
     """
 
     _instance: Optional["ConnectionPool"] = None
-    _pool: Optional[pool.SimpleConnectionPool] = None
+    _pool: Optional[pool.ThreadedConnectionPool] = None
 
     def __new__(cls):
         if cls._instance is None:
@@ -77,7 +83,7 @@ class ConnectionPool:
             max_conn: Maximum number of connections.
         """
         if self._pool is None:
-            self._pool = pool.SimpleConnectionPool(
+            self._pool = pool.ThreadedConnectionPool(
                 min_conn,
                 max_conn,
                 **config.get_connection_dict()
