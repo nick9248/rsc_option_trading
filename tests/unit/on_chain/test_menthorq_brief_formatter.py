@@ -288,7 +288,7 @@ class TestWallClockStaleness:
 
     def test_exactly_the_limit_at_now_is_not_stale_one_minute_more_is(self):
         record = _aged(snapshot_age=timedelta(minutes=20), spot_age=timedelta(seconds=30))
-        at_limit = record.snapshot_captured_at_utc + self.LIMIT       # 10:50 UTC
+        at_limit = BASE_TIME - timedelta(minutes=20) + self.LIMIT     # snapshot 08:50 + 120 min = 10:50 UTC
         assert stale_data_warning(record, self.LIMIT, at_limit) is None
         beyond = at_limit + timedelta(minutes=1)                      # 10:51 -> 121 min = 2 h 1 min
         assert stale_data_warning(record, self.LIMIT, beyond) == (

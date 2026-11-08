@@ -1,5 +1,7 @@
 """Unit tests for the Telegram config health check."""
 
+import types
+
 from coding.core.health.models import CheckStatus
 from coding.service.health.checkers.telegram_checker import TelegramConfigCheck
 
@@ -49,9 +51,13 @@ def test_config_fail_when_token_rejected(monkeypatch, tmp_path):
     assert results[0].status == CheckStatus.FAIL
 
 
-class _FailingRequests:
-    def get(self, url, timeout):
+def _failing_requests_module():
+    """A stand-in requests module whose get raises like requests does (URL in the text)."""
+    def get(url, timeout):
         raise ConnectionError(f"Max retries exceeded with url: {url}")
+    module = types.ModuleType("failing_requests")
+    setattr(module, "get", get)
+    return module
 
 
 def test_unreachable_message_hides_the_token(monkeypatch, tmp_path):
@@ -59,7 +65,7 @@ def test_unreachable_message_hides_the_token(monkeypatch, tmp_path):
     monkeypatch.setenv("OSF_TELEGRAM_CHAT_ID", "12345")
     empty_env = tmp_path / ".env"
     empty_env.write_text("")
-    check = TelegramConfigCheck(requests_module=_FailingRequests(), env_path=empty_env)
+    check = TelegramConfigCheck(requests_module=_failing_requests_module(), env_path=empty_env)
     results = check.run(repo=None)
     assert results[0].status == CheckStatus.FAIL
     assert "secret-token" not in results[0].message
