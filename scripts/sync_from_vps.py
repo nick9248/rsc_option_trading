@@ -241,6 +241,11 @@ SYNC_TABLES = [
 ]
 
 
+# Status message prefix of a table that is configured for sync but does not exist on the VPS
+# (for example a new table whose migration has not been applied there yet).
+SKIPPED_PREFIX = "SKIPPED: "
+
+
 def get_columns(cur, table_name: str) -> list[str]:
     """Get all columns for a table, excluding 'id' (auto-generated locally)."""
     cur.execute("""
@@ -409,6 +414,9 @@ def sync_table(vps_conn, local_conn, table: dict) -> tuple[int, str]:
     differ from the local copy are written. Nothing is resumed; each run starts
     from the beginning of that range. The local database is a read-only mirror: rows
     deleted on the VPS are not removed locally.
+
+    A table that does not exist on the VPS is skipped, not failed: nothing is read or
+    written, and the returned message starts with SKIPPED_PREFIX so the caller can log it.
     """
     vps_cur = None
     local_cur = None
@@ -421,6 +429,11 @@ def sync_table(vps_conn, local_conn, table: dict) -> tuple[int, str]:
         # Get columns from VPS (source of truth — avoids local schema drift)
         columns = get_columns(vps_cur, table["name"])
         vps_cur.close()  # nothing may stay open on the VPS connection while paging
+        if not columns:
+            logger.warning(f"Table {table['name']} not found on the VPS: skipped "
+                           f"(apply its migration on the VPS to sync it)")
+            return 0, (f"{SKIPPED_PREFIX}table not found on the VPS "
+                       f"(apply its migration there to sync it)")
 
         # Tables whose rows change after insertion are re-read in full and upserted;
         # all others are read incrementally from the local watermark.
@@ -539,14 +552,18 @@ def run():
 
         total_rows = 0
         errors = []
+        skipped = []
 
         for table in SYNC_TABLES:
             count, msg = sync_table(vps_conn, local_conn, table)
-            status = "OK " if count >= 0 else "ERR"
+            was_skipped = msg.startswith(SKIPPED_PREFIX)
+            status = "SKIP" if was_skipped else ("OK " if count >= 0 else "ERR")
             logger.info(f"  [{status}] {table['name']:<35} {msg}")
             if count > 0:
                 total_rows += count
-            if count < 0:
+            if was_skipped:
+                skipped.append(table["name"])
+            elif count < 0:
                 errors.append(f"{table['name']}: {msg}")
 
         # 5. Pull VPS health JSON
@@ -557,7 +574,9 @@ def run():
         logger.info("-" * 60)
         logger.info(f"\nSYNC COMPLETE in {duration:.1f}s")
         logger.info(f"  Total rows synced: {total_rows:,}")
-        logger.info(f"  Tables synced: {len(SYNC_TABLES)}")
+        logger.info(f"  Tables synced: {len(SYNC_TABLES) - len(skipped)}")
+        if skipped:
+            logger.warning(f"  Tables SKIPPED (not on the VPS): {', '.join(skipped)}")
 
         if errors:
             logger.error(f"\nERRORS ({len(errors)}):")

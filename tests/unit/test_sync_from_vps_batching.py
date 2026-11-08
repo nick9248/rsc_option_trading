@@ -38,7 +38,7 @@ class FakeCursor:
         self._connection.queries.append((query, params))
         rows = self._connection.rows
         if "information_schema" in query:
-            self._result = [(name,) for name in COLUMNS]
+            self._result = [(name,) for name in self._connection.columns]
         elif "captured_at = %s" in query:
             self._result = [r for r in rows if r[0] == params[0]]
         elif "captured_at > %s" in query:
@@ -69,6 +69,7 @@ class FakeVpsConnection:
         self.commits = 0
         self.rollbacks = 0
         self.autocommit = True
+        self.columns = COLUMNS   # a table missing on the VPS has none
         self._fail_on = fail_on_query_number
 
     def cursor(self, name=None):
@@ -356,3 +357,36 @@ class TestSyncTable:
             local = self._local_conn()
             self._run(vps, local, monkeypatch, batch_size=5)
             local.cursor.return_value.close.assert_called_once()
+
+
+class TestTableMissingOnTheVps:
+    """A table configured for sync that the VPS does not have yet is skipped, loudly."""
+
+    def test_it_is_skipped_and_nothing_is_read_or_written(self, caplog):
+        vps = FakeVpsConnection([])
+        vps.columns = []   # information_schema knows no such table
+        local = MagicMock()
+
+        with patch.object(sync_from_vps, "execute_values") as write:
+            count, message = sync_table(vps, local, TABLE)
+
+        assert count == 0
+        assert message.startswith(sync_from_vps.SKIPPED_PREFIX)
+        assert "apply its migration" in message
+        write.assert_not_called()
+        local.commit.assert_not_called()
+        # only the column lookup reached the VPS; no data page was requested
+        assert len(vps.queries) == 1 and "information_schema" in vps.queries[0][0]
+        assert any("not found on the VPS" in record.message for record in caplog.records)
+
+    def test_an_existing_table_is_not_marked_skipped(self, monkeypatch):
+        vps = FakeVpsConnection(_rows_with_ties([2]))
+        local = MagicMock()
+        local.cursor.return_value.fetchone.return_value = (None,)
+        monkeypatch.setattr(sync_from_vps, "FETCH_BATCH_SIZE", 10)
+
+        with patch.object(sync_from_vps, "execute_values", side_effect=lambda *a, rows=None, **k: [(1,)] * 2):
+            count, message = sync_table(vps, local, TABLE)
+
+        assert count == 2
+        assert not message.startswith(sync_from_vps.SKIPPED_PREFIX)
