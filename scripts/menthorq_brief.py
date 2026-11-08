@@ -9,7 +9,9 @@ Computes the live record at --as-of (default: now), replays the records of
 one hour, 24 hours and 7 days earlier and the daily-close record of the
 previous UTC date from the stored snapshots (point in time, no lookahead),
 then writes the brief (Telegram HTML) and the urgent alerts that would fire
-(before any cooldown) to standard output.
+(before any cooldown) to standard output. The alerts follow the collector's
+rule (``evaluate_urgent_alerts_of_record``): none for a record that was not
+computed, only the data_stale alert while the data is stale.
 
 Sends nothing and writes nothing: it does not need the monitor tables
 (migration 031) and only reads snapshots and historical_trades.
@@ -22,18 +24,10 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Sequence
 
-from coding.core.analytics.menthorq_monitor.alert_rules import evaluate_urgent_alerts
-from coding.core.analytics.menthorq_monitor.level_trend_calculator import (
-    COMPARISON_ONE_DAY,
-    COMPARISON_PREVIOUS,
-)
 from coding.core.analytics.menthorq_replication_calculator import EXPIRY_UNIVERSES
 from coding.core.logging.logging_setup import init_logging
-from coding.service.on_chain.menthorq_monitor.brief_formatter import (
-    format_brief,
-    format_urgent_alert,
-    telegram_length,
-)
+from coding.service.on_chain.menthorq_monitor.brief_delivery_service import evaluate_urgent_alerts_of_record
+from coding.service.on_chain.menthorq_monitor.brief_formatter import format_brief, telegram_length
 from coding.service.on_chain.menthorq_monitor.menthorq_monitor_service import MenthorqMonitorService
 from coding.service.on_chain.menthorq_monitor.monitor_settings import MenthorqMonitorSettings
 
@@ -70,12 +64,15 @@ def build_dry_run_output(service: MenthorqMonitorService, as_of: datetime) -> st
                          daily_close if daily_close.spot is not None else None,
                          title="Dry run (references replayed, not stored)",
                          stale_limit=service.settings.stale_snapshot_limit)
-    by_label = {comparison.label: comparison for comparison in comparisons}
-    alerts = evaluate_urgent_alerts(latest, by_label[COMPARISON_PREVIOUS], by_label[COMPARISON_ONE_DAY],
-                                    service.settings.alert_thresholds)
+    # The collector's own rule set (not computed -> none; stale -> data_stale only).
+    # The record is recomputed at as_of, so its data time is the "now" of that run.
+    evaluation = evaluate_urgent_alerts_of_record(
+        latest, lambda: comparisons, service.settings.alert_thresholds,
+        service.settings.stale_snapshot_limit)
+    alerts = evaluation.alerts
     parts = [brief, f"\n[brief length {telegram_length(brief)} of 4096]\n"]
     if alerts:
-        alert_text = format_urgent_alert(latest, alerts)
+        alert_text = evaluation.message(latest, alerts)
         parts += ["\n--- urgent alert that would be sent (before cooldown) ---\n", alert_text,
                   f"\n[alert length {telegram_length(alert_text)} of 4096]\n"]
     else:
