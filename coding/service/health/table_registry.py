@@ -59,7 +59,7 @@ TABLE_SPECS: Tuple[TableSpec, ...] = (
             required=("signal_direction", "signal_score", "signal_confidence", "spot_price_at_prediction")),
     _hourly("futures_basis", "timestamp"),
     # MenthorQ-style level monitor (migration 031): one live row per hour plus one daily-close
-    # row per day. Optional: MENTHORQ_MONITOR_ENABLED=0 switches it off. A row whose levels
+    # row per day. Optional: written only with MENTHORQ_MONITOR_ENABLED=1 (VPS). A row whose levels
     # could not be computed has NULLs, which the completeness check reports.
     _hourly("menthorq_level_snapshots", "computed_at", optional=True,
             required=("spot", "call_resistance", "put_support", "hvl", "total_net_gex")),

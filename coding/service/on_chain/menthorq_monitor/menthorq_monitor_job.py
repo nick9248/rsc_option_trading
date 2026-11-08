@@ -1,12 +1,14 @@
 """
 The MenthorQ-style monitor's jobs inside the collector (unified_scheduler).
 
-Registered on the collector's APScheduler (all times UTC; the weekly brief
-only with MENTHORQ_ALERTS_ENABLED=1, the polling only with
-MENTHORQ_COMMANDS_ENABLED=1, both off by default):
+Registered on the collector's APScheduler only with
+MENTHORQ_MONITOR_ENABLED=1 (all times UTC; the weekly brief only with
+MENTHORQ_ALERTS_ENABLED=1, the polling only with MENTHORQ_COMMANDS_ENABLED=1;
+all three off by default, the VPS .env sets them):
   - ``menthorq_monitor_hourly``  every hour at MENTHORQ_LIVE_RUN_MINUTE: store
-    the live record, store yesterday's daily-close record if missing, send
-    urgent alerts, catch up a missed weekly brief.
+    the live record, store the missing or not-computed daily-close records
+    of the last 7 ended days, send urgent alerts, catch up a missed weekly
+    brief.
   - ``menthorq_weekly_brief``    MENTHORQ_WEEKLY_BRIEF_DAY at
     MENTHORQ_WEEKLY_BRIEF_TIME_UTC.
   - ``menthorq_command_poll``    every MENTHORQ_COMMAND_POLL_SECONDS: the bot commands
@@ -160,14 +162,16 @@ def build_menthorq_monitor_job(
     telegram: Optional[TelegramAlertService] = None,
 ) -> Optional[MenthorqMonitorJob]:
     """
-    The job with its services, or None when MENTHORQ_MONITOR_ENABLED is 0.
+    The job with its services, or None unless MENTHORQ_MONITOR_ENABLED=1
+    (off by default; logged in one INFO line).
 
     Raises:
         ValueError: when a MENTHORQ_* setting is invalid.
     """
     settings = settings or MenthorqMonitorSettings.from_environment()
     if not settings.monitor_enabled:
-        logger.info("MenthorQ monitor disabled (MENTHORQ_MONITOR_ENABLED=0)")
+        logger.info("MenthorQ monitor OFF: no record is computed or stored and nothing is sent "
+                    "(set MENTHORQ_MONITOR_ENABLED=1, production collector only)")
         return None
     telegram = telegram or TelegramAlertService()
     monitor_service = MenthorqMonitorService(repository=repository, settings=settings)

@@ -81,7 +81,7 @@ class FixedRecordMonitorService(MenthorqMonitorService):
                  settings: Optional[MenthorqMonitorSettings] = None):
         self.fake_repository = FakeMonitorRepository()
         if settings is None:
-            settings = replace(MenthorqMonitorSettings(), alerts_enabled=True,
+            settings = replace(MenthorqMonitorSettings(), monitor_enabled=True, alerts_enabled=True,
                                alert_thresholds=SCENARIO_THRESHOLDS)
         super().__init__(repository=self.fake_repository, settings=settings,
                          input_loader=FakeInputLoader(available=False),

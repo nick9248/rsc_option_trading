@@ -19,7 +19,7 @@ Shows, on the PC, what the MenthorQ-style monitor in the collector would produce
 - **Output folder**: a clickable link and an **Open folder** button.
 - **Generated charts**: the PNG files of the Run. Click one to show it, scaled to the width of the pane. **Save PNG as...** copies it.
 - **Brief**: the brief as rich text, its length (of Telegram's 4,096), and **Copy as plain text** (the text as Telegram displays it).
-- **Alerts**: rule, enabled (`MENTHORQ_ALERTS_ENABLED` in the local .env), threshold, current value, would fire. Below it, the urgent message that would be sent.
+- **Alerts**: rule, enabled (yes only when `MENTHORQ_MONITOR_ENABLED` and `MENTHORQ_ALERTS_ENABLED` are both 1 in the local .env and the rule is on; with the defaults every row says no), threshold (shows whether the rule itself is on), current value, would fire (computed either way). Below it, the urgent message that would be sent.
 - **Info**: brief data time, snapshot capture time and age, index price and its trade time, open-interest instant, IV source counts, universe, expiries, the daily-close column, and the charts' own inputs. Then the warnings and data caveats.
 - **Compare with MenthorQ** (needs a reference JSON) and **Output** (the services' log).
 

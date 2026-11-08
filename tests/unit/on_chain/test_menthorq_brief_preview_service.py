@@ -23,7 +23,11 @@ from coding.service.on_chain.menthorq_monitor.brief_preview_service import (
     telegram_html_to_plain_text,
 )
 from coding.service.on_chain.menthorq_monitor.monitor_settings import MenthorqMonitorSettings
-from tests.fakes.fake_menthorq_brief_preview import FixedRecordMonitorService, moving_records
+from tests.fakes.fake_menthorq_brief_preview import (
+    SCENARIO_THRESHOLDS,
+    FixedRecordMonitorService,
+    moving_records,
+)
 from tests.fakes.fake_menthorq_monitor import BASE_TIME
 
 NOW = BASE_TIME + timedelta(hours=2)   # 11:10 UTC
@@ -138,9 +142,24 @@ class TestBuildPreview:
         assert "Movement alerts are paused until fresh data arrives." in preview.urgent_alert_html
 
     def test_alerts_disabled_shows_enabled_no(self):
-        settings = replace(MenthorqMonitorSettings(), alerts_enabled=False)
+        settings = replace(MenthorqMonitorSettings(), monitor_enabled=True, alerts_enabled=False)
         _, preview = _preview(moving_records(), settings)
         assert not any(check.enabled for check in preview.alert_checks)
+
+    def test_monitor_off_shows_enabled_no_but_still_evaluates_the_rules(self):
+        """Alerts on but the monitor off: this collector would send nothing, so 'enabled' is no;
+        'would fire' is still computed (HVL +4% > 3% in the scenario)."""
+        settings = replace(MenthorqMonitorSettings(), alerts_enabled=True,
+                           alert_thresholds=SCENARIO_THRESHOLDS)
+        assert settings.monitor_enabled is False
+        _, preview = _preview(moving_records(), settings)
+        assert not any(check.enabled for check in preview.alert_checks)
+        assert {check.rule: check for check in preview.alert_checks}["HVL move vs 24h ago"].would_fire
+
+    def test_local_defaults_preview_works_with_every_switch_off(self):
+        _, preview = _preview(moving_records(), MenthorqMonitorSettings.from_environment({}))
+        assert not any(check.enabled for check in preview.alert_checks)
+        assert preview.brief_html.startswith("<b>BTC MenthorQ-style levels")
 
     def test_missing_data_is_not_computed_never_zero(self):
         _, preview = _preview({})

@@ -7,7 +7,8 @@ The code is the source of truth. This page summarises it; when they disagree, tr
 - `migrations/031_add_menthorq_monitor_tables.sql` and `migrations/032_add_menthorq_monitor_state.sql`
 
 The monitor runs inside the collector (`unified_scheduler`, systemd unit `option-trading` on the VPS).
-It has no process of its own. Its jobs, all in UTC:
+It has no process of its own, and it runs only with `MENTHORQ_MONITOR_ENABLED=1` (off by default,
+set on the VPS only). Its jobs, all in UTC:
 
 | Job id | When | What |
 |---|---|---|
@@ -111,7 +112,7 @@ positive total net GEX.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `MENTHORQ_MONITOR_ENABLED` | 1 | hourly computation and storage |
+| `MENTHORQ_MONITOR_ENABLED` | 0 | hourly computation and storage (opt-in, VPS only) |
 | `MENTHORQ_ALERTS_ENABLED` | 0 | urgent alerts and the weekly brief (opt-in, VPS only) |
 | `MENTHORQ_COMMANDS_ENABLED` | 0 | bot commands (getUpdates polling; opt-in, VPS only) |
 | `MENTHORQ_EXPIRY_UNIVERSE` | monthly | all, monthly, quarterly_plus_front_month |
@@ -122,11 +123,22 @@ positive total net GEX.
 | `MENTHORQ_STALE_SNAPSHOT_MINUTES` | 120 | at least 10; stale-data limit, see below |
 | `MENTHORQ_ALERT_*` | see the rules table | alert rules |
 
-The two Telegram switches are off by default so that a local debug run of the collector never
-becomes a second consumer of the production bot (409 conflicts, stolen updates, duplicate alerts).
-With either off, the collector logs one INFO line at start-up (`MenthorQ monitor: Telegram OFF
-for ...`) naming the variable to set. The records are computed and stored either way. The dry-run
-CLI and the GUI preview never send anything.
+All three switches are off by default, so a local debug run of the collector neither writes
+`menthorq_level_snapshots` rows into the local database (a read-only mirror that
+`scripts/sync_from_vps.py` fills, with `MAX(computed_at)` as its watermark: a local row would hide
+VPS rows) nor becomes a second consumer of the production bot (409 conflicts, stolen updates,
+duplicate alerts).
+
+- With `MENTHORQ_MONITOR_ENABLED` off, the collector logs one INFO line at start-up
+  (`MenthorQ monitor OFF: ... (set MENTHORQ_MONITOR_ENABLED=1, production collector only)`) and
+  schedules no monitor job.
+- With the monitor on but either Telegram switch off, it logs one INFO line (`MenthorQ monitor:
+  Telegram OFF for ...`) naming the variable to set; the records are still computed and stored.
+- The dry-run CLI and the GUI preview do not read `MENTHORQ_MONITOR_ENABLED`: they compute from
+  the snapshots, store nothing and never send anything. The preview's alert rule table says "yes" in
+  its "enabled" column only when `MENTHORQ_MONITOR_ENABLED` and `MENTHORQ_ALERTS_ENABLED` are both
+  1 and the rule is on; with the defaults every row says "no". The threshold column still shows
+  which rules are on, and "would fire" is computed either way (what the VPS would send).
 
 An invalid value of any of these variables (for example `MENTHORQ_STALE_SNAPSHOT_MINUTES=9`) stops
 only the MenthorQ monitor from starting; the collector logs the error and runs on.
@@ -171,13 +183,16 @@ Migration 032 depends on 031 being applied first. Both are idempotent (`IF NOT E
 2. On the VPS, as a separate step and only when asked: pull the code, then run
    `python scripts/run_migration.py migrations/031_add_menthorq_monitor_tables.sql` (if not yet
    applied) and `python scripts/run_migration.py migrations/032_add_menthorq_monitor_state.sql`.
-3. In the VPS `.env`, set `MENTHORQ_ALERTS_ENABLED=1` and `MENTHORQ_COMMANDS_ENABLED=1`. Both
-   default to 0: without them the VPS sends no alert, no weekly brief and answers no command.
-   Set any `MENTHORQ_ALERT_*` overrides there too. Without them the defaults above apply.
+3. In the VPS `.env`, set all three switches:
+   `MENTHORQ_MONITOR_ENABLED=1`, `MENTHORQ_ALERTS_ENABLED=1` and `MENTHORQ_COMMANDS_ENABLED=1`.
+   All default to 0: without the first the VPS computes and stores no record (and runs no
+   monitor job at all); without the other two it sends no alert, no weekly brief and answers no
+   command. Set any `MENTHORQ_ALERT_*` overrides there too. Without them the defaults above apply.
 4. Restart the collector: `sudo systemctl restart option-trading`. The log should show
    `MenthorQ monitor scheduled: hourly at :10 UTC, weekly brief fri 09:00 UTC`,
    `MenthorQ bot command polling every 20 s` and, at the first poll,
-   `command menu registered (6 commands)`. It must NOT show `Telegram OFF`.
+   `command menu registered (6 commands)`. It must NOT show `MenthorQ monitor OFF` or
+   `Telegram OFF`.
 5. In Telegram, send `/help` and then `/status`.
 
 `menthorq_monitor_state` is per-deployment alert state and is not in `scripts/sync_from_vps.py`.

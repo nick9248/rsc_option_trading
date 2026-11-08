@@ -69,7 +69,12 @@ PREVIEW_TITLE = "Preview (references replayed, not stored)"
 
 @dataclass(frozen=True)
 class AlertRuleCheck:
-    """One urgent-alert rule as it stands at the preview instant."""
+    """
+    One urgent-alert rule as it stands at the preview instant. ``enabled``:
+    a collector with these settings would send it (MENTHORQ_MONITOR_ENABLED
+    and MENTHORQ_ALERTS_ENABLED both 1 and the rule on); False for every
+    rule with the local defaults. ``would_fire`` does not depend on it.
+    """
 
     rule: str
     enabled: bool
@@ -334,8 +339,9 @@ class MenthorqBriefPreviewService:
         evaluation = evaluate_urgent_alerts_of_record(
             latest, lambda: comparisons, self.thresholds, stale_limit)
         alerts = evaluation.alerts
+        # "enabled": a collector with these settings would send it (monitor AND alerts on).
         checks = alert_rule_checks(latest, previous, day, alerts, self.thresholds,
-                                   self.settings.alerts_enabled)
+                                   self.settings.monitor_enabled and self.settings.alerts_enabled)
         if evaluation.stale_warning is not None:
             checks = [replace(check, current_value=f"{check.current_value} (paused: data stale)")
                       for check in checks]

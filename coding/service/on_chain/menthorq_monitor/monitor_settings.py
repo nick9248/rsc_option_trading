@@ -2,16 +2,21 @@
 Settings of the MenthorQ-style monitor, read from the environment (.env).
 
 Variables (all optional; the defaults are in ``MenthorqMonitorSettings``):
-  MENTHORQ_MONITOR_ENABLED        1/0  hourly computation and storage (default 1)
+  MENTHORQ_MONITOR_ENABLED        1/0  hourly computation and storage in the collector,
+                                       default 0
   MENTHORQ_ALERTS_ENABLED         1/0  urgent alerts and the weekly brief (Telegram),
                                        default 0
   MENTHORQ_COMMANDS_ENABLED       1/0  the bot commands (Telegram getUpdates polling),
                                        default 0
 
-The two Telegram switches are opt-in: only the production collector (the VPS
-.env sets both to 1) may talk to the bot. A local debug run of the collector
-with the defaults never polls getUpdates or sends a message, so it cannot
-steal the production bot's updates or send duplicate alerts.
+All three switches are opt-in: only the production collector (the VPS .env
+sets all three to 1) runs the monitor. A local debug run of the collector
+with the defaults writes no menthorq_level_snapshots row (the local database
+is a read-only mirror that scripts/sync_from_vps.py fills, with
+MAX(computed_at) as its watermark), never polls getUpdates and sends no
+message, so it cannot steal the production bot's updates or send duplicate
+alerts. The dry-run CLI and the GUI preview only compute and do not read
+these switches.
   MENTHORQ_EXPIRY_UNIVERSE        all | monthly | quarterly_plus_front_month
   MENTHORQ_LIVE_RUN_MINUTE        0-59, minute past each hour of the live run
   MENTHORQ_WEEKLY_BRIEF_DAY       mon | tue | wed | thu | fri | sat | sun
@@ -72,7 +77,7 @@ class MenthorqMonitorSettings:
     checked date, so treat it as a choice, not a verified fact.
     """
 
-    monitor_enabled: bool = True
+    monitor_enabled: bool = False          # opt-in, see the module docstring
     alerts_enabled: bool = False           # opt-in, see the module docstring
     commands_enabled: bool = False         # opt-in, see the module docstring
     currency: str = "BTC"
