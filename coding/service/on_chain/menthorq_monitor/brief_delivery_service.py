@@ -13,6 +13,7 @@ the next run.
 """
 
 import logging
+import threading
 from datetime import datetime, timedelta, timezone
 from typing import Callable, List, Optional
 
@@ -51,6 +52,9 @@ DELIVERY_KEY_ON_DEMAND_BRIEF = "on_demand_brief"
 # A weekly brief missed (service down, Telegram failing) is still sent this
 # long after its scheduled time, never later.
 WEEKLY_BRIEF_CATCH_UP = timedelta(hours=24)
+# The scheduled weekly job and the hourly catch-up run in different scheduler
+# threads; this makes "check, send, record" of the weekly brief one step.
+WEEKLY_BRIEF_LOCK = threading.Lock()
 
 
 def latest_weekly_brief_instant(now: datetime, settings: MenthorqMonitorSettings) -> datetime:
@@ -211,6 +215,8 @@ class MenthorqBriefDeliveryService:
         """
         Send the weekly brief when its scheduled instant has passed (within
         ``WEEKLY_BRIEF_CATCH_UP``) and it was not delivered since then.
+        Check, send and record run under ``WEEKLY_BRIEF_LOCK``, so the
+        scheduled job and the hourly catch-up never both send it.
 
         Returns:
             True when a brief was delivered by this call.
@@ -218,15 +224,16 @@ class MenthorqBriefDeliveryService:
         scheduled = latest_weekly_brief_instant(now, self.settings)
         if now - scheduled > WEEKLY_BRIEF_CATCH_UP:
             return False
-        last = self.repository.get_last_menthorq_alert_delivery(
-            self.settings.currency, DELIVERY_KEY_WEEKLY_BRIEF)
-        if last is not None and last >= scheduled:
-            return False
-        message = self.build_brief(now, "Weekly brief")
-        if message is None:
-            logger.warning("MenthorQ monitor: weekly brief due but no live record is stored")
-            return False
-        return self._deliver(DELIVERY_KEY_WEEKLY_BRIEF, message, None)
+        with WEEKLY_BRIEF_LOCK:
+            last = self.repository.get_last_menthorq_alert_delivery(
+                self.settings.currency, DELIVERY_KEY_WEEKLY_BRIEF)
+            if last is not None and last >= scheduled:
+                return False
+            message = self.build_brief(now, "Weekly brief")
+            if message is None:
+                logger.warning("MenthorQ monitor: weekly brief due but no live record is stored")
+                return False
+            return self._deliver(DELIVERY_KEY_WEEKLY_BRIEF, message, None)
 
     def build_on_demand_brief(self, now: Optional[datetime] = None) -> str:
         """The /brief reply at ``now`` (the clock when omitted); says so when no record exists."""

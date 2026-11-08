@@ -251,3 +251,36 @@ class TestStaleDataAlert:
 
     def test_stale_key_is_an_urgent_key_so_status_lists_it(self):
         assert ALERT_KEY_DATA_STALE == "data_stale" and ALERT_KEY_DATA_STALE in URGENT_ALERT_KEYS
+
+
+def test_weekly_brief_from_two_threads_at_once_is_sent_exactly_once():
+    """The scheduled weekly job and the hourly catch-up run in different scheduler threads.
+    The send takes a while (0.2 s), so without the lock both pass the 'not yet delivered'
+    check before either records the delivery."""
+    import threading
+    import time as wall_time
+
+    service, repository, telegram, _ = _delivery([make_record()])
+    real_send = telegram.send
+
+    def slow_send(message, parse_mode=None):
+        wall_time.sleep(0.2)
+        return real_send(message, parse_mode)
+
+    telegram.send = slow_send  # type: ignore[method-assign]
+    start = threading.Barrier(2)
+    results = []
+
+    def run():
+        start.wait()
+        results.append(service.send_weekly_brief_if_due(FRIDAY_0910))
+
+    threads = [threading.Thread(target=run) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert sorted(results) == [False, True]
+    assert len(telegram.sent) == 1
+    assert [d["alert_key"] for d in repository.deliveries] == [DELIVERY_KEY_WEEKLY_BRIEF]
