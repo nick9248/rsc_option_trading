@@ -162,12 +162,14 @@ class MenthorqMonitorService:
         stored and kept, see ``save_menthorq_level_snapshot``).
         """
         record.record_id = self.repository.save_menthorq_level_snapshot(record)
+        # A computed record's reasons are only caveats (e.g. some rows without IV).
+        reasons_label = "caveats" if record.has_levels else "not computed"
         logger.info(
             "MenthorQ %s record %s as of %s: CR %s PS %s HVL %s net GEX %s regime %s (id %s)%s",
             record.mode, record.currency, record.as_of_utc.isoformat(), record.call_resistance,
             record.put_support, record.hvl, record.total_net_gex, record.gamma_regime,
             record.record_id,
-            f"; not computed: {record.not_computed_reasons}" if record.not_computed_reasons else "",
+            f"; {reasons_label}: {record.not_computed_reasons}" if record.not_computed_reasons else "",
         )
         return record
 

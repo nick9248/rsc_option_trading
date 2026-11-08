@@ -358,3 +358,25 @@ def test_replayed_comparisons_recompute_earlier_instants_without_storing():
         AS_OF - timedelta(hours=1), AS_OF - timedelta(hours=24), AS_OF - timedelta(days=7)]
     assert all(comparison.reference is not None for comparison in comparisons)
     assert repository.records == []
+
+
+def test_store_logs_caveats_of_a_computed_record_and_reasons_of_a_not_computed_one(caplog):
+    service = _service()
+    caveat = "1 chain rows have no open interest: left out of GEX"
+    with caplog.at_level("INFO"):
+        service.store(make_record(not_computed_reasons=[caveat]))
+    assert f"; caveats: ['{caveat}']" in caplog.text
+    assert "not computed" not in caplog.text
+
+    caplog.clear()
+    reason = "inputs not available: no snapshot"
+    with caplog.at_level("INFO"):
+        service.store(make_record_without_levels(spot=None, not_computed_reasons=[reason],
+                                                 as_of=BASE_TIME + timedelta(hours=1)))
+    assert f"; not computed: ['{reason}']" in caplog.text
+    assert "caveats" not in caplog.text
+
+    caplog.clear()
+    with caplog.at_level("INFO"):
+        service.store(make_record(as_of=BASE_TIME + timedelta(hours=2), not_computed_reasons=[]))
+    assert "caveats" not in caplog.text and "not computed" not in caplog.text
