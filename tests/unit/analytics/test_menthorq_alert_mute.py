@@ -50,3 +50,22 @@ def test_muted_strictly_before_the_end():
     assert is_muted(state, NOW + timedelta(hours=1)) is False       # ends on its own
     assert is_muted(MenthorqMonitorState(currency="BTC"), NOW) is False
     assert is_muted(None, NOW) is False
+
+
+@pytest.mark.parametrize("text", ["99999999999d", "99999999999999999999999m", "43201m"])
+def test_huge_numbers_raise_the_friendly_error_not_overflow(text):
+    # 30 d = 43,200 min: one minute more is refused; a huge number never reaches timedelta.
+    with pytest.raises(ValueError, match="longest mute is 30d"):
+        parse_mute_duration(text)
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("024h", timedelta(hours=24)), ("0003d", timedelta(days=3)), ("43200m", timedelta(days=30)),
+])
+def test_leading_zeros_and_the_exact_maximum_in_minutes(text, expected):
+    assert parse_mute_duration(text) == expected
+
+
+def test_zeros_with_leading_zeros_are_still_zero():
+    with pytest.raises(ValueError, match="longer than zero"):
+        parse_mute_duration("000h")

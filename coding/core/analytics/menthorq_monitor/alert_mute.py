@@ -55,12 +55,14 @@ def parse_mute_duration(text: str) -> Optional[timedelta]:
     match = _DURATION_PATTERN.match(cleaned)
     if match is None:
         raise ValueError(f"{text.strip()!r} is not a duration (use e.g. 24h, 3d, 90m or off)")
-    duration = timedelta(minutes=int(match.group(1)) * _UNIT_MINUTES[match.group(2)])
-    if duration <= timedelta(0):
+    # Checked as an integer BEFORE building the timedelta: a huge number
+    # (e.g. 99999999999d) would make timedelta raise OverflowError.
+    minutes = int(match.group(1)) * _UNIT_MINUTES[match.group(2)]
+    if minutes <= 0:
         raise ValueError("the duration must be longer than zero")
-    if duration > MAXIMUM_MUTE_DURATION:
+    if minutes > MAXIMUM_MUTE_DURATION // timedelta(minutes=1):
         raise ValueError(f"the longest mute is {MAXIMUM_MUTE_DURATION.days}d")
-    return duration
+    return timedelta(minutes=minutes)
 
 
 def is_muted(state: Optional[MenthorqMonitorState], now: datetime) -> bool:
