@@ -24,7 +24,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Sequence
 
-from coding.core.analytics.menthorq_replication_calculator import EXPIRY_UNIVERSES
+from coding.core.analytics.menthorq_replication_calculator import EXPIRY_UNIVERSES, parse_utc_timestamp
 from coding.core.logging.logging_setup import init_logging
 from coding.service.on_chain.menthorq_monitor.brief_delivery_service import evaluate_urgent_alerts_of_record
 from coding.service.on_chain.menthorq_monitor.brief_formatter import format_brief, telegram_length
@@ -32,14 +32,6 @@ from coding.service.on_chain.menthorq_monitor.menthorq_monitor_service import Me
 from coding.service.on_chain.menthorq_monitor.monitor_settings import MenthorqMonitorSettings
 
 logger = logging.getLogger(__name__)
-
-
-def parse_utc_timestamp(text: str) -> datetime:
-    """ISO timestamp -> UTC-aware datetime; a timestamp without offset is taken as UTC."""
-    parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
 
 
 def build_parser() -> argparse.ArgumentParser:

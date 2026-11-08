@@ -36,7 +36,7 @@ one IV*OI chart per listed, unsettled expiry with that expiry's own levels.
 import argparse
 import json
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from pathlib import Path
 from typing import Optional, Sequence, Tuple
 
@@ -45,6 +45,7 @@ from coding.core.analytics.menthorq_replication_calculator import (
     EXPIRY_UNIVERSES,
     GAMMA_UNDERLYING_INDEX,
     GAMMA_UNDERLYINGS,
+    parse_utc_timestamp,
     start_of_utc_day,
 )
 from coding.core.logging.logging_setup import init_logging
@@ -54,14 +55,6 @@ from coding.service.on_chain.menthorq_replication_service import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def parse_utc_timestamp(text: str) -> datetime:
-    """ISO timestamp -> UTC-aware datetime; a timestamp without offset is taken as UTC."""
-    parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -159,6 +159,14 @@ def parse_expiry_settlement(expiration: str) -> Optional[datetime]:
     )
 
 
+def parse_utc_timestamp(text: str) -> datetime:
+    """ISO timestamp -> UTC-aware datetime; a timestamp without offset is taken as UTC."""
+    parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 def start_of_utc_day(instant: datetime) -> datetime:
     """
     00:00 UTC of the UTC calendar day that contains ``instant``.

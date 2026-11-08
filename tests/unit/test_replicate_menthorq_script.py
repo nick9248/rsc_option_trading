@@ -52,3 +52,19 @@ def test_as_of_with_explicit_open_interest_instant_still_works():
 def test_invalid_combinations_are_rejected(argv):
     with pytest.raises(SystemExit):
         _instants(argv)
+
+
+def test_parse_utc_timestamp_is_shared_by_both_scripts():
+    from datetime import datetime, timezone
+
+    from coding.core.analytics.menthorq_replication_calculator import parse_utc_timestamp
+    from scripts import menthorq_brief, replicate_menthorq
+
+    assert menthorq_brief.parse_utc_timestamp is parse_utc_timestamp
+    assert replicate_menthorq.parse_utc_timestamp is parse_utc_timestamp
+    expected = datetime(2026, 11, 6, 20, 59, tzinfo=timezone.utc)
+    assert parse_utc_timestamp("2026-11-06T20:59") == expected            # no offset: UTC
+    assert parse_utc_timestamp("2026-11-06T20:59Z") == expected
+    assert parse_utc_timestamp("2026-11-06T15:59-05:00") == expected      # converted to UTC
+    assert parse_utc_timestamp("2026-11-06T15:59-05:00").tzinfo == timezone.utc
+
