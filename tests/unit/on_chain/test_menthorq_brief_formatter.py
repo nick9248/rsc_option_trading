@@ -29,6 +29,10 @@ from coding.service.on_chain.menthorq_monitor.brief_formatter import (
     stale_data_warning,
     telegram_length,
 )
+from coding.service.on_chain.menthorq_monitor.command_formatter import (
+    format_changes_reply,
+    format_levels_reply,
+)
 from tests.fakes.fake_menthorq_monitor import BASE_TIME, make_record
 
 ALLOWED_TAGS = {"b", "i", "pre", "code"}
@@ -262,3 +266,54 @@ def test_code_blocks_use_the_single_markup_constant():
     assert message.count("<pre") == message.count(CODE_BLOCK_OPEN) == 4
     assert message.count(CODE_BLOCK_CLOSE) == 4
     assert code_block("a < b") == f"{CODE_BLOCK_OPEN}a &lt; b{CODE_BLOCK_CLOSE}"
+
+
+class TestWallClockStaleness:
+    """A stored record is also judged against the reader's wall clock (``now``)."""
+
+    LIMIT = timedelta(minutes=120)
+
+    def test_record_stored_days_ago_is_stale_and_shows_the_age_at_now(self):
+        # Fresh inside the record: snapshot 20 min before the data time 09:10 (snapshot 08:50).
+        record = _aged(snapshot_age=timedelta(minutes=20), spot_age=timedelta(seconds=30))
+        assert stale_data_warning(record, self.LIMIT) is None
+        now = BASE_TIME + timedelta(days=3)          # 2026-11-09 09:10 UTC
+        # now - snapshot = 3 d + 20 min -> "3 d 0 h 20 min"
+        expected = ("<b>DATA STALE:</b> snapshot is 3 d 0 h 20 min older than now "
+                    "(2026-11-09 09:10 UTC); levels may be out of date.")
+        assert stale_data_line(record, self.LIMIT, now) == expected
+        lines = format_brief(record, [], title="Weekly brief", stale_limit=self.LIMIT, now=now).split("\n")
+        assert lines[1] == expected
+        assert format_brief(record, [], stale_limit=self.LIMIT, now=now).count("DATA STALE") == 1
+
+    def test_exactly_the_limit_at_now_is_not_stale_one_minute_more_is(self):
+        record = _aged(snapshot_age=timedelta(minutes=20), spot_age=timedelta(seconds=30))
+        at_limit = record.snapshot_captured_at_utc + self.LIMIT       # 10:50 UTC
+        assert stale_data_warning(record, self.LIMIT, at_limit) is None
+        beyond = at_limit + timedelta(minutes=1)                      # 10:51 -> 121 min = 2 h 1 min
+        assert stale_data_warning(record, self.LIMIT, beyond) == (
+            "snapshot is 2 h 1 min older than now (2026-11-06 10:51 UTC); levels may be out of date.")
+
+    def test_one_line_with_the_larger_age_and_the_stale_spot(self):
+        # In-record: snapshot 12 h 41 min, spot 12 h 31 min before the data time; now 1 h later
+        # -> snapshot age at now 13 h 41 min (the larger), spot bracket unchanged.
+        record = _aged(snapshot_age=timedelta(hours=12, minutes=41),
+                       spot_age=timedelta(hours=12, minutes=31, seconds=43))
+        now = BASE_TIME + timedelta(hours=1)
+        message = format_brief(record, [], stale_limit=self.LIMIT, now=now)
+        assert ("<b>DATA STALE:</b> snapshot is 13 h 41 min older than now (2026-11-06 10:10 UTC) "
+                "(spot trade 12 h 31 min); levels may be out of date.") in message
+        assert message.count("DATA STALE") == 1
+
+    def test_now_equal_to_the_data_time_keeps_the_data_time_wording(self):
+        record = _aged(snapshot_age=self.LIMIT + timedelta(minutes=1), spot_age=timedelta(seconds=30))
+        assert stale_data_warning(record, self.LIMIT, BASE_TIME) == (
+            "snapshot is 2 h 1 min older than the data time; levels may be out of date.")
+
+    def test_levels_and_changes_replies_pass_now(self):
+        record = _aged(snapshot_age=timedelta(minutes=20), spot_age=timedelta(seconds=30))
+        now = BASE_TIME + timedelta(days=3)
+        for message in (format_levels_reply("BTC", record, stale_limit=self.LIMIT, now=now),
+                        format_changes_reply("BTC", record, [], stale_limit=self.LIMIT, now=now)):
+            assert message.split("\n")[1].startswith("<b>DATA STALE:</b> snapshot is 3 d 0 h 20 min older than now")
+        assert "DATA STALE" not in format_levels_reply("BTC", record, stale_limit=self.LIMIT)

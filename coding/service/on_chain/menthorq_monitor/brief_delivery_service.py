@@ -105,7 +105,8 @@ class MenthorqBriefDeliveryService:
     def build_brief(self, now: datetime, title: str) -> Optional[str]:
         """
         The brief from the newest stored live record at or before ``now``,
-        or None when none is stored.
+        or None when none is stored. The record's snapshot is also judged
+        against ``now``, so a record stored long ago gets the DATA STALE line.
         """
         latest = self.monitor_service.latest_record(MODE_LIVE, now)
         if latest is None:
@@ -116,6 +117,7 @@ class MenthorqBriefDeliveryService:
             self.monitor_service.latest_record(MODE_DAILY_CLOSE, now),
             title,
             stale_limit=self.settings.stale_snapshot_limit,
+            now=now,
         )
 
     def _deliver(self, key: str, message: str, record_id: Optional[int]) -> bool:

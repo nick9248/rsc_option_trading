@@ -82,11 +82,12 @@ def _no_record(currency: str, text: str) -> str:
 
 
 def _title_lines(
-    currency: str, text: str, record: MenthorqLevelRecord, stale_limit: timedelta
+    currency: str, text: str, record: MenthorqLevelRecord, stale_limit: timedelta,
+    now: Optional[datetime],
 ) -> List[str]:
     """The title, then the "DATA STALE" line when the record's data is stale."""
     lines = [_title(currency, text, record)]
-    stale_line = stale_data_line(record, stale_limit)
+    stale_line = stale_data_line(record, stale_limit, now)
     if stale_line is not None:
         lines.append(stale_line)
     return lines
@@ -96,13 +97,15 @@ def format_levels_reply(
     currency: str,
     record: Optional[MenthorqLevelRecord],
     stale_limit: timedelta = DEFAULT_STALE_SNAPSHOT_LIMIT,
+    now: Optional[datetime] = None,
 ) -> str:
     """
     /levels: Call Resistance, HVL and Put Support of the latest stored live
     record with their signed distance to spot (level - spot, USD and % of
     spot), spot, the regime sentence and total net GEX. Starts with the
     "DATA STALE" line when the snapshot is more than ``stale_limit`` older
-    than the record's data time.
+    than the record's data time or than ``now`` (the wall clock of the
+    reply; see ``stale_data_warning``).
     """
     if record is None:
         return _no_record(currency, "key levels")
@@ -115,7 +118,7 @@ def format_levels_reply(
                     f"{format_signed_usd(distance.distance_usd):>9}")
     rows.append(f"{'Spot':<16}{format_strike(record.spot):>9}")
     lines = [
-        *_title_lines(currency, "key levels", record, stale_limit),
+        *_title_lines(currency, "key levels", record, stale_limit, now),
         code_block("\n".join(rows)),
         escape(regime_sentence(record)),
         f"Total net GEX {escape(format_gex(record.total_net_gex))} per 1% move.",
@@ -132,6 +135,7 @@ def format_changes_reply(
     comparisons: Sequence[RecordComparison],
     limit: int = TELEGRAM_MESSAGE_LIMIT,
     stale_limit: timedelta = DEFAULT_STALE_SNAPSHOT_LIMIT,
+    now: Optional[datetime] = None,
 ) -> str:
     """
     /changes: the latest stored live record vs the previous run, 24 h and
@@ -146,7 +150,7 @@ def format_changes_reply(
 
     def render(maximum_events: Optional[int]) -> str:
         return "\n".join([
-            *_title_lines(currency, "changes", record, stale_limit),
+            *_title_lines(currency, "changes", record, stale_limit, now),
             "<i>USD; level % = % of current spot.</i>",
             *[comparison_block(comparison) for comparison in comparisons],
             "<b>Events and expiry roll-offs</b>",

@@ -103,16 +103,18 @@ class MenthorqBotCommandService:
 
     def build_levels_reply(self) -> str:
         """/levels from the newest stored computed live record."""
+        now = self.clock()
         return format_levels_reply(self.settings.currency,
-                                   self.monitor_service.latest_record(MODE_LIVE, self.clock()),
-                                   stale_limit=self.settings.stale_snapshot_limit)
+                                   self.monitor_service.latest_record(MODE_LIVE, now),
+                                   stale_limit=self.settings.stale_snapshot_limit, now=now)
 
     def build_changes_reply(self) -> str:
         """/changes of the newest stored computed live record."""
-        latest = self.monitor_service.latest_record(MODE_LIVE, self.clock())
+        now = self.clock()
+        latest = self.monitor_service.latest_record(MODE_LIVE, now)
         comparisons = self.monitor_service.build_comparisons(latest) if latest is not None else []
         return format_changes_reply(self.settings.currency, latest, comparisons,
-                                    stale_limit=self.settings.stale_snapshot_limit)
+                                    stale_limit=self.settings.stale_snapshot_limit, now=now)
 
     def build_status_reply(self) -> str:
         """/status: runs, data age, health and alert state."""

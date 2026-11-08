@@ -122,14 +122,37 @@ def test_levels_and_changes_without_a_record_say_so():
 def test_levels_and_changes_start_with_the_stale_line_beyond_the_configured_limit():
     # make_record: snapshot 20 min before the data time, spot trade 30 s before.
     stale = "<b>DATA STALE:</b> snapshot is 20 min older than the data time; levels may be out of date."
-    at_limit, _, _, _ = _service([make_record()], replace(MenthorqMonitorSettings(), stale_snapshot_minutes=20))
+    # The reply is asked at the record's data time, so only the in-record age counts here.
+    at_limit, _, _, clock = _service([make_record()], replace(MenthorqMonitorSettings(), stale_snapshot_minutes=20))
+    clock["now"] = BASE_TIME
     assert "DATA STALE" not in _run(at_limit, "/levels")
     assert "DATA STALE" not in _run(at_limit, "/changes")
-    beyond, _, _, _ = _service([make_record()], replace(MenthorqMonitorSettings(), stale_snapshot_minutes=19))
+    beyond, _, _, clock = _service([make_record()], replace(MenthorqMonitorSettings(), stale_snapshot_minutes=19))
+    clock["now"] = BASE_TIME
     for command, title in (("/levels", "key levels"), ("/changes", "changes")):
         lines = _run(beyond, command).split("\n")
         assert lines[0] == f"<b>BTC {title}</b> | live 2026-11-06 09:10 UTC"
         assert lines[1] == stale
+
+
+def test_levels_and_changes_judge_a_stored_record_against_the_clock():
+    # make_record: snapshot 08:50 UTC. At NOW (10:05) it is 75 min old: within the 120 min default.
+    commands, _, _, clock = _service([make_record()])
+    assert "DATA STALE" not in _run(commands, "/levels")
+    # Collector down for 3 days: same stored record, clock 2026-11-09 10:05 -> 3 d 1 h 15 min.
+    clock["now"] = NOW + timedelta(days=3)
+    expected = ("<b>DATA STALE:</b> snapshot is 3 d 1 h 15 min older than now "
+                "(2026-11-09 10:05 UTC); levels may be out of date.")
+    for command in ("/levels", "/changes"):
+        assert _run(commands, command).split("\n")[1] == expected
+
+
+def test_on_demand_brief_judges_a_stored_record_against_the_clock():
+    commands, _, telegram, clock = _service([make_record()])
+    clock["now"] = NOW + timedelta(days=3)
+    commands.handlers()["/brief"]("")
+    assert ("<b>DATA STALE:</b> snapshot is 3 d 1 h 15 min older than now (2026-11-09 10:05 UTC)"
+            in telegram.sent[-1]["message"])
 
 
 def _changes_history():

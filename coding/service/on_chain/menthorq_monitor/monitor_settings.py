@@ -18,8 +18,10 @@ steal the production bot's updates or send duplicate alerts.
   MENTHORQ_WEEKLY_BRIEF_TIME_UTC  HH:MM (UTC)
   MENTHORQ_COMMAND_POLL_SECONDS   seconds between getUpdates calls (>= 5)
   MENTHORQ_STALE_SNAPSHOT_MINUTES minutes (>= 10, default 120): a snapshot or spot
-                                  trade older than this before the data time puts
-                                  a "DATA STALE" line on the brief, /levels, /changes
+                                  trade older than this before the data time, or a
+                                  stored record's snapshot older than this before
+                                  now, puts a "DATA STALE" line on the brief,
+                                  /levels, /changes
 
 Urgent alert rules (see alert_rules; "percent" = percent of spot, a number
 in (0, 100] or "off"):

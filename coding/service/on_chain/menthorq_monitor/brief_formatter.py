@@ -149,18 +149,37 @@ def _age_before_data_time(record: MenthorqLevelRecord, instant: Optional[datetim
     return None if instant is None else record.as_of_utc - instant
 
 
-def stale_data_warning(record: MenthorqLevelRecord, limit: timedelta) -> Optional[str]:
+def stale_data_warning(
+    record: MenthorqLevelRecord, limit: timedelta, now: Optional[datetime] = None
+) -> Optional[str]:
     """
-    Plain-text warning when the snapshot or the spot trade behind ``record``
-    is more than ``limit`` older than its data time (exactly ``limit`` is
-    not stale); None otherwise or when the instants are missing. One text
-    covers both ages.
+    Plain-text warning when the data behind ``record`` is stale; None
+    otherwise or when the instants are missing. One text covers every age.
+
+    The snapshot is stale when it is more than ``limit`` older than the
+    record's data time, or (with ``now``) more than ``limit`` older than
+    ``now``: a record stored days ago (collector down) is stale even though
+    it was fresh when it was computed. The larger of the two ages is shown.
+    The spot trade is compared with the data time only. Exactly ``limit``
+    is not stale.
+
+    Args:
+        record: The record shown.
+        limit: ``MenthorqMonitorSettings.stale_snapshot_limit``.
+        now: Wall clock (UTC-aware) of the reader of a stored record; None
+            skips the wall-clock check (a record computed at a chosen
+            instant, e.g. a replay of a past date).
     """
     snapshot_age = _age_before_data_time(record, record.snapshot_captured_at_utc)
+    reference_text = "the data time"
+    if now is not None and record.snapshot_captured_at_utc is not None:
+        age_at_now = now - record.snapshot_captured_at_utc
+        if snapshot_age is None or age_at_now > snapshot_age:
+            snapshot_age, reference_text = age_at_now, f"now ({format_utc(now)})"
     spot_age = _age_before_data_time(record, record.spot_time_utc)
     spot_stale = spot_age is not None and spot_age > limit
     if snapshot_age is not None and snapshot_age > limit:
-        text = f"snapshot is {format_duration(snapshot_age)} older than the data time"
+        text = f"snapshot is {format_duration(snapshot_age)} older than {reference_text}"
         if spot_stale and spot_age is not None:
             text += f" (spot trade {format_duration(spot_age)})"
         return text + "; levels may be out of date."
@@ -170,9 +189,11 @@ def stale_data_warning(record: MenthorqLevelRecord, limit: timedelta) -> Optiona
     return None
 
 
-def stale_data_line(record: MenthorqLevelRecord, limit: timedelta) -> Optional[str]:
+def stale_data_line(
+    record: MenthorqLevelRecord, limit: timedelta, now: Optional[datetime] = None
+) -> Optional[str]:
     """``stale_data_warning`` as the bold "DATA STALE" HTML line; None when not stale."""
-    warning = stale_data_warning(record, limit)
+    warning = stale_data_warning(record, limit, now)
     return None if warning is None else f"<b>DATA STALE:</b> {escape(warning)}"
 
 
@@ -216,7 +237,9 @@ class _RenderOptions:
     comparison_labels: tuple = (COMPARISON_PREVIOUS, COMPARISON_ONE_DAY, COMPARISON_SEVEN_DAYS)
 
 
-def _header(record: MenthorqLevelRecord, title: str, stale_limit: timedelta) -> str:
+def _header(
+    record: MenthorqLevelRecord, title: str, stale_limit: timedelta, now: Optional[datetime]
+) -> str:
     mode_text = ("live: newest snapshot and its own open interest" if record.mode == MODE_LIVE
                  else "daily close: 23:59 UTC, open interest from 00:00 UTC")
     expiries = record.expirations[:MAXIMUM_EXPIRIES_SHOWN]
@@ -224,7 +247,7 @@ def _header(record: MenthorqLevelRecord, title: str, stale_limit: timedelta) -> 
     if len(record.expirations) > len(expiries):
         expiries_text += f" (+{len(record.expirations) - len(expiries)} more)"
     lines = [f"<b>{escape(record.currency)} MenthorQ-style levels | {escape(title)}</b>"]
-    stale_line = stale_data_line(record, stale_limit)
+    stale_line = stale_data_line(record, stale_limit, now)
     if stale_line is not None:
         lines.append(stale_line)
     lines += [
@@ -392,9 +415,10 @@ def _render_brief(
     options: _RenderOptions,
     omitted: Sequence[str],
     stale_limit: timedelta,
+    now: Optional[datetime],
 ) -> str:
     sections = [
-        _header(record, title, stale_limit),
+        _header(record, title, stale_limit, now),
         _levels_table(record, daily_close),
         _regime_section(record),
         _changes_section(comparisons, options.comparison_labels),
@@ -430,6 +454,7 @@ def format_brief(
     title: str = "Brief",
     limit: int = TELEGRAM_MESSAGE_LIMIT,
     stale_limit: timedelta = DEFAULT_STALE_SNAPSHOT_LIMIT,
+    now: Optional[datetime] = None,
 ) -> str:
     """
     The brief: header (with the "DATA STALE" line when it applies), key
@@ -445,19 +470,23 @@ def format_brief(
         stale_limit: Snapshot / spot age before the data time above which
             the brief starts with the "DATA STALE" line
             (``MenthorqMonitorSettings.stale_snapshot_limit``).
+        now: Wall clock when the brief is built from a stored record; the
+            snapshot is then also judged against it (see
+            ``stale_data_warning``). None for a record computed at a chosen
+            instant.
 
     Returns:
         Telegram HTML no longer than ``limit``.
     """
     options = _RenderOptions()
     omitted: List[str] = []
-    text = _render_brief(record, comparisons, daily_close, title, options, omitted, stale_limit)
+    text = _render_brief(record, comparisons, daily_close, title, options, omitted, stale_limit, now)
     for description, step in _SHORTENING_STEPS:
         if telegram_length(text) <= limit:
             return text
         options = step(options)
         omitted.append(description)
-        text = _render_brief(record, comparisons, daily_close, title, options, omitted, stale_limit)
+        text = _render_brief(record, comparisons, daily_close, title, options, omitted, stale_limit, now)
     if telegram_length(text) <= limit:
         return text
     # Not reachable with the item caps above; kept so an oversize text is never sent.

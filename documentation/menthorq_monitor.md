@@ -118,6 +118,13 @@ data time, for example:
   added in brackets when it is also over the limit (one line, not two).
 - Only the spot trade older than the limit: `spot comes from a trade ... before the data time;
   distances to spot may be out of date.`
+- The brief, the weekly brief, `/levels` and `/changes` show a STORED record, so its snapshot is
+  also compared with the clock at the time of the reply. A record stored days ago (collector
+  down) is stale even though it was fresh when computed:
+  `DATA STALE: snapshot is 3 d 0 h 20 min older than now (2026-11-09 09:10 UTC); levels may be out of date.`
+  Still one line; it shows the larger of the two snapshot ages. The GUI preview and the dry run
+  recompute the record at the chosen instant, so their check against the data time is already
+  the check against "now" for a live run (and a past daily close is not called stale for being past).
 - Exactly the limit is not stale; one minute more is. Durations are whole minutes, rounded down.
 - A spot trade more than 15 min but not more than the limit before the data time is a normal
   caveat line instead. `/status` keeps its own 45 min snapshot check for its health line.

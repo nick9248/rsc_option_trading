@@ -163,3 +163,19 @@ def test_mute_does_not_silence_the_briefs():
     assert service.send_on_demand_brief(FRIDAY_0910) is True
     assert service.send_weekly_brief_if_due(FRIDAY_0910) is True
     assert len(telegram.sent) == 2
+
+
+def test_weekly_brief_from_a_record_stored_days_ago_carries_the_stale_line():
+    # Record 2026-11-06 09:10 (snapshot 08:50, fresh then); collector down until Friday 13th 09:10.
+    service, _, telegram, clock = _delivery([make_record()])
+    clock["now"] = FRIDAY_0910 + timedelta(days=7)
+    assert service.send_weekly_brief_if_due(clock["now"]) is True
+    # now - snapshot = 7 d 20 min
+    assert ("<b>DATA STALE:</b> snapshot is 7 d 0 h 20 min older than now (2026-11-13 09:10 UTC)"
+            in telegram.sent[-1]["message"])
+
+
+def test_weekly_brief_from_a_fresh_record_has_no_stale_line():
+    service, _, telegram, _ = _delivery([make_record()])
+    assert service.send_weekly_brief_if_due(FRIDAY_0910) is True
+    assert "DATA STALE" not in telegram.sent[-1]["message"]
