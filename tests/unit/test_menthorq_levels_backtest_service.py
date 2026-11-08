@@ -6,6 +6,7 @@ outcomes never read past the end of the data.
 """
 
 from datetime import date, datetime, timedelta, timezone
+from typing import Optional, Tuple
 
 import pytest
 
@@ -13,6 +14,7 @@ from coding.core.analytics.menthorq_levels_backtest_calculator import (
     CHANGE_EXPIRY_SETTLEMENT,
     CHANGE_UNCHANGED,
 )
+from coding.core.database.repository import DatabaseRepository
 from coding.service.on_chain.menthorq_levels_backtest_service import MenthorqLevelsBacktestService
 
 SPOT = 80000.0
@@ -98,9 +100,10 @@ def test_forward_outcomes_stop_at_the_end_of_the_data(rows):
     assert last["next_3d_final_price"] is None
 
 
-class VaryingPriceRepository:
+class VaryingPriceRepository(DatabaseRepository):
     """Index price that changes every hour, with a gap (stale samples) and an end of data.
-    Counts the index-price queries."""
+    Counts the index-price queries. Subclasses the real repository WITHOUT calling its
+    __init__ (no connection pool), so the type checker checks the signature."""
 
     start = datetime(2026, 10, 1, 0, 0, tzinfo=timezone.utc)
     data_end = datetime(2026, 10, 9, 5, 0, tzinfo=timezone.utc)
@@ -109,7 +112,7 @@ class VaryingPriceRepository:
     def __init__(self):
         self.index_price_queries = 0
 
-    def get_index_price_at_or_before(self, currency, as_of):
+    def get_index_price_at_or_before(self, currency: str, as_of: datetime) -> Optional[Tuple[float, datetime]]:
         self.index_price_queries += 1
         instant = min(as_of, self.data_end)
         if self.gap[0] <= instant < self.gap[1]:

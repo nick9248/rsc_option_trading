@@ -375,10 +375,10 @@ def test_unknown_command_reply_and_failed_reply(monkeypatch):
 
 
 def test_brief_handler_sends_the_on_demand_brief():
-    commands, _, telegram, _ = _service([make_record()])
+    commands, repository, telegram, _ = _service([make_record()])
     commands.handlers()["/brief"]("")
     assert "On-demand brief" in telegram.sent[-1]["message"]
-    assert [delivery["alert_key"] for delivery in commands.repository.deliveries] == ["on_demand_brief"]
+    assert [delivery["alert_key"] for delivery in repository.deliveries] == ["on_demand_brief"]
 
 
 def test_brief_that_cannot_be_built_gets_the_failed_reply(monkeypatch):
