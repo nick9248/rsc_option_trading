@@ -22,8 +22,11 @@ def _update(update_id, text, chat_id=OWNER, sent=NOW - timedelta(seconds=5), use
                         "date": int(sent.timestamp())}}
 
 
-def _listener(updates, owner=OWNER, with_unknown=True, menu=MENU):
-    telegram = FakeTelegram(updates=updates)
+def _listener(updates, owner=OWNER, with_unknown=True, menu=MENU, started=True):
+    """The listener and its fake Telegram. ``started``: the first poll (which skips
+    what was pending at start) has already run on an empty queue, and ``updates``
+    arrive after it; otherwise ``updates`` are queued before the first poll."""
+    telegram = FakeTelegram(updates=[] if started else updates)
     calls = []
     listener = TelegramCommandListener(
         telegram, owner,
@@ -34,6 +37,10 @@ def _listener(updates, owner=OWNER, with_unknown=True, menu=MENU):
         if with_unknown else None,
         command_menu=menu,
     )
+    if started:
+        listener.poll_once()
+        telegram.updates = list(updates)
+        telegram.get_updates_calls.clear()
     return listener, telegram, calls
 
 
@@ -83,23 +90,27 @@ def test_command_menu_is_registered_once_at_the_first_poll():
 
 
 def test_failed_menu_registration_is_logged_and_polling_goes_on(caplog):
-    listener, telegram, calls = _listener([_update(1, "/brief")])
+    listener, telegram, calls = _listener([], started=False)
     telegram.accept_commands = False
     with caplog.at_level(logging.WARNING):
-        assert listener.poll_once() == 1
+        assert listener.poll_once() == 0
+    telegram.updates = [_update(1, "/brief")]
+    assert listener.poll_once() == 1
     assert "command menu NOT registered" in caplog.text
     assert calls == [("brief", "")]
     listener.poll_once()
     assert len(telegram.registered_commands) == 1          # not retried every poll
 
 
-def test_raising_menu_registration_never_stops_polling():
-    listener, telegram, calls = _listener([_update(1, "/brief")])
+def test_raising_menu_registration_never_stops_polling(monkeypatch):
+    listener, telegram, calls = _listener([], started=False)
 
     def broken(commands):
         raise RuntimeError("network")
 
-    telegram.set_my_commands = broken
+    monkeypatch.setattr(telegram, "set_my_commands", broken)
+    listener.poll_once()
+    telegram.updates = [_update(1, "/brief")]
     assert listener.poll_once() == 1
     assert calls == [("brief", "")]
 
@@ -114,7 +125,7 @@ def test_offset_confirms_processed_updates_on_the_next_poll():
     listener, telegram, calls = _listener([_update(41, "/brief"), _update(42, "hello")])
     listener.poll_once()
     listener.poll_once()
-    assert telegram.get_updates_calls[0]["offset"] is None
+    assert telegram.get_updates_calls[0]["offset"] is None     # nothing was pending at start
     assert telegram.get_updates_calls[1]["offset"] == 43
     assert calls == [("brief", "")]           # not re-run on the second poll
 
@@ -126,13 +137,47 @@ def test_failed_get_updates_and_failing_handler_never_raise():
     def broken(arguments):
         raise RuntimeError("boom")
 
-    listener = TelegramCommandListener(FakeTelegram(updates=[_update(1, "/brief")]), OWNER,
-                                       {"/brief": broken}, clock=lambda: NOW)
+    telegram = FakeTelegram()
+    listener = TelegramCommandListener(telegram, OWNER, {"/brief": broken}, clock=lambda: NOW)
+    listener.poll_once()
+    telegram.updates = [_update(1, "/brief")]
     assert listener.poll_once() == 1
 
 
-def test_no_owner_configured_disables_commands():
-    listener, telegram, calls = _listener([_update(1, "/brief")], owner="")
-    assert listener.poll_once() == 0
+def test_no_owner_configured_disables_commands_with_one_warning(caplog):
+    with caplog.at_level(logging.WARNING):
+        listener, telegram, calls = _listener([_update(1, "/brief")], owner="", started=False)
+        for _ in range(5):
+            assert listener.poll_once() == 0
     assert telegram.get_updates_calls == []
     assert telegram.registered_commands == []
+    assert calls == []
+    assert caplog.text.count("no owner chat id configured") == 1
+
+
+def test_first_poll_skips_what_was_pending_so_a_restart_does_not_rerun_a_command(caplog):
+    """Before the restart /mute 24h (id 70) was handled; Telegram still holds it unconfirmed
+    with a newer /brief (id 71) sent while down. Both are recent (under the 10 min age rule)."""
+    pending = [_update(70, "/mute 24h", sent=NOW - timedelta(minutes=3)),
+               _update(71, "/brief", sent=NOW - timedelta(minutes=1))]
+    with caplog.at_level(logging.INFO):
+        listener, telegram, calls = _listener(pending, started=False)
+        assert listener.poll_once() == 0
+    assert calls == []
+    assert telegram.get_updates_calls[0] == {"offset": -1, "timeout_seconds": 0}
+    assert telegram.get_updates_calls[1]["offset"] == 72                 # continues after 71
+    assert "skipped the pending updates up to update_id 71" in caplog.text
+
+    telegram.updates.append(_update(72, "/brief"))                      # sent after the start
+    assert listener.poll_once() == 1
+    assert calls == [("brief", "")]
+
+
+def test_skip_that_fails_is_retried_and_nothing_runs_meanwhile():
+    listener, telegram, calls = _listener([_update(5, "/brief")], started=False)
+    telegram.fail_updates = True
+    assert listener.poll_once() == 0
+    telegram.fail_updates = False
+    assert listener.poll_once() == 0                                    # the retry skips /brief
+    assert calls == []
+    assert [call["offset"] for call in telegram.get_updates_calls] == [-1, -1, 6]

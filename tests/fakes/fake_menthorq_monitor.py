@@ -177,7 +177,8 @@ class FakeInputLoader(MenthorqInputLoader):
 class FakeTelegram(TelegramAlertService):
     """
     Records sent messages; ``accept`` decides whether a send succeeds.
-    ``updates`` are served by get_updates (None when ``fail_updates``);
+    ``updates`` are served by get_updates (None when ``fail_updates``; a
+    negative offset keeps and returns only the last updates, like Telegram);
     set_my_commands calls are kept in ``registered_commands``.
     """
 
@@ -205,4 +206,8 @@ class FakeTelegram(TelegramAlertService):
         self.get_updates_calls.append({"offset": offset, "timeout_seconds": timeout_seconds})
         if self.fail_updates:
             return None
+        if offset is not None and offset < 0:
+            # Like Telegram: the last -offset updates; every earlier one is forgotten.
+            self.updates = self.updates[offset:]
+            return list(self.updates)
         return [update for update in self.updates if offset is None or update["update_id"] >= offset]

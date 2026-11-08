@@ -137,7 +137,7 @@ class MenthorqMonitorJob:
         switched_off = []
         if not settings.alerts_enabled:
             switched_off.append("urgent alerts and weekly brief (set MENTHORQ_ALERTS_ENABLED=1)")
-        if self.command_listener is None:
+        if not settings.commands_enabled:
             switched_off.append("bot commands (set MENTHORQ_COMMANDS_ENABLED=1)")
         if switched_off:
             logger.info("MenthorQ monitor: Telegram OFF for %s; records are still computed and "
@@ -173,7 +173,10 @@ def build_menthorq_monitor_job(
     monitor_service = MenthorqMonitorService(repository=repository, settings=settings)
     delivery_service = MenthorqBriefDeliveryService(monitor_service, telegram)
     listener = None
-    if settings.commands_enabled:
+    if settings.commands_enabled and not telegram.chat_id.strip():
+        logger.warning("MenthorQ monitor: MENTHORQ_COMMANDS_ENABLED=1 but no owner chat id "
+                       "(OSF_TELEGRAM_CHAT_ID) is configured; bot command polling NOT scheduled")
+    elif settings.commands_enabled:
         command_service = MenthorqBotCommandService(monitor_service, delivery_service, telegram)
         listener = TelegramCommandListener(
             telegram, telegram.chat_id, command_service.handlers(),

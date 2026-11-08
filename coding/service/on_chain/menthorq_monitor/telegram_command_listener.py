@@ -16,9 +16,14 @@ Rules:
     (a short help hint).
   - The first poll registers the command menu with Telegram
     (setMyCommands) once; a failure is logged and polling goes on.
-  - The offset is kept in memory. Telegram keeps unconfirmed updates for
-    24 h, so after a restart the last command before the restart can be
-    seen again; the age rule above limits that to recent commands.
+  - At the first poll (each start of the collector) every pending update
+    is skipped: getUpdates with offset -1 returns only the newest update
+    and makes Telegram forget the older ones, and the offset is set after
+    it. A restart therefore never re-runs a command that was already
+    handled (the offset is kept in memory only). Commands sent while the
+    service was down are lost too; the owner sends them again.
+  - Without an owner chat id one warning is logged at construction and
+    ``poll_once`` does nothing (the job does not even schedule polling).
   - Getting updates fails if a webhook is set on the bot or another process
     polls the same bot token (Telegram answers 409); that is logged.
 """
@@ -73,6 +78,33 @@ class TelegramCommandListener:
         self._command_menu = tuple(command_menu)
         self._menu_registration_attempted = False
         self._offset: Optional[int] = None
+        self._pending_updates_skipped = False
+        if not self._owner_chat_id:
+            logger.warning("TelegramCommandListener: no owner chat id configured; commands disabled")
+
+    def skip_pending_updates(self) -> bool:
+        """
+        Forget every update that arrived before this start (getUpdates with
+        offset -1 and no wait) and continue after the newest one.
+
+        Returns:
+            True when done (also when nothing was pending); False when
+            Telegram could not be asked (retried at the next poll). Never raises.
+        """
+        newest = self._telegram.get_updates(-1, 0)
+        if newest is None:
+            logger.warning("TelegramCommandListener: pending updates could not be skipped; retried at the next poll")
+            return False
+        update_ids = [update.get("update_id") for update in newest]
+        update_ids = [update_id for update_id in update_ids if isinstance(update_id, int)]
+        if update_ids:
+            self._offset = max(update_ids) + 1
+            logger.info("TelegramCommandListener: skipped the pending updates up to update_id %d "
+                        "(%d returned by Telegram; older ones are discarded unread): commands sent "
+                        "before this start are not run", max(update_ids), len(update_ids))
+        else:
+            logger.info("TelegramCommandListener: no pending updates at start")
+        return True
 
     def register_command_menu(self) -> bool:
         """
@@ -98,16 +130,21 @@ class TelegramCommandListener:
 
     def poll_once(self) -> int:
         """
-        Fetch pending updates and run the owner's commands.
+        Fetch pending updates and run the owner's commands. The first
+        successful call skips the updates from before the start
+        (``skip_pending_updates``).
 
         Returns:
             Number of commands answered (known or unknown). Never raises (a
             handler error is logged).
         """
         if not self._owner_chat_id:
-            logger.warning("TelegramCommandListener: no owner chat id configured; commands disabled")
-            return 0
+            return 0   # warned once at construction
         self.register_command_menu()
+        if not self._pending_updates_skipped:
+            self._pending_updates_skipped = self.skip_pending_updates()
+            if not self._pending_updates_skipped:
+                return 0
         updates = self._telegram.get_updates(self._offset, self._long_poll_seconds)
         if updates is None:
             return 0

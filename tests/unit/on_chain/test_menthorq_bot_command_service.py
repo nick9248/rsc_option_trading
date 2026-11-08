@@ -403,11 +403,12 @@ def test_end_to_end_owner_only_through_the_listener():
     commands, repository, _, _ = _service([make_record()])
     telegram = commands.telegram
     assert isinstance(telegram, FakeTelegram)
-    telegram.updates = [_owner_update(1, "/mute 24h", chat_id="999"), _owner_update(2, "/levels", chat_id="999"),
-                        _owner_update(3, "/levels"), _owner_update(4, "/nope")]
     listener = TelegramCommandListener(telegram, OWNER, commands.handlers(), clock=lambda: NOW,
                                        unknown_command_handler=commands.reply_to_unknown_command,
                                        command_menu=BOT_COMMANDS)
+    assert listener.poll_once() == 0          # start: nothing pending
+    telegram.updates = [_owner_update(1, "/mute 24h", chat_id="999"), _owner_update(2, "/levels", chat_id="999"),
+                        _owner_update(3, "/levels"), _owner_update(4, "/nope")]
     assert listener.poll_once() == 2
     assert repository.states == {}                                  # the stranger's /mute did nothing
     assert [sent["message"].split("\n")[0] for sent in telegram.sent] == [

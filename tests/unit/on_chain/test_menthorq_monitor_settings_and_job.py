@@ -181,6 +181,21 @@ def test_both_switches_on_log_no_off_line(caplog):
     assert "Telegram OFF" not in caplog.text
 
 
+def test_commands_enabled_without_owner_chat_schedule_no_polling_and_warn_once(caplog):
+    with caplog.at_level("INFO"):
+        job = build_menthorq_monitor_job(repository=MagicMock(), settings=ALL_ON,
+                                         telegram=FakeTelegram(chat_id=""))
+        assert job is not None and job.command_listener is None
+        scheduler = BackgroundScheduler(timezone=timezone.utc)
+        job.register(scheduler)
+        for _ in range(3):
+            job.poll_commands()
+    assert COMMAND_POLL_JOB_ID not in {scheduled.id for scheduled in scheduler.get_jobs()}
+    warnings = [record for record in caplog.records if record.levelname == "WARNING"]
+    assert len(warnings) == 1 and "no owner chat id" in warnings[0].getMessage()
+    assert "Telegram OFF" not in caplog.text      # the switch is on; the warning names the cause
+
+
 def test_jobs_registered_with_utc_cron_triggers():
     job = build_menthorq_monitor_job(repository=MagicMock(), settings=ALL_ON,
                                      telegram=FakeTelegram())

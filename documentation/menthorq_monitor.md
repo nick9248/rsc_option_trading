@@ -18,9 +18,19 @@ It has no process of its own. Its jobs, all in UTC:
 ## Bot commands
 
 Only the owner chat (`OSF_TELEGRAM_CHAT_ID`) can run a command. A command from any other chat is logged
-as `REJECTED` and gets no reply. A command older than 10 minutes, for example one sent while the
-service was down, is skipped. At its first poll the listener sends the command menu to Telegram
-once (`setMyCommands`). If that fails, it logs the failure and the commands still work.
+as `REJECTED` and gets no reply. A command older than 10 minutes is skipped. At its first poll the
+listener sends the command menu to Telegram once (`setMyCommands`). If that fails, it logs the
+failure and the commands still work.
+
+At its first poll after each start the listener also skips everything Telegram still holds
+(`getUpdates` with offset -1, no wait: Telegram returns only the newest update and forgets the older
+ones; the listener continues after it and logs `skipped the pending updates up to update_id N`).
+So a restart never runs a command a second time. The cost: commands sent while the collector was
+down (or restarting) are lost, not run late. Send them again. If that first call fails, nothing is
+run and it is retried at the next poll.
+
+With `MENTHORQ_COMMANDS_ENABLED=1` but no `OSF_TELEGRAM_CHAT_ID`, the collector logs one warning at
+start-up and does not schedule command polling.
 
 | Command | Reply |
 |---|---|
