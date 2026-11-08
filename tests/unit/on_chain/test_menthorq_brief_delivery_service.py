@@ -7,7 +7,11 @@ schedule and catch-up, on-demand brief.
 from dataclasses import replace
 from datetime import datetime, time, timedelta, timezone
 
-from coding.core.analytics.menthorq_monitor.alert_rules import AlertThresholds
+from coding.core.analytics.menthorq_monitor.alert_rules import (
+    ALERT_KEY_DATA_STALE,
+    URGENT_ALERT_KEYS,
+    AlertThresholds,
+)
 from coding.service.on_chain.menthorq_monitor.brief_delivery_service import (
     DELIVERY_KEY_ON_DEMAND_BRIEF,
     DELIVERY_KEY_WEEKLY_BRIEF,
@@ -179,3 +183,71 @@ def test_weekly_brief_from_a_fresh_record_has_no_stale_line():
     service, _, telegram, _ = _delivery([make_record()])
     assert service.send_weekly_brief_if_due(FRIDAY_0910) is True
     assert "DATA STALE" not in telegram.sent[-1]["message"]
+
+
+def _stale_crossing_history():
+    """The crossing history, but the latest record's snapshot is 3 h before its data time (06:10)."""
+    previous, day_ago, latest = _crossing_history()
+    latest.snapshot_captured_at_utc = FRIDAY_0910 - timedelta(hours=3)
+    return previous, day_ago, latest
+
+
+STALE_ALERT = (
+    "<b>URGENT | BTC MenthorQ monitor data is STALE</b>\n"
+    "Record 2026-11-06 09:10 UTC | snapshot 2026-11-06 06:10 UTC\n"
+    "Snapshot is 3 h 0 min older than the data time; levels may be out of date.\n"
+    "Movement alerts are paused until fresh data arrives.\n"
+    "<i>Check the collector (snapshots). /mute 24h silences these alerts.</i>"
+)
+
+
+class TestStaleDataAlert:
+    def test_stale_record_sends_only_the_stale_alert_and_logs_a_warning(self, caplog):
+        # Fresh, this history fires hvl_move_24h (6.38% of spot); stale (3 h > 120 min) it must not.
+        previous, day_ago, latest = _stale_crossing_history()
+        service, repository, telegram, _ = _delivery([previous, day_ago, latest])
+        assert service.send_urgent_alerts(latest, FRIDAY_0910) == ["data_stale"]
+        assert [message["message"] for message in telegram.sent] == [STALE_ALERT]
+        assert [delivery["alert_key"] for delivery in repository.deliveries] == ["data_stale"]
+        warnings = [record for record in caplog.records if record.levelname == "WARNING"]
+        assert any("movement alerts paused" in record.getMessage() for record in warnings)
+
+    def test_record_stored_long_ago_is_stale_against_now(self):
+        # Snapshot 08:50, fresh at its data time 09:10; evaluated 3 h later (12:10) -> 3 h 20 min old.
+        previous, day_ago, latest = _crossing_history()
+        service, _, telegram, _ = _delivery([previous, day_ago, latest])
+        later = FRIDAY_0910 + timedelta(hours=3)
+        assert service.send_urgent_alerts(latest, later) == ["data_stale"]
+        assert ("Snapshot is 3 h 20 min older than now (2026-11-06 12:10 UTC); levels may be out of date."
+                in telegram.sent[0]["message"])
+
+    def test_fresh_record_sends_the_normal_alerts(self):
+        previous, day_ago, latest = _crossing_history()
+        service, _, telegram, _ = _delivery([previous, day_ago, latest])
+        assert service.send_urgent_alerts(latest, FRIDAY_0910) == ["hvl_move_24h"]
+        assert "STALE" not in telegram.sent[0]["message"]
+
+    def test_stale_alert_has_the_12h_cooldown(self):
+        previous, day_ago, latest = _stale_crossing_history()
+        service, _, telegram, clock = _delivery([previous, day_ago, latest])
+        assert service.send_urgent_alerts(latest, FRIDAY_0910) == ["data_stale"]
+        # 11 h 59 min later: on cooldown, nothing sent (and still no movement alert)
+        clock["now"] = FRIDAY_0910 + timedelta(hours=11, minutes=59)
+        assert service.send_urgent_alerts(latest, clock["now"]) == []
+        assert len(telegram.sent) == 1
+        # exactly 12 h later: sent again
+        clock["now"] = FRIDAY_0910 + timedelta(hours=12)
+        assert service.send_urgent_alerts(latest, clock["now"]) == ["data_stale"]
+        assert len(telegram.sent) == 2
+
+    def test_muted_stale_alert_is_held_back_and_recorded(self):
+        previous, day_ago, latest = _stale_crossing_history()
+        service, repository, telegram, _ = _delivery([previous, day_ago, latest])
+        repository.save_menthorq_alert_mute("BTC", FRIDAY_0910 + timedelta(hours=1), FRIDAY_0910)
+        assert service.send_urgent_alerts(latest, FRIDAY_0910) == []
+        assert telegram.sent == [] and repository.deliveries == []
+        state = repository.get_menthorq_monitor_state("BTC")
+        assert state is not None and state.last_suppressed_alert_keys == ["data_stale"]
+
+    def test_stale_key_is_an_urgent_key_so_status_lists_it(self):
+        assert ALERT_KEY_DATA_STALE == "data_stale" and ALERT_KEY_DATA_STALE in URGENT_ALERT_KEYS

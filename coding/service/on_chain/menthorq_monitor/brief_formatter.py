@@ -534,3 +534,19 @@ def format_urgent_alert(
     if telegram_length(text) <= limit:
         return text
     return "\n".join(lines[:3] + [bullet_lines(alert_lines, 5)] + lines[4:])
+
+
+def format_stale_data_alert(record: MenthorqLevelRecord, warning: str) -> str:
+    """
+    The URGENT message sent instead of the movement alerts while the data
+    behind ``record`` is stale: which snapshot, how old (``warning``, from
+    ``stale_data_warning``) and that the movement alerts are paused.
+    """
+    return "\n".join([
+        f"<b>URGENT | {escape(record.currency)} MenthorQ monitor data is STALE</b>",
+        f"Record {escape(format_utc(record.as_of_utc))} | snapshot "
+        f"{escape(format_utc(record.snapshot_captured_at_utc))}",
+        escape(warning[0].upper() + warning[1:]),
+        "Movement alerts are paused until fresh data arrives.",
+        "<i>Check the collector (snapshots). /mute 24h silences these alerts.</i>",
+    ])

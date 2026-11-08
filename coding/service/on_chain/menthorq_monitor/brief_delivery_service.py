@@ -18,6 +18,7 @@ from typing import Callable, List, Optional
 
 from coding.core.analytics.menthorq_monitor.alert_mute import is_muted
 from coding.core.analytics.menthorq_monitor.alert_rules import (
+    ALERT_KEY_DATA_STALE,
     AlertThresholds,
     apply_cooldown,
     evaluate_urgent_alerts,
@@ -34,7 +35,9 @@ from coding.core.analytics.menthorq_monitor.level_trend_calculator import (
 from coding.service.on_chain.menthorq_monitor.brief_formatter import (
     escape,
     format_brief,
+    format_stale_data_alert,
     format_urgent_alert,
+    stale_data_warning,
 )
 from coding.service.on_chain.menthorq_monitor.menthorq_monitor_service import MenthorqMonitorService
 from coding.service.on_chain.menthorq_monitor.monitor_settings import MenthorqMonitorSettings
@@ -137,6 +140,11 @@ class MenthorqBriefDeliveryService:
         delivered, so the cooldown does not start and a condition that
         still holds after the mute is reported then).
 
+        When the data behind ``latest`` is stale (``stale_data_warning``
+        with ``now``), the movement rules are NOT evaluated (their moves
+        would be spurious); one ``data_stale`` alert is sent instead, under
+        the same cooldown and mute rules.
+
         Returns:
             Keys of the alerts delivered (empty when none fired, all were on
             cooldown, alerts are muted, or the send failed).
@@ -144,6 +152,16 @@ class MenthorqBriefDeliveryService:
         if latest.spot is None:
             logger.info("MenthorQ monitor: no alerts evaluated (latest record not computed)")
             return []
+        stale_warning = stale_data_warning(latest, self.settings.stale_snapshot_limit, now)
+        if stale_warning is not None:
+            logger.warning("MenthorQ monitor: data stale (%s); movement alerts paused", stale_warning)
+            last = self.repository.get_last_menthorq_alert_delivery(latest.currency, ALERT_KEY_DATA_STALE)
+            if last is not None and now - last < self.thresholds.cooldown:
+                logger.info("MenthorQ monitor: alerts on cooldown (not repeated): %s",
+                            [ALERT_KEY_DATA_STALE])
+                return []
+            return self._send_urgent(latest, [ALERT_KEY_DATA_STALE],
+                                     format_stale_data_alert(latest, stale_warning), now)
         comparisons = {comparison.label: comparison
                        for comparison in self.monitor_service.build_comparisons(latest)}
         alerts = evaluate_urgent_alerts(
@@ -158,25 +176,36 @@ class MenthorqBriefDeliveryService:
             logger.info("MenthorQ monitor: alerts on cooldown (not repeated): %s", skipped)
         if not due:
             return []
+        return self._send_urgent(latest, [alert.key for alert in due],
+                                 format_urgent_alert(latest, due), now)
+
+    def _send_urgent(
+        self, latest: MenthorqLevelRecord, keys: List[str], message: str, now: datetime
+    ) -> List[str]:
+        """
+        Send one urgent ``message`` for ``keys`` unless muted (then the keys
+        are recorded as held back), and record each key as delivered when
+        Telegram accepted it.
+
+        Returns:
+            ``keys`` when delivered, else empty.
+        """
         if self.alerts_muted(now):
-            due_keys = [alert.key for alert in due]
-            logger.info("MenthorQ monitor: urgent alerts %s NOT sent (muted)", due_keys)
+            logger.info("MenthorQ monitor: urgent alerts %s NOT sent (muted)", keys)
             try:
-                self.repository.save_menthorq_suppressed_alerts(latest.currency, due_keys, self.clock())
+                self.repository.save_menthorq_suppressed_alerts(latest.currency, keys, self.clock())
             except Exception:
                 logger.exception("MenthorQ monitor: could not record the muted alerts")
             return []
-        message = format_urgent_alert(latest, due)
         if not self.telegram.send(message, parse_mode=TELEGRAM_PARSE_MODE):
-            logger.warning("MenthorQ monitor: urgent alerts %s NOT delivered (Telegram send failed)",
-                           [alert.key for alert in due])
+            logger.warning("MenthorQ monitor: urgent alerts %s NOT delivered (Telegram send failed)", keys)
             return []
         delivered_at = self.clock()
-        for alert in due:
+        for key in keys:
             self.repository.save_menthorq_alert_delivery(
-                latest.currency, alert.key, delivered_at, message, latest.record_id)
-        logger.info("MenthorQ monitor: urgent alerts delivered: %s", [alert.key for alert in due])
-        return [alert.key for alert in due]
+                latest.currency, key, delivered_at, message, latest.record_id)
+        logger.info("MenthorQ monitor: urgent alerts delivered: %s", keys)
+        return list(keys)
 
     def send_weekly_brief_if_due(self, now: datetime) -> bool:
         """

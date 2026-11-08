@@ -76,6 +76,11 @@ test. They were chosen by hand, not fitted by a backtest.
   monitor does not start (the collector logs it). A typo never silently falls back to the default.
 - Cooldown: an alert key delivered less than 12h ago is not sent again. A crossing and a sign flip
   carry their direction in the key.
+- Stale data: when the latest live record is stale by the DATA STALE rule below (snapshot older
+  than `MENTHORQ_STALE_SNAPSHOT_MINUTES` before its data time or before now), the movement rules
+  are not evaluated (their moves would be spurious). One `data_stale` alert is sent instead
+  (which snapshot, how old, "movement alerts are paused until fresh data arrives"), with the same
+  12h cooldown and `/mute`, and a warning is logged. `/status` lists it as the last alert.
 - An alert over a window in which an expiry settled says that the move coincides with the roll-off.
 
 The brief and `/levels` add one line when the gamma regime (spot vs HVL) and the sign of total net
