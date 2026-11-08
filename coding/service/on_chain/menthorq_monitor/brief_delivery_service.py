@@ -5,7 +5,9 @@ brief (/brief).
 
 Sending reuses ``TelegramAlertService`` (one attempt, never raises). A
 message counts as delivered only when Telegram accepted it; only then is it
-written to ``menthorq_alert_deliveries``. That table drives the 12 h alert
+written to ``menthorq_alert_deliveries`` (when that write fails after the
+send, the delivery is logged at ERROR and kept in memory for the life of
+the process, so it is not resent). That table drives the 12 h alert
 cooldown and the once-per-week rule of the weekly brief, and it is the
 retry of the weekly brief: an undelivered one is tried again at the next
 hourly run (within ``WEEKLY_BRIEF_CATCH_UP``).
@@ -24,7 +26,7 @@ import logging
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Callable, List, Optional, Sequence
+from typing import Callable, Dict, List, Optional, Sequence
 
 from coding.core.analytics.menthorq_monitor.alert_mute import is_muted
 from coding.core.analytics.menthorq_monitor.alert_rules import (
@@ -159,6 +161,9 @@ class MenthorqBriefDeliveryService:
         self.telegram = telegram
         self.thresholds = thresholds if thresholds is not None else self.settings.alert_thresholds
         self.clock = clock
+        # Key -> delivery time of messages Telegram accepted but whose delivery row
+        # could not be saved; honoured like a stored row for the life of the process.
+        self._unsaved_deliveries: Dict[str, datetime] = {}
 
     def alerts_muted(self, now: datetime) -> bool:
         """
@@ -192,12 +197,39 @@ class MenthorqBriefDeliveryService:
             now=now,
         )
 
+    def last_delivery(self, key: str) -> Optional[datetime]:
+        """
+        When ``key`` was last delivered: the newer of the stored delivery row
+        and a delivery whose row could not be saved (kept in memory).
+        """
+        stored = self.repository.get_last_menthorq_alert_delivery(self.settings.currency, key)
+        remembered = self._unsaved_deliveries.get(key)
+        known = [instant for instant in (stored, remembered) if instant is not None]
+        return max(known) if known else None
+
+    def _record_delivery(self, keys: List[str], message: str, record_id: Optional[int]) -> None:
+        """
+        Write one delivery row per key, in one transaction, for a message
+        Telegram already accepted. A failing write is logged at ERROR and
+        never raised: the keys are remembered in memory instead, so the
+        cooldown and the weekly-once check still see the delivery and the
+        message is not resent while this process runs.
+        """
+        delivered_at = self.clock()
+        try:
+            self.repository.save_menthorq_alert_deliveries(
+                self.settings.currency, list(keys), delivered_at, message, record_id)
+        except Exception:
+            logger.exception("MenthorQ monitor: %s delivered by Telegram but the delivery row was NOT "
+                             "saved; remembered in memory, not resent while the collector runs", keys)
+            for key in keys:
+                self._unsaved_deliveries[key] = delivered_at
+
     def _deliver(self, key: str, message: str, record_id: Optional[int]) -> bool:
         if not self.telegram.send(message, parse_mode=TELEGRAM_PARSE_MODE):
             logger.warning("MenthorQ monitor: %s NOT delivered (Telegram send failed)", key)
             return False
-        self.repository.save_menthorq_alert_delivery(
-            self.settings.currency, key, self.clock(), message, record_id)
+        self._record_delivery([key], message, record_id)
         logger.info("MenthorQ monitor: %s delivered", key)
         return True
 
@@ -231,10 +263,7 @@ class MenthorqBriefDeliveryService:
             logger.warning("MenthorQ monitor: data stale (%s); movement alerts paused",
                            evaluation.stale_warning)
         alerts = evaluation.alerts
-        last_delivered = {
-            alert.key: self.repository.get_last_menthorq_alert_delivery(latest.currency, alert.key)
-            for alert in alerts
-        }
+        last_delivered = {alert.key: self.last_delivery(alert.key) for alert in alerts}
         due = apply_cooldown(alerts, last_delivered, now, self.thresholds.cooldown)
         skipped = sorted({alert.key for alert in alerts} - {alert.key for alert in due})
         if skipped:
@@ -251,7 +280,8 @@ class MenthorqBriefDeliveryService:
         Send one urgent ``message`` for ``keys`` unless muted (then the keys
         are recorded as held back), and record every key as delivered, in
         one transaction, when Telegram accepted it. When that write fails
-        it raises (the job logs it) and no key is recorded.
+        no row is saved, the error is logged and the keys are remembered in
+        memory (``_record_delivery``), so the cooldown still holds.
 
         Returns:
             ``keys`` when delivered, else empty.
@@ -266,9 +296,7 @@ class MenthorqBriefDeliveryService:
         if not self.telegram.send(message, parse_mode=TELEGRAM_PARSE_MODE):
             logger.warning("MenthorQ monitor: urgent alerts %s NOT delivered (Telegram send failed)", keys)
             return []
-        # All keys in one transaction: a failure records none (the next run may resend).
-        self.repository.save_menthorq_alert_deliveries(
-            latest.currency, list(keys), self.clock(), message, latest.record_id)
+        self._record_delivery(keys, message, latest.record_id)
         logger.info("MenthorQ monitor: urgent alerts delivered: %s", keys)
         return list(keys)
 
@@ -286,8 +314,7 @@ class MenthorqBriefDeliveryService:
         if now - scheduled > WEEKLY_BRIEF_CATCH_UP:
             return False
         with WEEKLY_BRIEF_LOCK:
-            last = self.repository.get_last_menthorq_alert_delivery(
-                self.settings.currency, DELIVERY_KEY_WEEKLY_BRIEF)
+            last = self.last_delivery(DELIVERY_KEY_WEEKLY_BRIEF)
             if last is not None and last >= scheduled:
                 return False
             message = self.build_brief(now, "Weekly brief")

@@ -314,15 +314,60 @@ def test_urgent_keys_are_recorded_together_or_not_at_all():
     latest = replace(latest, total_net_gex=-1e6)
     service, repository, telegram, _ = _delivery([previous, day_ago, latest])
     repository.fail_deliveries = True
-
-    try:
-        service.send_urgent_alerts(latest, FRIDAY_0910)
-        raised = False
-    except RuntimeError:
-        raised = True
-    assert raised and len(telegram.sent) == 1 and repository.deliveries == []   # none partially recorded
+    # Telegram accepted it, so it counts as delivered; no row is partially recorded.
+    assert service.send_urgent_alerts(latest, FRIDAY_0910) == ["hvl_move_24h", "net_gex_turned_negative"]
+    assert len(telegram.sent) == 1 and repository.deliveries == []
 
     repository.fail_deliveries = False
+    service, repository, telegram, _ = _delivery([previous, day_ago, latest])
     assert service.send_urgent_alerts(latest, FRIDAY_0910) == ["hvl_move_24h", "net_gex_turned_negative"]
     assert len({d["delivered_at"] for d in repository.deliveries}) == 1
     assert [d["alert_key"] for d in repository.deliveries] == ["hvl_move_24h", "net_gex_turned_negative"]
+
+
+class TestDeliveryRowNotSaved:
+    """Telegram accepted the message, then the delivery write fails: logged at ERROR, never
+    raised, and remembered in memory so the message is not resent while the process runs."""
+
+    def test_weekly_brief_is_not_resent_every_hour(self, caplog):
+        service, repository, telegram, clock = _delivery([make_record()])
+        repository.fail_deliveries = True
+        with caplog.at_level("INFO"):
+            assert service.send_weekly_brief_if_due(FRIDAY_0910) is True
+        errors = [record for record in caplog.records if record.levelname == "ERROR"]
+        assert len(errors) == 1
+        assert "['weekly_brief'] delivered by Telegram but the delivery row was NOT saved" in errors[0].getMessage()
+        assert repository.deliveries == []
+        # The hourly catch-up of the next 23 h: the delivery (09:10) is after the 09:00 instant.
+        for hours in range(1, 24):
+            clock["now"] = FRIDAY_0910 + timedelta(hours=hours)
+            assert service.send_weekly_brief_if_due(clock["now"]) is False
+        assert len(telegram.sent) == 1
+
+    def test_urgent_alert_is_held_by_the_cooldown(self, caplog):
+        previous, day_ago, latest = _crossing_history()
+        service, repository, telegram, clock = _delivery([previous, day_ago, latest])
+        repository.fail_deliveries = True
+        assert service.send_urgent_alerts(latest, FRIDAY_0910) == ["hvl_move_24h"]
+        assert "delivery row was NOT saved" in caplog.text
+        # The next hourly run (snapshot 08:50, now 10:10: 80 min, still fresh): with no row and
+        # no memory the alert would be sent again; the remembered delivery holds the cooldown.
+        clock["now"] = FRIDAY_0910 + timedelta(hours=1)
+        assert service.send_urgent_alerts(latest, clock["now"]) == []
+        assert len(telegram.sent) == 1
+        assert service.last_delivery("hvl_move_24h") == FRIDAY_0910
+
+    def test_on_demand_brief_does_not_raise(self, caplog):
+        service, repository, telegram, _ = _delivery([make_record()])
+        repository.fail_deliveries = True
+        assert service.send_on_demand_brief(FRIDAY_0910) is True
+        assert len(telegram.sent) == 1 and repository.deliveries == []
+        assert "['on_demand_brief'] delivered by Telegram but the delivery row was NOT saved" in caplog.text
+
+    def test_a_new_process_has_no_memory(self):
+        # The limit of the fix: a restart forgets the unsaved delivery (no row exists).
+        service, repository, _, _ = _delivery([make_record()])
+        repository.fail_deliveries = True
+        service.send_weekly_brief_if_due(FRIDAY_0910)
+        restarted = MenthorqBriefDeliveryService(service.monitor_service, FakeTelegram())
+        assert restarted.last_delivery(DELIVERY_KEY_WEEKLY_BRIEF) is None

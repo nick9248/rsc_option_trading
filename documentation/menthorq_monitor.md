@@ -94,6 +94,10 @@ test. They were chosen by hand, not fitted by a backtest.
   carry their direction in the key. The three "vs 24h ago" move alerts use at least 24h (the
   comparison window): one move stays visible in that comparison for 24h, so a 12h cooldown would
   report it twice. Delivered 23h59 ago: held; 24h ago: may repeat.
+- If Telegram accepted a message but its `menthorq_alert_deliveries` row cannot be written, the
+  error is logged (`delivered by Telegram but the delivery row was NOT saved`) and the delivery is
+  kept in memory: the cooldown and the once-per-week rule still see it, so it is not resent while
+  the collector runs. A restart forgets it (no row exists), so it may then be sent once more.
 - Stale data: when the latest live record is stale by the DATA STALE rule below (snapshot older
   than `MENTHORQ_STALE_SNAPSHOT_MINUTES` before its data time or before now), the movement rules
   are not evaluated (their moves would be spurious). One `data_stale` alert is sent instead
