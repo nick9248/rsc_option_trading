@@ -100,13 +100,6 @@ class FakeMonitorRepository(DatabaseRepository):
             return index + 1
         return None
 
-    def has_computed_menthorq_level_snapshot(self, currency: str, mode: str, expiry_universe: str,
-                                             gamma_underlying: str, as_of_utc: datetime) -> bool:
-        return any(r.currency == currency and r.mode == mode and r.expiry_universe == expiry_universe
-                   and r.gamma_underlying == gamma_underlying and r.as_of_utc == as_of_utc
-                   and r.has_levels
-                   for r in self.records)
-
     def get_menthorq_level_snapshot(self, currency: str, mode: str, expiry_universe: str,
                                     gamma_underlying: str, as_of_utc: datetime) -> Optional[MenthorqLevelRecord]:
         return next((r for r in self.records
@@ -131,18 +124,14 @@ class FakeMonitorRepository(DatabaseRepository):
         ]
         return max(candidates, key=lambda r: r.as_of_utc) if candidates else None
 
-    def save_menthorq_alert_delivery(self, currency: str, alert_key: str, delivered_at: datetime,
-                                     message: str, level_snapshot_id: Optional[int] = None) -> None:
-        self.deliveries.append({"currency": currency, "alert_key": alert_key,
-                                "delivered_at": delivered_at, "message": message,
-                                "level_snapshot_id": level_snapshot_id})
-
     def save_menthorq_alert_deliveries(self, currency: str, alert_keys: List[str], delivered_at: datetime,
                                        message: str, level_snapshot_id: Optional[int] = None) -> None:
         if self.fail_deliveries:
             raise RuntimeError("database down")   # like the real one: nothing is saved
         for alert_key in alert_keys:
-            self.save_menthorq_alert_delivery(currency, alert_key, delivered_at, message, level_snapshot_id)
+            self.deliveries.append({"currency": currency, "alert_key": alert_key,
+                                    "delivered_at": delivered_at, "message": message,
+                                    "level_snapshot_id": level_snapshot_id})
 
     def get_last_menthorq_alert_delivery(self, currency: str, alert_key: str) -> Optional[datetime]:
         times = [d["delivered_at"] for d in self.deliveries

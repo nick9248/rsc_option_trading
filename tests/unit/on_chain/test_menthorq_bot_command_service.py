@@ -238,8 +238,8 @@ def test_status_reply_by_hand_healthy_not_muted():
 
 def test_status_reply_muted_with_last_alert_and_held_back_alert():
     commands, repository, _, _ = _service(_status_records())
-    repository.save_menthorq_alert_delivery("BTC", "hvl_move_24h", BASE_TIME + timedelta(minutes=1), "m")
-    repository.save_menthorq_alert_delivery("BTC", "weekly_brief", BASE_TIME + timedelta(minutes=20), "b")
+    repository.save_menthorq_alert_deliveries("BTC", ["hvl_move_24h"], BASE_TIME + timedelta(minutes=1), "m")
+    repository.save_menthorq_alert_deliveries("BTC", ["weekly_brief"], BASE_TIME + timedelta(minutes=20), "b")
     repository.save_menthorq_alert_mute("BTC", NOW + timedelta(hours=24), NOW)
     repository.save_menthorq_suppressed_alerts("BTC", ["put_support_move_24h"], BASE_TIME + timedelta(minutes=50))
     message = _run(commands, "/status")

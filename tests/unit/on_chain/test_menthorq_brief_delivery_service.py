@@ -232,8 +232,8 @@ class TestEventAlertsAgainstTheLastReportedState:
         latest = replace(latest, total_net_gex=-1e6)
         service, repository, telegram, clock = _delivery([previous, day_ago, latest], accept=accept)
         service.thresholds = AlertThresholds(hvl_move_percent_of_spot=None)   # only the sign flip on
-        repository.save_menthorq_alert_delivery("BTC", "net_gex_turned_positive",
-                                                FRIDAY_0910 - timedelta(days=2), "earlier alert")
+        repository.save_menthorq_alert_deliveries("BTC", ["net_gex_turned_positive"],
+                                                  FRIDAY_0910 - timedelta(days=2), "earlier alert")
         return service, repository, telegram, clock, latest
 
     @staticmethod
@@ -246,9 +246,9 @@ class TestEventAlertsAgainstTheLastReportedState:
     def test_the_last_reported_state_is_read_from_the_delivery_log(self):
         service, repository, _, _, _ = self._setup()
         assert service.last_reported_event_states() == {"net_gex_sign": "positive"}
-        repository.save_menthorq_alert_delivery("BTC", "spot_crossed_below_hvl", FRIDAY_0910, "m")
-        repository.save_menthorq_alert_delivery("BTC", "net_gex_turned_negative",
-                                                FRIDAY_0910 - timedelta(days=1), "m")
+        repository.save_menthorq_alert_deliveries("BTC", ["spot_crossed_below_hvl"], FRIDAY_0910, "m")
+        repository.save_menthorq_alert_deliveries("BTC", ["net_gex_turned_negative"],
+                                                  FRIDAY_0910 - timedelta(days=1), "m")
         assert service.last_reported_event_states() == {"net_gex_sign": "negative", "hvl_regime": "negative"}
 
     def test_a_flip_whose_send_failed_is_sent_at_the_next_run(self):
@@ -294,8 +294,8 @@ class TestEventAlertsAgainstTheLastReportedState:
         service, repository, telegram, clock = _delivery([previous, day_ago, latest], accept=False)
         service.thresholds = AlertThresholds(hvl_move_percent_of_spot=None, net_gex_sign_change=False,
                                              spot_crosses_hvl=True)
-        repository.save_menthorq_alert_delivery("BTC", "spot_crossed_above_hvl",
-                                                FRIDAY_0910 - timedelta(days=1), "m")
+        repository.save_menthorq_alert_deliveries("BTC", ["spot_crossed_above_hvl"],
+                                                  FRIDAY_0910 - timedelta(days=1), "m")
         assert service.send_urgent_alerts(latest, FRIDAY_0910) == []          # send failed
         telegram.accept = True
         assert self._run_at(service, repository, clock, 1, 5e6) == ["spot_crossed_below_hvl"]

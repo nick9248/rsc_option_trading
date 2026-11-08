@@ -113,10 +113,10 @@ def test_last_delivery_of_a_key_set(scratch):
     repository = _repository(connection, name)
     keys = ["hvl_move_24h", "net_gex_turned_negative"]
     assert repository.get_last_menthorq_alert_delivery_of_keys("BTC", keys) is None
-    repository.save_menthorq_alert_delivery("BTC", "hvl_move_24h", BASE_TIME, "m1")
-    repository.save_menthorq_alert_delivery("BTC", "weekly_brief", BASE_TIME + timedelta(hours=2), "b")
-    repository.save_menthorq_alert_delivery("BTC", "net_gex_turned_negative",
-                                            BASE_TIME + timedelta(hours=1), "m2")
+    repository.save_menthorq_alert_deliveries("BTC", ["hvl_move_24h"], BASE_TIME, "m1")
+    repository.save_menthorq_alert_deliveries("BTC", ["weekly_brief"], BASE_TIME + timedelta(hours=2), "b")
+    repository.save_menthorq_alert_deliveries("BTC", ["net_gex_turned_negative"],
+                                              BASE_TIME + timedelta(hours=1), "m2")
     assert repository.get_last_menthorq_alert_delivery_of_keys("BTC", keys) == \
         ("net_gex_turned_negative", BASE_TIME + timedelta(hours=1))
     assert repository.get_last_menthorq_alert_delivery_of_keys("ETH", keys) is None

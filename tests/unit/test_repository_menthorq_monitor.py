@@ -75,11 +75,17 @@ def test_round_trip_keeps_every_field(repo):
     assert loaded.not_computed_reasons == record.not_computed_reasons
 
 
+def _has_computed_run(repo, mode):
+    """A computed run (with levels) of ``mode`` is stored at BASE_TIME (BTC, monthly, index)."""
+    stored = repo.get_menthorq_level_snapshot("BTC", mode, "monthly", "index", BASE_TIME)
+    return stored is not None and stored.has_levels
+
+
 def test_duplicate_run_is_kept_once(repo):
     assert repo.save_menthorq_level_snapshot(make_record()) is not None
     assert repo.save_menthorq_level_snapshot(make_record(spot=1.0)) is None
-    assert repo.has_computed_menthorq_level_snapshot("BTC", "live", "monthly", "index", BASE_TIME)
-    assert not repo.has_computed_menthorq_level_snapshot("BTC", "daily_close", "monthly", "index", BASE_TIME)
+    assert _has_computed_run(repo, "live")
+    assert not _has_computed_run(repo, "daily_close")
 
 
 def _row_count_and_spot(repo):
@@ -92,7 +98,7 @@ def test_a_not_computed_row_is_replaced_by_a_computed_one_and_never_the_reverse(
     not_computed = make_record_without_levels(spot=None, not_computed_reasons=["no snapshot"])
     first_id = repo.save_menthorq_level_snapshot(not_computed)
     assert isinstance(first_id, int)
-    assert not repo.has_computed_menthorq_level_snapshot("BTC", "live", "monthly", "index", BASE_TIME)
+    assert not _has_computed_run(repo, "live")
 
     # a second not-computed attempt does not rewrite the not-computed row
     assert repo.save_menthorq_level_snapshot(make_record_without_levels(
@@ -100,7 +106,7 @@ def test_a_not_computed_row_is_replaced_by_a_computed_one_and_never_the_reverse(
 
     later = BASE_TIME + timedelta(hours=2)
     assert repo.save_menthorq_level_snapshot(make_record(computed_at_utc=later)) == first_id   # replaced in place
-    assert repo.has_computed_menthorq_level_snapshot("BTC", "live", "monthly", "index", BASE_TIME)
+    assert _has_computed_run(repo, "live")
     loaded = repo.get_menthorq_level_snapshot_at_or_before("BTC", "live", "monthly", "index", BASE_TIME)
     assert (loaded.spot, loaded.hvl, loaded.not_computed_reasons) == (100000.0, 95000.0, [])
     assert loaded.computed_at_utc == later     # the sync watermark moves with the replacement
@@ -139,7 +145,7 @@ def test_a_row_with_spot_but_no_levels_counts_as_not_computed(repo):
     without_levels = make_record_without_levels(spot=100000.0)
     first_id = repo.save_menthorq_level_snapshot(without_levels)
     assert isinstance(first_id, int)
-    assert not repo.has_computed_menthorq_level_snapshot("BTC", "live", "monthly", "index", BASE_TIME)
+    assert not _has_computed_run(repo, "live")
     assert repo.get_menthorq_level_snapshot_at_or_before("BTC", "live", "monthly", "index", BASE_TIME) is None
     latest_run = repo.get_latest_menthorq_level_run("BTC", "live", "monthly", "index")
     assert latest_run is not None and latest_run.spot == 100000.0 and not latest_run.has_levels
@@ -149,7 +155,7 @@ def test_a_row_with_spot_but_no_levels_counts_as_not_computed(repo):
     only_net_gex = make_record_without_levels(total_net_gex=-2e6, computed_at_utc=later,
                                               not_computed_reasons=[])
     assert repo.save_menthorq_level_snapshot(only_net_gex) == first_id
-    assert repo.has_computed_menthorq_level_snapshot("BTC", "live", "monthly", "index", BASE_TIME)
+    assert _has_computed_run(repo, "live")
     # ... and a row with one level is never overwritten again
     assert repo.save_menthorq_level_snapshot(make_record(computed_at_utc=later + timedelta(hours=1))) is None
     loaded = repo.get_menthorq_level_snapshot_at_or_before("BTC", "live", "monthly", "index", BASE_TIME)
@@ -163,9 +169,9 @@ def test_invalid_mode_is_rejected_by_the_table(repo):
 
 def test_alert_deliveries_last_time(repo):
     assert repo.get_last_menthorq_alert_delivery("BTC", "hvl_move_24h") is None
-    repo.save_menthorq_alert_delivery("BTC", "hvl_move_24h", BASE_TIME - timedelta(hours=3), "a", 7)
-    repo.save_menthorq_alert_delivery("BTC", "hvl_move_24h", BASE_TIME, "b")
-    repo.save_menthorq_alert_delivery("ETH", "hvl_move_24h", BASE_TIME + timedelta(hours=1), "c")
+    repo.save_menthorq_alert_deliveries("BTC", ["hvl_move_24h"], BASE_TIME - timedelta(hours=3), "a", 7)
+    repo.save_menthorq_alert_deliveries("BTC", ["hvl_move_24h"], BASE_TIME, "b")
+    repo.save_menthorq_alert_deliveries("ETH", ["hvl_move_24h"], BASE_TIME + timedelta(hours=1), "c")
     last = repo.get_last_menthorq_alert_delivery("BTC", "hvl_move_24h")
     assert last == BASE_TIME and last.tzinfo == timezone.utc
 

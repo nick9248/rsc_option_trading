@@ -1218,27 +1218,6 @@ class DatabaseRepository:
             row = cursor.fetchone()
         return int(row[0]) if row else None
 
-    def has_computed_menthorq_level_snapshot(
-        self, currency: str, mode: str, expiry_universe: str, gamma_underlying: str,
-        as_of_utc: datetime,
-    ) -> bool:
-        """
-        True when a COMPUTED run (with levels, ``has_levels``) with exactly
-        this key is stored. A stored not-computed row does not count, so it
-        is retried.
-        """
-        with self._db_cursor() as cursor:
-            cursor.execute(
-                f"""
-                SELECT 1 FROM menthorq_level_snapshots
-                WHERE currency = %s AND mode = %s AND expiry_universe = %s
-                  AND gamma_underlying = %s AND as_of_utc = %s
-                  AND {has_levels_sql_condition('menthorq_level_snapshots')}
-                """,
-                (currency, mode, expiry_universe, gamma_underlying, as_of_utc),
-            )
-            return cursor.fetchone() is not None
-
     def get_menthorq_level_snapshot(
         self, currency: str, mode: str, expiry_universe: str, gamma_underlying: str,
         as_of_utc: datetime,
@@ -1283,13 +1262,6 @@ class DatabaseRepository:
             cursor.execute(query, tuple(parameters))
             row = cursor.fetchone()
         return self._menthorq_level_record_from_row(row) if row else None
-
-    def save_menthorq_alert_delivery(
-        self, currency: str, alert_key: str, delivered_at: datetime, message: str,
-        level_snapshot_id: Optional[int] = None,
-    ) -> None:
-        """Record one delivered monitor message (alert cooldown and weekly-brief bookkeeping)."""
-        self.save_menthorq_alert_deliveries(currency, [alert_key], delivered_at, message, level_snapshot_id)
 
     def save_menthorq_alert_deliveries(
         self, currency: str, alert_keys: List[str], delivered_at: datetime, message: str,
