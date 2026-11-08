@@ -289,7 +289,8 @@ class MenthorqBriefDeliveryService:
         then; so is a held-back or failed EVENT alert (net GEX sign flip,
         spot crossing HVL), because events are judged against the last
         REPORTED state (``last_reported_event_states``), unless the state
-        has reverted to it.
+        has reverted to it. Not the first event of a family: with no
+        reported state it is lost (see the module docstring).
 
         When the data behind ``latest`` is stale (``stale_data_warning``
         with ``now``) or ``latest`` has no levels (not computed: every input
