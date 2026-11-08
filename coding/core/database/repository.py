@@ -1149,10 +1149,16 @@ class DatabaseRepository:
         """
         Store one monitor run in ``menthorq_level_snapshots``.
 
+        When a row with the same (currency, mode, expiry_universe,
+        gamma_underlying, as_of_utc) exists, it is replaced only if it was
+        NOT computed (spot NULL) and ``record`` is computed (spot not None):
+        a computed row is never overwritten, and a not-computed retry does
+        not rewrite a not-computed row. The replacement gets the new
+        ``computed_at``, so the incremental VPS sync picks it up.
+
         Returns:
-            The new row id, or None when a row with the same (currency,
-            mode, expiry_universe, gamma_underlying, as_of_utc) already
-            exists (it is kept unchanged).
+            The row id when a row was inserted or replaced, else None (the
+            existing row is kept unchanged).
         """
         with self._db_cursor() as cursor:
             cursor.execute(
@@ -1163,7 +1169,18 @@ class DatabaseRepository:
                     call_resistance, put_support, hvl, total_net_gex, gamma_regime,
                     expirations, panel_levels, iv_source_counts, not_computed_reasons)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (currency, mode, expiry_universe, gamma_underlying, as_of_utc) DO NOTHING
+                ON CONFLICT (currency, mode, expiry_universe, gamma_underlying, as_of_utc)
+                DO UPDATE SET
+                    computed_at = EXCLUDED.computed_at, spot = EXCLUDED.spot,
+                    spot_time_utc = EXCLUDED.spot_time_utc,
+                    snapshot_captured_at_utc = EXCLUDED.snapshot_captured_at_utc,
+                    open_interest_captured_at_utc = EXCLUDED.open_interest_captured_at_utc,
+                    call_resistance = EXCLUDED.call_resistance, put_support = EXCLUDED.put_support,
+                    hvl = EXCLUDED.hvl, total_net_gex = EXCLUDED.total_net_gex,
+                    gamma_regime = EXCLUDED.gamma_regime, expirations = EXCLUDED.expirations,
+                    panel_levels = EXCLUDED.panel_levels, iv_source_counts = EXCLUDED.iv_source_counts,
+                    not_computed_reasons = EXCLUDED.not_computed_reasons
+                WHERE menthorq_level_snapshots.spot IS NULL AND EXCLUDED.spot IS NOT NULL
                 RETURNING id
                 """,
                 (
@@ -1179,17 +1196,20 @@ class DatabaseRepository:
             row = cursor.fetchone()
         return int(row[0]) if row else None
 
-    def has_menthorq_level_snapshot(
+    def has_computed_menthorq_level_snapshot(
         self, currency: str, mode: str, expiry_universe: str, gamma_underlying: str,
         as_of_utc: datetime,
     ) -> bool:
-        """True when a run with exactly this key is stored."""
+        """
+        True when a COMPUTED run (spot not NULL) with exactly this key is
+        stored. A stored not-computed row does not count, so it is retried.
+        """
         with self._db_cursor() as cursor:
             cursor.execute(
                 """
                 SELECT 1 FROM menthorq_level_snapshots
                 WHERE currency = %s AND mode = %s AND expiry_universe = %s
-                  AND gamma_underlying = %s AND as_of_utc = %s
+                  AND gamma_underlying = %s AND as_of_utc = %s AND spot IS NOT NULL
                 """,
                 (currency, mode, expiry_universe, gamma_underlying, as_of_utc),
             )

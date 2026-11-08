@@ -63,17 +63,30 @@ class FakeMonitorRepository(DatabaseRepository):
         self.fail_state = False   # True: the state methods raise (table missing)
         self.fail_deliveries = False   # True: save_menthorq_alert_deliveries raises, saving nothing
 
-    def save_menthorq_level_snapshot(self, record: MenthorqLevelRecord) -> Optional[int]:
-        if self.has_menthorq_level_snapshot(record.currency, record.mode, record.expiry_universe,
-                                            record.gamma_underlying, record.as_of_utc):
-            return None
-        self.records.append(record)
-        return len(self.records)
+    def _same_run_index(self, record: MenthorqLevelRecord) -> Optional[int]:
+        for index, stored in enumerate(self.records):
+            if (stored.currency, stored.mode, stored.expiry_universe, stored.gamma_underlying,
+                    stored.as_of_utc) == (record.currency, record.mode, record.expiry_universe,
+                                          record.gamma_underlying, record.as_of_utc):
+                return index
+        return None
 
-    def has_menthorq_level_snapshot(self, currency: str, mode: str, expiry_universe: str,
-                                    gamma_underlying: str, as_of_utc: datetime) -> bool:
+    def save_menthorq_level_snapshot(self, record: MenthorqLevelRecord) -> Optional[int]:
+        # Like the real one: a not-computed row is replaced by a computed one, nothing else.
+        index = self._same_run_index(record)
+        if index is None:
+            self.records.append(record)
+            return len(self.records)
+        if self.records[index].spot is None and record.spot is not None:
+            self.records[index] = record
+            return index + 1
+        return None
+
+    def has_computed_menthorq_level_snapshot(self, currency: str, mode: str, expiry_universe: str,
+                                             gamma_underlying: str, as_of_utc: datetime) -> bool:
         return any(r.currency == currency and r.mode == mode and r.expiry_universe == expiry_universe
                    and r.gamma_underlying == gamma_underlying and r.as_of_utc == as_of_utc
+                   and r.spot is not None
                    for r in self.records)
 
     def get_menthorq_level_snapshot_at_or_before(
@@ -151,11 +164,18 @@ class FakeInputLoader(MenthorqInputLoader):
     """
     MenthorqInputLoader stand-in. One monthly expiry (27NOV26): a 110,000 call
     and a 90,000 put, 100 BTC open interest each, IV 50%, spot 100,000.
-    Records every (as_of, open_interest_as_of) it is asked for.
+    Records every (as_of, open_interest_as_of) it is asked for. The capture
+    times are the given ages before their instants (defaults: 21 min for the
+    snapshots, 5 s for the index trade).
     """
 
-    def __init__(self, available: bool = True):
+    def __init__(self, available: bool = True, snapshot_age: timedelta = timedelta(minutes=21),
+                 open_interest_age: timedelta = timedelta(minutes=21),
+                 index_age: timedelta = timedelta(seconds=5)):
         self.available = available
+        self.snapshot_age = snapshot_age
+        self.open_interest_age = open_interest_age
+        self.index_age = index_age
         self.calls: List[Any] = []
 
     def load_inputs(
@@ -173,12 +193,12 @@ class FakeInputLoader(MenthorqInputLoader):
              "underlying_price": FAKE_CHAIN_SPOT, "mark_price": 0.01, "iv_source": "mark_iv"},
         ]
         return {
-            "snapshot_captured_at_utc": as_of - timedelta(minutes=21),
-            "open_interest_captured_at_utc": (open_interest_as_of or as_of) - timedelta(minutes=21),
+            "snapshot_captured_at_utc": as_of - self.snapshot_age,
+            "open_interest_captured_at_utc": (open_interest_as_of or as_of) - self.open_interest_age,
             "chain_rows": rows,
             "iv_source_counts": {"mark_iv": 2, "rebuilt_from_mark_price": 0, "missing": 0},
             "index_price": FAKE_CHAIN_SPOT,
-            "index_price_time_utc": as_of - timedelta(seconds=5),
+            "index_price_time_utc": as_of - self.index_age,
         }
 
 

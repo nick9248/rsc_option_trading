@@ -35,6 +35,7 @@ from coding.core.analytics.menthorq_levels_backtest_calculator import (
     summarize_replication,
 )
 from coding.core.analytics.menthorq_replication_calculator import (
+    DAILY_CLOSE_MAXIMUM_INPUT_AGE,
     EXPIRY_UNIVERSE_ALL,
     EXPIRY_UNIVERSE_MONTHLY,
     GAMMA_UNDERLYING_INDEX,
@@ -52,7 +53,6 @@ logger = logging.getLogger(__name__)
 
 MENTHORQ_DATA_TIME_UTC = time(23, 59)
 BACKTEST_UNIVERSES = (EXPIRY_UNIVERSE_MONTHLY, EXPIRY_UNIVERSE_ALL)
-MAXIMUM_INPUT_AGE = timedelta(minutes=60)
 MAXIMUM_PRICE_SAMPLE_AGE = timedelta(minutes=120)
 OUTCOME_HORIZONS_HOURS = {"1d": 24, "3d": 72}
 STATUS_COMPUTED = "computed"
@@ -84,13 +84,13 @@ class MenthorqLevelsBacktestService:
             return {"reason": str(error)}
         reasons = []
         snapshot_age = as_of - inputs["snapshot_captured_at_utc"]
-        if snapshot_age > MAXIMUM_INPUT_AGE:
+        if snapshot_age > DAILY_CLOSE_MAXIMUM_INPUT_AGE:
             reasons.append(f"newest snapshot is {snapshot_age} before as_of (day incomplete in the DB)")
         open_interest_age = open_interest_as_of - inputs["open_interest_captured_at_utc"]
-        if open_interest_age > MAXIMUM_INPUT_AGE:
+        if open_interest_age > DAILY_CLOSE_MAXIMUM_INPUT_AGE:
             reasons.append(f"open-interest snapshot is {open_interest_age} before 00:00 UTC")
         index_age = as_of - inputs["index_price_time_utc"]
-        if index_age > MAXIMUM_INPUT_AGE:
+        if index_age > DAILY_CLOSE_MAXIMUM_INPUT_AGE:
             reasons.append(f"index price is from a trade {index_age} before as_of")
         if reasons:
             return {"reason": "; ".join(reasons)}

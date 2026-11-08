@@ -90,7 +90,8 @@ class FixedRecordMonitorService(MenthorqMonitorService):
         self.asked: List[Any] = []
 
     def compute_record(self, mode: str, as_of: datetime,
-                       open_interest_as_of: Optional[datetime] = None) -> MenthorqLevelRecord:
+                       open_interest_as_of: Optional[datetime] = None,
+                       maximum_input_age: Optional[timedelta] = None) -> MenthorqLevelRecord:
         self.asked.append((mode, as_of, open_interest_as_of))
         record = self.records.get((mode, as_of))
         if record is None:

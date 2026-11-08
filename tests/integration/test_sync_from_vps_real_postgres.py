@@ -304,6 +304,35 @@ def test_jsonb_columns_of_menthorq_level_snapshots_are_copied_unchanged(source_a
     ]
 
 
+def test_a_not_computed_level_row_replaced_on_the_source_is_replaced_in_the_copy(source_and_copy):
+    """The VPS replaces a not-computed daily close (spot NULL) with a computed one and a newer
+    computed_at; the incremental sync must carry the replacement, never the reverse."""
+    from datetime import datetime, timezone
+
+    source, copy = source_and_copy
+    _apply_migration_031(source, copy)
+    table = next(entry for entry in sync_from_vps.SYNC_TABLES if entry["name"] == "menthorq_level_snapshots")
+    as_of = datetime(2026, 11, 6, 23, 59, tzinfo=timezone.utc)
+    retried_at = datetime(2026, 11, 7, 3, 10, tzinfo=timezone.utc)
+    with source.cursor() as cursor:
+        cursor.execute(
+            "INSERT INTO menthorq_level_snapshots (currency, mode, as_of_utc, computed_at, expiry_universe, "
+            "gamma_underlying, expirations, panel_levels, iv_source_counts, not_computed_reasons) "
+            "VALUES ('BTC', 'daily_close', %s, %s, 'monthly', 'index', '[]'::jsonb, '{}'::jsonb, '{}'::jsonb, "
+            "'[\"snapshot 75 min older than 23:59 UTC (limit 60)\"]'::jsonb)", (as_of, as_of))
+    assert sync_table(source, copy, table) == (1, "+1 rows")
+
+    with source.cursor() as cursor:   # what save_menthorq_level_snapshot does on the VPS
+        cursor.execute("UPDATE menthorq_level_snapshots SET spot = 100000, hvl = 95000, computed_at = %s, "
+                       "not_computed_reasons = '[]'::jsonb", (retried_at,))
+    assert sync_table(source, copy, table) == (1, "+1 rows")
+
+    with copy.cursor() as cursor:
+        cursor.execute("SELECT count(*), max(spot), max(hvl), max(computed_at) FROM menthorq_level_snapshots")
+        count, spot, hvl, computed_at = cursor.fetchone()
+    assert (count, float(spot), float(hvl), computed_at) == (1, 100000.0, 95000.0, retried_at)
+
+
 def test_upsert_path_copies_jsonb_and_keeps_real_array_columns(source_and_copy):
     """An upsert table with a jsonb column and a text[] column: jsonb values
     are wrapped, the array stays an array, None stays NULL, and a changed jsonb value is updated."""

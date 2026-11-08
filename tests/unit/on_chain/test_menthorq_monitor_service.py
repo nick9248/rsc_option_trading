@@ -150,6 +150,80 @@ def test_one_failing_day_does_not_stop_the_other_days(caplog, monkeypatch):
     assert "2 computed (2026-11-06, 2026-11-08), 1 failed (2026-11-07)" in caplog.text
 
 
+def test_a_stored_not_computed_daily_close_is_retried_and_replaced():
+    """6 Nov was stored NOT computed (snapshots synced late); 31 Oct..5 Nov are computed.
+    At 7 Nov 00:10 only 6 Nov is recomputed, and the computed record replaces the row."""
+    computed_days = [_daily_close(date(2026, 10, 31) + timedelta(days=offset)) for offset in range(6)]
+    not_computed = make_record(as_of=daily_close_as_of(date(2026, 11, 6)), mode=MODE_DAILY_CLOSE,
+                               spot=None, hvl=None, call_resistance=None, put_support=None,
+                               total_net_gex=None, not_computed_reasons=["inputs not available"])
+    repository = FakeMonitorRepository(computed_days + [not_computed])
+    loader = FakeInputLoader()
+    service = _service(repository, loader)
+    now = datetime(2026, 11, 7, 0, 10, tzinfo=timezone.utc)
+
+    retried = service.run_daily_close_if_missing(now)
+
+    assert loader.calls == [(datetime(2026, 11, 6, 23, 59, tzinfo=timezone.utc),
+                             datetime(2026, 11, 6, 0, 0, tzinfo=timezone.utc))]
+    assert [record.spot for record in retried] == [SPOT]
+    assert retried[0].record_id == 7                       # the 7th row, replaced in place
+    assert len(repository.records) == 7 and repository.records[6].spot == SPOT
+    assert service.run_daily_close_if_missing(now + timedelta(hours=1)) == []   # computed now: done
+
+
+def test_a_not_computed_retry_leaves_the_not_computed_row_unchanged():
+    not_computed = make_record(as_of=daily_close_as_of(date(2026, 11, 6)), mode=MODE_DAILY_CLOSE,
+                               spot=None, not_computed_reasons=["first reason"])
+    computed_days = [_daily_close(date(2026, 10, 31) + timedelta(days=offset)) for offset in range(6)]
+    repository = FakeMonitorRepository(computed_days + [not_computed])
+    service = _service(repository, FakeInputLoader(available=False))
+
+    retried = service.run_daily_close_if_missing(datetime(2026, 11, 7, 0, 10, tzinfo=timezone.utc))
+
+    assert [record.record_id for record in retried] == [None]
+    assert repository.records[6].not_computed_reasons == ["first reason"]
+
+
+class TestDailyCloseInputAge:
+    """Like the backtest: no input more than 60 min older than its instant
+    (snapshot and index trade vs 23:59 UTC, open interest vs 00:00 UTC)."""
+
+    def test_snapshot_exactly_60_min_old_is_computed(self):
+        record = _service(loader=FakeInputLoader(snapshot_age=timedelta(minutes=60))) \
+            .compute_daily_close_record(date(2026, 11, 6))
+        assert record.spot == SPOT and record.snapshot_captured_at_utc == \
+            datetime(2026, 11, 6, 22, 59, tzinfo=timezone.utc)
+
+    def test_snapshot_61_min_old_is_not_computed_with_the_reason(self, caplog):
+        # 23:59 - 22:58 = 61 min > 60
+        record = _service(loader=FakeInputLoader(snapshot_age=timedelta(minutes=61))) \
+            .compute_daily_close_record(date(2026, 11, 6))
+        assert record.spot is None and record.hvl is None and record.mode == MODE_DAILY_CLOSE
+        assert record.not_computed_reasons == ["snapshot 61 min older than 23:59 UTC (limit 60)"]
+        assert "snapshot 61 min older than 23:59 UTC (limit 60)" in caplog.text
+
+    def test_old_open_interest_and_index_trade_are_named_together(self):
+        # OI captured 22:45 of 5 Nov = 75 min before 00:00 of 6 Nov; index trade 90 min 30 s before 23:59.
+        loader = FakeInputLoader(open_interest_age=timedelta(minutes=75),
+                                 index_age=timedelta(minutes=90, seconds=30))
+        record = _service(loader=loader).compute_daily_close_record(date(2026, 11, 6))
+        assert record.not_computed_reasons == [
+            "open-interest snapshot 75 min older than 00:00 UTC (limit 60); "
+            "index trade 90 min older than 23:59 UTC (limit 60)"]
+
+    def test_the_live_record_keeps_its_own_stale_handling(self):
+        # A 3 h old snapshot still gives a computed live record (the DATA STALE line flags it).
+        record = _service(loader=FakeInputLoader(snapshot_age=timedelta(hours=3))).compute_live_record(AS_OF)
+        assert record.spot == SPOT and record.not_computed_reasons[0].startswith("panel")
+
+    def test_the_backtest_uses_the_same_constant(self):
+        from coding.core.analytics.menthorq_replication_calculator import DAILY_CLOSE_MAXIMUM_INPUT_AGE
+        from coding.service.on_chain import menthorq_levels_backtest_service
+        assert menthorq_levels_backtest_service.DAILY_CLOSE_MAXIMUM_INPUT_AGE is DAILY_CLOSE_MAXIMUM_INPUT_AGE
+        assert DAILY_CLOSE_MAXIMUM_INPUT_AGE == timedelta(minutes=60)
+
+
 def test_storing_the_same_run_twice_keeps_one_row():
     repository = FakeMonitorRepository()
     service = _service(repository)

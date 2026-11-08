@@ -196,11 +196,25 @@ SYNC_TABLES = [
         "conflict_target": "(futures_instrument, timestamp) DO NOTHING",
     },
     {
-        # MenthorQ-style level monitor (migration 031). Rows are never changed after insertion.
+        # MenthorQ-style level monitor (migration 031). A computed row is never changed;
+        # a NOT-computed row (spot NULL) is replaced on the VPS by a computed one with a
+        # new computed_at, so the watermark sees it and the same rule replaces it here.
         "name": "menthorq_level_snapshots",
         "watermark_col": "computed_at",
         "watermark_type": "timestamp",
-        "conflict_target": "(currency, mode, expiry_universe, gamma_underlying, as_of_utc) DO NOTHING",
+        "conflict_target": (
+            "(currency, mode, expiry_universe, gamma_underlying, as_of_utc) DO UPDATE SET "
+            "computed_at = EXCLUDED.computed_at, spot = EXCLUDED.spot, "
+            "spot_time_utc = EXCLUDED.spot_time_utc, "
+            "snapshot_captured_at_utc = EXCLUDED.snapshot_captured_at_utc, "
+            "open_interest_captured_at_utc = EXCLUDED.open_interest_captured_at_utc, "
+            "call_resistance = EXCLUDED.call_resistance, put_support = EXCLUDED.put_support, "
+            "hvl = EXCLUDED.hvl, total_net_gex = EXCLUDED.total_net_gex, "
+            "gamma_regime = EXCLUDED.gamma_regime, expirations = EXCLUDED.expirations, "
+            "panel_levels = EXCLUDED.panel_levels, iv_source_counts = EXCLUDED.iv_source_counts, "
+            "not_computed_reasons = EXCLUDED.not_computed_reasons "
+            "WHERE menthorq_level_snapshots.spot IS NULL AND EXCLUDED.spot IS NOT NULL"
+        ),
     },
     {
         # Hourly DVOL candle closes. The daemon re-checks the last 48 hours every

@@ -78,8 +78,38 @@ def test_round_trip_keeps_every_field(repo):
 def test_duplicate_run_is_kept_once(repo):
     assert repo.save_menthorq_level_snapshot(make_record()) is not None
     assert repo.save_menthorq_level_snapshot(make_record(spot=1.0)) is None
-    assert repo.has_menthorq_level_snapshot("BTC", "live", "monthly", "index", BASE_TIME)
-    assert not repo.has_menthorq_level_snapshot("BTC", "daily_close", "monthly", "index", BASE_TIME)
+    assert repo.has_computed_menthorq_level_snapshot("BTC", "live", "monthly", "index", BASE_TIME)
+    assert not repo.has_computed_menthorq_level_snapshot("BTC", "daily_close", "monthly", "index", BASE_TIME)
+
+
+def _row_count_and_spot(repo):
+    with repo._db_cursor() as cursor:
+        cursor.execute("SELECT count(*), max(spot), max(computed_at) FROM menthorq_level_snapshots")
+        return cursor.fetchone()
+
+
+def test_a_not_computed_row_is_replaced_by_a_computed_one_and_never_the_reverse(repo):
+    not_computed = make_record(spot=None, hvl=None, total_net_gex=None, not_computed_reasons=["no snapshot"])
+    first_id = repo.save_menthorq_level_snapshot(not_computed)
+    assert isinstance(first_id, int)
+    assert not repo.has_computed_menthorq_level_snapshot("BTC", "live", "monthly", "index", BASE_TIME)
+
+    # a second not-computed attempt does not rewrite the not-computed row
+    assert repo.save_menthorq_level_snapshot(
+        make_record(spot=None, not_computed_reasons=["other"], computed_at_utc=BASE_TIME + timedelta(hours=1))) is None
+
+    later = BASE_TIME + timedelta(hours=2)
+    assert repo.save_menthorq_level_snapshot(make_record(computed_at_utc=later)) == first_id   # replaced in place
+    assert repo.has_computed_menthorq_level_snapshot("BTC", "live", "monthly", "index", BASE_TIME)
+    loaded = repo.get_menthorq_level_snapshot_at_or_before("BTC", "live", "monthly", "index", BASE_TIME)
+    assert (loaded.spot, loaded.hvl, loaded.not_computed_reasons) == (100000.0, 95000.0, [])
+    assert loaded.computed_at_utc == later     # the sync watermark moves with the replacement
+
+    # a computed row is never overwritten, neither by a computed nor by a not-computed record
+    assert repo.save_menthorq_level_snapshot(make_record(spot=1.0)) is None
+    assert repo.save_menthorq_level_snapshot(not_computed) is None
+    count, spot, computed_at = _row_count_and_spot(repo)
+    assert (count, float(spot), computed_at.astimezone(timezone.utc)) == (1, 100000.0, later)
 
 
 def test_lookup_is_point_in_time_and_skips_not_computed_rows(repo):
