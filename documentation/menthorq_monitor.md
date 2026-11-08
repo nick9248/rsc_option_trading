@@ -80,12 +80,16 @@ or its snapshot is more than 45 min older than the run.
   positive gamma regime). While the current state differs from the reported one, the alert for the
   current state fires (cooldown, mute and stale rules as usual); when it was not a change since the
   previous run, its line says `(earlier, not reported yet; last reported: ...)`. A flip that flips
-  back before it was reported sends nothing. Until the first event of a family has been delivered,
-  the trigger is the change since the previous run, so a very first event that falls inside a mute
-  or fails is still lost. The 24h level-move alerts (and spot near a wall, data stale) are
+  back before it was reported sends nothing. The 24h level-move alerts (and spot near a wall, data stale) are
   re-evaluated every run too: one whose condition still holds after the mute ends, or after a
   failed send, is sent at the next hourly run. The current state is always in `/brief` and
   `/levels`. The GUI preview and the dry run read no delivery log and use the previous-run rule.
+- The one remaining limit: the very FIRST event of a family (the first-ever net GEX sign flip, the
+  first-ever HVL crossing: no event of that family has ever been delivered, so there is no reported
+  state to compare with) is detected only by the comparison with the previous run. If alerts are
+  muted, or the send fails, at exactly that hour, that first event is lost; at the next run the
+  previous record already has the new state and nothing fires. From the first delivered event of a
+  family on, the state-based rule above applies and a muted or failed event is sent later.
 - If the state cannot be read (for example, migration 032 is not applied), alerts are treated as
   NOT muted and the error is logged.
 

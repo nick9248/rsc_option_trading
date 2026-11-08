@@ -20,8 +20,14 @@ the newest record with the state last REPORTED to the owner (the newest
 delivered alert of that event family in ``menthorq_alert_deliveries``):
 an event whose send failed or that fell inside a mute is re-evaluated every
 run and sent once it can be (cooldown, mute and stale rules as usual),
-unless the state reverted to the reported one first. Before any event of a
-family was delivered, its trigger is the change since the previous run.
+unless the state reverted to the reported one first.
+
+The one remaining limit: the very FIRST event of a family (first-ever sign
+flip, first-ever HVL crossing: no event of that family was ever delivered,
+so there is no reported state) is detected only by the comparison with the
+previous run. A mute or a failed send at exactly that hour loses it (at the
+next run the previous record already has the new state). From the first
+delivered event of a family on, the state-based rule above applies.
 
 When the hourly computation itself raises (``send_monitor_error_alert``),
 one ``monitor_error`` alert names the exception, under the same cooldown
