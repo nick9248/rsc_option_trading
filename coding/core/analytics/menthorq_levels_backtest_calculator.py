@@ -23,13 +23,12 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from coding.core.analytics.menthorq_replication_calculator import (
     GEX_PER_ONE_PERCENT_MOVE,
+    LEVEL_NAMES,
     PANEL_NAMES,
     PANEL_RANKING_ABSOLUTE_NET,
     parse_expiry_settlement,
     select_drawn_levels,
 )
-
-LEVEL_NAMES = ("call_resistance", "put_support", "hvl")
 
 REGIME_SPOT_ABOVE_HVL = "spot_above_hvl"
 REGIME_SPOT_BELOW_HVL = "spot_below_hvl"

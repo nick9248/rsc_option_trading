@@ -16,7 +16,7 @@ import csv
 import json
 import logging
 import time as clock
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -35,6 +35,7 @@ from coding.core.analytics.menthorq_levels_backtest_calculator import (
     summarize_replication,
 )
 from coding.core.analytics.menthorq_replication_calculator import (
+    DAILY_CLOSE_DATA_TIME_UTC,
     DAILY_CLOSE_MAXIMUM_INPUT_AGE,
     EXPIRY_UNIVERSE_ALL,
     EXPIRY_UNIVERSE_MONTHLY,
@@ -51,7 +52,6 @@ from coding.service.on_chain.menthorq_replication_service import MenthorqReplica
 
 logger = logging.getLogger(__name__)
 
-MENTHORQ_DATA_TIME_UTC = time(23, 59)
 BACKTEST_UNIVERSES = (EXPIRY_UNIVERSE_MONTHLY, EXPIRY_UNIVERSE_ALL)
 MAXIMUM_PRICE_SAMPLE_AGE = timedelta(minutes=120)
 OUTCOME_HORIZONS_HOURS = {"1d": 24, "3d": 72}
@@ -111,7 +111,7 @@ class MenthorqLevelsBacktestService:
         previous: Optional[Dict[str, Any]] = None
         day = first_date
         while day <= last_date:
-            as_of = datetime.combine(day, MENTHORQ_DATA_TIME_UTC, tzinfo=timezone.utc)
+            as_of = datetime.combine(day, DAILY_CLOSE_DATA_TIME_UTC, tzinfo=timezone.utc)
             inputs = self._load_day_inputs(currency, as_of)
             row: Dict[str, Any] = {"date": day.isoformat(), "as_of_utc": as_of.isoformat()}
             if "reason" in inputs:

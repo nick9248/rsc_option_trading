@@ -8,7 +8,7 @@ configuration and writes a JSON of all numbers.
 
 import json
 import logging
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -20,6 +20,7 @@ from coding.core.analytics.menthorq_chart_renderer import (
 )
 from coding.core.analytics.menthorq_chart_summary import iv_source_text
 from coding.core.analytics.menthorq_replication_calculator import (
+    DAILY_CLOSE_DATA_TIME_UTC,
     DEFAULT_LEVEL_CANDIDATES,
     EXPIRY_UNIVERSE_ALL,
     EXPIRY_UNIVERSE_MONTHLY,
@@ -40,7 +41,6 @@ logger = logging.getLogger(__name__)
 # Deribit index at about 23:59 UTC (checked on 2026-08-24, 2026-10-12 and
 # 2026-11-06); its open interest is about one day older (00:00 UTC is a
 # consistent choice, not a proven instant -- see ``start_of_utc_day``).
-MENTHORQ_DATA_TIME_UTC = time(23, 59)
 
 RUN_MODE_AS_OF = "as_of"
 RUN_MODE_MENTHORQ_DAILY_CLOSE = "menthorq_daily_close"
@@ -72,7 +72,7 @@ def menthorq_daily_close_instants(menthorq_date: date) -> Tuple[datetime, dateti
     ``menthorq_date``: 23:59 UTC of that date, open interest from 00:00 UTC
     of the same date.
     """
-    as_of = datetime.combine(menthorq_date, MENTHORQ_DATA_TIME_UTC, tzinfo=timezone.utc)
+    as_of = datetime.combine(menthorq_date, DAILY_CLOSE_DATA_TIME_UTC, tzinfo=timezone.utc)
     return as_of, start_of_utc_day(as_of)
 
 

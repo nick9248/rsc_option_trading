@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 from coding.core.analytics.menthorq_replication_calculator import (
     IV_SOURCE_MISSING,
     IV_SOURCE_REBUILT_FROM_MARK_PRICE,
+    LEVEL_NAMES,
     PANEL_NAMES,
     PANEL_RANKING_ABSOLUTE_NET,
     select_drawn_levels,
@@ -32,7 +33,6 @@ GAMMA_REGIME_POSITIVE = "positive"   # spot above HVL
 GAMMA_REGIME_NEGATIVE = "negative"   # spot below HVL
 GAMMA_REGIME_AT_HVL = "at_hvl"       # spot exactly on HVL
 
-LEVEL_NAMES = ("call_resistance", "put_support", "hvl")
 LEVEL_LABELS = {"call_resistance": "Call Resistance", "put_support": "Put Support", "hvl": "HVL"}
 # A run counts as COMPUTED when at least one of these is set (``has_levels``).
 # Spot alone does not count: a run can load its inputs and still compute nothing.

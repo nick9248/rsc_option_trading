@@ -40,7 +40,7 @@ Pure: no database or network access. The service layer loads the snapshot.
 import calendar
 import logging
 import math
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from coding.core.analytics.black_scholes_calculator import BlackScholesCalculator
@@ -132,6 +132,12 @@ IMPLIED_VOLATILITY_TOLERANCE = 1e-10     # decimal vol
 # before 23:59 UTC, open-interest snapshot before 00:00 UTC): the day is then
 # incomplete in the database. Shared by the backtest and the monitor.
 DAILY_CLOSE_MAXIMUM_INPUT_AGE = timedelta(minutes=60)
+# The data instant (UTC time of day) of a MenthorQ-style daily close and of a
+# MenthorQ chart labelled with that date. Shared by the replay, the backtest
+# and the monitor.
+DAILY_CLOSE_DATA_TIME_UTC = time(23, 59)
+# The three drawn levels (keys of ``select_drawn_levels``).
+LEVEL_NAMES = ("call_resistance", "put_support", "hvl")
 
 
 # --------------------------------------------------------------------------

@@ -20,7 +20,7 @@ Reuses ``MenthorqInputLoader`` and ``replicate_menthorq`` (no chart import).
 """
 
 import logging
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from coding.core.analytics.menthorq_monitor.level_record import (
@@ -39,6 +39,7 @@ from coding.core.analytics.menthorq_monitor.level_trend_calculator import (
     compare_records,
 )
 from coding.core.analytics.menthorq_replication_calculator import (
+    DAILY_CLOSE_DATA_TIME_UTC,
     DAILY_CLOSE_MAXIMUM_INPUT_AGE,
     replicate_menthorq,
     start_of_utc_day,
@@ -49,7 +50,6 @@ from coding.service.on_chain.menthorq_monitor.monitor_settings import MenthorqMo
 
 logger = logging.getLogger(__name__)
 
-DAILY_CLOSE_DATA_TIME_UTC = time(23, 59)
 # The hourly run fills missing daily-close records of this many ended UTC days.
 DAILY_CLOSE_BACKFILL_DAYS = 7
 # How far a comparison record may be from its target instant (e.g. "24 h
