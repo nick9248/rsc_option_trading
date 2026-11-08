@@ -11,7 +11,7 @@ It has no process of its own. Its jobs, all in UTC:
 
 | Job id | When | What |
 |---|---|---|
-| `menthorq_monitor_hourly` | every hour at `MENTHORQ_LIVE_RUN_MINUTE` | stores the live record, stores yesterday's daily-close record if it is missing, sends urgent alerts and catches up a missed weekly brief (both only with `MENTHORQ_ALERTS_ENABLED=1`) |
+| `menthorq_monitor_hourly` | every hour at `MENTHORQ_LIVE_RUN_MINUTE` | stores the live record, stores every missing daily-close record of the last 7 ended UTC days (oldest first; a day that fails is logged and the others still run; today is never computed), sends urgent alerts and catches up a missed weekly brief (both only with `MENTHORQ_ALERTS_ENABLED=1`) |
 | `menthorq_weekly_brief` | `MENTHORQ_WEEKLY_BRIEF_DAY` at `MENTHORQ_WEEKLY_BRIEF_TIME_UTC` | sends the weekly brief once per week; registered only with `MENTHORQ_ALERTS_ENABLED=1` |
 | `menthorq_command_poll` | every `MENTHORQ_COMMAND_POLL_SECONDS` | polls Telegram for bot commands (getUpdates); registered only with `MENTHORQ_COMMANDS_ENABLED=1` |
 

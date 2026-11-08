@@ -10,8 +10,8 @@ Two modes (column ``mode``):
   - "daily_close": the MenthorQ-style daily record of a UTC date: spot and
     IV at 23:59 UTC, open interest from the snapshot at or before 00:00 UTC
     of the same date (a consistent choice on three checked dates, not a
-    proven instant). Computed once the date is over (the hourly run checks
-    whether yesterday's record exists).
+    proven instant). Computed once the date is over (the hourly run fills
+    any missing record of the last 7 ended days).
 
 Reuses ``MenthorqInputLoader`` and ``replicate_menthorq`` (no chart import).
 """
@@ -46,6 +46,8 @@ from coding.service.on_chain.menthorq_monitor.monitor_settings import MenthorqMo
 logger = logging.getLogger(__name__)
 
 DAILY_CLOSE_DATA_TIME_UTC = time(23, 59)
+# The hourly run fills missing daily-close records of this many ended UTC days.
+DAILY_CLOSE_BACKFILL_DAYS = 7
 # How far a comparison record may be from its target instant (e.g. "24 h
 # ago" accepts a record between 30 h and 24 h ago). Older -> "no record".
 COMPARISON_TOLERANCE = {
@@ -142,22 +144,40 @@ class MenthorqMonitorService:
         """Compute and store the live record of ``now``."""
         return self.store(self.compute_live_record(now))
 
-    def run_daily_close_if_missing(self, now: datetime) -> Optional[MenthorqLevelRecord]:
+    def run_daily_close_if_missing(self, now: datetime) -> List[MenthorqLevelRecord]:
         """
-        Compute and store yesterday's (UTC) daily-close record when it is not
-        stored yet. Only data at or before yesterday 23:59 UTC is used, so
-        running it any time after midnight adds no lookahead.
+        Compute and store every daily-close record of the last
+        ``DAILY_CLOSE_BACKFILL_DAYS`` ended UTC days (yesterday and the six
+        days before it) that is not stored yet, oldest first, so a collector
+        that was down for a few days fills the gap. Today is never computed
+        (it has not ended). Each record uses only data at or before its own
+        23:59 UTC (no lookahead). A day that fails is logged and the other
+        days are still computed.
 
         Returns:
-            The new record, or None when it was already stored.
+            The records stored by this call, oldest first (empty when none
+            was missing).
         """
-        yesterday = (now.astimezone(timezone.utc) - timedelta(days=1)).date()
+        today = now.astimezone(timezone.utc).date()
         settings = self.settings
-        if self.repository.has_menthorq_level_snapshot(
-                settings.currency, MODE_DAILY_CLOSE, settings.expiry_universe,
-                settings.gamma_underlying, daily_close_as_of(yesterday)):
-            return None
-        return self.store(self.compute_daily_close_record(yesterday))
+        stored = []
+        failed_days = []
+        for days_back in range(DAILY_CLOSE_BACKFILL_DAYS, 0, -1):
+            utc_date = today - timedelta(days=days_back)
+            try:
+                if self.repository.has_menthorq_level_snapshot(
+                        settings.currency, MODE_DAILY_CLOSE, settings.expiry_universe,
+                        settings.gamma_underlying, daily_close_as_of(utc_date)):
+                    continue
+                stored.append(self.store(self.compute_daily_close_record(utc_date)))
+            except Exception:
+                logger.exception("MenthorQ daily-close record of %s failed", utc_date.isoformat())
+                failed_days.append(utc_date.isoformat())
+        if stored or failed_days:
+            logger.info("MenthorQ daily-close backfill: %d computed (%s), %d failed%s",
+                        len(stored), ", ".join(record.as_of_utc.date().isoformat() for record in stored),
+                        len(failed_days), f" ({', '.join(failed_days)})" if failed_days else "")
+        return stored
 
     def find_reference(
         self, latest: MenthorqLevelRecord, label: str
