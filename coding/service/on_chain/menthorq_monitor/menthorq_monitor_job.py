@@ -15,7 +15,10 @@ all three off by default, the VPS .env sets them):
     (/brief /levels /changes /status /mute /help, see bot_command_service).
 
 Every step is isolated: a failure is logged and never stops the collector or
-the next step. Numbers only; nothing on this path imports matplotlib.
+the next step. When the live record or yesterday's daily close raised (and
+alerts are enabled), the owner also gets one ``monitor_error`` alert (12 h
+cooldown, muted by /mute), so a persistent failure is not silent. Numbers
+only; nothing on this path imports matplotlib.
 """
 
 import logging
@@ -68,19 +71,32 @@ class MenthorqMonitorJob:
         self.clock = clock
 
     def run_hourly(self) -> None:
-        """Live record, daily-close catch-up, urgent alerts, weekly-brief catch-up."""
+        """
+        Live record, daily-close catch-up, urgent alerts, weekly-brief
+        catch-up. When the live record or yesterday's daily close raised,
+        one ``monitor_error`` alert names the first error (alerts enabled
+        only; cooldown and mute as for the other urgent alerts).
+        """
         now = self.clock()
         live = None
+        computation_error: Optional[Exception] = None
         try:
             live = self.monitor_service.run_live(now)
-        except Exception:
+        except Exception as error:
             logger.exception("MenthorQ monitor: live record failed")
+            computation_error = error
         try:
             self.monitor_service.run_daily_close_if_missing(now)
-        except Exception:
+        except Exception as error:
             logger.exception("MenthorQ monitor: daily-close record failed")
+            computation_error = computation_error or error
         if not self.settings.alerts_enabled:
             return
+        if computation_error is not None:
+            try:
+                self.delivery_service.send_monitor_error_alert(computation_error, now)
+            except Exception:
+                logger.exception("MenthorQ monitor: monitor-error alert failed")
         if live is not None:
             try:
                 self.delivery_service.send_urgent_alerts(live, now)

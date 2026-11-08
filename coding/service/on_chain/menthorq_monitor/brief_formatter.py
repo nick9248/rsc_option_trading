@@ -570,3 +570,18 @@ def format_stale_data_alert(record: MenthorqLevelRecord, warning: str) -> str:
         "Movement alerts are paused until fresh data arrives.",
         "<i>Check the collector (snapshots). /mute 24h silences these alerts.</i>",
     ])
+
+
+MAXIMUM_ERROR_MESSAGE_CHARACTERS = 200
+
+
+def format_monitor_error_alert(error_class_name: str, error_text: str) -> str:
+    """
+    The message sent when the hourly computation raised. ``error_text`` must
+    already be free of secrets (the caller scrubs the bot token and the
+    database password); it is cut to ``MAXIMUM_ERROR_MESSAGE_CHARACTERS``
+    and HTML-escaped. Never a traceback.
+    """
+    return (f"<b>Monitor error:</b> the hourly computation failed: "
+            f"{escape(error_class_name)}: {escape(error_text[:MAXIMUM_ERROR_MESSAGE_CHARACTERS])}. "
+            "Levels and alerts are paused until it succeeds.")

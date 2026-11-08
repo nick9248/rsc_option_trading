@@ -22,6 +22,10 @@ an event whose send failed or that fell inside a mute is re-evaluated every
 run and sent once it can be (cooldown, mute and stale rules as usual),
 unless the state reverted to the reported one first. Before any event of a
 family was delivered, its trigger is the change since the previous run.
+
+When the hourly computation itself raises (``send_monitor_error_alert``),
+one ``monitor_error`` alert names the exception, under the same cooldown
+and mute rules, so a persistent failure is not silent.
 """
 
 import logging
@@ -33,6 +37,7 @@ from typing import Callable, Dict, List, Mapping, Optional, Sequence
 from coding.core.analytics.menthorq_monitor.alert_mute import is_muted
 from coding.core.analytics.menthorq_monitor.alert_rules import (
     ALERT_KEY_DATA_STALE,
+    ALERT_KEY_MONITOR_ERROR,
     EVENT_ALERT_STATES,
     EVENT_FAMILY_KEYS,
     AlertThresholds,
@@ -50,9 +55,11 @@ from coding.core.analytics.menthorq_monitor.level_trend_calculator import (
     COMPARISON_PREVIOUS,
     RecordComparison,
 )
+from coding.core.database.config import DatabaseConfig
 from coding.service.on_chain.menthorq_monitor.brief_formatter import (
     escape,
     format_brief,
+    format_monitor_error_alert,
     format_stale_data_alert,
     format_urgent_alert,
     no_usable_data_warning,
@@ -302,11 +309,51 @@ class MenthorqBriefDeliveryService:
             logger.info("MenthorQ monitor: alerts on cooldown (not repeated): %s", skipped)
         if not due:
             return []
-        return self._send_urgent(latest, [alert.key for alert in due],
+        return self._send_urgent(latest.currency, latest.record_id, [alert.key for alert in due],
                                  evaluation.message(latest, due), now)
 
+    def send_monitor_error_alert(self, error: BaseException, now: datetime) -> bool:
+        """
+        Tell the owner that the hourly computation raised (``error``): one
+        ``monitor_error`` alert under the same 12 h cooldown and mute rules
+        as the other urgent alerts. The text names the exception class and
+        its message (bot token and database password scrubbed, cut to 200
+        characters, escaped), never a traceback. When the delivery log
+        cannot be read (often the cause of the error) only the deliveries
+        kept in memory count for the cooldown, so a database that stays
+        down gives one alert per cooldown, not one per hour. Never raises.
+
+        Returns:
+            True when the alert was delivered by this call.
+        """
+        try:
+            error_text = self.telegram.scrub_token(str(error))
+            database_password = DatabaseConfig().password
+            if database_password:
+                error_text = error_text.replace(database_password, "<database password>")
+            try:
+                stored = self.repository.get_last_menthorq_alert_delivery(
+                    self.settings.currency, ALERT_KEY_MONITOR_ERROR)
+            except Exception:
+                logger.exception("MenthorQ monitor: delivery log not readable; monitor-error cooldown "
+                                 "from this process's memory only")
+                stored = None
+            remembered = self._unsaved_deliveries.get(ALERT_KEY_MONITOR_ERROR)
+            known = [instant for instant in (stored, remembered) if instant is not None]
+            alert = UrgentAlert(key=ALERT_KEY_MONITOR_ERROR, title="Monitor error", comparison_label="latest")
+            if not apply_cooldown([alert], {alert.key: max(known) if known else None}, now,
+                                  self.thresholds.cooldown):
+                logger.info("MenthorQ monitor: monitor-error alert on cooldown (not repeated)")
+                return False
+            message = format_monitor_error_alert(type(error).__name__, error_text)
+            return bool(self._send_urgent(self.settings.currency, None, [ALERT_KEY_MONITOR_ERROR],
+                                          message, now))
+        except Exception:
+            logger.exception("MenthorQ monitor: the monitor-error alert itself failed")
+            return False
+
     def _send_urgent(
-        self, latest: MenthorqLevelRecord, keys: List[str], message: str, now: datetime
+        self, currency: str, record_id: Optional[int], keys: List[str], message: str, now: datetime
     ) -> List[str]:
         """
         Send one urgent ``message`` for ``keys`` unless muted (then the keys
@@ -321,14 +368,14 @@ class MenthorqBriefDeliveryService:
         if self.alerts_muted(now):
             logger.info("MenthorQ monitor: urgent alerts %s NOT sent (muted)", keys)
             try:
-                self.repository.save_menthorq_suppressed_alerts(latest.currency, keys, self.clock())
+                self.repository.save_menthorq_suppressed_alerts(currency, keys, self.clock())
             except Exception:
                 logger.exception("MenthorQ monitor: could not record the muted alerts")
             return []
         if not self.telegram.send(message, parse_mode=TELEGRAM_PARSE_MODE):
             logger.warning("MenthorQ monitor: urgent alerts %s NOT delivered (Telegram send failed)", keys)
             return []
-        self._record_delivery(keys, message, latest.record_id)
+        self._record_delivery(keys, message, record_id)
         logger.info("MenthorQ monitor: urgent alerts delivered: %s", keys)
         return list(keys)
 

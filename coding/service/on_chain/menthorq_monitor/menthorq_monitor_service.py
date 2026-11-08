@@ -236,11 +236,17 @@ class MenthorqMonitorService:
             The records computed by this call, oldest first (empty when none
             was missing or due); a not-computed retry that left the stored
             row unchanged has ``record_id`` None.
+
+        Raises:
+            Exception: the error of the latest ended day (yesterday) when its
+                step raised, after every other day was tried, so the caller
+                can report it; a failure of an older day is only logged.
         """
         today = now.astimezone(timezone.utc).date()
         settings = self.settings
         stored = []
         failed_days = []
+        latest_day_error: Optional[Exception] = None
         for days_back in range(DAILY_CLOSE_BACKFILL_DAYS, 0, -1):
             utc_date = today - timedelta(days=days_back)
             as_of = daily_close_as_of(utc_date)
@@ -261,13 +267,17 @@ class MenthorqMonitorService:
                     continue
                 self._daily_close_attempt_captures[utc_date] = newest_capture
                 stored.append(self.store(self.compute_daily_close_record(utc_date)))
-            except Exception:
+            except Exception as error:
                 logger.exception("MenthorQ daily-close record of %s failed", utc_date.isoformat())
                 failed_days.append(utc_date.isoformat())
+                if days_back == 1:
+                    latest_day_error = error
         if stored or failed_days:
             logger.info("MenthorQ daily-close backfill: %d computed (%s), %d failed%s",
                         len(stored), ", ".join(record.as_of_utc.date().isoformat() for record in stored),
                         len(failed_days), f" ({', '.join(failed_days)})" if failed_days else "")
+        if latest_day_error is not None:
+            raise latest_day_error
         return stored
 
     def find_reference(

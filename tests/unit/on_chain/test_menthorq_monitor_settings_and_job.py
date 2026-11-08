@@ -28,7 +28,9 @@ from coding.service.on_chain.menthorq_monitor.monitor_settings import (
     MenthorqMonitorSettings,
 )
 from coding.service.on_chain.menthorq_monitor.telegram_command_listener import LONG_POLL_SECONDS
-from tests.fakes.fake_menthorq_monitor import BASE_TIME, FakeTelegram
+from coding.service.on_chain.menthorq_monitor.brief_delivery_service import MenthorqBriefDeliveryService
+from coding.service.on_chain.menthorq_monitor.menthorq_monitor_service import MenthorqMonitorService
+from tests.fakes.fake_menthorq_monitor import BASE_TIME, FakeInputLoader, FakeMonitorRepository, FakeTelegram
 
 REPOSITORY_ROOT = Path(__file__).parents[3]
 
@@ -256,6 +258,64 @@ def test_alerts_disabled_sends_nothing():
     monitor.run_live.assert_called_once()
     delivery.send_urgent_alerts.assert_not_called()
     delivery.send_weekly_brief_if_due.assert_not_called()
+
+
+class TestMonitorErrorAlertFromTheHourlyRun:
+    """run_live (or yesterday's daily close) raising sends one monitor_error alert."""
+
+    def test_live_failure_sends_one_alert_naming_the_error(self):
+        monitor, delivery = MagicMock(), MagicMock()
+        error = RuntimeError("database down")
+        monitor.run_live.side_effect = error
+        MenthorqMonitorJob(ALL_ON, monitor, delivery, clock=lambda: BASE_TIME).run_hourly()
+        delivery.send_monitor_error_alert.assert_called_once_with(error, BASE_TIME)
+
+    def test_both_failing_send_one_alert_with_the_live_error(self):
+        monitor, delivery = MagicMock(), MagicMock()
+        live_error, daily_error = RuntimeError("live"), RuntimeError("daily")
+        monitor.run_live.side_effect = live_error
+        monitor.run_daily_close_if_missing.side_effect = daily_error
+        MenthorqMonitorJob(ALL_ON, monitor, delivery, clock=lambda: BASE_TIME).run_hourly()
+        delivery.send_monitor_error_alert.assert_called_once_with(live_error, BASE_TIME)
+
+    def test_daily_close_failure_alone_sends_the_alert_and_the_live_alerts_still_run(self):
+        monitor, delivery = MagicMock(), MagicMock()
+        daily_error = RuntimeError("daily")
+        monitor.run_daily_close_if_missing.side_effect = daily_error
+        MenthorqMonitorJob(ALL_ON, monitor, delivery, clock=lambda: BASE_TIME).run_hourly()
+        delivery.send_monitor_error_alert.assert_called_once_with(daily_error, BASE_TIME)
+        delivery.send_urgent_alerts.assert_called_once()
+
+    def test_no_error_or_alerts_disabled_sends_no_error_alert(self):
+        monitor, delivery = MagicMock(), MagicMock()
+        MenthorqMonitorJob(ALL_ON, monitor, delivery, clock=lambda: BASE_TIME).run_hourly()
+        delivery.send_monitor_error_alert.assert_not_called()
+        monitor.run_live.side_effect = RuntimeError("down")
+        MenthorqMonitorJob(MONITOR_ONLY, monitor, delivery, clock=lambda: BASE_TIME).run_hourly()
+        delivery.send_monitor_error_alert.assert_not_called()
+
+    def test_a_raising_alert_path_does_not_stop_the_other_steps(self):
+        monitor, delivery = MagicMock(), MagicMock()
+        monitor.run_live.side_effect = RuntimeError("down")
+        delivery.send_monitor_error_alert.side_effect = RuntimeError("alert broken")
+        MenthorqMonitorJob(ALL_ON, monitor, delivery, clock=lambda: BASE_TIME).run_hourly()
+        delivery.send_weekly_brief_if_due.assert_called_once_with(BASE_TIME)
+
+    def test_real_delivery_with_a_raising_live_record_sends_one_alert(self, monkeypatch):
+        repository, telegram = FakeMonitorRepository(), FakeTelegram()
+        monitor = MenthorqMonitorService(repository=repository, settings=ALL_ON,
+                                         input_loader=FakeInputLoader())
+        delivery = MenthorqBriefDeliveryService(monitor, telegram, clock=lambda: BASE_TIME)
+
+        def raise_replication_error(_now):
+            raise ValueError("replication failed")
+        monkeypatch.setattr(monitor, "run_live", raise_replication_error)
+        job = MenthorqMonitorJob(ALL_ON, monitor, delivery, clock=lambda: BASE_TIME)
+        job.run_hourly()
+        job.run_hourly()                              # same hour again: cooldown, no second alert
+        error_messages = [sent["message"] for sent in telegram.sent if "Monitor error" in sent["message"]]
+        assert error_messages == ["<b>Monitor error:</b> the hourly computation failed: ValueError: "
+                                  "replication failed. Levels and alerts are paused until it succeeds."]
 
 
 def test_collector_and_monitor_import_graph_has_no_matplotlib():

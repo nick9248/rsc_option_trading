@@ -67,6 +67,8 @@ ALERT_KEY_SPOT_NEAR_CALL_RESISTANCE = "spot_near_call_resistance"
 ALERT_KEY_SPOT_NEAR_PUT_SUPPORT = "spot_near_put_support"
 # Sent instead of the movement alerts while the latest record's data is stale.
 ALERT_KEY_DATA_STALE = "data_stale"
+# Sent when the hourly computation itself raised (database error, replication bug).
+ALERT_KEY_MONITOR_ERROR = "monitor_error"
 # A level move vs 24 h ago stays true for the whole comparison window after the
 # move, so these keys are held for at least that window (one move, one alert).
 LEVEL_MOVE_ALERT_KEYS = (ALERT_KEY_HVL_MOVE, ALERT_KEY_CALL_RESISTANCE_MOVE, ALERT_KEY_PUT_SUPPORT_MOVE)
@@ -91,7 +93,7 @@ URGENT_ALERT_KEYS = (
     ALERT_KEY_CROSSED_BELOW_HVL, ALERT_KEY_CROSSED_ABOVE_HVL,
     ALERT_KEY_NET_GEX_TURNED_NEGATIVE, ALERT_KEY_NET_GEX_TURNED_POSITIVE,
     ALERT_KEY_SPOT_NEAR_CALL_RESISTANCE, ALERT_KEY_SPOT_NEAR_PUT_SUPPORT,
-    ALERT_KEY_DATA_STALE,
+    ALERT_KEY_DATA_STALE, ALERT_KEY_MONITOR_ERROR,
 )
 
 

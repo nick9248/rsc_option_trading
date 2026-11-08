@@ -12,6 +12,7 @@ from coding.core.analytics.menthorq_monitor.alert_rules import (
     URGENT_ALERT_KEYS,
     AlertThresholds,
 )
+from coding.core.database.config import DatabaseConfig
 from coding.service.on_chain.menthorq_monitor.brief_delivery_service import (
     DELIVERY_KEY_ON_DEMAND_BRIEF,
     DELIVERY_KEY_WEEKLY_BRIEF,
@@ -498,3 +499,75 @@ class TestDeliveryRowNotSaved:
         service.send_weekly_brief_if_due(FRIDAY_0910)
         restarted = MenthorqBriefDeliveryService(service.monitor_service, FakeTelegram())
         assert restarted.last_delivery(DELIVERY_KEY_WEEKLY_BRIEF) is None
+
+
+class OperationalError(Exception):
+    """Stand-in for a database driver error class."""
+
+
+class TestMonitorErrorAlert:
+    """The hourly computation raised: one monitor_error alert, cooldown and mute as usual."""
+
+    def test_one_alert_with_class_scrubbed_message_and_no_traceback(self, monkeypatch):
+        monkeypatch.setattr("coding.service.on_chain.menthorq_monitor.brief_delivery_service.DatabaseConfig",
+                            lambda: DatabaseConfig(password="s3cret"))
+        service, repository, telegram, _ = _delivery([])
+        error = OperationalError("could not connect: password s3cret rejected, token fake-token")
+        assert service.send_monitor_error_alert(error, FRIDAY_0910) is True
+        # "s3cret" -> "<database password>", the FakeTelegram token "fake-token" -> "<bot token>",
+        # both then escaped (< -> &lt;, > -> &gt;)
+        assert [sent["message"] for sent in telegram.sent] == [
+            "<b>Monitor error:</b> the hourly computation failed: OperationalError: "
+            "could not connect: password &lt;database password&gt; rejected, token &lt;bot token&gt;. "
+            "Levels and alerts are paused until it succeeds."]
+        assert telegram.sent[0]["parse_mode"] == "HTML"
+        assert "Traceback" not in telegram.sent[0]["message"]
+        assert [delivery["alert_key"] for delivery in repository.deliveries] == ["monitor_error"]
+        assert "monitor_error" in URGENT_ALERT_KEYS
+
+    def test_message_is_cut_to_200_characters_before_escaping(self):
+        service, _, telegram, _ = _delivery([])
+        service.send_monitor_error_alert(RuntimeError("<" * 250), FRIDAY_0910)
+        # 250 "<" cut to 200, each then escaped to "&lt;"
+        assert telegram.sent[0]["message"] == (
+            "<b>Monitor error:</b> the hourly computation failed: RuntimeError: " + "&lt;" * 200
+            + ". Levels and alerts are paused until it succeeds.")
+
+    def test_cooldown_is_12_hours(self):
+        service, _, telegram, _ = _delivery([])
+        assert service.send_monitor_error_alert(RuntimeError("down"), FRIDAY_0910) is True
+        assert service.send_monitor_error_alert(
+            RuntimeError("down"), FRIDAY_0910 + timedelta(hours=11, minutes=59)) is False
+        assert service.send_monitor_error_alert(
+            RuntimeError("down"), FRIDAY_0910 + timedelta(hours=12)) is True
+        assert len(telegram.sent) == 2
+
+    def test_muted_alert_is_held_back_and_recorded(self):
+        service, repository, telegram, _ = _delivery([])
+        repository.save_menthorq_alert_mute("BTC", FRIDAY_0910 + timedelta(hours=1), FRIDAY_0910)
+        assert service.send_monitor_error_alert(RuntimeError("down"), FRIDAY_0910) is False
+        assert telegram.sent == [] and repository.deliveries == []
+        state = repository.get_menthorq_monitor_state("BTC")
+        assert state is not None and state.last_suppressed_alert_keys == ["monitor_error"]
+
+    def test_database_down_gives_one_alert_per_cooldown_from_memory(self, monkeypatch, caplog):
+        service, repository, telegram, _ = _delivery([])
+
+        def raise_database_down(*_arguments, **_keywords):
+            raise RuntimeError("database down")
+        monkeypatch.setattr(repository, "get_last_menthorq_alert_delivery", raise_database_down)
+        repository.fail_deliveries = True
+        assert service.send_monitor_error_alert(RuntimeError("database down"), FRIDAY_0910) is True
+        assert service.send_monitor_error_alert(
+            RuntimeError("database down"), FRIDAY_0910 + timedelta(hours=1)) is False
+        assert len(telegram.sent) == 1
+        assert "monitor-error cooldown from this process's memory only" in caplog.text
+
+    def test_a_raising_alert_path_is_swallowed_and_logged(self, monkeypatch, caplog):
+        service, _, telegram, _ = _delivery([])
+
+        def raise_on_send(*_arguments, **_keywords):
+            raise RuntimeError("sender broken")
+        monkeypatch.setattr(telegram, "send", raise_on_send)
+        assert service.send_monitor_error_alert(RuntimeError("down"), FRIDAY_0910) is False
+        assert "the monitor-error alert itself failed" in caplog.text

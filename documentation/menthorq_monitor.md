@@ -123,6 +123,13 @@ test. They were chosen by hand, not fitted by a backtest.
   cooldown and `/mute`, with the stored reasons in the message (`Monitor has no usable data:
   <reasons>`, at most three, then how many more), and the movement alerts are paused. Losing every
   input is therefore never silent. The GUI preview and the dry-run script show the same alert.
+- Monitor error: when the hourly computation itself raises (the live record, or the daily close
+  of yesterday; for example a database error), one `monitor_error` alert is sent: `Monitor
+  error: the hourly computation failed: <exception class>: <message>. Levels and alerts are
+  paused until it succeeds.` The message is cut to 200 characters, the bot token and the
+  database password are replaced, and no traceback is sent (it is in the log). Same 12h cooldown
+  and `/mute`. When the delivery log cannot be read, only the deliveries this process remembers
+  count for the cooldown, so a database that stays down gives one alert per 12h.
 - An alert over a window in which an expiry settled says that the move coincides with the roll-off.
 
 The brief and `/levels` add one line when the gamma regime (spot vs HVL) and the sign of total net

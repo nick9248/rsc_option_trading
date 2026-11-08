@@ -66,6 +66,10 @@ class TelegramAlertService:
             return text
         return text.replace(self._token, "<bot token>")
 
+    def scrub_token(self, text: str) -> str:
+        """``text`` with the bot token replaced by "<bot token>" (for text built outside this class)."""
+        return self._without_token(text)
+
     def send(self, message: str, parse_mode: Optional[str] = None) -> bool:
         """
         Send `message` to the configured chat.

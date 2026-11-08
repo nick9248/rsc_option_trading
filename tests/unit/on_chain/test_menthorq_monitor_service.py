@@ -151,6 +151,26 @@ def test_one_failing_day_does_not_stop_the_other_days(caplog, monkeypatch):
     assert "2 computed (2026-11-06, 2026-11-08), 1 failed (2026-11-07)" in caplog.text
 
 
+def test_a_failure_of_yesterday_is_raised_after_the_other_days(monkeypatch):
+    """now = Mon 9 Nov 05:10 UTC; yesterday (8 Nov) raises: 2..7 Nov are still computed, then
+    the 8 Nov error is raised so the hourly job can report it."""
+    repository = FakeMonitorRepository()
+    loader = FakeInputLoader()
+    real_load_inputs = loader.load_inputs
+
+    def fail_on_8_november(currency, as_of, open_interest_as_of=None):
+        if as_of.date() == date(2026, 11, 8):
+            raise RuntimeError("database hiccup")
+        return real_load_inputs(currency, as_of, open_interest_as_of)
+
+    monkeypatch.setattr(loader, "load_inputs", fail_on_8_november)
+    service = _service(repository, loader)
+    with pytest.raises(RuntimeError, match="database hiccup"):
+        service.run_daily_close_if_missing(datetime(2026, 11, 9, 5, 10, tzinfo=timezone.utc))
+    assert sorted(record.as_of_utc.date() for record in repository.records) == [
+        date(2026, 11, 2) + timedelta(days=offset) for offset in range(6)]
+
+
 def test_a_stored_not_computed_daily_close_is_retried_and_replaced():
     """6 Nov was stored NOT computed (snapshots synced late); 31 Oct..5 Nov are computed.
     At 7 Nov 00:10 only 6 Nov is recomputed, and the computed record replaces the row."""
