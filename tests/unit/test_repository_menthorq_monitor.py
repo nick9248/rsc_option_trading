@@ -187,3 +187,13 @@ def test_a_failing_key_rolls_back_every_key_of_the_message(repo):
     with pytest.raises(psycopg2.errors.StringDataRightTruncation):
         repo.save_menthorq_alert_deliveries("BTC", ["hvl_move_24h", too_long], BASE_TIME, "m")
     assert _delivery_keys(repo) == []         # the first key was rolled back too
+
+
+def test_get_level_snapshot_by_key_returns_computed_and_not_computed_rows(repo):
+    assert repo.get_menthorq_level_snapshot("BTC", "live", "monthly", "index", BASE_TIME) is None
+    repo.save_menthorq_level_snapshot(make_record_without_levels(spot=None, snapshot_captured_at_utc=None))
+    stored = repo.get_menthorq_level_snapshot("BTC", "live", "monthly", "index", BASE_TIME)
+    assert stored is not None and not stored.has_levels and stored.snapshot_captured_at_utc is None
+    assert repo.get_menthorq_level_snapshot("BTC", "daily_close", "monthly", "index", BASE_TIME) is None
+    assert repo.get_menthorq_level_snapshot(
+        "BTC", "live", "monthly", "index", BASE_TIME + timedelta(minutes=1)) is None

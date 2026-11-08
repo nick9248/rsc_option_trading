@@ -179,3 +179,20 @@ def test_snapshot_is_none_when_only_later_captures_exist(repo):
     ])
 
     assert repository.get_option_chain_snapshot_at_or_before("BTC", AS_OF) is None
+
+
+def test_latest_capture_is_the_newest_at_or_before_as_of_without_loading_rows(repo):
+    repository, scratch_connection = repo
+    assert repository.get_latest_option_chain_capture_at_or_before("BTC", AS_OF) is None
+    _insert_snapshot_rows(scratch_connection, [
+        (AS_OF - timedelta(minutes=40), "BTC-27NOV26-80000-C", 100.0, 45.0, 76000.0),
+        (AS_OF, "BTC-27NOV26-80000-C", 200.0, 46.5, 76100.0),                # exactly at as_of: counts
+        (AS_OF + timedelta(minutes=20), "BTC-27NOV26-80000-C", 999.0, 99.0, 99999.0),
+    ])
+
+    latest = repository.get_latest_option_chain_capture_at_or_before("BTC", AS_OF)
+
+    assert latest == AS_OF and latest.tzinfo is not None
+    assert repository.get_latest_option_chain_capture_at_or_before("BTC", AS_OF - timedelta(minutes=1)) == \
+        AS_OF - timedelta(minutes=40)
+    assert repository.get_latest_option_chain_capture_at_or_before("ETH", AS_OF) is None

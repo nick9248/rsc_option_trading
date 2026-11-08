@@ -11,7 +11,8 @@ Two modes (column ``mode``):
     IV at 23:59 UTC, open interest from the snapshot at or before 00:00 UTC
     of the same date (a consistent choice on three checked dates, not a
     proven instant). Computed once the date is over (the hourly run fills
-    any missing or not-computed record of the last 7 ended days); not
+    any missing record of the last 7 ended days, and retries a
+    not-computed one when a newer snapshot has arrived); not
     computed from an input more than 60 min older than its instant
     (``DAILY_CLOSE_MAXIMUM_INPUT_AGE``, shared with the backtest).
 
@@ -125,6 +126,9 @@ class MenthorqMonitorService:
         self.settings = settings or MenthorqMonitorSettings()
         self.input_loader = input_loader or MenthorqInputLoader(self.repository)
         self.clock = clock
+        # Daily-close date -> newest snapshot capture (at or before its 23:59 UTC)
+        # when this process last computed it; None when there was none.
+        self._daily_close_attempt_captures: Dict[date, Optional[datetime]] = {}
 
     def compute_record(
         self, mode: str, as_of: datetime, open_interest_as_of: Optional[datetime] = None,
@@ -192,6 +196,27 @@ class MenthorqMonitorService:
         """Compute and store the live record of ``now``."""
         return self.store(self.compute_live_record(now))
 
+    def _daily_close_retry_is_due(
+        self, utc_date: date, stored_row: MenthorqLevelRecord, newest_capture: Optional[datetime]
+    ) -> bool:
+        """
+        Whether a stored NOT-computed daily close of ``utc_date`` is worth
+        recomputing: only when a snapshot newer than the one it was last
+        tried with exists at or before its 23:59 UTC (``newest_capture``).
+        "Last tried with" is the newer of the row's
+        ``snapshot_captured_at_utc`` and the newest capture seen at this
+        process's last attempt. A row without a snapshot time that this
+        process has not tried yet is retried once.
+        """
+        attempted = utc_date in self._daily_close_attempt_captures
+        if stored_row.snapshot_captured_at_utc is None and not attempted:
+            return True
+        known = [instant for instant in (stored_row.snapshot_captured_at_utc,
+                                         self._daily_close_attempt_captures.get(utc_date))
+                 if instant is not None]
+        last_tried_with = max(known) if known else None
+        return newest_capture is not None and (last_tried_with is None or newest_capture > last_tried_with)
+
     def run_daily_close_if_missing(self, now: datetime) -> List[MenthorqLevelRecord]:
         """
         Compute and store every daily-close record of the last
@@ -199,16 +224,18 @@ class MenthorqMonitorService:
         days before it) that is not stored as COMPUTED yet, oldest first, so
         a collector that was down for a few days fills the gap. A stored
         not-computed row (no levels, e.g. the snapshots of that day were
-        synced late) is retried every run; a computed result replaces it
-        (``save_menthorq_level_snapshot``). Today is never computed (it has
-        not ended). Each record uses only data at or before its own 23:59
-        UTC (no lookahead). A day that fails is logged and the other days are
-        still computed.
+        synced late) is retried only when newer input data has arrived
+        (``_daily_close_retry_is_due``: one MAX query, no chain load), so a
+        day that cannot be computed is not reloaded every hour; a computed
+        result replaces it (``save_menthorq_level_snapshot``). Today is
+        never computed (it has not ended). Each record uses only data at or
+        before its own 23:59 UTC (no lookahead). A day that fails is logged
+        and the other days are still computed.
 
         Returns:
             The records computed by this call, oldest first (empty when none
-            was missing); a not-computed retry that left the stored row
-            unchanged has ``record_id`` None.
+            was missing or due); a not-computed retry that left the stored
+            row unchanged has ``record_id`` None.
         """
         today = now.astimezone(timezone.utc).date()
         settings = self.settings
@@ -216,11 +243,23 @@ class MenthorqMonitorService:
         failed_days = []
         for days_back in range(DAILY_CLOSE_BACKFILL_DAYS, 0, -1):
             utc_date = today - timedelta(days=days_back)
+            as_of = daily_close_as_of(utc_date)
             try:
-                if self.repository.has_computed_menthorq_level_snapshot(
-                        settings.currency, MODE_DAILY_CLOSE, settings.expiry_universe,
-                        settings.gamma_underlying, daily_close_as_of(utc_date)):
+                stored_row = self.repository.get_menthorq_level_snapshot(
+                    settings.currency, MODE_DAILY_CLOSE, settings.expiry_universe,
+                    settings.gamma_underlying, as_of)
+                if stored_row is not None and stored_row.has_levels:
                     continue
+                newest_capture = self.repository.get_latest_option_chain_capture_at_or_before(
+                    settings.currency, as_of)
+                if stored_row is not None and not self._daily_close_retry_is_due(
+                        utc_date, stored_row, newest_capture):
+                    logger.info("MenthorQ daily close of %s stays not computed: no snapshot newer than "
+                                "the last attempt (newest at or before 23:59 UTC: %s)",
+                                utc_date.isoformat(),
+                                newest_capture.isoformat() if newest_capture else "none")
+                    continue
+                self._daily_close_attempt_captures[utc_date] = newest_capture
                 stored.append(self.store(self.compute_daily_close_record(utc_date)))
             except Exception:
                 logger.exception("MenthorQ daily-close record of %s failed", utc_date.isoformat())

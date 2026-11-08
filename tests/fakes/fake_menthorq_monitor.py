@@ -77,6 +77,9 @@ class FakeMonitorRepository(DatabaseRepository):
         self.states: Dict[str, MenthorqMonitorState] = {}
         self.fail_state = False   # True: the state methods raise (table missing)
         self.fail_deliveries = False   # True: save_menthorq_alert_deliveries raises, saving nothing
+        # Capture times of the "snapshots" table (get_latest_option_chain_capture_at_or_before).
+        self.option_chain_captures: List[datetime] = []
+        self.capture_queries = 0
 
     def _same_run_index(self, record: MenthorqLevelRecord) -> Optional[int]:
         for index, stored in enumerate(self.records):
@@ -103,6 +106,17 @@ class FakeMonitorRepository(DatabaseRepository):
                    and r.gamma_underlying == gamma_underlying and r.as_of_utc == as_of_utc
                    and r.has_levels
                    for r in self.records)
+
+    def get_menthorq_level_snapshot(self, currency: str, mode: str, expiry_universe: str,
+                                    gamma_underlying: str, as_of_utc: datetime) -> Optional[MenthorqLevelRecord]:
+        return next((r for r in self.records
+                     if (r.currency, r.mode, r.expiry_universe, r.gamma_underlying, r.as_of_utc)
+                     == (currency, mode, expiry_universe, gamma_underlying, as_of_utc)), None)
+
+    def get_latest_option_chain_capture_at_or_before(self, currency: str, as_of: datetime) -> Optional[datetime]:
+        self.capture_queries += 1
+        earlier = [capture for capture in self.option_chain_captures if capture <= as_of]
+        return max(earlier) if earlier else None
 
     def get_menthorq_level_snapshot_at_or_before(
         self, currency: str, mode: str, expiry_universe: str, gamma_underlying: str,

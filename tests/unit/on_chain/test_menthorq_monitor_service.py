@@ -157,7 +157,8 @@ def test_a_stored_not_computed_daily_close_is_retried_and_replaced():
     computed_days = [_daily_close(date(2026, 10, 31) + timedelta(days=offset)) for offset in range(6)]
     not_computed = make_record(as_of=daily_close_as_of(date(2026, 11, 6)), mode=MODE_DAILY_CLOSE,
                                spot=None, hvl=None, call_resistance=None, put_support=None,
-                               total_net_gex=None, not_computed_reasons=["inputs not available"])
+                               total_net_gex=None, snapshot_captured_at_utc=None,
+                               not_computed_reasons=["inputs not available"])
     repository = FakeMonitorRepository(computed_days + [not_computed])
     loader = FakeInputLoader()
     service = _service(repository, loader)
@@ -176,6 +177,7 @@ def test_a_stored_not_computed_daily_close_is_retried_and_replaced():
 def test_a_not_computed_retry_leaves_the_not_computed_row_unchanged():
     not_computed = make_record_without_levels(as_of=daily_close_as_of(date(2026, 11, 6)),
                                               mode=MODE_DAILY_CLOSE, spot=None,
+                                              snapshot_captured_at_utc=None,
                                               not_computed_reasons=["first reason"])
     computed_days = [_daily_close(date(2026, 10, 31) + timedelta(days=offset)) for offset in range(6)]
     repository = FakeMonitorRepository(computed_days + [not_computed])
@@ -185,6 +187,80 @@ def test_a_not_computed_retry_leaves_the_not_computed_row_unchanged():
 
     assert [record.record_id for record in retried] == [None]
     assert repository.records[6].not_computed_reasons == ["first reason"]
+
+
+class TestNotComputedDailyCloseRetry:
+    """A stored not-computed daily close is recomputed only when a snapshot newer than
+    the one it was last tried with exists at or before its 23:59 UTC (no hourly reload)."""
+
+    NOW = datetime(2026, 11, 7, 0, 10, tzinfo=timezone.utc)
+    DAY = date(2026, 11, 6)
+
+    def _repository_with_one_not_computed_day(self, snapshot_captured_at_utc):
+        computed_days = [_daily_close(date(2026, 10, 31) + timedelta(days=offset)) for offset in range(6)]
+        not_computed = make_record_without_levels(
+            as_of=daily_close_as_of(self.DAY), mode=MODE_DAILY_CLOSE, spot=None,
+            snapshot_captured_at_utc=snapshot_captured_at_utc,
+            not_computed_reasons=["snapshot 75 min older than 23:59 UTC (limit 60)"])
+        return FakeMonitorRepository(computed_days + [not_computed])
+
+    def test_no_newer_snapshot_than_the_stored_one_means_no_chain_load_and_an_info_line(self, caplog):
+        caplog.set_level("INFO")
+        repository = self._repository_with_one_not_computed_day(datetime(2026, 11, 6, 22, 44, tzinfo=timezone.utc))
+        repository.option_chain_captures = [datetime(2026, 11, 6, 22, 44, tzinfo=timezone.utc),
+                                            datetime(2026, 11, 7, 0, 5, tzinfo=timezone.utc)]  # after 23:59
+        loader = FakeInputLoader()
+        service = _service(repository, loader)
+
+        assert service.run_daily_close_if_missing(self.NOW) == []
+        assert loader.calls == []                          # no chain was loaded
+        skip_lines = [record for record in caplog.records if "stays not computed" in record.message]
+        assert len(skip_lines) == 1 and skip_lines[0].levelname == "INFO"
+        assert "2026-11-06T22:44:00+00:00" in skip_lines[0].message
+        assert not [record for record in caplog.records if record.levelname == "WARNING"]
+
+    def test_a_newer_snapshot_at_or_before_23_59_triggers_one_retry(self):
+        repository = self._repository_with_one_not_computed_day(datetime(2026, 11, 6, 22, 44, tzinfo=timezone.utc))
+        repository.option_chain_captures = [datetime(2026, 11, 6, 23, 59, tzinfo=timezone.utc)]   # equal counts
+        loader = FakeInputLoader()
+        service = _service(repository, loader)
+
+        retried = service.run_daily_close_if_missing(self.NOW)
+
+        assert [record.as_of_utc for record in retried] == [daily_close_as_of(self.DAY)]
+        assert retried[0].has_levels and repository.records[6].has_levels   # replaced
+        assert len(loader.calls) == 1
+
+    def test_a_retry_that_stays_not_computed_is_not_repeated_until_a_newer_snapshot(self):
+        repository = self._repository_with_one_not_computed_day(datetime(2026, 11, 6, 22, 44, tzinfo=timezone.utc))
+        repository.option_chain_captures = [datetime(2026, 11, 6, 23, 0, tzinfo=timezone.utc)]
+        # the loader's own snapshot is 75 min old: the retry stays not computed
+        loader = FakeInputLoader(snapshot_age=timedelta(minutes=75))
+        service = _service(repository, loader)
+
+        first = service.run_daily_close_if_missing(self.NOW)
+        assert [record.record_id for record in first] == [None] and len(loader.calls) == 1
+        # 01:10 and 02:10: still the 23:00 capture -> no reload
+        assert service.run_daily_close_if_missing(self.NOW + timedelta(hours=1)) == []
+        assert service.run_daily_close_if_missing(self.NOW + timedelta(hours=2)) == []
+        assert len(loader.calls) == 1
+        # a 23:30 capture arrives (late sync) -> one more attempt
+        repository.option_chain_captures.append(datetime(2026, 11, 6, 23, 30, tzinfo=timezone.utc))
+        assert len(service.run_daily_close_if_missing(self.NOW + timedelta(hours=3))) == 1
+        assert len(loader.calls) == 2
+
+    def test_a_row_without_snapshot_time_is_retried_once_per_process(self):
+        repository = self._repository_with_one_not_computed_day(None)
+        loader = FakeInputLoader(available=False)          # no snapshot at all
+        service = _service(repository, loader)
+
+        assert [record.record_id for record in service.run_daily_close_if_missing(self.NOW)] == [None]
+        assert service.run_daily_close_if_missing(self.NOW + timedelta(hours=1)) == []
+        assert len(loader.calls) == 1
+        # a new process (new service) tries it once again
+        restarted = _service(repository, loader)
+        assert len(restarted.run_daily_close_if_missing(self.NOW + timedelta(hours=2))) == 1
+        assert len(loader.calls) == 2
 
 
 class TestDailyCloseInputAge:

@@ -1057,6 +1057,28 @@ class DatabaseRepository:
             return None
         return float(row[0]), self._from_epoch_ms(int(row[1]))
 
+    @staticmethod
+    def _newest_snapshot_capture(cursor: Any, currency: str, as_of_naive_utc: datetime) -> Optional[datetime]:
+        """MAX(snapshots.captured_at) at or before ``as_of_naive_utc`` (naive UTC, as stored), or None."""
+        cursor.execute("""
+            SELECT MAX(captured_at) FROM snapshots
+            WHERE currency = %s AND captured_at <= %s
+        """, (currency, as_of_naive_utc))
+        return cursor.fetchone()[0]
+
+    def get_latest_option_chain_capture_at_or_before(
+        self, currency: str, as_of: datetime
+    ) -> Optional[datetime]:
+        """
+        Capture time (UTC-aware) of the newest ``snapshots`` capture at or
+        before ``as_of``, or None when there is none. One MAX query, no
+        chain rows: a cheap check whether newer input data has arrived.
+        """
+        as_of_naive_utc = as_of.astimezone(timezone.utc).replace(tzinfo=None)
+        with self._db_cursor() as cursor:
+            captured_at = self._newest_snapshot_capture(cursor, currency, as_of_naive_utc)
+        return captured_at.replace(tzinfo=timezone.utc) if captured_at is not None else None
+
     def get_option_chain_snapshot_at_or_before(
         self, currency: str, as_of: datetime
     ) -> Optional[Tuple[datetime, List[Dict[str, Any]]]]:
@@ -1079,11 +1101,7 @@ class DatabaseRepository:
         """
         as_of_naive_utc = as_of.astimezone(timezone.utc).replace(tzinfo=None)
         with self._db_cursor() as cursor:
-            cursor.execute("""
-                SELECT MAX(captured_at) FROM snapshots
-                WHERE currency = %s AND captured_at <= %s
-            """, (currency, as_of_naive_utc))
-            captured_at = cursor.fetchone()[0]
+            captured_at = self._newest_snapshot_capture(cursor, currency, as_of_naive_utc)
             if captured_at is None:
                 return None
             cursor.execute("""
@@ -1220,6 +1238,21 @@ class DatabaseRepository:
                 (currency, mode, expiry_universe, gamma_underlying, as_of_utc),
             )
             return cursor.fetchone() is not None
+
+    def get_menthorq_level_snapshot(
+        self, currency: str, mode: str, expiry_universe: str, gamma_underlying: str,
+        as_of_utc: datetime,
+    ) -> Optional[MenthorqLevelRecord]:
+        """The stored run with exactly this key, computed or not, or None when none is stored."""
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                f"SELECT {self._MENTHORQ_LEVEL_COLUMNS} FROM menthorq_level_snapshots "
+                "WHERE currency = %s AND mode = %s AND expiry_universe = %s "
+                "AND gamma_underlying = %s AND as_of_utc = %s",
+                (currency, mode, expiry_universe, gamma_underlying, as_of_utc),
+            )
+            row = cursor.fetchone()
+        return self._menthorq_level_record_from_row(row) if row else None
 
     def get_menthorq_level_snapshot_at_or_before(
         self, currency: str, mode: str, expiry_universe: str, gamma_underlying: str,
