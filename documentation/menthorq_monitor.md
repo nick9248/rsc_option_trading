@@ -63,12 +63,19 @@ or its snapshot is more than 45 min older than the run.
 - While muted, the alerts that would have been sent are not written to `menthorq_alert_deliveries`,
   so their 12h cooldown does not start. Their keys and time are written to
   `menthorq_monitor_state.last_suppressed_*` and logged.
-- Muted or failed EVENT alerts (net GEX sign flip, spot crossing HVL) are NOT replayed. They are
-  detected only by comparing the newest record with the previous hourly record, so once the next
-  run has a newer previous record the event is no longer seen. The 24h level-move alerts (and spot
-  near a wall, data stale) are re-evaluated every run: one whose condition still holds after the
-  mute ends, or after a failed send, is sent at the next hourly run. The current state is always
-  in `/brief` and `/levels`.
+- Muted or failed EVENT alerts (net GEX sign flip, spot crossing HVL) are re-evaluated every run
+  until they are delivered or the state reverts. Each event family is compared with the state last
+  REPORTED to the owner, read from `menthorq_alert_deliveries` (`net_gex_turned_negative` /
+  `_positive` -> negative / positive net GEX; `spot_crossed_below_hvl` / `_above_hvl` -> negative /
+  positive gamma regime). While the current state differs from the reported one, the alert for the
+  current state fires (cooldown, mute and stale rules as usual); when it was not a change since the
+  previous run, its line says `(earlier, not reported yet; last reported: ...)`. A flip that flips
+  back before it was reported sends nothing. Until the first event of a family has been delivered,
+  the trigger is the change since the previous run, so a very first event that falls inside a mute
+  or fails is still lost. The 24h level-move alerts (and spot near a wall, data stale) are
+  re-evaluated every run too: one whose condition still holds after the mute ends, or after a
+  failed send, is sent at the next hourly run. The current state is always in `/brief` and
+  `/levels`. The GUI preview and the dry run read no delivery log and use the previous-run rule.
 - If the state cannot be read (for example, migration 032 is not applied), alerts are treated as
   NOT muted and the error is logged.
 
@@ -82,8 +89,8 @@ test. They were chosen by hand, not fitted by a backtest.
 | HVL moved more than X% vs 24h ago | ON, 5 | `MENTHORQ_ALERT_HVL_MOVE_PERCENT` |
 | Call Resistance moved more than X% vs 24h ago | ON, 10 | `MENTHORQ_ALERT_CALL_RESISTANCE_MOVE_PERCENT` |
 | Put Support moved more than X% vs 24h ago | ON, 5 | `MENTHORQ_ALERT_PUT_SUPPORT_MOVE_PERCENT` |
-| Total net GEX changed sign since the previous run | ON | `MENTHORQ_ALERT_NET_GEX_SIGN_CHANGE` (1/0) |
-| Spot crossed HVL since the previous run | OFF | `MENTHORQ_ALERT_SPOT_CROSSES_HVL` (1/0) |
+| Total net GEX changed sign (vs the last reported sign, see Mute) | ON | `MENTHORQ_ALERT_NET_GEX_SIGN_CHANGE` (1/0) |
+| Spot crossed HVL (vs the last reported regime, see Mute) | OFF | `MENTHORQ_ALERT_SPOT_CROSSES_HVL` (1/0) |
 | Spot within X% of Call Resistance or Put Support | OFF | `MENTHORQ_ALERT_SPOT_NEAR_WALL_PERCENT` (e.g. 1) |
 
 - "More than" is strict: a move of exactly 5.00% does not fire. "Within" is inclusive: a distance

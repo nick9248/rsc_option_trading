@@ -12,25 +12,29 @@ cooldown and the once-per-week rule of the weekly brief, and it is the
 retry of the weekly brief: an undelivered one is tried again at the next
 hourly run (within ``WEEKLY_BRIEF_CATCH_UP``).
 
-Urgent alerts are NOT replayed. Each run evaluates the rules on the newest
-record only. The state rules (the 24 h level moves, spot near a wall, data
-stale) are re-evaluated every run, so one that failed or was muted is sent
-at a later run while its condition still holds. The EVENT rules (net GEX
-sign flip, spot crossing HVL) compare the newest record with the previous
-hourly one only, so an event that failed to send or fell inside a mute is
-lost: a later run no longer sees it. The current state is always in
-/brief and /levels.
+Each run evaluates the rules on the newest record. The state rules (the
+24 h level moves, spot near a wall, data stale) are re-evaluated every run,
+so one that failed or was muted is sent at a later run while its condition
+still holds. The EVENT rules (net GEX sign flip, spot crossing HVL) compare
+the newest record with the state last REPORTED to the owner (the newest
+delivered alert of that event family in ``menthorq_alert_deliveries``):
+an event whose send failed or that fell inside a mute is re-evaluated every
+run and sent once it can be (cooldown, mute and stale rules as usual),
+unless the state reverted to the reported one first. Before any event of a
+family was delivered, its trigger is the change since the previous run.
 """
 
 import logging
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Callable, Dict, List, Optional, Sequence
+from typing import Callable, Dict, List, Mapping, Optional, Sequence
 
 from coding.core.analytics.menthorq_monitor.alert_mute import is_muted
 from coding.core.analytics.menthorq_monitor.alert_rules import (
     ALERT_KEY_DATA_STALE,
+    EVENT_ALERT_STATES,
+    EVENT_FAMILY_KEYS,
     AlertThresholds,
     UrgentAlert,
     apply_cooldown,
@@ -108,6 +112,7 @@ def evaluate_urgent_alerts_of_record(
     thresholds: AlertThresholds,
     stale_limit: timedelta,
     now: Optional[datetime] = None,
+    last_reported_states: Optional[Mapping[str, str]] = None,
 ) -> UrgentAlertEvaluation:
     """
     The one rule set of the collector and of the GUI preview: for a record
@@ -126,6 +131,9 @@ def evaluate_urgent_alerts_of_record(
         stale_limit: The DATA STALE limit.
         now: Wall clock to judge a stored record against; None judges
             against the record's own data time only.
+        last_reported_states: Event family -> last reported state (see
+            ``evaluate_urgent_alerts``); None (the preview, which reads no
+            delivery log) uses the change since the previous run.
     """
     stale_warning = (no_usable_data_warning(latest) if not latest.has_levels
                      else stale_data_warning(latest, stale_limit, now))
@@ -136,7 +144,8 @@ def evaluate_urgent_alerts_of_record(
     by_label = {comparison.label: comparison for comparison in comparisons()}
     return UrgentAlertEvaluation(
         alerts=evaluate_urgent_alerts(latest, by_label[COMPARISON_PREVIOUS],
-                                      by_label[COMPARISON_ONE_DAY], thresholds),
+                                      by_label[COMPARISON_ONE_DAY], thresholds,
+                                      last_reported_states),
         stale_warning=None)
 
 
@@ -211,6 +220,26 @@ class MenthorqBriefDeliveryService:
         known = [instant for instant in (stored, remembered) if instant is not None]
         return max(known) if known else None
 
+    def last_reported_event_states(self) -> Dict[str, str]:
+        """
+        Event family -> the state its newest DELIVERED event alert reported
+        (e.g. "net_gex_sign" -> "negative" after ``net_gex_turned_negative``),
+        from the delivery log and the deliveries kept in memory. A family
+        with no delivered event is absent.
+        """
+        states = {}
+        for family, keys in EVENT_FAMILY_KEYS.items():
+            candidates = []
+            stored = self.repository.get_last_menthorq_alert_delivery_of_keys(self.settings.currency, list(keys))
+            if stored is not None:
+                candidates.append((stored[1], stored[0]))
+            candidates += [(delivered_at, key) for key, delivered_at in self._unsaved_deliveries.items()
+                           if key in keys]
+            if candidates:
+                _, newest_key = max(candidates)
+                states[family] = EVENT_ALERT_STATES[newest_key][1]
+        return states
+
     def _record_delivery(self, keys: List[str], message: str, record_id: Optional[int]) -> None:
         """
         Write one delivery row per key, in one transaction, for a message
@@ -244,9 +273,10 @@ class MenthorqBriefDeliveryService:
         back keys are recorded in ``menthorq_monitor_state`` (not as
         delivered, so the cooldown does not start). A 24 h level move (or
         another state rule) that still holds after the mute is reported
-        then; a held-back EVENT alert (net GEX sign flip, spot crossing HVL)
-        is not replayed, because the next run compares with a newer
-        previous record.
+        then; so is a held-back or failed EVENT alert (net GEX sign flip,
+        spot crossing HVL), because events are judged against the last
+        REPORTED state (``last_reported_event_states``), unless the state
+        has reverted to it.
 
         When the data behind ``latest`` is stale (``stale_data_warning``
         with ``now``) or ``latest`` has no levels (not computed: every input
@@ -260,7 +290,7 @@ class MenthorqBriefDeliveryService:
         """
         evaluation = evaluate_urgent_alerts_of_record(
             latest, lambda: self.monitor_service.build_comparisons(latest), self.thresholds,
-            self.settings.stale_snapshot_limit, now)
+            self.settings.stale_snapshot_limit, now, self.last_reported_event_states())
         if evaluation.stale_warning is not None:
             logger.warning("MenthorQ monitor: data stale or not computed (%s); movement alerts paused",
                            evaluation.stale_warning)

@@ -197,3 +197,25 @@ def test_cooldown_for_key_uses_the_longer_of_configured_and_comparison_window():
     for key in (ALERT_KEY_CROSSED_BELOW_HVL, ALERT_KEY_NET_GEX_TURNED_POSITIVE,
                 ALERT_KEY_SPOT_NEAR_CALL_RESISTANCE, ALERT_KEY_DATA_STALE):
         assert cooldown_for_key(key, timedelta(hours=12)) == timedelta(hours=12)
+
+
+def test_event_rules_against_the_last_reported_state():
+    """Pure rule: with a reported state the current state fires while it differs; without one,
+    the change since the previous run. Previous run -1M, latest -1M (no flip)."""
+    previous = make_record(as_of=BASE_TIME - timedelta(hours=1), total_net_gex=-1e6)
+    latest = make_record(total_net_gex=-1e6)
+    previous_comparison = compare_records(latest, previous, "previous")
+    day_comparison = compare_records(latest, None, "24h")
+    sign_only = AlertThresholds(hvl_move_percent_of_spot=None)
+
+    assert evaluate_urgent_alerts(latest, previous_comparison, day_comparison, sign_only) == []
+    fired = evaluate_urgent_alerts(latest, previous_comparison, day_comparison, sign_only,
+                                   {"net_gex_sign": "positive"})
+    assert [alert.key for alert in fired] == ["net_gex_turned_negative"]
+    assert fired[0].change_usd is None and fired[0].expiry_roll == ()
+    assert evaluate_urgent_alerts(latest, previous_comparison, day_comparison, sign_only,
+                                  {"net_gex_sign": "negative"}) == []
+    # a zero net GEX has no sign: nothing to report
+    zero = make_record(total_net_gex=0.0)
+    assert evaluate_urgent_alerts(zero, compare_records(zero, previous, "previous"),
+                                  day_comparison, sign_only, {"net_gex_sign": "positive"}) == []

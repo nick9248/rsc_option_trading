@@ -9,12 +9,20 @@ ON by default (the owner's choice for the first test):
     ``call_resistance_move_percent_of_spot`` (10) vs 24 h ago.
   - Put Support moved by MORE than ``put_support_move_percent_of_spot`` (5)
     vs 24 h ago.
-  - Total net GEX changed sign since the previous run.
+  - Total net GEX changed sign (see the event rules below).
 OFF by default (implemented; switched on by setting, see monitor_settings):
-  - Spot crossed HVL (gamma regime changed) since the previous run.
+  - Spot crossed HVL (gamma regime changed; see the event rules below).
   - Spot is within ``spot_near_wall_percent`` of Call Resistance or Put
     Support (latest record only).
 A percent threshold of None switches that rule off.
+
+Event rules (net GEX sign flip, spot crossing HVL) are judged against the
+state last REPORTED to the owner when one exists (``last_reported_states``,
+from the delivered event alerts): the alert for the current state fires
+while it differs from the last reported one, so an event whose send failed
+or fell inside a mute is still reported at a later run, and an event that
+reverted before it was reported is not. Without any delivered event of that
+family the trigger is the change since the previous run.
 
 The thresholds are chosen by hand, not fitted; a backtest is meant to
 replace them. An alert whose key was delivered less than ``cooldown`` ago
@@ -29,7 +37,12 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import List, Mapping, Optional
 
-from coding.core.analytics.menthorq_monitor.level_record import LEVEL_LABELS, MenthorqLevelRecord
+from coding.core.analytics.menthorq_monitor.level_record import (
+    GAMMA_REGIME_NEGATIVE,
+    GAMMA_REGIME_POSITIVE,
+    LEVEL_LABELS,
+    MenthorqLevelRecord,
+)
 from coding.core.analytics.menthorq_monitor.level_trend_calculator import (
     CROSSED_ABOVE_HVL,
     CROSSED_BELOW_HVL,
@@ -58,6 +71,21 @@ ALERT_KEY_DATA_STALE = "data_stale"
 # move, so these keys are held for at least that window (one move, one alert).
 LEVEL_MOVE_ALERT_KEYS = (ALERT_KEY_HVL_MOVE, ALERT_KEY_CALL_RESISTANCE_MOVE, ALERT_KEY_PUT_SUPPORT_MOVE)
 LEVEL_MOVE_ALERT_COOLDOWN = ONE_DAY_COMPARISON_OFFSET
+# Event families: the state an event alert reports, by key (see last_reported_states).
+EVENT_FAMILY_NET_GEX_SIGN = "net_gex_sign"
+EVENT_FAMILY_HVL_REGIME = "hvl_regime"
+EVENT_STATE_POSITIVE = "positive"
+EVENT_STATE_NEGATIVE = "negative"
+EVENT_ALERT_STATES = {
+    ALERT_KEY_NET_GEX_TURNED_NEGATIVE: (EVENT_FAMILY_NET_GEX_SIGN, EVENT_STATE_NEGATIVE),
+    ALERT_KEY_NET_GEX_TURNED_POSITIVE: (EVENT_FAMILY_NET_GEX_SIGN, EVENT_STATE_POSITIVE),
+    ALERT_KEY_CROSSED_BELOW_HVL: (EVENT_FAMILY_HVL_REGIME, EVENT_STATE_NEGATIVE),
+    ALERT_KEY_CROSSED_ABOVE_HVL: (EVENT_FAMILY_HVL_REGIME, EVENT_STATE_POSITIVE),
+}
+EVENT_FAMILY_KEYS = {
+    family: tuple(key for key, (key_family, _) in EVENT_ALERT_STATES.items() if key_family == family)
+    for family in (EVENT_FAMILY_NET_GEX_SIGN, EVENT_FAMILY_HVL_REGIME)
+}
 URGENT_ALERT_KEYS = (
     ALERT_KEY_HVL_MOVE, ALERT_KEY_CALL_RESISTANCE_MOVE, ALERT_KEY_PUT_SUPPORT_MOVE,
     ALERT_KEY_CROSSED_BELOW_HVL, ALERT_KEY_CROSSED_ABOVE_HVL,
@@ -166,43 +194,107 @@ def _near_wall_alerts(latest: MenthorqLevelRecord, threshold: float) -> List[Urg
     return alerts
 
 
+def net_gex_sign_state(record: MenthorqLevelRecord) -> Optional[str]:
+    """"positive" / "negative" sign of total net GEX; None when missing or exactly 0."""
+    if record.total_net_gex is None or record.total_net_gex == 0:
+        return None
+    return EVENT_STATE_POSITIVE if record.total_net_gex > 0 else EVENT_STATE_NEGATIVE
+
+
+def hvl_regime_state(record: MenthorqLevelRecord) -> Optional[str]:
+    """"positive" (spot above HVL) / "negative" (below); None when missing or spot exactly at HVL."""
+    if record.gamma_regime == GAMMA_REGIME_POSITIVE:
+        return EVENT_STATE_POSITIVE
+    if record.gamma_regime == GAMMA_REGIME_NEGATIVE:
+        return EVENT_STATE_NEGATIVE
+    return None
+
+
+def _event_state_to_report(
+    family: str,
+    latest: MenthorqLevelRecord,
+    previous_comparison: RecordComparison,
+    last_reported_states: Mapping[str, str],
+) -> Optional[str]:
+    """
+    The state whose event alert fires for ``family``, or None. With a
+    reported state: the current state when it differs from it. Without one:
+    the new state when it changed since the previous run.
+    """
+    current = (net_gex_sign_state(latest) if family == EVENT_FAMILY_NET_GEX_SIGN
+               else hvl_regime_state(latest))
+    if family in last_reported_states:
+        return current if current is not None and current != last_reported_states[family] else None
+    if family == EVENT_FAMILY_NET_GEX_SIGN:
+        return current if previous_comparison.net_gex_sign_flipped else None
+    if previous_comparison.hvl_crossing == CROSSED_BELOW_HVL:
+        return EVENT_STATE_NEGATIVE
+    if previous_comparison.hvl_crossing == CROSSED_ABOVE_HVL:
+        return EVENT_STATE_POSITIVE
+    return None
+
+
+def _event_alerts(
+    latest: MenthorqLevelRecord,
+    previous_comparison: RecordComparison,
+    thresholds: AlertThresholds,
+    last_reported_states: Mapping[str, str],
+) -> List[UrgentAlert]:
+    """The HVL-crossing and net-GEX sign-flip alerts that are on and fire."""
+    families = []
+    if thresholds.spot_crosses_hvl:
+        families.append(EVENT_FAMILY_HVL_REGIME)
+    if thresholds.net_gex_sign_change:
+        families.append(EVENT_FAMILY_NET_GEX_SIGN)
+    alerts = []
+    for family in families:
+        state = _event_state_to_report(family, latest, previous_comparison, last_reported_states)
+        if state is None:
+            continue
+        negative = state == EVENT_STATE_NEGATIVE
+        if family == EVENT_FAMILY_HVL_REGIME:
+            key = ALERT_KEY_CROSSED_BELOW_HVL if negative else ALERT_KEY_CROSSED_ABOVE_HVL
+            title = ("Spot crossed BELOW HVL (negative gamma regime)" if negative
+                     else "Spot crossed ABOVE HVL (positive gamma regime)")
+            changed_since_previous_run = previous_comparison.hvl_crossing is not None
+        else:
+            key = ALERT_KEY_NET_GEX_TURNED_NEGATIVE if negative else ALERT_KEY_NET_GEX_TURNED_POSITIVE
+            title = f"Total net GEX turned {'NEGATIVE' if negative else 'POSITIVE'}"
+            changed_since_previous_run = bool(previous_comparison.net_gex_sign_flipped)
+        if not changed_since_previous_run:
+            # Changed before the previous run but not reported yet (failed send or mute).
+            title += f" (earlier, not reported yet; last reported: {last_reported_states[family]})"
+        alerts.append(UrgentAlert(
+            key=key, title=title, comparison_label=previous_comparison.label,
+            change_usd=(previous_comparison.net_gex_change
+                        if family == EVENT_FAMILY_NET_GEX_SIGN and changed_since_previous_run else None),
+            expiry_roll=tuple(previous_comparison.settled_expiries) if changed_since_previous_run else ()))
+    return alerts
+
+
 def evaluate_urgent_alerts(
     latest: MenthorqLevelRecord,
     previous_comparison: RecordComparison,
     day_comparison: RecordComparison,
     thresholds: AlertThresholds = AlertThresholds(),
+    last_reported_states: Optional[Mapping[str, str]] = None,
 ) -> List[UrgentAlert]:
     """
     Every rule that is on and fires, before the cooldown is applied.
 
     Args:
-        latest: The latest record (for the spot-near-wall rule).
+        latest: The latest record (for the spot-near-wall rule and the
+            current event states).
         previous_comparison: Latest vs the previous run.
         day_comparison: Latest vs 24 hours ago.
         thresholds: Which rules are on and their thresholds.
+        last_reported_states: Event family (``EVENT_FAMILY_*``) -> state
+            ("positive" / "negative") of the newest DELIVERED event alert of
+            that family. A family without a delivered event is absent; its
+            trigger is then the change since the previous run.
     """
     alerts = _level_move_alerts(day_comparison, thresholds)
-    previous_roll = tuple(previous_comparison.settled_expiries)
-    if thresholds.spot_crosses_hvl:
-        if previous_comparison.hvl_crossing == CROSSED_BELOW_HVL:
-            alerts.append(UrgentAlert(
-                key=ALERT_KEY_CROSSED_BELOW_HVL,
-                title="Spot crossed BELOW HVL (negative gamma regime)",
-                comparison_label=previous_comparison.label, expiry_roll=previous_roll))
-        elif previous_comparison.hvl_crossing == CROSSED_ABOVE_HVL:
-            alerts.append(UrgentAlert(
-                key=ALERT_KEY_CROSSED_ABOVE_HVL,
-                title="Spot crossed ABOVE HVL (positive gamma regime)",
-                comparison_label=previous_comparison.label, expiry_roll=previous_roll))
-    reference = previous_comparison.reference
-    if thresholds.net_gex_sign_change and previous_comparison.net_gex_sign_flipped \
-            and reference is not None and reference.total_net_gex is not None:
-        turned_negative = reference.total_net_gex > 0
-        alerts.append(UrgentAlert(
-            key=ALERT_KEY_NET_GEX_TURNED_NEGATIVE if turned_negative else ALERT_KEY_NET_GEX_TURNED_POSITIVE,
-            title=f"Total net GEX turned {'NEGATIVE' if turned_negative else 'POSITIVE'}",
-            comparison_label=previous_comparison.label,
-            change_usd=previous_comparison.net_gex_change, expiry_roll=previous_roll))
+    alerts.extend(_event_alerts(latest, previous_comparison, thresholds, last_reported_states or {}))
     if thresholds.spot_near_wall_percent is not None:
         alerts.extend(_near_wall_alerts(latest, thresholds.spot_near_wall_percent))
     return alerts

@@ -10,7 +10,9 @@ recomputed from the stored snapshots at their own instants (point in time,
 no lookahead), so the monitor tables are neither needed nor written. The
 brief is the same ``format_brief`` text Telegram gets; only its title says
 it is a preview. Alerts are shown before the cooldown (the cooldown needs
-the delivery log, which a preview does not read).
+the delivery log, which a preview does not read); for the same reason the
+event rules (sign flip, HVL crossing) use the change since the previous
+run, not the last reported state the collector compares with.
 """
 
 import html

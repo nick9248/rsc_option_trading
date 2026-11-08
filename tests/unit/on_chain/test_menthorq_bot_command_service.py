@@ -297,8 +297,8 @@ def test_mute_for_a_duration_persists_and_expires():
     assert _run(commands, "/mute", "24h") == (
         "<b>BTC URGENT alerts muted</b> until 2026-11-07 10:05 UTC (24h).\n"
         "Command replies and the weekly brief are still sent. /mute off ends it early.\n"
-        "Sign flips and HVL crossings during the mute are not sent later; /brief and "
-        "/levels show the current state.")
+        "A sign flip or HVL crossing during the mute is sent after it if the new state "
+        "still holds; /brief and /levels show the current state.")
     assert repository.states["BTC"].alerts_muted_until == NOW + timedelta(hours=24)
     assert repository.states["BTC"].mute_updated_at == NOW
 
