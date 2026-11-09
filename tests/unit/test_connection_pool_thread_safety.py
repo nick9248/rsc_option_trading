@@ -91,6 +91,45 @@ def test_threads_never_share_a_connection(fake_connection_pool):
     assert fake_connection_pool._pool._used == {}
 
 
+def test_default_maximum_is_20_connections_and_minimum_1(monkeypatch):
+    """5 scheduler jobs, at most 10 executor threads, x 2 margin -> 20 (config.py docstring)."""
+    monkeypatch.setattr(psycopg2, "connect", lambda *arguments, **keyword_arguments: FakeConnection())
+    ConnectionPool().close_all()
+    connection_pool = ConnectionPool()
+    try:
+        connection_pool.initialize(DatabaseConfig())
+        assert connection_pool._pool.maxconn == 20
+        assert connection_pool._pool.minconn == 1
+    finally:
+        connection_pool.close_all()
+
+
+def test_an_exhausted_pool_raises_a_clear_pool_error(fake_connection_pool):
+    """
+    All 10 connections taken: the 11th request fails at once (no waiting)
+    with the connection count in the message; returning one makes it work again.
+    """
+    taken = [fake_connection_pool.get_connection() for _ in range(10)]
+    with pytest.raises(psycopg2.pool.PoolError, match=r"^database pool exhausted: 10 connections in use$"):
+        fake_connection_pool.get_connection()
+    fake_connection_pool.return_connection(taken.pop())
+    taken.append(fake_connection_pool.get_connection())
+    for connection in taken:
+        fake_connection_pool.return_connection(connection)
+
+
+def test_a_closed_pool_error_is_not_relabelled(fake_connection_pool):
+    """Only exhaustion gets the new message; psycopg2's other errors pass through."""
+    psycopg2_pool = fake_connection_pool._pool
+    psycopg2_pool.closeall()
+    try:
+        with pytest.raises(psycopg2.pool.PoolError, match=r"^connection pool is closed$"):
+            fake_connection_pool.get_connection()
+    finally:
+        # Closed already: replace it so the fixture's close_all() has a pool to close.
+        fake_connection_pool._pool = psycopg2.pool.ThreadedConnectionPool(1, 10, **DatabaseConfig().get_connection_dict())
+
+
 def test_concurrent_initialize_creates_exactly_one_pool(monkeypatch):
     """
     16 threads released together each construct ConnectionPool() and call

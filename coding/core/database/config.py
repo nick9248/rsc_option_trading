@@ -59,11 +59,27 @@ class ConnectionPool:
     """
     Singleton connection pool for database connections (one pool per process).
 
-    Thread-safe: the collector's APScheduler runs its jobs in worker threads
-    (prospective and trade collection, the MenthorQ hourly job, the weekly brief
-    and the command poll: at most 5 at once, each holding one connection at a
-    time), so the pool is a psycopg2 ThreadedConnectionPool. The default maximum
-    of 10 connections covers those 5 jobs with room to spare.
+    Thread-safe: the collector's APScheduler runs its jobs in worker threads,
+    so the pool is a psycopg2 ThreadedConnectionPool. Its ``getconn`` does NOT
+    wait for a free connection: with all ``max_conn`` in use it raises
+    ``PoolError`` at once (re-raised by ``get_connection`` as "database pool
+    exhausted: N connections in use").
+
+    Sizing (default maximum 20, minimum 1):
+      - unified_scheduler registers 5 jobs that touch the database
+        (prospective collection, trade collection, the MenthorQ hourly job,
+        the weekly brief, the command poll), each ``max_instances=1``: at
+        most 5 job threads at once. The initial collections run in the main
+        thread BEFORE the scheduler starts, so they do not overlap.
+      - APScheduler 3's default executor is a ThreadPoolExecutor with
+        ``max_workers=10``: a hard upper bound of 10 job threads, even if
+        more jobs are added later.
+      - A thread normally holds one connection at a time
+        (``DatabaseRepository._db_cursor``); 20 = 2 x 10 leaves room for a
+        job that holds a raw connection while calling a repository method.
+      - PostgreSQL's default ``max_connections`` is 100 (server setting not
+        checked here); 20 for the collector leaves room for the GUI, the
+        sync and ad-hoc scripts, which each have their own process pool.
 
     Creating the singleton and creating the pool are both guarded by one
     class-level lock (double-checked), so two threads constructing a
@@ -82,7 +98,7 @@ class ConnectionPool:
                     cls._instance = super().__new__(cls)
         return cls._instance
 
-    def initialize(self, config: DatabaseConfig, min_conn: int = 1, max_conn: int = 10):
+    def initialize(self, config: DatabaseConfig, min_conn: int = 1, max_conn: int = 20):
         """
         Initialize the connection pool.
 
@@ -107,10 +123,21 @@ class ConnectionPool:
 
         Returns:
             Database connection.
+
+        Raises:
+            pool.PoolError: "database pool exhausted: N connections in use"
+                when every connection is taken (no waiting, as psycopg2);
+                any other pool error (e.g. a closed pool) unchanged.
         """
         if self._pool is None:
             raise RuntimeError("Connection pool not initialized")
-        return self._pool.getconn()
+        try:
+            return self._pool.getconn()
+        except pool.PoolError as error:
+            if self._pool.closed:
+                raise
+            raise pool.PoolError(
+                f"database pool exhausted: {self._pool.maxconn} connections in use") from error
 
     def return_connection(self, conn):
         """
