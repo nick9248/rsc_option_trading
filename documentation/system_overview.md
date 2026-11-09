@@ -4,6 +4,10 @@ Automated crypto options trading for BTC and ETH on Deribit. The current focus i
 
 This document was rewritten on 2026-10-12 after the table cleanup (migrations 024 to 030); every statement was checked against the code at that date.
 
+## Changes
+
+- 2026-11-08: the strategy finder (straddle, iron condor and butterfly scanners, the regime gate) and the forward tests (on-chain prediction harness, straddle and defined-risk settlement tracking) were removed, together with their health checks, VPS sync entries and the Automation GUI tab. The evaluation found no usable edge. The scripts and results CSV behind the evaluation (`scripts/backtest_straddle_metrics.py`, `scripts/phase2_backtest.py`, `scripts/phase2_blueprint.txt`, `scripts/phase2_single_metric_results.csv`) remain in git history at commit 93cbc93 (the last commit of main before this removal); the evaluation summary is in the vault note wiki/straddle-scanner.md. Their history tables (`straddle_scan_history`, `defined_risk_scan_history`, `forward_test_predictions`) stay in the VPS and local databases untouched; from the deploy of this change on (after the VPS runs this change; deploy date: to be filled in the vault log) nothing writes or syncs them any more. Until then the VPS keeps running the old code and keeps writing them. Dropping them needs a new forward-only migration (not done). The Telegram alerts of those scanners were removed in the same change, so from the deploy on the `alert_sent` and `alert_sent_at` columns of `straddle_scan_history` and `defined_risk_scan_history` are no longer written: rows created before the deploy may have `alert_sent = TRUE`. Do not read those columns as 'an alert fired'.
+
 ## Architecture
 
 ```
@@ -13,20 +17,20 @@ Core (models, calculators)  ->  Service (orchestration)  ->  GUI / CLI
 | Layer | Folder | Contains |
 |-------|--------|----------|
 | Core | `coding/core/` | `analytics/` (calculators, synthesis, charts), `api/`, `database/` (repository), `health/` (result models), `schemas/`, `config.py` |
-| Service | `coding/service/` | `data_collection/`, `on_chain/`, `scanner/`, `health/`, `deribit/`, `morning_note/`, `snapshot/`, `analytics/`, `api_testing/`, `database/` (VPS sync) |
+| Service | `coding/service/` | `data_collection/`, `on_chain/`, `notifications/` (Telegram Bot API client used by the MenthorQ monitor), `health/`, `deribit/`, `morning_note/`, `snapshot/`, `analytics/`, `api_testing/`, `database/` (VPS sync) |
 | GUI | `coding/gui/` | PySide6 app (`app.py`, `main_window.py`, `tabs/`, `dialogs/`). No business logic: it calls services. |
 
 Other folders: `scripts/` (backfills, sync, health check), `migrations/` (numbered, forward-only SQL), `tests/`, `strategies/` (sample strategies running on the VPS, left alone).
 
 ## Data collection
 
-The collector runs on the Hetzner VPS as the systemd service `option-trading` (see `vps/vps_setup_and_operations.md`). The entry point is `coding/service/data_collection/unified_scheduler.py` (`python -m coding.service.data_collection.unified_scheduler`; the `ExecStart` of the unit on the server was checked on 2026-10-12): `UnifiedScheduler` runs `ProspectiveCollector.collect_hour()` every 30 minutes (hourly snapshots, on-chain analysis, scanners, DVOL, futures basis, account data) and `TradeCollector` every 60 seconds (trades for the flow data), both with APScheduler. On start-up it runs one collection of each straight away, but it has no gap backfill: hours missed while the service was down stay missing (the older `CollectionDaemon` backfilled up to 1.5 hours).
+The collector runs on the Hetzner VPS as the systemd service `option-trading` (see `vps/vps_setup_and_operations.md`). The entry point is `coding/service/data_collection/unified_scheduler.py` (`python -m coding.service.data_collection.unified_scheduler`; the `ExecStart` of the unit on the server was checked on 2026-10-12): `UnifiedScheduler` runs `ProspectiveCollector.collect_hour()` every 30 minutes (hourly snapshots, on-chain analysis, DVOL, futures basis, account data) and `TradeCollector` every 60 seconds (trades for the flow data), both with APScheduler. On start-up it runs one collection of each straight away, but it has no gap backfill: hours missed while the service was down stay missing (the older `CollectionDaemon` backfilled up to 1.5 hours).
 
 For each currency (BTC, ETH) one cycle does, in this order:
 
 1. recent trades into `historical_trades`
 2. book summary into `snapshots`
-3. on-chain analysis into `onchain_analysis_snapshots` (also `volatility_skew_history`, and the forward-test harness records its predictions into `forward_test_predictions`)
+3. on-chain analysis into `onchain_analysis_snapshots` (also `volatility_skew_history`)
 4. DVOL (last 48 hourly candles) into `dvol_history`
 5. dated-futures basis into `futures_basis`
 6. the owner's Deribit account (read-only, `AccountCollector`) into `account_snapshots`, `position_snapshots`, `user_trades`, `orders`, `settlements`; skipped when no credentials are set
@@ -35,7 +39,7 @@ For each currency (BTC, ETH) one cycle does, in this order:
 9. delta-weighted taker flow into `flow_delta_hourly`
 10. the daily open-interest anchor into `daily_oi_snapshots` (only in the 08:00 UTC hour)
 
-After the currencies: hourly aggregation into `hourly_snapshots`, volatility reconstruction into `onchain_volatility_snapshots`, and the scanners (straddle, then iron condor and butterfly) into `straddle_scan_history` and `defined_risk_scan_history` (recorded only; the scanners send no alerts).
+After the currencies: hourly aggregation into `hourly_snapshots` and volatility reconstruction into `onchain_volatility_snapshots`.
 
 `collection_daemon.py` (`CollectionDaemon`) is an older, simpler runner (its docstring: started with the PC by Windows Task Scheduler): it runs `ProspectiveCollector` only, every 30 minutes, and backfills a start-up gap of up to 1.5 hours. The server does not use it, and it is not maintained further.
 
@@ -43,23 +47,24 @@ Buy/sell flow is not stored per capture. It is computed on demand from `historic
 
 ## Live tables
 
-21 tables, created by `migrations/000` to `030` (tables dropped along the way: see migrations `026` to `028`):
+24 tables, created by `migrations/000` to `032` (tables dropped along the way: see migrations `026` to `028`):
 
 | Group | Tables |
 |-------|--------|
 | Market data | `historical_trades`, `snapshots`, `hourly_snapshots`, `funding_rate_history`, `ohlcv_history`, `dvol_history`, `futures_basis`, `daily_oi_snapshots` |
 | On-chain analysis | `onchain_analysis_snapshots`, `onchain_volatility_snapshots`, `volatility_skew_history`, `flow_delta_hourly` |
-| Scanners and forward tests | `straddle_scan_history`, `defined_risk_scan_history`, `forward_test_predictions` |
+| MenthorQ monitor | `menthorq_level_snapshots`, `menthorq_alert_deliveries`, `menthorq_monitor_state` |
+| No longer written from the deploy of the 2026-11-08 removal on (strategy finder) | `straddle_scan_history`, `defined_risk_scan_history`, `forward_test_predictions` |
 | Owner's Deribit account | `account_snapshots`, `position_snapshots`, `user_trades`, `orders`, `settlements` |
 | Operations | `health_check_runs` (stored on the VPS only) |
 
-`scripts/sync_from_vps.py` (`SYNC_TABLES`, 20 tables) copies everything except `health_check_runs` into the local database. `coding/service/health/table_registry.py` lists the same 20 tables with their freshness limits; a test fails when a synced table is missing there.
+`scripts/sync_from_vps.py` (`SYNC_TABLES`, 18 tables) copies the market data, on-chain analysis, account tables and `menthorq_level_snapshots` into the local database (not `health_check_runs`, the other two MenthorQ tables, or the three tables that are no longer written). `coding/service/health/table_registry.py` lists the same 18 tables with their freshness limits; a test fails when a synced table is missing there.
 
 ## Health checks
 
 One registry (`coding/service/health/registry.py`) holds the checks; each check is marked LOCAL, VPS or BOTH:
 
-- API connectivity, local database freshness (per table, from `table_registry.py`), VPS internal continuity (VPS), sync gap between VPS and local (LOCAL), scanner activity, daemon service (VPS), Telegram configuration (bot token valid), forward-test harnesses (on-chain and straddle), IV-percentile window (LOCAL), morning-note smoke test (LOCAL).
+- API connectivity, local database freshness (per table, from `table_registry.py`), VPS internal continuity (VPS: `onchain_analysis_snapshots` and `hourly_snapshots`), sync gap between VPS and local (LOCAL), daemon service (VPS), Telegram configuration (bot token valid), IV-percentile window (LOCAL), morning-note smoke test (LOCAL).
 - `python -m scripts.validate_system` runs the LOCAL checks; the GUI "System Health" tab shows them too.
 - `scripts/check_vps_health.py` runs the VPS checks every hour (cron) and writes `logs/vps_health.json` and a row in `health_check_runs` (rows older than 90 days are pruned).
 

@@ -301,7 +301,7 @@ def test_rich_text_keeps_pre_blocks_and_breaks_other_lines():
 
 def test_tab_is_registered_after_the_charts_tab():
     definitions = {entry["index"]: entry["name"] for entry in main_window.MODULE_DEFS}
-    assert definitions[7] == "MenthorQ Charts" and definitions[8] == "MenthorQ Monitor"
-    assert main_window._LAST_ACTIVE == 8
-    assert main_window._PLACEHOLDER_INDICES == {9, 10, 11}
+    assert definitions[6] == "MenthorQ Charts" and definitions[7] == "MenthorQ Monitor"
+    assert main_window._LAST_ACTIVE == 7
+    assert main_window._PLACEHOLDER_INDICES == {8, 9, 10}
     assert cast(Any, main_window).MenthorqMonitorTab is MenthorqMonitorTab

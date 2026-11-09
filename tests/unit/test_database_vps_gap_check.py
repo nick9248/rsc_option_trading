@@ -1,6 +1,7 @@
 """Unit tests for DatabaseVpsGapCheck's per-table gap analysis."""
 
 from coding.core.health.models import CheckStatus
+from coding.service.health.checkers import database_vps_gap_checker
 from coding.service.health.checkers.database_vps_gap_checker import DatabaseVpsGapCheck
 
 
@@ -40,10 +41,18 @@ def test_no_rows_fails():
     assert results[0].status == CheckStatus.FAIL
 
 
-def test_run_isolates_one_table_failure_and_rolls_back():
+def test_run_isolates_one_table_failure_and_rolls_back(monkeypatch):
+    # A third, missing table sits between the two real ones, so the check
+    # must survive its error and still judge the table after it.
+    monkeypatch.setattr(database_vps_gap_checker, "_CADENCE_TABLES", [
+        ("onchain_analysis_snapshots", "snapshot_hour"),
+        ("missing_table", "snapshot_hour"),
+        ("hourly_snapshots", "snapshot_hour"),
+    ])
+
     class _MultiTableCursor:
         def execute(self, query, params=None):
-            if "straddle_scan_history" in query:
+            if "missing_table" in query:
                 raise Exception("relation does not exist")
             self._last_query = query
 
@@ -85,9 +94,9 @@ def test_run_isolates_one_table_failure_and_rolls_back():
     results = DatabaseVpsGapCheck().run(repo)
 
     by_name = {r.name: r for r in results}
-    assert "straddle_scan_history continuity" in by_name
-    assert by_name["straddle_scan_history continuity"].status == CheckStatus.FAIL
-    assert "continuity check failed" in by_name["straddle_scan_history continuity"].message
+    assert "missing_table continuity" in by_name
+    assert by_name["missing_table continuity"].status == CheckStatus.FAIL
+    assert "continuity check failed" in by_name["missing_table continuity"].message
 
     assert by_name["onchain_analysis_snapshots continuity (BTC)"].status == CheckStatus.PASS
     assert by_name["hourly_snapshots continuity (BTC)"].status == CheckStatus.WARN

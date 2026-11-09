@@ -13,7 +13,6 @@ _EXPECTED_HOURS = 48
 _CADENCE_TABLES: List[Tuple[str, str]] = [
     ("onchain_analysis_snapshots", "snapshot_hour"),
     ("hourly_snapshots", "snapshot_hour"),
-    ("straddle_scan_history", "scan_time"),
 ]
 
 _WARN_COVERAGE_PCT = 90.0

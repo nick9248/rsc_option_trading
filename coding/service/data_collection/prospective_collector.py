@@ -28,14 +28,7 @@ from coding.service.data_collection.account_collector import AccountCollector
 from coding.service.data_collection.hourly_aggregation_service import HourlyAggregationService
 from coding.service.deribit.deribit_api_service import DeribitApiService
 from coding.service.deribit.dvol_fetcher import DVOLFetcher
-from coding.service.on_chain.forward_testing_harness import ForwardTestingHarness
 from coding.service.on_chain.volatility_reconstruction_service import VolatilityReconstructionService
-from coding.service.scanner.butterfly_scan_service import ButterflyScanService
-from coding.service.scanner.defined_risk_forward_test_harness import DefinedRiskForwardTestHarness
-from coding.service.scanner.iron_condor_scan_service import IronCondorScanService
-from coding.service.scanner.regime_gate_service import RegimeGateService
-from coding.service.scanner.straddle_forward_test_harness import StraddleForwardTestHarness
-from coding.service.scanner.straddle_scan_service import StraddleScanService
 
 logger = logging.getLogger(__name__)
 
@@ -74,27 +67,12 @@ class ProspectiveCollector:
         self._dvol_fetcher = DVOLFetcher()
         # Our own Deribit account (read-only); skipped when no credentials are configured.
         self._account_collector = AccountCollector(repository=self.repo)
-        self._forward_harness = ForwardTestingHarness(repository=self.repo)
         self._volatility_reconstruction = VolatilityReconstructionService(repository=self.repo)
         # institutional_metrics_spec.md section 6 / task C7: signed delta-
         # weighted taker flow (HIRO analog). Pure calculator, no
         # repository/api dependency of its own -- shares this collector's
         # repository only via _persist_delta_flow's own read/write calls.
         self._delta_flow_calculator = DeltaFlowCalculator()
-        # Straddle scanner (increment 2): reuses the same live api connection
-        # and repository as the rest of this collector (THE ONE DATA SOURCE
-        # RULE — see straddle_scan_service.py module docstring).
-        self._straddle_scan_service = StraddleScanService(api_service=self.api, repository=self.repo)
-        self._straddle_harness = StraddleForwardTestHarness(repository=self.repo)
-        # Defined-risk scanners (iron condor + long butterfly): same THE ONE
-        # DATA SOURCE RULE as the straddle scanner above, sharing this
-        # collector's live api connection and repository.
-        self._regime_gate_service = RegimeGateService(repository=self.repo)
-        self._iron_condor_scan_service = IronCondorScanService(
-            api_service=self.api, repository=self.repo, regime_gate_service=self._regime_gate_service)
-        self._butterfly_scan_service = ButterflyScanService(
-            api_service=self.api, repository=self.repo, regime_gate_service=self._regime_gate_service)
-        self._defined_risk_harness = DefinedRiskForwardTestHarness(repository=self.repo)
 
         logger.info("ProspectiveCollector initialized")
 
@@ -225,77 +203,7 @@ class ProspectiveCollector:
                     reconstruction_summary[currency] = {"error": str(e)}
             result["volatility_reconstruction"] = reconstruction_summary
 
-            # Straddle scanner (increment 2): rank expiries, record scan
-            # history for forward-testing and resolve settled expiries.
-            # Wrapped in an outer try/except AND a per-currency try/except
-            # (same isolation pattern as ForwardTestingHarness/
-            # VolatilityReconstructionService above) so a scanner failure
-            # -- at any level -- can never break the collection cycle.
-            logger.info(f"\nRunning straddle scanner for hour {hour}...")
-            scanner_summary = {}
-            try:
-                for currency in currencies:
-                    try:
-                        scan_result = self._straddle_scan_service.scan(currency)
-                        inserted = self._straddle_harness.record_scan(scan_result, scan_time=hour)
-                        self._straddle_harness.resolve_due(currency)
-
-                        scanner_summary[currency] = {"inserted": inserted}
-                        logger.info(f"  {currency} straddle scan: {scanner_summary[currency]}")
-                    except Exception as e:
-                        logger.warning(f"  Straddle scanner failed for {currency}: {e}")
-                        scanner_summary[currency] = {"error": str(e)}
-            except Exception as e:
-                logger.warning(f"  Straddle scanner block failed: {e}")
-            result["straddle_scanner"] = scanner_summary
-
-            self._run_defined_risk_scanners(currencies, hour, result)
-
         return result
-
-    def _run_defined_risk_scanners(self, currencies, hour, result: dict) -> None:
-        """
-        Iron condor + long butterfly scanners (defined-risk complement to
-        the straddle scanner). Every candidate is recorded regardless of
-        gate_pass -- the gate is stored with the row, not used as a filter (see
-        docs/superpowers/specs/2026-07-20-defined-risk-scanner-design.md).
-        Same per-currency try/except isolation as the straddle scanner and
-        ForwardTestingHarness above: a failure here -- including a regime
-        gate compute() failure -- can never break the collection cycle or
-        skip a later currency in the same cycle. The regime is computed
-        exactly once per currency and shared across both structure-type
-        scans below.
-        """
-        logger.info(f"\nRunning defined-risk scanners for hour {hour}...")
-        scanner_summary: dict = {}
-        try:
-            for currency in currencies:
-                scanner_summary[currency] = {}
-
-                try:
-                    regime = self._regime_gate_service.compute(currency)
-                except Exception as e:
-                    logger.warning(f"  Regime gate compute failed for {currency}: {e}")
-                    scanner_summary[currency]["regime_gate"] = {"error": str(e)}
-                    continue
-
-                for structure_type, scan_service in (
-                    ("iron_condor", self._iron_condor_scan_service),
-                    ("butterfly", self._butterfly_scan_service),
-                ):
-                    try:
-                        scan_result = scan_service.scan(currency, regime=regime)
-                        inserted = self._defined_risk_harness.record_scan(scan_result, structure_type, scan_time=hour)
-                        self._defined_risk_harness.resolve_due(currency, structure_type)
-
-                        scanner_summary[currency][structure_type] = {"inserted": inserted}
-                        logger.info(f"  {currency} {structure_type} scan: {scanner_summary[currency][structure_type]}")
-                    except Exception as e:
-                        logger.warning(f"  {structure_type} scanner failed for {currency}: {e}")
-                        scanner_summary[currency][structure_type] = {"error": str(e)}
-        except Exception as e:
-            logger.warning(f"  Defined-risk scanner block failed: {e}")
-        result["defined_risk_scanner"] = scanner_summary
 
     def _collect_currency(
         self,
@@ -978,66 +886,6 @@ class ProspectiveCollector:
                     continue
 
             logger.info(f"    Saved {snapshots_saved} on-chain snapshots")
-
-            # Phase 3: resolve previous hour's predictions, then record a new one
-            # using the front-month (nearest expiry) snapshot metrics.
-            try:
-                self._forward_harness.resolve_pending_predictions(currency)
-            except Exception as e:
-                logger.warning(f"    Forward harness resolve failed for {currency}: {e}")
-
-            if snapshots_saved > 0 and grouped:
-                try:
-                    front_exp = sorted(grouped.keys())[0]
-                    # T10 (refactor_design_spec.md compat-map row #8):
-                    # analyze_expiration() returns the typed
-                    # ExpirationAnalysisResult now -- attribute access
-                    # instead of the legacy dict's .get() chains.
-                    front_data = analyzer.analyze_expiration(front_exp)
-                    if front_data is None:
-                        logger.warning(
-                            f"    analyze_expiration returned None for front-month "
-                            f"{front_exp} — skipping forward-harness prediction"
-                        )
-                    else:
-                        moneyness = front_data.moneyness
-                        max_pain_strike = front_data.max_pain.max_pain_strike
-                        # bugfix_spec.md Item 7 anchor table: max-pain
-                        # distance is settlement-space -- front_data.
-                        # underlying_price is this expiry's own forward
-                        # (analyze_expiration already anchors it there),
-                        # not the index.
-                        front_forward_price = front_data.underlying_price
-                        max_pain_dist = (
-                            (max_pain_strike - front_forward_price) / front_forward_price * 100
-                            if max_pain_strike and front_forward_price else None
-                        )
-                        metrics = {
-                            "itm_call_oi_pct": moneyness.calls.itm_pct,
-                            "otm_call_oi_pct": moneyness.calls.otm_pct,
-                            "itm_put_oi_pct": moneyness.puts.itm_pct,
-                            "otm_put_oi_pct": moneyness.puts.otm_pct,
-                            "max_pain_distance_pct": max_pain_dist,
-                            # pc_far_otm_ratio: live vol-surface computation deferred;
-                            # harness will use None and fall back to the 5 common metrics.
-                            "pc_far_otm_ratio": None,
-                        }
-                        self._forward_harness.record_prediction(
-                            currency=currency,
-                            snapshot_hour=hour,
-                            metrics=metrics,
-                            spot_price=underlying_price,
-                        )
-                except (AttributeError, TypeError):
-                    # Same reasoning as the per-expiration loop above: a
-                    # shape mismatch here is a programming error, not a
-                    # data condition -- re-raise so it is loud (this
-                    # method's own outer except logs it at ERROR and
-                    # re-raises; the daemon's caller already catches that
-                    # and moves on, so the process does not crash).
-                    raise
-                except Exception as e:
-                    logger.warning(f"    Forward harness record failed for {currency}: {e}")
 
         except Exception as e:
             logger.error(f"    On-chain analysis failed: {e}", exc_info=True)

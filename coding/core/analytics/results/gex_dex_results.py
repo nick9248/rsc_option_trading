@@ -136,8 +136,7 @@ class GexDexKeyLevels:
     identical value is exposed as ``cumulative_gex_zero_strike`` below.
     ``hvl``/``gamma_flip`` are kept (not renamed/deleted) because
     ``repository.save_onchain_snapshot`` persists ``key_levels.hvl`` into the
-    LIVE ``hvl_level`` DB column read by the straddle regime gate and IC/BF
-    scanners, and ``synthesis.py`` (morning-note rendering) also reads
+    LIVE ``hvl_level`` DB column, and ``synthesis.py`` (morning-note rendering) also reads
     ``key_levels.hvl`` directly -- decision D3 (task-B1-brief.md) keeps both
     that column and every attribute name any persistence/synthesis path
     already reads unchanged in this task.

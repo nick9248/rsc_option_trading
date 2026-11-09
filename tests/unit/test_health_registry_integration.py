@@ -5,7 +5,7 @@ from coding.service.health.registry import CHECKERS
 
 
 def test_all_checkers_are_health_check_instances():
-    assert len(CHECKERS) == 11
+    assert len(CHECKERS) == 8
     for checker in CHECKERS:
         assert isinstance(checker, HealthCheck)
         assert checker.category
@@ -16,7 +16,6 @@ def test_expected_categories_present():
     categories = {checker.category for checker in CHECKERS}
     expected = {
         "API Connectivity", "Database — Local", "Database — VPS Internal Continuity",
-        "Database — VPS Sync", "Scanner Activity", "Daemon Service", "Telegram",
-        "Forward-Test Harnesses", "IV-Percentile Window", "Morning Note",
+        "Database — VPS Sync", "Daemon Service", "Telegram", "IV-Percentile Window", "Morning Note",
     }
     assert expected.issubset(categories)

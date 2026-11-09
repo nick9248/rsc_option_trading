@@ -77,8 +77,7 @@ class GexDexCalculator:
       strike axis, NOT a re-priced dealer-gamma flip -- bugfix_spec.md Item
       2's live audit found it can (and did) sit on the OPPOSITE side of spot
       from the actual Zero Gamma Level. ``repository.save_onchain_snapshot``
-      persists this value into the LIVE ``hvl_level`` DB column read by the
-      straddle regime gate and IC/BF scanners, and ``synthesis.py``
+      persists this value into the LIVE ``hvl_level`` DB column, and ``synthesis.py``
       (morning-note rendering) also reads it directly -- that is why this
       attribute keeps its old, misleading name rather than being renamed.
     - Zero Gamma Level (the actual gamma flip, ``GexDexKeyLevels.
@@ -577,8 +576,8 @@ class GexDexCalculator:
         # spot, then -- if that also came up empty -- to whichever strike had
         # the smallest |cumulative GEX|, which is never actually zero and
         # will always find SOME strike. Together those fallbacks meant `hvl`
-        # (persisted into the live `hvl_level` DB column, documented as read
-        # by the straddle regime gate and IC/BF scanners) was essentially
+        # (persisted into the live `hvl_level` column of
+        # onchain_analysis_snapshots, stored for analysis only) was essentially
         # ALWAYS populated with a strike, even when cumulative GEX never
         # crossed zero anywhere in the book -- a fabricated level presented
         # as if it answered the same question as a real cumulative

@@ -545,8 +545,7 @@ class OnChainAnalysisService:
         Pick the true nearest-DTE (front-month) expiration.
 
         C1 review Important #1: ``sorted(expiration_names)[0]`` (the
-        previous convention, mirrored from ``get_recent_onchain_history``'s
-        subquery) picks the lexicographically-first expiration STRING, not
+        previous convention) picks the lexicographically-first expiration STRING, not
         the chronologically-nearest one -- "%d%b%y"-style date strings
         like "14AUG26"/"26JUL26" do not sort chronologically as plain
         strings. Confirmed in this task's own golden fixture: string-sort

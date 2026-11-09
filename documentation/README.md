@@ -31,8 +31,6 @@ One file per tab that exists in `coding/gui/tabs/`:
 - `gui_tabs/tab_menthorq_charts.md`
 - `gui_tabs/tab_menthorq_monitor.md`
 
-The Automation tab (`automation_tab.py`) has no document yet.
-
 ## Keeping documentation current
 
 - When code changes a table, command, class name or path that a document mentions, update the document in the same pull request.

@@ -56,10 +56,6 @@ class TestLiveTablesAreSynced:
         "futures_basis", "account_snapshots", "position_snapshots", "user_trades", "settlements",
     )
     MUTABLE = {
-        # Rows are updated on the VPS after insertion (alerts, settlement results).
-        "forward_test_predictions": ["currency", "snapshot_hour"],
-        "straddle_scan_history": ["currency", "expiration", "scan_time"],
-        "defined_risk_scan_history": ["currency", "expiration", "structure_type", "scan_time"],
         # Rewritten in place on the VPS (ON CONFLICT ... DO UPDATE) when recomputed.
         "daily_oi_snapshots": ["snapshot_date", "snapshot_hour_utc", "currency", "expiration", "strike", "option_type"],
         "volatility_skew_history": ["snapshot_hour", "currency", "expiration"],
@@ -90,6 +86,8 @@ class TestLiveTablesAreSynced:
             "volatility_index_history",  # merged into dvol_history
             "max_pain", "open_interest", "volume",  # onchain_analysis_snapshots has them hourly
             "buy_sell_flow_metrics",  # computed on demand from historical_trades
+            # Strategy finder and forward tests removed 2026-11-08; the tables stay, unsynced.
+            "forward_test_predictions", "straddle_scan_history", "defined_risk_scan_history",
         }
         assert dropped.isdisjoint({entry["name"] for entry in SYNC_TABLES})
 
@@ -120,17 +118,12 @@ class TestMenthorqLevelSnapshotsReplaceRule:
 
 
 class TestLookbackWindows:
-    """Tables whose rows change only shortly after insertion re-read just a recent window.
-    Tables whose rows change long after insertion (resolved scans) must be re-read in full."""
+    """Tables whose rows change only shortly after insertion re-read just a recent window."""
 
     def test_recent_window_tables(self):
         assert _find("dvol_history")["lookback_hours"] == 72  # daemon repairs the last 48 h
         assert _find("daily_oi_snapshots")["lookback_hours"] == 6
         assert _find("volatility_skew_history")["lookback_hours"] == 6
-
-    def test_tables_resolved_long_after_insertion_are_re_read_in_full(self):
-        for name in ("forward_test_predictions", "straddle_scan_history", "defined_risk_scan_history"):
-            assert "lookback_hours" not in _find(name), name
 
     def test_lookback_is_only_used_with_an_upsert_key_and_a_timestamp_watermark(self):
         for entry in SYNC_TABLES:

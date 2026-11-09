@@ -11,7 +11,6 @@ def _make_collector():
     collector.repo = MagicMock()
     collector.aggregation_service = MagicMock()
     collector.aggregation_service.aggregate_unaggregated_hours.return_value = {"snapshots_created": 3}
-    collector._forward_harness = MagicMock()
     collector._volatility_reconstruction = MagicMock()
     return collector
 
@@ -43,7 +42,7 @@ def test_collect_hour_runs_volatility_reconstruction_per_currency():
 def test_collect_hour_reconstruction_failure_does_not_break_collection():
     """A reconstruction failure for one currency must not raise or flip the
     overall collection result status -- matches the try/except + logger.warning
-    pattern used for ForwardTestingHarness."""
+    pattern used for the other per-currency steps."""
     collector = _make_collector()
     collector._collect_currency = MagicMock(return_value={"trades": 5, "instruments": 10})
     collector._volatility_reconstruction.reconstruct_range.side_effect = Exception("boom")

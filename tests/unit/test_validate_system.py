@@ -54,9 +54,9 @@ def test_log_summary_lists_problems(monkeypatch, caplog):
     monkeypatch.setattr(
         "scripts.validate_system.run_checks",
         lambda environment, repo: {
-            "Scanner Activity": [
-                CheckResult(name="x", status=CheckStatus.FAIL, message="BTC: no straddle scans recorded in the last 6h"),
-                CheckResult(name="y", status=CheckStatus.PASS, message="ETH: 5 scans in last 6h"),
+            "Daemon Service": [
+                CheckResult(name="x", status=CheckStatus.FAIL, message="option-trading service is not active"),
+                CheckResult(name="y", status=CheckStatus.PASS, message="option-trading service active"),
             ],
             "Database — Local": [
                 CheckResult(name="z", status=CheckStatus.WARN, message="hourly_snapshots: stale (4.5h ago)"),
@@ -68,11 +68,11 @@ def test_log_summary_lists_problems(monkeypatch, caplog):
         validator.validate_all()
 
     assert "PROBLEMS (2):" in caplog.text
-    assert "[FAIL] Scanner Activity: BTC: no straddle scans recorded in the last 6h" in caplog.text
+    assert "[FAIL] Daemon Service: option-trading service is not active" in caplog.text
     assert "[WARN] Database — Local: hourly_snapshots: stale (4.5h ago)" in caplog.text
     # The passing result must not appear in the problems list
-    assert "[FAIL] Scanner Activity: ETH: 5 scans in last 6h" not in caplog.text
-    assert "[WARN] Scanner Activity: ETH: 5 scans in last 6h" not in caplog.text
+    assert "[FAIL] Daemon Service: option-trading service active" not in caplog.text
+    assert "[WARN] Daemon Service: option-trading service active" not in caplog.text
 
 
 def test_log_summary_omits_problems_section_when_all_pass(monkeypatch, caplog):
