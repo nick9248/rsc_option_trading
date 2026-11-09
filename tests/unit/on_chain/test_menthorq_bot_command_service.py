@@ -274,7 +274,8 @@ def test_status_says_problem_when_the_latest_live_run_has_spot_but_no_levels():
 
 def test_status_reply_with_stale_snapshot_unreadable_state_and_alerts_off():
     old_snapshot = make_record(snapshot_captured_at_utc=BASE_TIME - timedelta(minutes=50))
-    settings = MenthorqMonitorSettings(alerts_enabled=False, commands_enabled=True)
+    settings = MenthorqMonitorSettings(alerts_enabled=False, commands_enabled=True,
+                                       stale_snapshot_minutes=45)
     commands, repository, _, _ = _service([old_snapshot], settings=settings)
     message = _run(commands, "/status")
     assert "Health: PROBLEM: snapshot 50 min older than the latest run" in message
@@ -283,6 +284,22 @@ def test_status_reply_with_stale_snapshot_unreadable_state_and_alerts_off():
     repository.fail_state = True
     assert ("Urgent alerts: on; mute state not readable (RuntimeError), treated as not muted"
             in _run(commands, "/status"))
+
+
+def test_status_health_uses_the_configured_stale_limit():
+    """Snapshot 07:30, live run 09:10: 100 min older than the run. Limit 240 min (as the brief
+    would use) -> healthy; limit 45 min -> problem; limit 100 min (exactly) -> healthy."""
+    old_snapshot = make_record(snapshot_captured_at_utc=BASE_TIME - timedelta(minutes=100))
+
+    def status_with_limit(minutes):
+        settings = MenthorqMonitorSettings(alerts_enabled=True, commands_enabled=True,
+                                           stale_snapshot_minutes=minutes)
+        commands, _, _, _ = _service([old_snapshot], settings=settings)
+        return _run(commands, "/status")
+
+    assert "Health: OK" in status_with_limit(240)
+    assert "Health: OK" in status_with_limit(100)
+    assert "Health: PROBLEM: snapshot 100 min older than the latest run" in status_with_limit(45)
 
 
 def test_status_with_no_run_at_all():

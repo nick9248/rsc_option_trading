@@ -159,7 +159,7 @@ class MenthorqBotCommandService:
             last_alert_delivered=repository.get_last_menthorq_alert_delivery_of_keys(
                 settings.currency, list(URGENT_ALERT_KEYS)),
         )
-        return format_status_reply(status)
+        return format_status_reply(status, settings.stale_snapshot_limit)
 
     def apply_mute(self, arguments: str) -> str:
         """

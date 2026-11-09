@@ -49,8 +49,6 @@ from coding.core.analytics.menthorq_replication_calculator import PANEL_NAMES
 TELEGRAM_MESSAGE_LIMIT = 4096
 MAXIMUM_LIST_ITEM_CHARACTERS = 300
 MAXIMUM_EXPIRIES_SHOWN = 12
-# /status health check (command_formatter); the brief uses the configured stale limit.
-STALE_SNAPSHOT_AGE = timedelta(minutes=45)
 # Default of MENTHORQ_STALE_SNAPSHOT_MINUTES (monitor_settings).
 DEFAULT_STALE_SNAPSHOT_LIMIT = timedelta(minutes=120)
 # Spot trade older than this (but within the stale limit) gets a caveat line.

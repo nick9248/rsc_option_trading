@@ -69,7 +69,8 @@ be built (for example, the database is down), the bot answers `<command> failed 
 
 Health in `/status` is `OK` unless one of these holds: no live run is stored, the newest live run
 was computed more than 2h ago, the newest live run was not computed (the stored reason is shown),
-or its snapshot is more than 45 min older than the run.
+or its snapshot is more than the stale limit (`MENTHORQ_STALE_SNAPSHOT_MINUTES`, default 120 min,
+the same limit as the brief's "DATA STALE" line) older than the run.
 
 ## Mute
 
@@ -215,7 +216,7 @@ data time, for example:
   the check against "now" for a live run (and a past daily close is not called stale for being past).
 - Exactly the limit is not stale; one minute more is. Durations are whole minutes, rounded down.
 - A spot trade more than 15 min but not more than the limit before the data time is a normal
-  caveat line instead. `/status` keeps its own 45 min snapshot check for its health line.
+  caveat line instead. `/status` uses the same limit for its health line (snapshot vs the latest run).
 
 The usual cause is a collector that stopped writing snapshots (or a local database that was not
 synced from the VPS), so the newest snapshot is hours behind the time the brief was asked for.

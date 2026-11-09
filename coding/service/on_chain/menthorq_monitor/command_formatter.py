@@ -28,7 +28,6 @@ from coding.service.on_chain.menthorq_monitor.brief_formatter import (
     DEFAULT_STALE_SNAPSHOT_LIMIT,
     LEVEL_ORDER,
     NOT_AVAILABLE,
-    STALE_SNAPSHOT_AGE,
     TELEGRAM_MESSAGE_LIMIT,
     bullet_lines,
     code_block,
@@ -179,8 +178,19 @@ class MonitorStatus:
     last_alert_delivered: Optional[Tuple[str, datetime]]
 
 
-def monitor_health_problems(status: MonitorStatus) -> List[str]:
-    """Plain-text problems of the monitor job; empty when it looks healthy."""
+def monitor_health_problems(
+    status: MonitorStatus, stale_limit: timedelta = DEFAULT_STALE_SNAPSHOT_LIMIT
+) -> List[str]:
+    """
+    Plain-text problems of the monitor job; empty when it looks healthy.
+
+    Args:
+        status: What /status shows.
+        stale_limit: ``MenthorqMonitorSettings.stale_snapshot_limit``, the
+            limit the brief and the alerts use, so they never disagree; a
+            snapshot more than this older than the latest live run is a
+            problem (exactly the limit is not).
+    """
     live = status.latest_live_run
     if live is None:
         return ["no live run stored"]
@@ -192,7 +202,7 @@ def monitor_health_problems(status: MonitorStatus) -> List[str]:
         reason = live.not_computed_reasons[0] if live.not_computed_reasons else "reason not stored"
         problems.append(f"latest live run not computed: {reason}")
     elif live.snapshot_captured_at_utc is not None and \
-            live.as_of_utc - live.snapshot_captured_at_utc > STALE_SNAPSHOT_AGE:
+            live.as_of_utc - live.snapshot_captured_at_utc > stale_limit:
         problems.append(f"snapshot {format_age(live.as_of_utc - live.snapshot_captured_at_utc)} "
                         "older than the latest run")
     return problems
@@ -232,15 +242,18 @@ def _alert_state_lines(status: MonitorStatus) -> List[str]:
     return lines
 
 
-def format_status_reply(status: MonitorStatus) -> str:
+def format_status_reply(
+    status: MonitorStatus, stale_limit: timedelta = DEFAULT_STALE_SNAPSHOT_LIMIT
+) -> str:
     """
-    /status: health of the monitor job, last run per mode, data age and
-    capture instants, whether the hourly job ran in the last 2 h, the alert
-    state (muted or not) and the last delivered alert.
+    /status: health of the monitor job (``stale_limit``: see
+    ``monitor_health_problems``), last run per mode, data age and capture
+    instants, whether the hourly job ran in the last 2 h, the alert state
+    (muted or not) and the last delivered alert.
     """
     now = status.now
     live = status.latest_live_run
-    problems = monitor_health_problems(status)
+    problems = monitor_health_problems(status, stale_limit)
     lines = [
         f"<b>{escape(status.currency)} MenthorQ monitor status</b> | {escape(format_utc(now))}",
         "Health: OK" if not problems else f"Health: PROBLEM: {escape('; '.join(problems))}",
