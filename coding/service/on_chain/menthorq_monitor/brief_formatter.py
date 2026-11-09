@@ -571,6 +571,7 @@ def format_stale_data_alert(record: MenthorqLevelRecord, warning: str) -> str:
 
 
 MAXIMUM_ERROR_MESSAGE_CHARACTERS = 200
+MAXIMUM_NOT_STARTED_ERROR_CHARACTERS = 300
 
 
 def format_monitor_error_alert(error_class_name: str, error_text: str) -> str:
@@ -583,3 +584,15 @@ def format_monitor_error_alert(error_class_name: str, error_text: str) -> str:
     return (f"<b>Monitor error:</b> the hourly computation failed: "
             f"{escape(error_class_name)}: {escape(error_text[:MAXIMUM_ERROR_MESSAGE_CHARACTERS])}. "
             "Levels and alerts are paused until it succeeds.")
+
+
+def format_monitor_not_started_notice(error_text: str) -> str:
+    """
+    The start-up notice when the monitor could not be built (bad MENTHORQ_*
+    setting or construction error). ``error_text`` must already be free of
+    secrets; it is cut to ``MAXIMUM_NOT_STARTED_ERROR_CHARACTERS`` and
+    HTML-escaped.
+    """
+    return (f"<b>MenthorQ monitor NOT started:</b> "
+            f"{escape(error_text[:MAXIMUM_NOT_STARTED_ERROR_CHARACTERS])}. "
+            "The collector itself keeps running.")

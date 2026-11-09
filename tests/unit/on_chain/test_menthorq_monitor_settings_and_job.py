@@ -19,6 +19,7 @@ from coding.service.on_chain.menthorq_monitor.menthorq_monitor_job import (
     WEEKLY_BRIEF_JOB_ID,
     MenthorqMonitorJob,
     build_menthorq_monitor_job,
+    start_menthorq_monitor_job,
 )
 from coding.core.analytics.menthorq_monitor.alert_rules import AlertThresholds
 from coding.service.on_chain.menthorq_monitor.brief_formatter import DEFAULT_STALE_SNAPSHOT_LIMIT
@@ -344,6 +345,55 @@ class TestMonitorErrorAlertFromTheHourlyRun:
         error_messages = [sent["message"] for sent in telegram.sent if "Monitor error" in sent["message"]]
         assert error_messages == ["<b>Monitor error:</b> the hourly computation failed: ValueError: "
                                   "replication failed. Levels and alerts are paused until it succeeds."]
+
+
+class TestMonitorNotStartedNotice:
+    """start_menthorq_monitor_job: a bad setting keeps the collector running and tells the owner once."""
+
+    def test_a_bad_weekly_brief_day_logs_an_error_and_sends_one_notice(self, monkeypatch, caplog):
+        monkeypatch.setenv("MENTHORQ_WEEKLY_BRIEF_DAY", "frii")
+        telegram = FakeTelegram()
+        with caplog.at_level("INFO"):
+            job = start_menthorq_monitor_job(repository=MagicMock(), telegram=telegram)
+        assert job is None
+        assert telegram.sent == [{
+            "message": ("<b>MenthorQ monitor NOT started:</b> MENTHORQ_WEEKLY_BRIEF_DAY='frii' is not one "
+                        "of ('mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'). "
+                        "The collector itself keeps running."),
+            "parse_mode": "HTML"}]
+        errors = [record for record in caplog.records if record.levelname == "ERROR"]
+        assert len(errors) == 1 and "MenthorQ monitor NOT started" in errors[0].getMessage()
+
+    def test_no_notice_without_telegram_credentials(self, monkeypatch, caplog):
+        monkeypatch.setenv("MENTHORQ_WEEKLY_BRIEF_DAY", "frii")
+        telegram = FakeTelegram()
+        telegram._token = ""
+        with caplog.at_level("INFO"):
+            assert start_menthorq_monitor_job(repository=MagicMock(), telegram=telegram) is None
+        assert telegram.sent == []
+        assert "not-started notice NOT sent" in caplog.text
+
+    def test_a_construction_error_is_scrubbed_cut_escaped_and_a_failing_send_is_swallowed(
+            self, monkeypatch, caplog):
+        def raise_construction_error(**_keyword_arguments):
+            raise RuntimeError("bot fake-token <x> " + "y" * 400)
+        monkeypatch.setattr(
+            "coding.service.on_chain.menthorq_monitor.menthorq_monitor_job.build_menthorq_monitor_job",
+            raise_construction_error)
+        telegram = FakeTelegram(accept=False)
+        with caplog.at_level("INFO"):
+            assert start_menthorq_monitor_job(repository=MagicMock(), telegram=telegram) is None
+        # "bot <bot token> <x> " is 20 characters, so 280 "y" fill the 300-character cut.
+        assert telegram.sent[0]["message"] == ("<b>MenthorQ monitor NOT started:</b> bot &lt;bot token&gt; "
+                                               "&lt;x&gt; " + "y" * 280 + ". The collector itself keeps running.")
+        assert "fake-token" not in telegram.sent[0]["message"]
+        assert "not-started notice NOT delivered" in caplog.text
+
+    def test_valid_settings_send_nothing(self, monkeypatch):
+        monkeypatch.setenv("MENTHORQ_MONITOR_ENABLED", "0")
+        telegram = FakeTelegram()
+        assert start_menthorq_monitor_job(repository=MagicMock(), telegram=telegram) is None
+        assert telegram.sent == []
 
 
 def test_collector_and_monitor_import_graph_has_no_matplotlib():

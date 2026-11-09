@@ -93,6 +93,15 @@ WEEKLY_BRIEF_CATCH_UP = timedelta(hours=24)
 WEEKLY_BRIEF_LOCK = threading.Lock()
 
 
+def scrub_secrets(text: str, telegram: TelegramAlertService) -> str:
+    """``text`` with the bot token and the database password replaced by placeholders."""
+    scrubbed = telegram.scrub_token(text)
+    database_password = DatabaseConfig().password
+    if database_password:
+        scrubbed = scrubbed.replace(database_password, "<database password>")
+    return scrubbed
+
+
 def latest_weekly_brief_instant(now: datetime, settings: MenthorqMonitorSettings) -> datetime:
     """The newest scheduled weekly-brief instant at or before ``now`` (UTC)."""
     utc_now = now.astimezone(timezone.utc)
@@ -349,10 +358,7 @@ class MenthorqBriefDeliveryService:
             True when the alert was delivered by this call.
         """
         try:
-            error_text = self.telegram.scrub_token(str(error))
-            database_password = DatabaseConfig().password
-            if database_password:
-                error_text = error_text.replace(database_password, "<database password>")
+            error_text = scrub_secrets(str(error), self.telegram)
             try:
                 stored = self.repository.get_last_menthorq_alert_delivery(
                     self.settings.currency, ALERT_KEY_MONITOR_ERROR)

@@ -55,6 +55,11 @@ class TelegramAlertService:
         """The configured chat id ("" when not configured)."""
         return self._chat_id
 
+    @property
+    def has_credentials(self) -> bool:
+        """True when both the bot token and the chat id are configured (``send`` can try)."""
+        return bool(self._token) and bool(self._chat_id)
+
     def _without_token(self, error: object) -> str:
         """
         Return the text of ``error`` with the bot token replaced by

@@ -30,7 +30,12 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from coding.core.database.repository import DatabaseRepository
 from coding.service.on_chain.menthorq_monitor.bot_command_service import MenthorqBotCommandService
-from coding.service.on_chain.menthorq_monitor.brief_delivery_service import MenthorqBriefDeliveryService
+from coding.service.on_chain.menthorq_monitor.brief_delivery_service import (
+    TELEGRAM_PARSE_MODE,
+    MenthorqBriefDeliveryService,
+    scrub_secrets,
+)
+from coding.service.on_chain.menthorq_monitor.brief_formatter import format_monitor_not_started_notice
 from coding.service.on_chain.menthorq_monitor.command_formatter import BOT_COMMANDS
 from coding.service.on_chain.menthorq_monitor.menthorq_monitor_service import MenthorqMonitorService
 from coding.service.on_chain.menthorq_monitor.monitor_settings import MenthorqMonitorSettings
@@ -212,3 +217,41 @@ def build_menthorq_monitor_job(
             configured_owner_user_id=settings.owner_user_id,
         )
     return MenthorqMonitorJob(settings, monitor_service, delivery_service, listener)
+
+
+def start_menthorq_monitor_job(
+    repository: Optional[DatabaseRepository] = None,
+    telegram: Optional[TelegramAlertService] = None,
+) -> Optional[MenthorqMonitorJob]:
+    """
+    ``build_menthorq_monitor_job`` for the collector: a bad MENTHORQ_*
+    setting (ValueError) or a construction error never stops the collector.
+    The error is logged at ERROR and the owner gets ONE best-effort Telegram
+    notice (``format_monitor_not_started_notice``, secrets scrubbed) when
+    the Telegram credentials exist; a failing notice is logged and
+    swallowed, and nothing is sent without credentials.
+
+    Args:
+        repository: Database access shared with the collector.
+        telegram: Sender; a default ``TelegramAlertService`` (credentials
+            from the environment) when omitted.
+
+    Returns:
+        The job, or None when the monitor is off or could not be built.
+    """
+    try:
+        return build_menthorq_monitor_job(repository=repository, telegram=telegram)
+    except Exception as error:
+        logger.exception("MenthorQ monitor NOT started (configuration or construction error); "
+                         "the collector keeps running")
+        try:
+            telegram = telegram or TelegramAlertService()
+            if not telegram.has_credentials:
+                logger.warning("MenthorQ monitor: no Telegram credentials; not-started notice NOT sent")
+                return None
+            notice = format_monitor_not_started_notice(scrub_secrets(str(error), telegram))
+            if not telegram.send(notice, parse_mode=TELEGRAM_PARSE_MODE):
+                logger.warning("MenthorQ monitor: not-started notice NOT delivered (Telegram send failed)")
+        except Exception:
+            logger.exception("MenthorQ monitor: the not-started notice itself failed")
+        return None
