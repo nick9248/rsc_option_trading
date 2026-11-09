@@ -200,6 +200,13 @@ duplicate alerts).
 An invalid value of any of these variables (for example `MENTHORQ_STALE_SNAPSHOT_MINUTES=9`) stops
 only the MenthorQ monitor from starting; the collector logs the error and runs on.
 
+With `MENTHORQ_MONITOR_ENABLED=1` the collector also checks at start-up (one `to_regclass` query)
+that `menthorq_level_snapshots`, `menthorq_alert_deliveries` (migration 031) and
+`menthorq_monitor_state` (migration 032) exist. When one is missing, the monitor is NOT started:
+the collector logs an ERROR and sends one Telegram notice naming the missing table(s) and the
+migration numbers, and runs on without the monitor jobs. If the check itself fails, that is
+logged and the monitor starts anyway.
+
 ### The DATA STALE line
 
 The brief, `/levels`, `/changes` and the GUI preview start (right under the title) with one line
@@ -234,6 +241,8 @@ and that is logged.
 ## Deployment of the bot commands (migration 032)
 
 Migration 032 depends on 031 being applied first. Both are idempotent (`IF NOT EXISTS`).
+Apply 031 and 032 BEFORE switching `MENTHORQ_MONITOR_ENABLED` on (steps 1 and 2 before step 3):
+an enabled monitor whose tables are missing is not started (see above).
 
 1. Locally: `python scripts/run_migration.py migrations/032_add_menthorq_monitor_state.sql`
    (031 first if it is missing). Then run the monitor tests and

@@ -396,6 +396,47 @@ class TestMonitorNotStartedNotice:
         assert telegram.sent == []
 
 
+class TestMonitorTablesCheckedAtStartUp:
+    """An enabled monitor whose tables are missing (031/032 not applied) is NOT started."""
+
+    def test_missing_tables_log_an_error_send_one_notice_and_register_no_job(self, monkeypatch, caplog):
+        monkeypatch.setenv("MENTHORQ_MONITOR_ENABLED", "1")
+        repository, telegram = FakeMonitorRepository(), FakeTelegram()
+        repository.absent_tables = ["menthorq_alert_deliveries", "menthorq_monitor_state"]
+        with caplog.at_level("INFO"):
+            assert start_menthorq_monitor_job(repository=repository, telegram=telegram) is None
+        assert telegram.sent == [{
+            "message": ("<b>MenthorQ monitor NOT started:</b> database table(s) missing: "
+                        "menthorq_alert_deliveries (migration 031), menthorq_monitor_state (migration 032); "
+                        "apply migrations 031 and 032, then restart the collector. "
+                        "The collector itself keeps running."),
+            "parse_mode": "HTML"}]
+        errors = [record.getMessage() for record in caplog.records if record.levelname == "ERROR"]
+        assert len(errors) == 1 and "MenthorQ monitor NOT started" in errors[0]
+        assert "menthorq_monitor_state" in errors[0]
+
+    def test_all_tables_present_starts_the_monitor_and_sends_nothing(self, monkeypatch):
+        monkeypatch.setenv("MENTHORQ_MONITOR_ENABLED", "1")
+        telegram = FakeTelegram()
+        job = start_menthorq_monitor_job(repository=FakeMonitorRepository(), telegram=telegram)
+        assert job is not None and telegram.sent == []
+
+    def test_a_failing_check_is_logged_and_the_monitor_still_starts(self, monkeypatch, caplog):
+        monkeypatch.setenv("MENTHORQ_MONITOR_ENABLED", "1")
+        repository, telegram = FakeMonitorRepository(), FakeTelegram()
+        repository.fail_table_check = True
+        with caplog.at_level("INFO"):
+            job = start_menthorq_monitor_job(repository=repository, telegram=telegram)
+        assert job is not None and telegram.sent == []
+        assert "start-up check of the monitor tables failed" in caplog.text
+
+    def test_monitor_off_runs_no_table_check(self, monkeypatch):
+        monkeypatch.setenv("MENTHORQ_MONITOR_ENABLED", "0")
+        repository = MagicMock()
+        assert start_menthorq_monitor_job(repository=repository, telegram=FakeTelegram()) is None
+        repository.missing_tables.assert_not_called()
+
+
 def test_collector_and_monitor_import_graph_has_no_matplotlib():
     code = ("import sys\n"
             "import coding.service.data_collection.unified_scheduler\n"

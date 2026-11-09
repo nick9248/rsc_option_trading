@@ -8,7 +8,7 @@ import json
 import logging
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from psycopg2.extras import Json, execute_values
 
@@ -1141,6 +1141,18 @@ class DatabaseRepository:
     # ------------------------------------------------------------------
     # MenthorQ-style level monitor (migration 031)
     # ------------------------------------------------------------------
+
+    def missing_tables(self, table_names: Sequence[str]) -> List[str]:
+        """
+        The names in ``table_names`` that do not exist in the database's
+        search path (one ``to_regclass`` query; reads no table).
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                "SELECT name FROM unnest(%s::text[]) AS name WHERE to_regclass(name) IS NULL",
+                (list(table_names),),
+            )
+            return [row[0] for row in cursor.fetchall()]
 
     _MENTHORQ_LEVEL_COLUMNS = (
         "id, currency, mode, as_of_utc, computed_at, expiry_universe, gamma_underlying, "

@@ -80,6 +80,13 @@ class FakeMonitorRepository(DatabaseRepository):
         # Capture times of the "snapshots" table (get_latest_option_chain_capture_at_or_before).
         self.option_chain_captures: List[datetime] = []
         self.capture_queries = 0
+        self.absent_tables: List[str] = []   # tables missing_tables reports as not existing
+        self.fail_table_check = False        # True: missing_tables raises
+
+    def missing_tables(self, table_names: Sequence[str]) -> List[str]:
+        if self.fail_table_check:
+            raise RuntimeError("permission denied for schema pg_catalog")
+        return [name for name in table_names if name in self.absent_tables]
 
     def _same_run_index(self, record: MenthorqLevelRecord) -> Optional[int]:
         for index, stored in enumerate(self.records):

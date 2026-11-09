@@ -23,7 +23,7 @@ only; nothing on this path imports matplotlib.
 
 import logging
 from datetime import datetime, timezone
-from typing import Callable, Optional
+from typing import Callable, List, Optional, Sequence
 
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
@@ -51,6 +51,12 @@ HOURLY_JOB_ID = "menthorq_monitor_hourly"
 WEEKLY_BRIEF_JOB_ID = "menthorq_weekly_brief"
 COMMAND_POLL_JOB_ID = "menthorq_command_poll"
 MISFIRE_GRACE_SECONDS = 600
+# Table -> the migration that creates it (checked at start-up, missing_monitor_tables).
+MONITOR_TABLE_MIGRATIONS = {
+    "menthorq_level_snapshots": "031",
+    "menthorq_alert_deliveries": "031",
+    "menthorq_monitor_state": "032",
+}
 
 
 class MenthorqMonitorJob:
@@ -219,17 +225,55 @@ def build_menthorq_monitor_job(
     return MenthorqMonitorJob(settings, monitor_service, delivery_service, listener)
 
 
+def missing_monitor_tables(repository: DatabaseRepository) -> List[str]:
+    """
+    The monitor tables (``MONITOR_TABLE_MIGRATIONS``) missing from the
+    database, e.g. migration 031 or 032 not applied. When the check itself
+    fails it is logged and treated as nothing missing: a failing check must
+    not stop the monitor (the hourly run then reports the real error).
+    """
+    try:
+        return list(repository.missing_tables(list(MONITOR_TABLE_MIGRATIONS)))
+    except Exception:
+        logger.exception("MenthorQ monitor: the start-up check of the monitor tables failed; "
+                         "the monitor is started anyway")
+        return []
+
+
+def missing_tables_text(missing: Sequence[str]) -> str:
+    """The not-started reason for missing tables, naming each table and its migration."""
+    named = ", ".join(f"{table} (migration {MONITOR_TABLE_MIGRATIONS[table]})" for table in missing)
+    return (f"database table(s) missing: {named}; apply migrations 031 and 032, "
+            "then restart the collector")
+
+
+def _send_not_started_notice(telegram: Optional[TelegramAlertService], reason: str) -> None:
+    """ONE best-effort not-started notice (``reason`` must be free of secrets); never raises."""
+    try:
+        telegram = telegram or TelegramAlertService()
+        if not telegram.has_credentials:
+            logger.warning("MenthorQ monitor: no Telegram credentials; not-started notice NOT sent")
+            return
+        if not telegram.send(format_monitor_not_started_notice(reason), parse_mode=TELEGRAM_PARSE_MODE):
+            logger.warning("MenthorQ monitor: not-started notice NOT delivered (Telegram send failed)")
+    except Exception:
+        logger.exception("MenthorQ monitor: the not-started notice itself failed")
+
+
 def start_menthorq_monitor_job(
     repository: Optional[DatabaseRepository] = None,
     telegram: Optional[TelegramAlertService] = None,
 ) -> Optional[MenthorqMonitorJob]:
     """
     ``build_menthorq_monitor_job`` for the collector: a bad MENTHORQ_*
-    setting (ValueError) or a construction error never stops the collector.
-    The error is logged at ERROR and the owner gets ONE best-effort Telegram
-    notice (``format_monitor_not_started_notice``, secrets scrubbed) when
-    the Telegram credentials exist; a failing notice is logged and
-    swallowed, and nothing is sent without credentials.
+    setting (ValueError) or a construction error never stops the collector,
+    and neither do missing monitor tables (migration 031 or 032 not
+    applied; ``missing_monitor_tables``, checked once here so the hourly
+    job does not raise every hour). In each case the monitor is NOT
+    started: the cause is logged at ERROR and the owner gets ONE
+    best-effort Telegram notice (``format_monitor_not_started_notice``,
+    secrets scrubbed) when the Telegram credentials exist; a failing notice
+    is logged and swallowed, and nothing is sent without credentials.
 
     Args:
         repository: Database access shared with the collector.
@@ -237,21 +281,27 @@ def start_menthorq_monitor_job(
             from the environment) when omitted.
 
     Returns:
-        The job, or None when the monitor is off or could not be built.
+        The job, or None when the monitor is off or could not be started.
     """
     try:
-        return build_menthorq_monitor_job(repository=repository, telegram=telegram)
+        job = build_menthorq_monitor_job(repository=repository, telegram=telegram)
     except Exception as error:
         logger.exception("MenthorQ monitor NOT started (configuration or construction error); "
                          "the collector keeps running")
         try:
             telegram = telegram or TelegramAlertService()
-            if not telegram.has_credentials:
-                logger.warning("MenthorQ monitor: no Telegram credentials; not-started notice NOT sent")
-                return None
-            notice = format_monitor_not_started_notice(scrub_secrets(str(error), telegram))
-            if not telegram.send(notice, parse_mode=TELEGRAM_PARSE_MODE):
-                logger.warning("MenthorQ monitor: not-started notice NOT delivered (Telegram send failed)")
+            reason = scrub_secrets(str(error), telegram)
         except Exception:
             logger.exception("MenthorQ monitor: the not-started notice itself failed")
+            return None
+        _send_not_started_notice(telegram, reason)
         return None
+    if job is None:
+        return None
+    missing = missing_monitor_tables(job.monitor_service.repository)
+    if missing:
+        reason = missing_tables_text(missing)
+        logger.error("MenthorQ monitor NOT started: %s; the collector keeps running", reason)
+        _send_not_started_notice(job.delivery_service.telegram, reason)
+        return None
+    return job
