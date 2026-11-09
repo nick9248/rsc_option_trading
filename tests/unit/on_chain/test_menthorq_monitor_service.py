@@ -433,7 +433,7 @@ def test_replayed_outage_record_is_no_reference_and_exactly_the_limit_is_kept():
     service = _service(FakeMonitorRepository(), loader)
     latest = service.compute_live_record(AS_OF)
     previous, day_ago, week_ago = service.build_replayed_comparisons(latest)
-    assert previous.reference is not None
+    assert previous.reference is not None and previous.reference.snapshot_captured_at_utc is not None
     assert previous.reference.as_of_utc - previous.reference.snapshot_captured_at_utc == timedelta(minutes=120)
     assert day_ago.reference is None
     assert week_ago.reference is not None
