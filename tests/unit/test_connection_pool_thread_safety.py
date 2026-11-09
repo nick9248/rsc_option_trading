@@ -98,8 +98,10 @@ def test_default_maximum_is_20_connections_and_minimum_1(monkeypatch):
     connection_pool = ConnectionPool()
     try:
         connection_pool.initialize(DatabaseConfig())
-        assert connection_pool._pool.maxconn == 20
-        assert connection_pool._pool.minconn == 1
+        psycopg2_pool = connection_pool._pool
+        assert psycopg2_pool is not None
+        assert psycopg2_pool.maxconn == 20
+        assert psycopg2_pool.minconn == 1
     finally:
         connection_pool.close_all()
 

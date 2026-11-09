@@ -124,7 +124,7 @@ def test_level_change_from_a_settled_expiry_is_attributed_to_it(rows):
 def test_hvl_at_the_chain_edge_is_not_reported_like_the_monitor():
     # Without the 75000 padding row 80000 is the LOWEST strike: the monitor's
     # rule (all_expiries_levels) leaves HVL and the regime None; the walls stay.
-    service = MenthorqLevelsBacktestService(FakeRepository(CHAIN_WITHOUT_EDGE_PADDING))
+    service = MenthorqLevelsBacktestService(cast(DatabaseRepository, FakeRepository(CHAIN_WITHOUT_EDGE_PADDING)))
     edge_rows = service.build_daily_rows("BTC", STALE_DAY, LAST_DAY, universes=("all",))
     before, after = edge_rows[2], edge_rows[3]
     assert before["all_hvl"] is None and after["all_hvl"] is None
