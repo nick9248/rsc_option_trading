@@ -380,9 +380,40 @@ class TestDailyCloseInputAge:
 def test_storing_the_same_run_twice_keeps_one_row():
     repository = FakeMonitorRepository()
     service = _service(repository)
-    assert service.run_live(AS_OF).record_id == 1
-    assert service.run_live(AS_OF + timedelta(seconds=20)).record_id is None   # same minute
+    first = service.run_live(AS_OF)
+    assert first.record_id == 1
+    # Same minute: the save keeps the row, and run_live returns that stored row.
+    assert service.run_live(AS_OF + timedelta(seconds=20)) is first
     assert len(repository.records) == 1
+
+
+def test_a_failing_recompute_of_a_stored_computed_live_row_returns_the_stored_row():
+    # A computed live row of 09:10 exists (id 1, HVL 95,000); a restart recomputes the same
+    # minute with every input missing. The save keeps the computed row (returns None), so
+    # run_live must hand the STORED row to the alerts, not the not-computed copy.
+    stored = make_record(as_of=AS_OF, record_id=1)
+    repository = FakeMonitorRepository([stored])
+    returned = _service(repository, FakeInputLoader(available=False)).run_live(AS_OF)
+    assert returned is stored
+    assert returned.has_levels and returned.hvl == 95000.0 and returned.record_id == 1
+    assert repository.records == [stored]
+
+
+def test_the_stored_row_returned_after_a_failing_recompute_sends_no_data_stale_alert():
+    from coding.service.on_chain.menthorq_monitor.brief_delivery_service import MenthorqBriefDeliveryService
+    from coding.service.on_chain.menthorq_monitor.monitor_settings import MenthorqMonitorSettings
+    from tests.fakes.fake_menthorq_monitor import FakeTelegram
+
+    repository = FakeMonitorRepository([make_record(as_of=AS_OF, record_id=1)])
+    service = MenthorqMonitorService(repository=repository, settings=MenthorqMonitorSettings(),
+                                     input_loader=FakeInputLoader(available=False),
+                                     clock=lambda: AS_OF + timedelta(seconds=3))
+    telegram = FakeTelegram()
+    delivery = MenthorqBriefDeliveryService(service, telegram, clock=lambda: AS_OF)
+    # The stored row's snapshot is 20 min old at 09:10: not stale, and no earlier record,
+    # so no movement rule fires either.
+    assert delivery.send_urgent_alerts(service.run_live(AS_OF), AS_OF) == []
+    assert telegram.sent == []
 
 
 def test_reference_lookup_offsets_and_tolerances():

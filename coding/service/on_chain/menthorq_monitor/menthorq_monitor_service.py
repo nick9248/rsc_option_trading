@@ -178,8 +178,24 @@ class MenthorqMonitorService:
         return record
 
     def run_live(self, now: datetime) -> MenthorqLevelRecord:
-        """Compute and store the live record of ``now``."""
-        return self.store(self.compute_live_record(now))
+        """
+        Compute and store the live record of ``now``. When the save kept an
+        existing row of the same run (``record_id`` None, e.g. a computed row
+        and a not-computed recompute after a restart), the STORED row is
+        returned, not the fresh copy, so the alerts judge what is stored
+        (a not-computed copy would raise a false data_stale alert).
+        """
+        record = self.store(self.compute_live_record(now))
+        if record.record_id is not None:
+            return record
+        stored = self.repository.get_menthorq_level_snapshot(
+            record.currency, record.mode, record.expiry_universe, record.gamma_underlying,
+            record.as_of_utc)
+        if stored is None:
+            logger.warning("MenthorQ live record as of %s was not saved and no stored row was found; "
+                           "the fresh record is used", record.as_of_utc.isoformat())
+            return record
+        return stored
 
     def _daily_close_retry_is_due(
         self, utc_date: date, stored_row: MenthorqLevelRecord, newest_capture: Optional[datetime]
