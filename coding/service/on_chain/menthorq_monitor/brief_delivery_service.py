@@ -241,12 +241,26 @@ class MenthorqBriefDeliveryService:
             now=now,
         )
 
-    def last_delivery(self, key: str) -> Optional[datetime]:
+    def last_delivery(self, key: str, tolerate_repository_errors: bool = False) -> Optional[datetime]:
         """
         When ``key`` was last delivered: the newer of the stored delivery row
         and a delivery whose row could not be saved (kept in memory).
+
+        Args:
+            key: Alert or delivery key.
+            tolerate_repository_errors: False (default): a delivery-log read
+                error is raised. True: it is logged and only the in-memory
+                delivery counts (the monitor-error alert, whose cause is
+                often that very database error).
         """
-        stored = self.repository.get_last_menthorq_alert_delivery(self.settings.currency, key)
+        try:
+            stored = self.repository.get_last_menthorq_alert_delivery(self.settings.currency, key)
+        except Exception:
+            if not tolerate_repository_errors:
+                raise
+            logger.exception("MenthorQ monitor: delivery log not readable; %s cooldown from this "
+                             "process's memory only", key)
+            stored = None
         remembered = self._unsaved_deliveries.get(key)
         known = [instant for instant in (stored, remembered) if instant is not None]
         return max(known) if known else None
@@ -359,18 +373,9 @@ class MenthorqBriefDeliveryService:
         """
         try:
             error_text = scrub_secrets(str(error), self.telegram)
-            try:
-                stored = self.repository.get_last_menthorq_alert_delivery(
-                    self.settings.currency, ALERT_KEY_MONITOR_ERROR)
-            except Exception:
-                logger.exception("MenthorQ monitor: delivery log not readable; monitor-error cooldown "
-                                 "from this process's memory only")
-                stored = None
-            remembered = self._unsaved_deliveries.get(ALERT_KEY_MONITOR_ERROR)
-            known = [instant for instant in (stored, remembered) if instant is not None]
+            last_delivered = self.last_delivery(ALERT_KEY_MONITOR_ERROR, tolerate_repository_errors=True)
             alert = UrgentAlert(key=ALERT_KEY_MONITOR_ERROR, title="Monitor error", comparison_label="latest")
-            if not apply_cooldown([alert], {alert.key: max(known) if known else None}, now,
-                                  self.thresholds.cooldown):
+            if not apply_cooldown([alert], {alert.key: last_delivered}, now, self.thresholds.cooldown):
                 logger.info("MenthorQ monitor: monitor-error alert on cooldown (not repeated)")
                 return False
             message = format_monitor_error_alert(type(error).__name__, error_text)

@@ -7,6 +7,8 @@ schedule and catch-up, on-demand brief.
 from dataclasses import replace
 from datetime import datetime, time, timedelta, timezone
 
+import pytest
+
 from coding.core.analytics.menthorq_monitor.alert_rules import (
     ALERT_KEY_DATA_STALE,
     URGENT_ALERT_KEYS,
@@ -649,7 +651,11 @@ class TestMonitorErrorAlert:
         assert service.send_monitor_error_alert(
             RuntimeError("database down"), FRIDAY_0910 + timedelta(hours=1)) is False
         assert len(telegram.sent) == 1
-        assert "monitor-error cooldown from this process's memory only" in caplog.text
+        assert "monitor_error cooldown from this process's memory only" in caplog.text
+        # The one in-memory rule: the strict mode (every other caller) still raises.
+        with pytest.raises(RuntimeError, match="database down"):
+            service.last_delivery("monitor_error")
+        assert service.last_delivery("monitor_error", tolerate_repository_errors=True) == FRIDAY_0910
 
     def test_a_raising_alert_path_is_swallowed_and_logged(self, monkeypatch, caplog):
         service, _, telegram, _ = _delivery([])
