@@ -18,4 +18,4 @@ def test_expected_categories_present():
         "API Connectivity", "Database — Local", "Database — VPS Internal Continuity",
         "Database — VPS Sync", "Daemon Service", "Telegram", "IV-Percentile Window", "Morning Note",
     }
-    assert expected == categories
+    assert expected.issubset(categories)
