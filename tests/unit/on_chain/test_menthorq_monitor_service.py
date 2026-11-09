@@ -432,3 +432,55 @@ def test_store_logs_caveats_of_a_computed_record_and_reasons_of_a_not_computed_o
     with caplog.at_level("INFO"):
         service.store(make_record(as_of=BASE_TIME + timedelta(hours=2), not_computed_reasons=[]))
     assert "caveats" not in caplog.text and "not computed" not in caplog.text
+
+
+class TestOutdatedSnapshotRecordsAreNoReference:
+    """
+    A live record built during a collector outage (its snapshot hours older
+    than its as_of) is stored but never used as a reference or baseline.
+    Default stale limit: 120 min.
+    """
+
+    @staticmethod
+    def _record(hours_back: float, snapshot_age: timedelta):
+        as_of = AS_OF - timedelta(hours=hours_back)
+        return make_record(as_of=as_of, snapshot_captured_at_utc=as_of - snapshot_age)
+
+    def test_an_outage_record_is_skipped_for_the_next_older_normal_one(self):
+        latest = make_record(as_of=AS_OF)
+        outage_previous = self._record(1, timedelta(hours=5))          # 300 min > 120 min
+        normal_before = self._record(2, timedelta(minutes=20))
+        outage_day = self._record(24, timedelta(hours=3))                # 180 min > 120 min
+        normal_day = self._record(26, timedelta(minutes=20))
+        repository = FakeMonitorRepository([latest, outage_previous, normal_before, outage_day, normal_day])
+        service = _service(repository)
+
+        assert service.find_reference(latest, "previous") is normal_before
+        assert service.find_reference(latest, "24h") is normal_day
+        # Stored, only not used: the outage records are still in the table.
+        assert outage_previous in repository.records and outage_day in repository.records
+
+    def test_only_outage_records_in_the_window_give_no_reference(self):
+        latest = make_record(as_of=AS_OF)
+        repository = FakeMonitorRepository([latest, self._record(24, timedelta(hours=3))])
+        assert _service(repository).find_reference(latest, "24h") is None
+
+    def test_exactly_the_limit_is_kept_and_one_minute_more_is_skipped(self):
+        latest = make_record(as_of=AS_OF)
+        at_limit = self._record(1, timedelta(minutes=120))
+        over_limit = self._record(24, timedelta(minutes=121))
+        without_snapshot_time = self._record(25, timedelta(0))
+        without_snapshot_time.snapshot_captured_at_utc = None
+        repository = FakeMonitorRepository([latest, at_limit, over_limit, without_snapshot_time])
+        service = _service(repository)
+
+        assert service.find_reference(latest, "previous") is at_limit
+        assert service.find_reference(latest, "24h") is without_snapshot_time   # kept as before
+
+    def test_event_baseline_records_leave_outage_records_out(self):
+        latest = make_record(as_of=AS_OF)
+        normal_early = self._record(25, timedelta(minutes=20))
+        outage = self._record(12, timedelta(hours=4))
+        normal_late = self._record(1, timedelta(minutes=120))   # boundary: kept
+        repository = FakeMonitorRepository([latest, normal_early, outage, normal_late])
+        assert _service(repository).event_baseline_records(latest) == [normal_early, normal_late]

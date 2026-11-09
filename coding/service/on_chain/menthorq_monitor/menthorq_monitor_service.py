@@ -267,6 +267,20 @@ class MenthorqMonitorService:
             raise latest_day_error
         return stored
 
+    def is_usable_reference(self, record: MenthorqLevelRecord) -> bool:
+        """
+        Whether a stored computed record may serve as a comparison reference
+        or event-baseline record. A record whose own snapshot was older than
+        ``settings.stale_snapshot_limit`` before its ``as_of_utc`` (a live
+        run during a collector outage) never described a real hourly state,
+        so it is not used (it is still stored: the data-stale alert and
+        /status need it). Exactly the limit is still usable; a record
+        without a snapshot time is kept, as before.
+        """
+        if record.snapshot_captured_at_utc is None:
+            return True
+        return record.as_of_utc - record.snapshot_captured_at_utc <= self.settings.stale_snapshot_limit
+
     def find_reference(
         self, latest: MenthorqLevelRecord, label: str
     ) -> Optional[MenthorqLevelRecord]:
@@ -274,27 +288,40 @@ class MenthorqMonitorService:
         The stored record ``label`` ("previous", "24h", "7d") refers to:
         the newest computed record of the same currency, mode and settings
         at or before ``latest.as_of_utc`` minus the offset (strictly before
-        for "previous"), within ``COMPARISON_TOLERANCE``.
+        for "previous"), within ``COMPARISON_TOLERANCE``, skipping records
+        built from an outdated snapshot (``is_usable_reference``).
         """
         target = latest.as_of_utc - COMPARISON_OFFSET[label]
-        return self.repository.get_menthorq_level_snapshot_at_or_before(
-            latest.currency, latest.mode, latest.expiry_universe, latest.gamma_underlying,
-            target, earliest=target - COMPARISON_TOLERANCE[label],
-            strictly_before=(label == COMPARISON_PREVIOUS),
-        )
+        earliest = target - COMPARISON_TOLERANCE[label]
+        instant, strictly_before = target, label == COMPARISON_PREVIOUS
+        while True:
+            candidate = self.repository.get_menthorq_level_snapshot_at_or_before(
+                latest.currency, latest.mode, latest.expiry_universe, latest.gamma_underlying,
+                instant, earliest=earliest, strictly_before=strictly_before,
+            )
+            if candidate is None or self.is_usable_reference(candidate):
+                return candidate
+            logger.info("MenthorQ %s reference at %s skipped: built from a snapshot captured %s",
+                        label, candidate.as_of_utc.isoformat(),
+                        candidate.snapshot_captured_at_utc.isoformat()
+                        if candidate.snapshot_captured_at_utc else "never")
+            # as_of_utc falls strictly with each step and stops at ``earliest``.
+            instant, strictly_before = candidate.as_of_utc, True
 
     def event_baseline_records(self, latest: MenthorqLevelRecord) -> List[MenthorqLevelRecord]:
         """
         The stored computed records the 24 h event baseline needs
         (``event_baseline``): same currency, mode and settings, strictly
         before ``latest``, back to the oldest instant the 24 h comparison
-        accepts (24 h plus its tolerance), oldest first.
+        accepts (24 h plus its tolerance), oldest first, without records
+        built from an outdated snapshot (``is_usable_reference``).
         """
         earliest = (latest.as_of_utc - COMPARISON_OFFSET[COMPARISON_ONE_DAY]
                     - COMPARISON_TOLERANCE[COMPARISON_ONE_DAY])
-        return self.repository.get_menthorq_level_snapshots_between(
+        records = self.repository.get_menthorq_level_snapshots_between(
             latest.currency, latest.mode, latest.expiry_universe, latest.gamma_underlying,
             earliest, latest.as_of_utc)
+        return [record for record in records if self.is_usable_reference(record)]
 
     def build_comparisons(self, latest: MenthorqLevelRecord) -> List[RecordComparison]:
         """Latest vs previous run, 24 h ago and 7 days ago (stored records)."""
