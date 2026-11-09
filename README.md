@@ -13,7 +13,7 @@ Automated crypto options trading for BTC and ETH on Deribit. The long-term goal 
 | **Morning note** | Turns the on-chain analysis into a scored executive summary (`synthesis_logic.md`). |
 | **Scanners and forward tests** | Straddle, iron condor and butterfly scanners; forward-test harnesses that record predictions and resolve them at settlement. |
 | **Health checks** | One shared check registry, run locally (`scripts/validate_system.py`) and on the VPS (`scripts/check_vps_health.py`, hourly cron). |
-| **Desktop GUI** | PySide6 app: API connection, snapshot, on-chain analysis, database sync, system health and automation tabs. |
+| **Desktop GUI** | PySide6 app: API connection, snapshot, on-chain analysis, database sync, system health and automation tabs, plus the MenthorQ charts and MenthorQ monitor tabs. |
 
 No code in this repo places real orders.
 
