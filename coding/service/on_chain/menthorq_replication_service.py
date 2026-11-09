@@ -350,12 +350,15 @@ class MenthorqReplicationService:
                 into ``nested_date_folder(output_directory, menthorq_date)``.
 
         Raises:
-            ValueError: when 23:59 UTC of ``menthorq_date`` is after ``now``
-                (the day is not complete, so there is no daily close yet).
+            ValueError: when ``menthorq_date`` is after
+                ``last_complete_utc_day(now)`` (the UTC day has not ended,
+                so there is no daily close yet; 23:59:30 UTC of the date is
+                still rejected, 00:00 UTC of the next day is allowed), or
+                when ``now`` is naive.
         """
         now = now or datetime.now(timezone.utc)
         as_of, open_interest_as_of = menthorq_daily_close_instants(menthorq_date)
-        if as_of > now:
+        if menthorq_date > last_complete_utc_day(now):
             raise ValueError(
                 f"{menthorq_date.isoformat()} has not ended at {now.isoformat()}: "
                 f"no daily close yet (newest complete UTC day: "

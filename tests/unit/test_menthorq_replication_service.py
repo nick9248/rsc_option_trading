@@ -186,6 +186,27 @@ def test_daily_close_of_a_day_that_has_not_ended_is_rejected(tmp_path):
             now=datetime(2026, 11, 7, 12, 0, tzinfo=timezone.utc))
 
 
+@pytest.mark.parametrize("now", [
+    datetime(2026, 11, 6, 23, 59, 0, tzinfo=timezone.utc),    # the 23:59 instant itself
+    datetime(2026, 11, 6, 23, 59, 30, tzinfo=timezone.utc),   # after 23:59, day still running
+    datetime(2026, 11, 6, 23, 59, 59, 999999, tzinfo=timezone.utc),
+])
+def test_daily_close_before_the_utc_day_ended_is_rejected(tmp_path, now):
+    """last_complete_utc_day(6 Nov 23:59:xx) = 5 Nov < 6 Nov: rejected (the old guard
+    compared 23:59:00 with now and let these through)."""
+    service = _service(RecordingRepository(captured_at=datetime(2026, 12, 1, tzinfo=timezone.utc)))
+    with pytest.raises(ValueError, match=r"2026-11-06 has not ended .*\(newest complete UTC day: 2026-11-05"):
+        service.run_menthorq_daily_close("BTC", date(2026, 11, 6), tmp_path, now=now)
+
+
+def test_daily_close_at_midnight_of_the_next_day_is_allowed(tmp_path):
+    """last_complete_utc_day(7 Nov 00:00:00) = 6 Nov: the 6 Nov close may be replayed."""
+    repository = RecordingRepository(captured_at=datetime(2026, 12, 1, tzinfo=timezone.utc))
+    output = _service(repository).run_menthorq_daily_close(
+        "BTC", date(2026, 11, 6), tmp_path, now=datetime(2026, 11, 7, 0, 0, 0, tzinfo=timezone.utc))
+    assert output["run_mode"] == "menthorq_daily_close"
+
+
 def test_live_uses_the_newest_snapshot_capture_time_as_as_of(tmp_path):
     repository = RecordingRepository()
     now = datetime(2026, 11, 7, 10, 0, tzinfo=timezone.utc)
