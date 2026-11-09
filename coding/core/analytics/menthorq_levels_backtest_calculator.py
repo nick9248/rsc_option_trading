@@ -21,6 +21,7 @@ import math
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
+from coding.core.analytics.menthorq_monitor.level_record import all_expiries_levels
 from coding.core.analytics.menthorq_replication_calculator import (
     GEX_PER_ONE_PERCENT_MOVE,
     LEVEL_NAMES,
@@ -58,7 +59,9 @@ def summarize_replication(
          "total_net_gex_usd_per_one_percent", "total_net_gex_gamma_open_interest_spot",
          "panels" {panel: {"expiration", call_resistance, put_support, hvl}},
          "expirations_not_computed", "instruments_missing_gamma"}.
-        Values the replication could not compute stay None.
+        Values the replication could not compute stay None; the headline
+        HVL is None when it sits at the chain edge (``all_expiries_levels``,
+        the same rule as the monitor record). Panel levels are unchanged.
     """
     spot = replication["settings"]["index_price"]
     exposure = replication["iv_times_open_interest"]["all_expiries_exposure"]
@@ -72,7 +75,8 @@ def summarize_replication(
         panels[panel_name] = {"expiration": expiration, **panel_levels}
     return {
         "expirations": list(replication["settings"]["expirations"]),
-        "levels": select_drawn_levels(replication["iv_times_open_interest"]["levels"]),
+        # HVL at the chain edge -> None, the monitor's rule (``all_expiries_levels``).
+        "levels": all_expiries_levels(replication)[0],
         "total_net_gex_usd_per_one_percent": total_usd,
         "total_net_gex_gamma_open_interest_spot": (
             total_usd / (spot * GEX_PER_ONE_PERCENT_MOVE)

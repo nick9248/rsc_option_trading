@@ -29,6 +29,7 @@ from coding.core.analytics.menthorq_levels_backtest_calculator import (
     state_entries,
     summarize_replication,
 )
+from coding.core.analytics.menthorq_monitor.level_record import all_expiries_levels
 
 
 def test_gamma_regime_compares_spot_with_hvl():
@@ -146,17 +147,20 @@ def test_alerts_per_month():
     assert per_month == pytest.approx(2 / (61 / 30.44))
 
 
-def test_summarize_replication_converts_units_and_keeps_missing_panels_none():
-    replication = {
+def _summary_replication(hvl: float) -> dict:
+    """A replication over strikes 48,000 / 49,000 / 52,000 with the given HVL."""
+    return {
         "settings": {"index_price": 50000.0, "expirations": ["27NOV26"]},
         "iv_times_open_interest": {
             "levels": {
                 "call_resistance": {"net_gex_argmax_positive": 52000.0},
                 "put_support": {"net_gex_argmin_negative": 48000.0},
-                "hvl": {"cumulative_net_gex_argmin": 49000.0},
+                "hvl": {"cumulative_net_gex_argmin": hvl},
             },
             # 1000 USD per 1% move / (50000 * 0.01) = 2.0 in gamma * OI * S
-            "all_expiries_exposure": {"total_net_gex": 1000.0, "instruments_missing_gamma": 3},
+            "all_expiries_exposure": {"total_net_gex": 1000.0, "instruments_missing_gamma": 3,
+                                      "strikes": [{"strike": 48000.0}, {"strike": 49000.0},
+                                                  {"strike": 52000.0}]},
         },
         "gex_by_expiration": {"27NOV26": {"total_net_gex": None, "levels": {
             "call_resistance": {"net_gex_argmax_positive": None},
@@ -165,12 +169,27 @@ def test_summarize_replication_converts_units_and_keeps_missing_panels_none():
         "panels": {"absolute_net_gex": {"first_expiration": None, "next_expiration": None,
                                         "highest_gex": None, "second_highest_gex": None}},
     }
-    summary = summarize_replication(replication)
+
+
+def test_summarize_replication_converts_units_and_keeps_missing_panels_none():
+    summary = summarize_replication(_summary_replication(hvl=49000.0))
+    # 49,000 is an inner strike: HVL kept, the same numbers as before the edge rule.
     assert summary["levels"] == {"call_resistance": 52000.0, "put_support": 48000.0, "hvl": 49000.0}
     assert summary["total_net_gex_gamma_open_interest_spot"] == pytest.approx(2.0)
     assert summary["expirations_not_computed"] == ["27NOV26"]
     assert summary["panels"]["first_expiration"] == {
         "expiration": None, "call_resistance": None, "put_support": None, "hvl": None}
+
+
+@pytest.mark.parametrize("edge_strike", [48000.0, 52000.0])
+def test_summarize_replication_drops_hvl_at_the_chain_edge_like_the_monitor(edge_strike):
+    replication = _summary_replication(hvl=edge_strike)
+    summary = summarize_replication(replication)
+    # lowest (48,000) or highest (52,000) strike -> no HVL; the other numbers unchanged
+    assert summary["levels"] == {"call_resistance": 52000.0, "put_support": 48000.0, "hvl": None}
+    assert summary["total_net_gex_gamma_open_interest_spot"] == pytest.approx(2.0)
+    levels, hvl_at_chain_edge = all_expiries_levels(replication)
+    assert levels == summary["levels"] and hvl_at_chain_edge is True
 
 
 def test_signed_median_keeps_the_sign_unlike_the_absolute_median():

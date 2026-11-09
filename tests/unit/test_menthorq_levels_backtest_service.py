@@ -37,23 +37,29 @@ def chain_row(name, expiration, strike, option_type, open_interest):
 # 30OCT26 settles 2026-10-30 08:00 UTC. Its large 81000 call is the Call
 # Resistance on 29 Oct; after it settles only 27NOV26 is left (call 85000,
 # put 80000), so the Call Resistance becomes 85000 and the HVL stays 80000.
-CHAIN = [
+# The 75000 call has no open interest (net GEX 0): it keeps the cumulative
+# net GEX minimum (80000) off the chain edge.
+CHAIN_WITHOUT_EDGE_PADDING = [
     chain_row("A", "30OCT26", 81000.0, "C", 1000.0),
     chain_row("B", "27NOV26", 85000.0, "C", 100.0),
     chain_row("C", "27NOV26", 80000.0, "P", 100.0),
 ]
+CHAIN = CHAIN_WITHOUT_EDGE_PADDING + [chain_row("D", "27NOV26", 75000.0, "C", 0.0)]
 
 
 class FakeRepository:
-    """Serves CHAIN with the capture times described above; index price until ``data_end``."""
+    """Serves ``chain`` with the capture times described above; index price until ``data_end``."""
 
     data_end = datetime(2026, 10, 30, 23, 59, tzinfo=timezone.utc) + timedelta(hours=30)
 
+    def __init__(self, chain=None):
+        self.chain = CHAIN if chain is None else chain
+
     def get_option_chain_snapshot_at_or_before(self, currency, as_of):
         if as_of >= FRESH_FROM:
-            return as_of - timedelta(minutes=10), [dict(row) for row in CHAIN]
+            return as_of - timedelta(minutes=10), [dict(row) for row in self.chain]
         if as_of >= OLD_CAPTURE:
-            return OLD_CAPTURE, [dict(row) for row in CHAIN]
+            return OLD_CAPTURE, [dict(row) for row in self.chain]
         return None
 
     def get_index_price_at_or_before(self, currency, as_of):
@@ -113,6 +119,19 @@ def test_level_change_from_a_settled_expiry_is_attributed_to_it(rows):
     # the day after a not-computed day has no previous day to compare with
     assert before["all_call_resistance_change_attribution"] is None
     assert before["all_gamma_regime"] == "spot_at_hvl"
+
+
+def test_hvl_at_the_chain_edge_is_not_reported_like_the_monitor():
+    # Without the 75000 padding row 80000 is the LOWEST strike: the monitor's
+    # rule (all_expiries_levels) leaves HVL and the regime None; the walls stay.
+    service = MenthorqLevelsBacktestService(FakeRepository(CHAIN_WITHOUT_EDGE_PADDING))
+    edge_rows = service.build_daily_rows("BTC", STALE_DAY, LAST_DAY, universes=("all",))
+    before, after = edge_rows[2], edge_rows[3]
+    assert before["all_hvl"] is None and after["all_hvl"] is None
+    assert before["all_gamma_regime"] is None
+    assert before["all_levels_not_computed"] == "hvl"
+    assert before["all_call_resistance"] == 81000.0 and after["all_call_resistance"] == 85000.0
+    assert before["all_put_support"] == 80000.0
 
 
 def test_forward_outcomes_stop_at_the_end_of_the_data(rows):

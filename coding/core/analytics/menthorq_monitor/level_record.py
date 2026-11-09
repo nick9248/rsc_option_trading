@@ -16,7 +16,7 @@ Pure: no database, network or plotting imports.
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from coding.core.analytics.menthorq_replication_calculator import (
     IV_SOURCE_MISSING,
@@ -116,6 +116,30 @@ def classify_gamma_regime(spot: Optional[float], hvl: Optional[float]) -> Option
     return GAMMA_REGIME_AT_HVL
 
 
+def all_expiries_levels(replication: Dict[str, Any]) -> Tuple[Dict[str, Optional[float]], bool]:
+    """
+    Call Resistance, Put Support and HVL of the all-expiry curve of one
+    ``replicate_menthorq`` result, with HVL None when it sits at the lowest
+    or highest strike of the chain (``HVL_AT_CHAIN_EDGE_REASON``). The one
+    rule for the monitor record and the backtest rows, so thresholds taken
+    from the backtest describe the same HVL as the live alerts.
+
+    Returns:
+        (levels, hvl_at_chain_edge): ``levels`` maps each of
+        ``LEVEL_NAMES`` to a strike or None; ``hvl_at_chain_edge`` is True
+        when HVL was dropped by the edge rule.
+    """
+    levels = select_drawn_levels(replication["iv_times_open_interest"]["levels"])
+    # The cumulative net GEX runs over these strikes (the all-expiry set).
+    chain_strikes = [row["strike"] for row in
+                     replication["iv_times_open_interest"]["all_expiries_exposure"]["strikes"]]
+    hvl_at_chain_edge = (levels["hvl"] is not None and bool(chain_strikes)
+                         and levels["hvl"] in (min(chain_strikes), max(chain_strikes)))
+    if hvl_at_chain_edge:
+        levels = {**levels, "hvl": None}
+    return levels, hvl_at_chain_edge
+
+
 def _not_computed_reasons(
     levels: Dict[str, Optional[float]],
     total_net_gex: Optional[float],
@@ -179,15 +203,8 @@ def build_level_record(
     if mode not in MODES:
         raise ValueError(f"Unknown mode {mode!r}")
     settings = replication["settings"]
-    levels = select_drawn_levels(replication["iv_times_open_interest"]["levels"])
-    all_expiries_exposure = replication["iv_times_open_interest"]["all_expiries_exposure"]
-    total_net_gex = all_expiries_exposure["total_net_gex"]
-    # The cumulative net GEX runs over these strikes (the all-expiry set).
-    chain_strikes = [row["strike"] for row in all_expiries_exposure["strikes"]]
-    hvl_at_chain_edge = (levels["hvl"] is not None and bool(chain_strikes)
-                         and levels["hvl"] in (min(chain_strikes), max(chain_strikes)))
-    if hvl_at_chain_edge:
-        levels = {**levels, "hvl": None}
+    levels, hvl_at_chain_edge = all_expiries_levels(replication)
+    total_net_gex = replication["iv_times_open_interest"]["all_expiries_exposure"]["total_net_gex"]
     panels = replication["panels"][PANEL_RANKING_ABSOLUTE_NET]
     expiring_percent = replication["gex_expiring_percent"]
 
