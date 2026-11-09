@@ -1103,13 +1103,13 @@ def fit_scale_factor(
     sum_ours_squared = sum(value * value for value in ours)
     if sum_ours_squared == 0:
         return None
-    scale = sum(o * t for o, t in zip(ours, theirs)) / sum_ours_squared
-    residuals = [t - scale * o for o, t in zip(ours, theirs)]
+    scale = sum(our_value * their_value for our_value, their_value in zip(ours, theirs)) / sum_ours_squared
+    residuals = [their_value - scale * our_value for our_value, their_value in zip(ours, theirs)]
     mean_theirs = sum(theirs) / len(theirs)
-    total_variance = sum((t - mean_theirs) ** 2 for t in theirs)
+    total_variance = sum((their_value - mean_theirs) ** 2 for their_value in theirs)
     residual_variance = sum(residual * residual for residual in residuals)
     relative_errors = sorted(
-        abs(residual) / abs(t) for residual, t in zip(residuals, theirs) if t != 0
+        abs(residual) / abs(their_value) for residual, their_value in zip(residuals, theirs) if their_value != 0
     )
     median_relative = (
         relative_errors[len(relative_errors) // 2] if relative_errors else None

@@ -151,9 +151,10 @@ def _correlation_test(
     name: str, feature: Sequence[Optional[float]], outcome: Sequence[Optional[float]],
     block_length: int, resample_count: int, seed: int,
 ) -> Dict[str, Any]:
-    pairs = [(x, y) for x, y in zip(feature, outcome) if x is not None and y is not None]
-    features = [x for x, _ in pairs]
-    outcomes = [y for _, y in pairs]
+    pairs = [(feature_value, outcome_value) for feature_value, outcome_value in zip(feature, outcome)
+             if feature_value is not None and outcome_value is not None]
+    features = [feature_value for feature_value, _ in pairs]
+    outcomes = [outcome_value for _, outcome_value in pairs]
     interval = moving_block_bootstrap_interval(
         len(pairs),
         lambda positions: spearman_rank_correlation(select(features, positions), select(outcomes, positions)),

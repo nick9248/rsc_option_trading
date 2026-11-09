@@ -69,8 +69,8 @@ def group_mean_difference(
     mean(values where in_group is True) - mean(values where it is False);
     rows with a missing value or group are ignored. None when a group is empty.
     """
-    group_true = [v for v, g in zip(values, in_group) if _is_present(v) and g is True]
-    group_false = [v for v, g in zip(values, in_group) if _is_present(v) and g is False]
+    group_true = [value for value, member in zip(values, in_group) if _is_present(value) and member is True]
+    group_false = [value for value, member in zip(values, in_group) if _is_present(value) and member is False]
     if not group_true or not group_false:
         return None
     return sum(group_true) / len(group_true) - sum(group_false) / len(group_false)

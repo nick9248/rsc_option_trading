@@ -108,8 +108,8 @@ class TelegramAlertService:
                 )
                 return False
             return True
-        except Exception as exc:
-            logger.warning("TelegramAlertService: send failed: %s", self._without_token(exc))
+        except Exception as error:
+            logger.warning("TelegramAlertService: send failed: %s", self._without_token(error))
             return False
 
     def set_my_commands(self, commands: Sequence[Tuple[str, str]]) -> bool:
@@ -136,8 +136,8 @@ class TelegramAlertService:
                                response.status_code, response.text)
                 return False
             return True
-        except Exception as exc:
-            logger.warning("TelegramAlertService: setMyCommands failed: %s", self._without_token(exc))
+        except Exception as error:
+            logger.warning("TelegramAlertService: setMyCommands failed: %s", self._without_token(error))
             return False
 
     def get_bot_username(self) -> Optional[str]:
@@ -168,8 +168,8 @@ class TelegramAlertService:
                 return None
             self._bot_username = username
             return username
-        except Exception as exc:
-            logger.warning("TelegramAlertService: getMe failed: %s", self._without_token(exc))
+        except Exception as error:
+            logger.warning("TelegramAlertService: getMe failed: %s", self._without_token(error))
             return None
 
     def get_updates(self, offset: Optional[int], timeout_seconds: int) -> Optional[List[Dict[str, Any]]]:
@@ -208,6 +208,6 @@ class TelegramAlertService:
                 logger.warning("TelegramAlertService: unexpected getUpdates body: %s", body)
                 return None
             return body["result"]
-        except Exception as exc:
-            logger.warning("TelegramAlertService: getUpdates failed: %s", self._without_token(exc))
+        except Exception as error:
+            logger.warning("TelegramAlertService: getUpdates failed: %s", self._without_token(error))
             return None

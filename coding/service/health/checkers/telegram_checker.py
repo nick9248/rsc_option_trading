@@ -36,11 +36,11 @@ class TelegramConfigCheck(HealthCheck):
 
         try:
             response = self._requests.get(f"https://api.telegram.org/bot{token}/getMe", timeout=10)
-        except Exception as exc:
+        except Exception as error:
             return [CheckResult(
                 name="Telegram config", status=CheckStatus.FAIL,
                 # requests puts the URL, which contains the token, in its error text.
-                message=f"Telegram API unreachable: {str(exc).replace(token, '<bot token>')}",
+                message=f"Telegram API unreachable: {str(error).replace(token, '<bot token>')}",
             )]
 
         if not response.ok:

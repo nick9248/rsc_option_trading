@@ -177,13 +177,13 @@ def _render_iv_times_open_interest(
     call_values = [by_strike[strike]["call"] for strike in strikes]
     put_values = [by_strike[strike]["put"] for strike in strikes]
     axes.barh(
-        [s for s, v in zip(strikes, call_values) if v is not None],
-        [v for v in call_values if v is not None],
+        [strike for strike, value in zip(strikes, call_values) if value is not None],
+        [value for value in call_values if value is not None],
         height=height, color=POSITIVE_COLOR,
     )
     axes.barh(
-        [s for s, v in zip(strikes, put_values) if v is not None],
-        [v for v in put_values if v is not None],
+        [strike for strike, value in zip(strikes, put_values) if value is not None],
+        [value for value in put_values if value is not None],
         height=height, facecolor="none", edgecolor=NEGATIVE_COLOR, linewidth=1.0,
     )
     handles = _draw_level_lines(axes, levels, spot)

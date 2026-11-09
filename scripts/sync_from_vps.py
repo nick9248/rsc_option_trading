@@ -283,19 +283,19 @@ def get_columns(cur, table_name: str) -> list[str]:
     return [row[0] for row in cur.fetchall() if row[0] != "id"]
 
 
-def get_json_columns(cur, table_name: str) -> set[str]:
+def get_json_columns(cursor, table_name: str) -> set[str]:
     """Names of the table's json and jsonb columns.
 
     psycopg2 reads those columns as Python dict/list, and writing them back needs
     psycopg2.extras.Json (a dict cannot be adapted, a list would become an array).
     Real array columns (text[] etc.) report data_type 'ARRAY' and are not included.
     """
-    cur.execute("""
+    cursor.execute("""
         SELECT column_name
         FROM information_schema.columns
         WHERE table_schema = 'public' AND table_name = %s AND data_type IN ('json', 'jsonb')
     """, (table_name,))
-    return {row[0] for row in cur.fetchall()}
+    return {row[0] for row in cursor.fetchall()}
 
 
 def wrap_json_values(rows: list, columns: list, json_columns: set[str]) -> list:
