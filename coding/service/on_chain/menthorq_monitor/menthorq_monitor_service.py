@@ -334,15 +334,23 @@ class MenthorqMonitorService:
         from the snapshots (point in time, nothing stored): what the hourly
         job would have stored one hour, 24 hours and 7 days before
         ``latest``. Used by the dry run, which must not need or write the
-        monitor table.
+        monitor table. A replayed record built from an outdated snapshot
+        fails ``is_usable_reference`` (the filter ``find_reference``
+        applies) and gives no reference, as the hourly job would not use it.
         """
         comparisons = []
         for label, offset in ((COMPARISON_PREVIOUS, timedelta(hours=1)),
                               (COMPARISON_ONE_DAY, COMPARISON_OFFSET[COMPARISON_ONE_DAY]),
                               (COMPARISON_SEVEN_DAYS, COMPARISON_OFFSET[COMPARISON_SEVEN_DAYS])):
-            reference = self.compute_record(latest.mode, latest.as_of_utc - offset)
-            comparisons.append(compare_records(
-                latest, reference if reference.has_levels else None, label))
+            replayed = self.compute_record(latest.mode, latest.as_of_utc - offset)
+            reference: Optional[MenthorqLevelRecord] = replayed if replayed.has_levels else None
+            if reference is not None and not self.is_usable_reference(reference):
+                logger.info("MenthorQ replayed %s reference at %s skipped: built from a snapshot captured %s",
+                            label, reference.as_of_utc.isoformat(),
+                            reference.snapshot_captured_at_utc.isoformat()
+                            if reference.snapshot_captured_at_utc else "never")
+                reference = None
+            comparisons.append(compare_records(latest, reference, label))
         return comparisons
 
     def latest_record(self, mode: str, now: datetime) -> Optional[MenthorqLevelRecord]:

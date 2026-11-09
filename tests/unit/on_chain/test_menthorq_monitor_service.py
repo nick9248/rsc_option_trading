@@ -412,6 +412,33 @@ def test_replayed_comparisons_recompute_earlier_instants_without_storing():
     assert repository.records == []
 
 
+class _AgeByInstantLoader(FakeInputLoader):
+    """FakeInputLoader whose snapshot age depends on the instant asked for."""
+
+    def __init__(self, snapshot_age_by_instant):
+        super().__init__()
+        self._snapshot_age_by_instant = snapshot_age_by_instant
+
+    def load_inputs(self, currency, as_of, open_interest_as_of=None):
+        self.snapshot_age = self._snapshot_age_by_instant.get(as_of, timedelta(minutes=21))
+        return super().load_inputs(currency, as_of, open_interest_as_of)
+
+
+def test_replayed_outage_record_is_no_reference_and_exactly_the_limit_is_kept():
+    """Default stale limit 120 min (the one is_usable_reference uses for stored records).
+    Replayed 1 h ago: snapshot exactly 120 min old -> kept. 24 h ago: 121 min -> skipped
+    (an outage-era record). 7 d ago: 21 min -> kept."""
+    loader = _AgeByInstantLoader({AS_OF - timedelta(hours=1): timedelta(minutes=120),
+                                  AS_OF - timedelta(hours=24): timedelta(minutes=121)})
+    service = _service(FakeMonitorRepository(), loader)
+    latest = service.compute_live_record(AS_OF)
+    previous, day_ago, week_ago = service.build_replayed_comparisons(latest)
+    assert previous.reference is not None
+    assert previous.reference.as_of_utc - previous.reference.snapshot_captured_at_utc == timedelta(minutes=120)
+    assert day_ago.reference is None
+    assert week_ago.reference is not None
+
+
 def test_store_logs_caveats_of_a_computed_record_and_reasons_of_a_not_computed_one(caplog):
     service = _service()
     caveat = "1 chain rows have no open interest: left out of GEX"

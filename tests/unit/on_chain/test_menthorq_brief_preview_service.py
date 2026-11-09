@@ -127,8 +127,15 @@ class TestBuildPreview:
     def test_stale_record_previews_the_data_stale_alert_like_production(self):
         """Limit 19 min, snapshot 20 min before the data time: stale. The movement rules
         (HVL +4%, PS +6%, crossing, sign flip would all fire when fresh) are paused, and the
-        preview shows the data_stale message the collector would send."""
-        _, preview = _preview(moving_records(), replace(MenthorqMonitorSettings(), stale_snapshot_minutes=19))
+        preview shows the data_stale message the collector would send. The 1 h and 24 h
+        references get a 10 min old snapshot (fresh under 19 min), so they stay usable
+        references (is_usable_reference) and only the latest record is stale."""
+        records = moving_records()
+        for hours_back in (1, 24):
+            key = (MODE_LIVE, BASE_TIME - timedelta(hours=hours_back))
+            records[key] = replace(records[key],
+                                   snapshot_captured_at_utc=records[key].as_of_utc - timedelta(minutes=10))
+        _, preview = _preview(records, replace(MenthorqMonitorSettings(), stale_snapshot_minutes=19))
         assert [alert.key for alert in preview.alerts] == ["data_stale"]
         assert not any(check.would_fire for check in preview.alert_checks)
         rows = {check.rule: check for check in preview.alert_checks}
