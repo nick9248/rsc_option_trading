@@ -22,7 +22,6 @@ from coding.service.on_chain.menthorq_monitor.brief_formatter import (
 from coding.service.on_chain.menthorq_monitor.command_formatter import (
     BOT_COMMANDS,
     MUTE_USAGE,
-    format_age,
     format_changes_reply,
 )
 from coding.service.on_chain.menthorq_monitor.menthorq_monitor_service import MenthorqMonitorService
@@ -223,13 +222,13 @@ def _status_records():
 
 def test_status_reply_by_hand_healthy_not_muted():
     commands, _, _, _ = _service(_status_records())
-    # now 10:05: live 55 min ago; daily close 23:59 -> 10 h 06 min = 10.1 h; snapshot 08:50 = 75 min old
+    # now 10:05: live 55 min ago; daily close 23:59 -> 10 h 6 min; snapshot 08:50 = 1 h 15 min old
     assert _run(commands, "/status") == (
         "<b>BTC MenthorQ monitor status</b> | 2026-11-06 10:05 UTC\n"
         "Health: OK\n"
         "Live run: 2026-11-06 09:10 UTC (55 min ago), computed\n"
-        "Daily close: 2026-11-05 23:59 UTC (10.1 h ago), computed\n"
-        "Data age: snapshot 2026-11-06 08:50 UTC (75 min old), open interest 2026-11-06 08:50 UTC\n"
+        "Daily close: 2026-11-05 23:59 UTC (10 h 6 min ago), computed\n"
+        "Data age: snapshot 2026-11-06 08:50 UTC (1 h 15 min old), open interest 2026-11-06 08:50 UTC\n"
         "Hourly job ran in the last 2h: yes\n"
         "Urgent alerts: on, not muted\n"
         "Last alert delivered: none"
@@ -243,7 +242,7 @@ def test_status_reply_muted_with_last_alert_and_held_back_alert():
     repository.save_menthorq_alert_mute("BTC", NOW + timedelta(hours=24), NOW)
     repository.save_menthorq_suppressed_alerts("BTC", ["put_support_move_24h"], BASE_TIME + timedelta(minutes=50))
     message = _run(commands, "/status")
-    assert "Urgent alerts: MUTED until 2026-11-07 10:05 UTC (24.0 h left)" in message
+    assert "Urgent alerts: MUTED until 2026-11-07 10:05 UTC (1 d 0 h 0 min left)" in message
     # the weekly brief at 09:30 is not an alert; the newest alert is the 09:11 one
     assert "Last alert delivered: hvl_move_24h at 2026-11-06 09:11 UTC" in message
     assert "Last alert held back by the mute: put_support_move_24h at 2026-11-06 10:00 UTC" in message
@@ -255,9 +254,9 @@ def test_status_reply_reports_problems():
                                               not_computed_reasons=["inputs not available: no snapshot"])
     commands, _, _, _ = _service([stale_failed])
     message = _run(commands, "/status")
-    assert ("Health: PROBLEM: hourly job has not run for 3.0 h; latest live run not computed: "
+    assert ("Health: PROBLEM: hourly job has not run for 3 h 0 min; latest live run not computed: "
             "inputs not available: no snapshot") in message
-    assert "Live run: 2026-11-06 07:05 UTC (3.0 h ago), NOT computed" in message
+    assert "Live run: 2026-11-06 07:05 UTC (3 h 0 min ago), NOT computed" in message
     assert "Daily close: none stored" in message
     assert "Data age: n/a (no computed live run)" in message
     assert "Hourly job ran in the last 2h: NO" in message
@@ -299,7 +298,7 @@ def test_status_health_uses_the_configured_stale_limit():
 
     assert "Health: OK" in status_with_limit(240)
     assert "Health: OK" in status_with_limit(100)
-    assert "Health: PROBLEM: snapshot 100 min older than the latest run" in status_with_limit(45)
+    assert "Health: PROBLEM: snapshot 1 h 40 min older than the latest run" in status_with_limit(45)
 
 
 def test_status_with_no_run_at_all():
@@ -447,11 +446,3 @@ def test_end_to_end_owner_only_through_the_listener():
         "Unknown command /nope. Commands: /brief /levels /changes /status /mute /help. Send /help for details.",
     ]
     assert telegram.registered_commands == [list(BOT_COMMANDS)]
-
-
-def test_format_age_by_hand():
-    assert format_age(timedelta(minutes=55)) == "55 min"
-    assert format_age(timedelta(minutes=119)) == "119 min"
-    assert format_age(timedelta(hours=2)) == "2.0 h"
-    assert format_age(timedelta(hours=47, minutes=54)) == "47.9 h"
-    assert format_age(timedelta(days=3)) == "3.0 d"

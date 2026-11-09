@@ -33,6 +33,7 @@ from coding.service.on_chain.menthorq_monitor.brief_formatter import (
     code_block,
     comparison_block,
     escape,
+    format_duration,
     format_gex,
     format_signed_percent,
     format_signed_usd,
@@ -56,16 +57,6 @@ BOT_COMMANDS: Tuple[Tuple[str, str], ...] = (
 )
 HOURLY_JOB_EXPECTED_WITHIN = timedelta(hours=2)
 MUTE_USAGE = "Usage: /mute 24h | /mute 3d | /mute 90m | /mute off (longest 30d)."
-
-
-def format_age(age: timedelta) -> str:
-    """timedelta(minutes=55) -> "55 min"; 3 h -> "3.0 h"; 3 days -> "3.0 d"."""
-    minutes = age.total_seconds() / 60
-    if minutes < 120:
-        return f"{minutes:.0f} min"
-    if minutes < 48 * 60:
-        return f"{minutes / 60:.1f} h"
-    return f"{minutes / (24 * 60):.1f} d"
 
 
 def _title(currency: str, text: str, record: Optional[MenthorqLevelRecord]) -> str:
@@ -197,13 +188,13 @@ def monitor_health_problems(
     problems = []
     since_run = status.now - live.computed_at_utc
     if since_run > HOURLY_JOB_EXPECTED_WITHIN:
-        problems.append(f"hourly job has not run for {format_age(since_run)}")
+        problems.append(f"hourly job has not run for {format_duration(since_run)}")
     if not live.has_levels:
         reason = live.not_computed_reasons[0] if live.not_computed_reasons else "reason not stored"
         problems.append(f"latest live run not computed: {reason}")
     elif live.snapshot_captured_at_utc is not None and \
             live.as_of_utc - live.snapshot_captured_at_utc > stale_limit:
-        problems.append(f"snapshot {format_age(live.as_of_utc - live.snapshot_captured_at_utc)} "
+        problems.append(f"snapshot {format_duration(live.as_of_utc - live.snapshot_captured_at_utc)} "
                         "older than the latest run")
     return problems
 
@@ -212,7 +203,7 @@ def _run_line(label: str, run: Optional[MenthorqLevelRecord], now: datetime) -> 
     if run is None:
         return f"{label}: none stored"
     computed = "computed" if run.has_levels else "NOT computed"
-    return (f"{label}: {format_utc(run.as_of_utc)} ({format_age(now - run.as_of_utc)} ago), "
+    return (f"{label}: {format_utc(run.as_of_utc)} ({format_duration(now - run.as_of_utc)} ago), "
             f"{computed}")
 
 
@@ -226,7 +217,7 @@ def _alert_state_lines(status: MonitorStatus) -> List[str]:
             and status.monitor_state.alerts_muted_until is not None:
         muted_until = status.monitor_state.alerts_muted_until
         lines = [f"Urgent alerts: MUTED until {format_utc(muted_until)} "
-                 f"({format_age(muted_until - status.now)} left)"]
+                 f"({format_duration(muted_until - status.now)} left)"]
     else:
         lines = ["Urgent alerts: on, not muted"]
     if status.last_alert_delivered is None:
@@ -263,7 +254,7 @@ def format_status_reply(
     if live is not None and live.snapshot_captured_at_utc is not None:
         lines.append(escape(
             f"Data age: snapshot {format_utc(live.snapshot_captured_at_utc)} "
-            f"({format_age(now - live.snapshot_captured_at_utc)} old), open interest "
+            f"({format_duration(now - live.snapshot_captured_at_utc)} old), open interest "
             f"{format_utc(live.open_interest_captured_at_utc)}"))
     else:
         lines.append("Data age: n/a (no computed live run)")
