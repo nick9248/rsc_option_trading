@@ -218,7 +218,7 @@ Every 30 minutes, the `ProspectiveCollector` runs for BTC and ETH:
 
 The tables `max_pain`, `open_interest`, `volume`, `gex_dex`, `levels`, `volatility_index_history` and `buy_sell_flow_metrics` no longer exist (migrations 024, 027, 028).
 
-The strategy finder (straddle, iron condor and butterfly scanners) and the forward tests were removed on 2026-11-08. Their tables `straddle_scan_history`, `defined_risk_scan_history` and `forward_test_predictions` still exist with their history, but nothing writes or syncs them any more.
+The strategy finder (straddle, iron condor and butterfly scanners) and the forward tests were removed on 2026-11-08. Their tables `straddle_scan_history`, `defined_risk_scan_history` and `forward_test_predictions` still exist with their history. The VPS keeps writing them until it runs this change; from that deploy on (deploy date: to be filled in the vault log) nothing writes or syncs them any more, and rows created before the deploy may have `alert_sent = TRUE`. The scripts and results CSV behind the evaluation (`scripts/backtest_straddle_metrics.py`, `scripts/phase2_backtest.py`, `scripts/phase2_blueprint.txt`, `scripts/phase2_single_metric_results.csv`) remain in git history at commit 93cbc93 (the last commit of main before this removal); the evaluation summary is in the vault note wiki/straddle-scanner.md.
 
 ---
 

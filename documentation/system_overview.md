@@ -6,7 +6,7 @@ This document was rewritten on 2026-10-12 after the table cleanup (migrations 02
 
 ## Changes
 
-- 2026-11-08: the strategy finder (straddle, iron condor and butterfly scanners, the regime gate) and the forward tests (on-chain prediction harness, straddle and defined-risk settlement tracking) were removed, together with their health checks, VPS sync entries and the Automation GUI tab. The evaluation found no usable edge. Their history tables (`straddle_scan_history`, `defined_risk_scan_history`, `forward_test_predictions`) stay in the VPS and local databases untouched; nothing writes or syncs them any more. Dropping them needs a new forward-only migration (not done). The Telegram alerts of those scanners were removed on the same date, so the `alert_sent` and `alert_sent_at` columns of `straddle_scan_history` and `defined_risk_scan_history` are no longer written: rows created before the removal keep their old values, newer rows always have `alert_sent = FALSE`. Do not read those columns as 'an alert fired'.
+- 2026-11-08: the strategy finder (straddle, iron condor and butterfly scanners, the regime gate) and the forward tests (on-chain prediction harness, straddle and defined-risk settlement tracking) were removed, together with their health checks, VPS sync entries and the Automation GUI tab. The evaluation found no usable edge. The scripts and results CSV behind the evaluation (`scripts/backtest_straddle_metrics.py`, `scripts/phase2_backtest.py`, `scripts/phase2_blueprint.txt`, `scripts/phase2_single_metric_results.csv`) remain in git history at commit 93cbc93 (the last commit of main before this removal); the evaluation summary is in the vault note wiki/straddle-scanner.md. Their history tables (`straddle_scan_history`, `defined_risk_scan_history`, `forward_test_predictions`) stay in the VPS and local databases untouched; from the deploy of this change on (after the VPS runs this change; deploy date: to be filled in the vault log) nothing writes or syncs them any more. Until then the VPS keeps running the old code and keeps writing them. Dropping them needs a new forward-only migration (not done). The Telegram alerts of those scanners were removed in the same change, so from the deploy on the `alert_sent` and `alert_sent_at` columns of `straddle_scan_history` and `defined_risk_scan_history` are no longer written: rows created before the deploy may have `alert_sent = TRUE`. Do not read those columns as 'an alert fired'.
 
 ## Architecture
 
@@ -54,7 +54,7 @@ Buy/sell flow is not stored per capture. It is computed on demand from `historic
 | Market data | `historical_trades`, `snapshots`, `hourly_snapshots`, `funding_rate_history`, `ohlcv_history`, `dvol_history`, `futures_basis`, `daily_oi_snapshots` |
 | On-chain analysis | `onchain_analysis_snapshots`, `onchain_volatility_snapshots`, `volatility_skew_history`, `flow_delta_hourly` |
 | MenthorQ monitor | `menthorq_level_snapshots`, `menthorq_alert_deliveries`, `menthorq_monitor_state` |
-| No longer written (strategy finder, removed 2026-11-08) | `straddle_scan_history`, `defined_risk_scan_history`, `forward_test_predictions` |
+| No longer written from the deploy of the 2026-11-08 removal on (strategy finder) | `straddle_scan_history`, `defined_risk_scan_history`, `forward_test_predictions` |
 | Owner's Deribit account | `account_snapshots`, `position_snapshots`, `user_trades`, `orders`, `settlements` |
 | Operations | `health_check_runs` (stored on the VPS only) |
 
