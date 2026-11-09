@@ -153,9 +153,12 @@ test. They were chosen by hand, not fitted by a backtest.
   input is therefore never silent. The GUI preview and the dry-run script show the same alert.
 - Monitor error: when the hourly computation itself raises (the live record, or the daily close
   of yesterday; for example a database error), one `monitor_error` alert is sent: `Monitor
-  error: the hourly computation failed: <exception class>: <message>. Levels and alerts are
-  paused until it succeeds.` The message is cut to 200 characters, the bot token and the
-  database password are replaced, and no traceback is sent (it is in the log). Same 12h cooldown
+  error: the hourly computation failed: <exception class> (details: see the collector log).
+  Levels and alerts are paused until it succeeds.` The exception's message is NOT sent (a
+  database error can name the host, user and database); only an invalid MENTHORQ_* setting
+  (`MonitorSettingsError`) is sent with its own message, cut to 200 characters. The same rule
+  applies to the start-up "monitor NOT started" notice. The log keeps the full traceback, with the
+  bot token and the database password replaced. Same 12h cooldown
   and `/mute`. When the delivery log cannot be read, only the deliveries this process remembers
   count for the cooldown, so a database that stays down gives one alert per 12h.
 - An alert over a window in which an expiry settled says that the move coincides with the roll-off.

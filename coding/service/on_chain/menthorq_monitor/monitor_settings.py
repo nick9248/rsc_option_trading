@@ -73,6 +73,14 @@ MINIMUM_STALE_SNAPSHOT_MINUTES = 10
 RULE_OFF = "off"
 
 
+class MonitorSettingsError(ValueError):
+    """
+    An invalid MENTHORQ_* setting. Its message names only the variable and
+    the value the owner set (no secret by construction), so it may be sent
+    to Telegram in full; any other exception is sent by class name only.
+    """
+
+
 @dataclass(frozen=True)
 class MenthorqMonitorSettings:
     """
@@ -118,7 +126,7 @@ class MenthorqMonitorSettings:
                 repository's .env) when omitted.
 
         Raises:
-            ValueError: when a variable is set to an invalid value (the
+            MonitorSettingsError: when a variable is set to an invalid value (the
                 monitor is then not started; a typo is never silently replaced
                 by a default).
         """
@@ -135,7 +143,7 @@ class MenthorqMonitorSettings:
                 return True
             if text.strip().lower() in ("0", "false", "no", "off"):
                 return False
-            raise ValueError(f"{name}={text!r} is not a boolean (use 1 or 0)")
+            raise MonitorSettingsError(f"{name}={text!r} is not a boolean (use 1 or 0)")
 
         def integer(name: str, default: int, minimum: int, maximum: Optional[int]) -> int:
             text = environment.get(name)
@@ -144,9 +152,9 @@ class MenthorqMonitorSettings:
             try:
                 value = int(text)
             except ValueError:
-                raise ValueError(f"{name}={text!r} is not an integer") from None
+                raise MonitorSettingsError(f"{name}={text!r} is not an integer") from None
             if value < minimum or (maximum is not None and value > maximum):
-                raise ValueError(f"{name}={value} is outside {minimum}..{maximum}")
+                raise MonitorSettingsError(f"{name}={value} is outside {minimum}..{maximum}")
             return value
 
         def percent(name: str, default: Optional[float]) -> Optional[float]:
@@ -158,9 +166,9 @@ class MenthorqMonitorSettings:
             try:
                 value = float(text)
             except ValueError:
-                raise ValueError(f"{name}={text!r} is not a number or 'off'") from None
+                raise MonitorSettingsError(f"{name}={text!r} is not a number or 'off'") from None
             if not 0 < value <= 100:
-                raise ValueError(f"{name}={value:g} is outside (0, 100] percent of spot")
+                raise MonitorSettingsError(f"{name}={value:g} is outside (0, 100] percent of spot")
             return value
 
         default_thresholds = defaults.alert_thresholds
@@ -184,11 +192,13 @@ class MenthorqMonitorSettings:
 
         universe = environment.get("MENTHORQ_EXPIRY_UNIVERSE", "").strip() or defaults.expiry_universe
         if universe not in EXPIRY_UNIVERSES:
-            raise ValueError(f"MENTHORQ_EXPIRY_UNIVERSE={universe!r} is not one of {EXPIRY_UNIVERSES}")
+            raise MonitorSettingsError(
+                f"MENTHORQ_EXPIRY_UNIVERSE={universe!r} is not one of {EXPIRY_UNIVERSES}")
 
         day_text = environment.get("MENTHORQ_WEEKLY_BRIEF_DAY", "").strip().lower()
         if day_text and day_text not in WEEKDAY_NAMES:
-            raise ValueError(f"MENTHORQ_WEEKLY_BRIEF_DAY={day_text!r} is not one of {WEEKDAY_NAMES}")
+            raise MonitorSettingsError(
+                f"MENTHORQ_WEEKLY_BRIEF_DAY={day_text!r} is not one of {WEEKDAY_NAMES}")
         weekday = WEEKDAY_NAMES.index(day_text) if day_text else defaults.weekly_brief_weekday
 
         time_text = environment.get("MENTHORQ_WEEKLY_BRIEF_TIME_UTC", "").strip()
@@ -197,17 +207,19 @@ class MenthorqMonitorSettings:
             try:
                 brief_time = time.fromisoformat(time_text)
             except ValueError:
-                raise ValueError(f"MENTHORQ_WEEKLY_BRIEF_TIME_UTC={time_text!r} is not HH:MM") from None
+                raise MonitorSettingsError(
+                    f"MENTHORQ_WEEKLY_BRIEF_TIME_UTC={time_text!r} is not HH:MM") from None
             if brief_time.tzinfo is not None:
-                raise ValueError(f"MENTHORQ_WEEKLY_BRIEF_TIME_UTC={time_text!r} has an offset; "
-                                 "UTC only, format HH:MM")
+                raise MonitorSettingsError(f"MENTHORQ_WEEKLY_BRIEF_TIME_UTC={time_text!r} has an offset; "
+                                           "UTC only, format HH:MM")
 
         owner_user_text = environment.get("MENTHORQ_OWNER_USER_ID", "").strip()
         owner_user_id = defaults.owner_user_id
         if owner_user_text:
             if not owner_user_text.isdigit() or int(owner_user_text) <= 0:
-                raise ValueError(f"MENTHORQ_OWNER_USER_ID={owner_user_text!r} is not a positive integer "
-                                 "(a Telegram user id)")
+                raise MonitorSettingsError(
+                    f"MENTHORQ_OWNER_USER_ID={owner_user_text!r} is not a positive integer "
+                    "(a Telegram user id)")
             owner_user_id = int(owner_user_text)
 
         return cls(

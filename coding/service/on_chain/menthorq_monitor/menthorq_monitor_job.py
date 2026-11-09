@@ -33,7 +33,8 @@ from coding.service.on_chain.menthorq_monitor.bot_command_service import Menthor
 from coding.service.on_chain.menthorq_monitor.brief_delivery_service import (
     TELEGRAM_PARSE_MODE,
     MenthorqBriefDeliveryService,
-    scrub_secrets,
+    error_text_for_telegram,
+    scrubbed_traceback,
 )
 from coding.service.on_chain.menthorq_monitor.brief_formatter import format_monitor_not_started_notice
 from coding.service.on_chain.menthorq_monitor.command_formatter import BOT_COMMANDS
@@ -57,6 +58,20 @@ MONITOR_TABLE_MIGRATIONS = {
     "menthorq_alert_deliveries": "031",
     "menthorq_monitor_state": "032",
 }
+
+
+def log_scrubbed_exception(message: str, error: BaseException, telegram: TelegramAlertService) -> None:
+    """
+    Log ``message`` at ERROR with the full traceback of ``error``, the bot
+    token and database password scrubbed. Never raises: when the scrubbing
+    itself fails, the traceback is logged as it is.
+    """
+    try:
+        text = scrubbed_traceback(error, telegram)
+    except Exception:
+        logger.error(message, exc_info=error)
+        return
+    logger.error("%s\n%s", message, text)
 
 
 class MenthorqMonitorJob:
@@ -97,12 +112,14 @@ class MenthorqMonitorJob:
         try:
             live = self.monitor_service.run_live(now)
         except Exception as error:
-            logger.exception("MenthorQ monitor: live record failed")
+            log_scrubbed_exception("MenthorQ monitor: live record failed", error,
+                                   self.delivery_service.telegram)
             computation_error = error
         try:
             self.monitor_service.run_daily_close_if_missing(now)
         except Exception as error:
-            logger.exception("MenthorQ monitor: daily-close record failed")
+            log_scrubbed_exception("MenthorQ monitor: daily-close record failed", error,
+                                   self.delivery_service.telegram)
             computation_error = computation_error or error
         if not self.settings.alerts_enabled:
             return
@@ -196,7 +213,7 @@ def build_menthorq_monitor_job(
     (off by default; logged in one INFO line).
 
     Raises:
-        ValueError: when a MENTHORQ_* setting is invalid.
+        MonitorSettingsError: when a MENTHORQ_* setting is invalid.
     """
     settings = settings or MenthorqMonitorSettings.from_environment()
     if not settings.monitor_enabled:
@@ -266,13 +283,15 @@ def start_menthorq_monitor_job(
 ) -> Optional[MenthorqMonitorJob]:
     """
     ``build_menthorq_monitor_job`` for the collector: a bad MENTHORQ_*
-    setting (ValueError) or a construction error never stops the collector,
-    and neither do missing monitor tables (migration 031 or 032 not
-    applied; ``missing_monitor_tables``, checked once here so the hourly
-    job does not raise every hour). In each case the monitor is NOT
-    started: the cause is logged at ERROR and the owner gets ONE
-    best-effort Telegram notice (``format_monitor_not_started_notice``,
-    secrets scrubbed) when the Telegram credentials exist; a failing notice
+    setting (``MonitorSettingsError``) or a construction error never stops
+    the collector, and neither do missing monitor tables (migration 031 or
+    032 not applied; ``missing_monitor_tables``, checked once here so the
+    hourly job does not raise every hour). In each case the monitor is NOT
+    started: the cause is logged at ERROR (full traceback, secrets
+    scrubbed) and the owner gets ONE best-effort Telegram notice
+    (``format_monitor_not_started_notice``; a settings error's message in
+    full, any other exception by class name only,
+    ``error_text_for_telegram``) when the Telegram credentials exist; a failing notice
     is logged and swallowed, and nothing is sent without credentials.
 
     Args:
@@ -286,14 +305,16 @@ def start_menthorq_monitor_job(
     try:
         job = build_menthorq_monitor_job(repository=repository, telegram=telegram)
     except Exception as error:
-        logger.exception("MenthorQ monitor NOT started (configuration or construction error); "
-                         "the collector keeps running")
+        message = ("MenthorQ monitor NOT started (configuration or construction error); "
+                   "the collector keeps running")
         try:
             telegram = telegram or TelegramAlertService()
-            reason = scrub_secrets(str(error), telegram)
+            reason = error_text_for_telegram(error, telegram)
         except Exception:
+            logger.error(message, exc_info=error)
             logger.exception("MenthorQ monitor: the not-started notice itself failed")
             return None
+        log_scrubbed_exception(message, error, telegram)
         _send_not_started_notice(telegram, reason)
         return None
     if job is None:

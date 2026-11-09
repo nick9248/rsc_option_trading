@@ -574,23 +574,24 @@ MAXIMUM_ERROR_MESSAGE_CHARACTERS = 200
 MAXIMUM_NOT_STARTED_ERROR_CHARACTERS = 300
 
 
-def format_monitor_error_alert(error_class_name: str, error_text: str) -> str:
+def format_monitor_error_alert(error_text: str) -> str:
     """
     The message sent when the hourly computation raised. ``error_text`` must
-    already be free of secrets (the caller scrubs the bot token and the
-    database password); it is cut to ``MAXIMUM_ERROR_MESSAGE_CHARACTERS``
-    and HTML-escaped. Never a traceback.
+    already be safe to send (``error_text_for_telegram``: the class name, or
+    a settings error's own message); it is cut to
+    ``MAXIMUM_ERROR_MESSAGE_CHARACTERS`` and HTML-escaped. Never a traceback.
     """
     return (f"<b>Monitor error:</b> the hourly computation failed: "
-            f"{escape(error_class_name)}: {escape(error_text[:MAXIMUM_ERROR_MESSAGE_CHARACTERS])}. "
+            f"{escape(error_text[:MAXIMUM_ERROR_MESSAGE_CHARACTERS])}. "
             "Levels and alerts are paused until it succeeds.")
 
 
 def format_monitor_not_started_notice(error_text: str) -> str:
     """
-    The start-up notice when the monitor could not be built (bad MENTHORQ_*
-    setting or construction error). ``error_text`` must already be free of
-    secrets; it is cut to ``MAXIMUM_NOT_STARTED_ERROR_CHARACTERS`` and
+    The start-up notice when the monitor could not be started (bad
+    MENTHORQ_* setting, construction error, missing tables). ``error_text``
+    must already be safe to send (``error_text_for_telegram`` or our own
+    text); it is cut to ``MAXIMUM_NOT_STARTED_ERROR_CHARACTERS`` and
     HTML-escaped.
     """
     return (f"<b>MenthorQ monitor NOT started:</b> "

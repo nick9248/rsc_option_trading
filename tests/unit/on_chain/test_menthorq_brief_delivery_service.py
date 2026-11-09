@@ -22,7 +22,10 @@ from coding.service.on_chain.menthorq_monitor.brief_delivery_service import (
     latest_weekly_brief_instant,
 )
 from coding.service.on_chain.menthorq_monitor.menthorq_monitor_service import MenthorqMonitorService
-from coding.service.on_chain.menthorq_monitor.monitor_settings import MenthorqMonitorSettings
+from coding.service.on_chain.menthorq_monitor.monitor_settings import (
+    MenthorqMonitorSettings,
+    MonitorSettingsError,
+)
 from tests.fakes.fake_menthorq_monitor import (
     BASE_TIME,
     FakeInputLoader,
@@ -619,30 +622,34 @@ class OperationalError(Exception):
 class TestMonitorErrorAlert:
     """The hourly computation raised: one monitor_error alert, cooldown and mute as usual."""
 
-    def test_one_alert_with_class_scrubbed_message_and_no_traceback(self, monkeypatch):
-        monkeypatch.setattr("coding.service.on_chain.menthorq_monitor.brief_delivery_service.DatabaseConfig",
-                            lambda: DatabaseConfig(password="s3cret"))
+    def test_a_driver_error_sends_only_its_class_name_never_its_message(self):
         service, repository, telegram, _ = _delivery([])
-        error = OperationalError("could not connect: password s3cret rejected, token fake-token")
+        # psycopg2-style connection error: host, user and database name in the message.
+        error = OperationalError('connection to server at "10.0.0.5", port 5433 failed: FATAL: password '
+                                 'authentication failed for user "trader_user" database "option_trading"')
         assert service.send_monitor_error_alert(error, FRIDAY_0910) is True
-        # "s3cret" -> "<database password>", the FakeTelegram token "fake-token" -> "<bot token>",
-        # both then escaped (< -> &lt;, > -> &gt;)
         assert [sent["message"] for sent in telegram.sent] == [
-            "<b>Monitor error:</b> the hourly computation failed: OperationalError: "
-            "could not connect: password &lt;database password&gt; rejected, token &lt;bot token&gt;. "
-            "Levels and alerts are paused until it succeeds."]
+            "<b>Monitor error:</b> the hourly computation failed: OperationalError "
+            "(details: see the collector log). Levels and alerts are paused until it succeeds."]
+        for secret in ("10.0.0.5", "5433", "trader_user", "option_trading", "authentication"):
+            assert secret not in telegram.sent[0]["message"]
         assert telegram.sent[0]["parse_mode"] == "HTML"
         assert "Traceback" not in telegram.sent[0]["message"]
+        assert "tests." not in telegram.sent[0]["message"]           # no module path
         assert [delivery["alert_key"] for delivery in repository.deliveries] == ["monitor_error"]
         assert "monitor_error" in URGENT_ALERT_KEYS
 
-    def test_message_is_cut_to_200_characters_before_escaping(self):
+    def test_a_settings_error_keeps_its_full_message_scrubbed_and_cut_to_200_characters(self, monkeypatch):
+        monkeypatch.setattr("coding.service.on_chain.menthorq_monitor.brief_delivery_service.DatabaseConfig",
+                            lambda: DatabaseConfig(password="s3cret"))
         service, _, telegram, _ = _delivery([])
-        service.send_monitor_error_alert(RuntimeError("<" * 250), FRIDAY_0910)
-        # 250 "<" cut to 200, each then escaped to "&lt;"
+        service.send_monitor_error_alert(
+            MonitorSettingsError("MENTHORQ_X='s3cret fake-token' " + "<" * 250), FRIDAY_0910)
+        # "MENTHORQ_X='" (12) + "<database password>" (19) + " " + "<bot token>" (11) + "' " (2)
+        # is 45 characters, so 155 "<" fill the 200-character cut; each "<" / ">" then escaped.
         assert telegram.sent[0]["message"] == (
-            "<b>Monitor error:</b> the hourly computation failed: RuntimeError: " + "&lt;" * 200
-            + ". Levels and alerts are paused until it succeeds.")
+            "<b>Monitor error:</b> the hourly computation failed: MENTHORQ_X='&lt;database password&gt; "
+            "&lt;bot token&gt;' " + "&lt;" * 155 + ". Levels and alerts are paused until it succeeds.")
 
     def test_cooldown_is_12_hours(self):
         service, _, telegram, _ = _delivery([])

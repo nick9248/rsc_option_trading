@@ -38,6 +38,7 @@ and mute rules, so a persistent failure is not silent.
 
 import logging
 import threading
+import traceback
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, List, Mapping, Optional, Sequence
@@ -77,7 +78,10 @@ from coding.service.on_chain.menthorq_monitor.brief_formatter import (
     stale_data_warning,
 )
 from coding.service.on_chain.menthorq_monitor.menthorq_monitor_service import MenthorqMonitorService
-from coding.service.on_chain.menthorq_monitor.monitor_settings import MenthorqMonitorSettings
+from coding.service.on_chain.menthorq_monitor.monitor_settings import (
+    MenthorqMonitorSettings,
+    MonitorSettingsError,
+)
 from coding.service.notifications.telegram_alert_service import TelegramAlertService
 
 logger = logging.getLogger(__name__)
@@ -100,6 +104,24 @@ def scrub_secrets(text: str, telegram: TelegramAlertService) -> str:
     if database_password:
         scrubbed = scrubbed.replace(database_password, "<database password>")
     return scrubbed
+
+
+def error_text_for_telegram(error: BaseException, telegram: TelegramAlertService) -> str:
+    """
+    What a Telegram message may say about ``error``: the full message of a
+    ``MonitorSettingsError`` (our own MENTHORQ_* validation, no secret by
+    construction; still scrubbed), otherwise only the class name and a
+    pointer to the log. Another exception's message can hold the database
+    host, user or name (e.g. a psycopg2 connection error), so it is never sent.
+    """
+    if isinstance(error, MonitorSettingsError):
+        return scrub_secrets(str(error), telegram)
+    return f"{type(error).__name__} (details: see the collector log)"
+
+
+def scrubbed_traceback(error: BaseException, telegram: TelegramAlertService) -> str:
+    """The full traceback of ``error`` for the log, with the bot token and database password scrubbed."""
+    return scrub_secrets("".join(traceback.format_exception(error)).rstrip(), telegram)
 
 
 def latest_weekly_brief_instant(now: datetime, settings: MenthorqMonitorSettings) -> datetime:
@@ -361,9 +383,10 @@ class MenthorqBriefDeliveryService:
         """
         Tell the owner that the hourly computation raised (``error``): one
         ``monitor_error`` alert under the same 12 h cooldown and mute rules
-        as the other urgent alerts. The text names the exception class and
-        its message (bot token and database password scrubbed, cut to 200
-        characters, escaped), never a traceback. When the delivery log
+        as the other urgent alerts. The text is ``error_text_for_telegram``:
+        the class name and "see the collector log" (the message of a
+        ``MonitorSettingsError`` only in full), never a traceback; the
+        caller logs the full exception. When the delivery log
         cannot be read (often the cause of the error) only the deliveries
         kept in memory count for the cooldown, so a database that stays
         down gives one alert per cooldown, not one per hour. Never raises.
@@ -372,13 +395,13 @@ class MenthorqBriefDeliveryService:
             True when the alert was delivered by this call.
         """
         try:
-            error_text = scrub_secrets(str(error), self.telegram)
+            error_text = error_text_for_telegram(error, self.telegram)
             last_delivered = self.last_delivery(ALERT_KEY_MONITOR_ERROR, tolerate_repository_errors=True)
             alert = UrgentAlert(key=ALERT_KEY_MONITOR_ERROR, title="Monitor error", comparison_label="latest")
             if not apply_cooldown([alert], {alert.key: last_delivered}, now, self.thresholds.cooldown):
                 logger.info("MenthorQ monitor: monitor-error alert on cooldown (not repeated)")
                 return False
-            message = format_monitor_error_alert(type(error).__name__, error_text)
+            message = format_monitor_error_alert(error_text)
             return bool(self._send_urgent(self.settings.currency, None, [ALERT_KEY_MONITOR_ERROR],
                                           message, now))
         except Exception:

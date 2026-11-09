@@ -343,8 +343,23 @@ class TestMonitorErrorAlertFromTheHourlyRun:
         job.run_hourly()
         job.run_hourly()                              # same hour again: cooldown, no second alert
         error_messages = [sent["message"] for sent in telegram.sent if "Monitor error" in sent["message"]]
-        assert error_messages == ["<b>Monitor error:</b> the hourly computation failed: ValueError: "
-                                  "replication failed. Levels and alerts are paused until it succeeds."]
+        assert error_messages == ["<b>Monitor error:</b> the hourly computation failed: ValueError "
+                                  "(details: see the collector log). Levels and alerts are paused "
+                                  "until it succeeds."]
+
+    def test_the_log_keeps_the_full_exception_with_secrets_scrubbed(self, monkeypatch, caplog):
+        telegram = FakeTelegram()
+        delivery = MagicMock()
+        delivery.telegram = telegram
+        monitor = MagicMock()
+        monitor.run_live.side_effect = RuntimeError('could not connect to host "db.internal" token fake-token')
+        with caplog.at_level("INFO"):
+            MenthorqMonitorJob(ALL_ON, monitor, delivery, clock=lambda: BASE_TIME).run_hourly()
+        errors = [record.getMessage() for record in caplog.records if record.levelname == "ERROR"]
+        assert len(errors) == 1
+        assert errors[0].startswith("MenthorQ monitor: live record failed\nTraceback")
+        assert 'RuntimeError: could not connect to host "db.internal" token <bot token>' in errors[0]
+        assert "fake-token" not in caplog.text
 
 
 class TestMonitorNotStartedNotice:
@@ -373,21 +388,34 @@ class TestMonitorNotStartedNotice:
         assert telegram.sent == []
         assert "not-started notice NOT sent" in caplog.text
 
-    def test_a_construction_error_is_scrubbed_cut_escaped_and_a_failing_send_is_swallowed(
+    def test_a_construction_error_sends_only_its_class_and_a_failing_send_is_swallowed(
             self, monkeypatch, caplog):
         def raise_construction_error(**_keyword_arguments):
-            raise RuntimeError("bot fake-token <x> " + "y" * 400)
+            raise RuntimeError('connection to server at "10.0.0.5" failed for user "collector" '
+                               'database "option_trading", bot fake-token')
         monkeypatch.setattr(
             "coding.service.on_chain.menthorq_monitor.menthorq_monitor_job.build_menthorq_monitor_job",
             raise_construction_error)
         telegram = FakeTelegram(accept=False)
         with caplog.at_level("INFO"):
             assert start_menthorq_monitor_job(repository=MagicMock(), telegram=telegram) is None
-        # "bot <bot token> <x> " is 20 characters, so 280 "y" fill the 300-character cut.
-        assert telegram.sent[0]["message"] == ("<b>MenthorQ monitor NOT started:</b> bot &lt;bot token&gt; "
-                                               "&lt;x&gt; " + "y" * 280 + ". The collector itself keeps running.")
-        assert "fake-token" not in telegram.sent[0]["message"]
+        assert telegram.sent[0]["message"] == ("<b>MenthorQ monitor NOT started:</b> RuntimeError "
+                                               "(details: see the collector log). "
+                                               "The collector itself keeps running.")
         assert "not-started notice NOT delivered" in caplog.text
+        # The log has the full exception, the bot token scrubbed.
+        errors = [record.getMessage() for record in caplog.records if record.levelname == "ERROR"]
+        assert len(errors) == 1 and "MenthorQ monitor NOT started" in errors[0]
+        assert 'user "collector" database "option_trading", bot <bot token>' in errors[0]
+        assert "fake-token" not in caplog.text
+
+    def test_a_settings_error_message_reaches_telegram_in_full(self, monkeypatch):
+        monkeypatch.setenv("MENTHORQ_STALE_SNAPSHOT_MINUTES", "9")
+        telegram = FakeTelegram()
+        assert start_menthorq_monitor_job(repository=MagicMock(), telegram=telegram) is None
+        assert telegram.sent[0]["message"] == ("<b>MenthorQ monitor NOT started:</b> "
+                                               "MENTHORQ_STALE_SNAPSHOT_MINUTES=9 is outside 10..None. "
+                                               "The collector itself keeps running.")
 
     def test_valid_settings_send_nothing(self, monkeypatch):
         monkeypatch.setenv("MENTHORQ_MONITOR_ENABLED", "0")
