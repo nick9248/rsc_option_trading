@@ -249,19 +249,25 @@ def build_not_computed_record(
     expiry_universe: str,
     gamma_underlying: str,
     reason: str,
+    snapshot_captured_at_utc: Optional[datetime] = None,
+    open_interest_captured_at_utc: Optional[datetime] = None,
 ) -> MenthorqLevelRecord:
     """
-    A record for a run whose inputs could not be loaded (e.g. no snapshot or
-    index price at or before ``as_of_utc``): every number None, the reason
-    stored, so a gap is visible in the table instead of silent.
+    A record for a run that computed nothing: its inputs could not be
+    loaded (e.g. no snapshot or index price at or before ``as_of_utc``) or
+    were too old. Every number None, the reason stored, so a gap is visible
+    in the table instead of silent. When the inputs were loaded (too old),
+    the capture times of the snapshots used are kept, so a later retry can
+    tell whether a newer snapshot has arrived.
     """
     if mode not in MODES:
         raise ValueError(f"Unknown mode {mode!r}")
     return MenthorqLevelRecord(
         currency=currency, mode=mode, as_of_utc=as_of_utc, computed_at_utc=computed_at_utc,
         expiry_universe=expiry_universe, gamma_underlying=gamma_underlying,
-        spot=None, spot_time_utc=None, snapshot_captured_at_utc=None,
-        open_interest_captured_at_utc=None, call_resistance=None, put_support=None, hvl=None,
+        spot=None, spot_time_utc=None, snapshot_captured_at_utc=snapshot_captured_at_utc,
+        open_interest_captured_at_utc=open_interest_captured_at_utc,
+        call_resistance=None, put_support=None, hvl=None,
         total_net_gex=None, gamma_regime=None, not_computed_reasons=[reason],
     )
 

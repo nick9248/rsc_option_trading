@@ -132,9 +132,13 @@ class MenthorqMonitorService:
             if reasons:
                 reason = "; ".join(reasons)
                 logger.warning("MenthorQ %s record at %s not computed: %s", mode, as_of.isoformat(), reason)
+                # The snapshots used are known: keep their capture times, so a retry after a
+                # restart sees that no newer snapshot exists (_daily_close_retry_is_due).
                 return build_not_computed_record(
                     settings.currency, mode, as_of, self.clock(), settings.expiry_universe,
-                    settings.gamma_underlying, reason)
+                    settings.gamma_underlying, reason,
+                    snapshot_captured_at_utc=inputs.get("snapshot_captured_at_utc"),
+                    open_interest_captured_at_utc=inputs.get("open_interest_captured_at_utc"))
         replication = replicate_menthorq(
             inputs["chain_rows"], inputs["index_price"], as_of,
             settings.expiry_universe, settings.gamma_underlying, currency=settings.currency,

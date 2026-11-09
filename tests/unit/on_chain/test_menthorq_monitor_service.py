@@ -269,6 +269,30 @@ class TestNotComputedDailyCloseRetry:
         assert len(service.run_daily_close_if_missing(self.NOW + timedelta(hours=3))) == 1
         assert len(loader.calls) == 2
 
+    def test_a_stale_day_keeps_its_snapshot_time_so_a_restart_does_not_reload_it(self):
+        """Nothing stored for 6 Nov; the newest snapshot at or before 23:59 is the one loaded,
+        captured 22:44 (75 min old > 60: not computed). The stored row keeps 22:44 (and the
+        open-interest snapshot of 00:00 - 75 min = 5 Nov 22:45), so a fresh service instance
+        (a restart) with still no newer snapshot loads no chain."""
+        computed_days = [_daily_close(date(2026, 10, 31) + timedelta(days=offset)) for offset in range(6)]
+        repository = FakeMonitorRepository(computed_days)
+        repository.option_chain_captures = [datetime(2026, 11, 6, 22, 44, tzinfo=timezone.utc)]
+        loader = FakeInputLoader(snapshot_age=timedelta(minutes=75), open_interest_age=timedelta(minutes=75))
+
+        first = _service(repository, loader).run_daily_close_if_missing(self.NOW)
+        assert len(first) == 1 and not first[0].has_levels and len(loader.calls) == 1
+        stored = repository.records[6]
+        assert stored.snapshot_captured_at_utc == datetime(2026, 11, 6, 22, 44, tzinfo=timezone.utc)
+        assert stored.open_interest_captured_at_utc == datetime(2026, 11, 5, 22, 45, tzinfo=timezone.utc)
+
+        restarted = _service(repository, loader)
+        assert restarted.run_daily_close_if_missing(self.NOW + timedelta(hours=1)) == []
+        assert len(loader.calls) == 1                      # no reload after the restart
+        # a newer snapshot (23:30) still triggers one retry in the restarted process
+        repository.option_chain_captures.append(datetime(2026, 11, 6, 23, 30, tzinfo=timezone.utc))
+        assert len(restarted.run_daily_close_if_missing(self.NOW + timedelta(hours=2))) == 1
+        assert len(loader.calls) == 2
+
     def test_a_row_without_snapshot_time_is_retried_once_per_process(self):
         repository = self._repository_with_one_not_computed_day(None)
         loader = FakeInputLoader(available=False)          # no snapshot at all
