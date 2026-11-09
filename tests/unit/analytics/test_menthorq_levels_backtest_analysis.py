@@ -131,3 +131,85 @@ def test_settlement_share_medians_without_settlement_days_are_none():
     summary = trend_summary(make_rows(), "u")["total_net_gex_gamma_open_interest_spot"]
     assert summary["settlement_share_of_change_signed_median"] is None
     assert summary["settlement_share_of_change_absolute_median"] is None
+
+
+def test_each_alert_rule_uses_its_own_evaluable_days():
+    rows = make_rows()
+    # HVL (and so the regime) missing on days 2 and 3; total net GEX 5, -1, -2, 3 on every day.
+    for row in rows[1:3]:
+        row["u_hvl"] = None
+        row["u_gamma_regime"] = None
+    table = alert_threshold_table(rows, "u", target_alerts_per_month=())
+    by_rule = {(entry["alert"], entry["threshold"]): entry for entry in table["alerts"]}
+    assert table["evaluated_days"] == 2                       # days with an HVL (unchanged meaning)
+    # Net GEX sign change: day pairs (1,2) (2,3) (3,4) all known -> 3 evaluable days, 2 changes:
+    # 2 / (3 / 30.44) = 20.2933 per month (it was 2 / (2 / 30.44) = 30.44 over the HVL days).
+    sign = by_rule[("total_net_gex_sign_change", None)]
+    assert sign["evaluable_days"] == 3 and sign["alert_count"] == 2
+    assert sign["alerts_per_month"] == pytest.approx(20.2933, abs=1e-4)
+    # Spot within 1% of Call Resistance: known on all 4 days -> 3 evaluable pairs, no entry.
+    wall = by_rule[("spot_enters_within_n_percent_of_call_resistance", 1.0)]
+    assert wall["evaluable_days"] == 3 and wall["alerts_per_month"] == 0.0
+    # HVL crossing and HVL move: regimes above, None, None, above and HVLs 80,000, None, None,
+    # 81,000 -> no day with both itself and the previous day known: 0 evaluable, rate None.
+    crossing = by_rule[("spot_crosses_hvl", None)]
+    assert crossing["evaluable_days"] == 0 and crossing["alerts_per_month"] is None
+    hvl_move = by_rule[("hvl_1d_move", 1.0)]
+    assert hvl_move["evaluable_days"] == 0 and hvl_move["alerts_per_month"] is None
+    # Put Support 90,000 every day: moves None, 0, 0, 0 -> 3 evaluable days, no alert at 2%.
+    put_support = by_rule[("put_support_1d_move", 2.0)]
+    assert put_support["evaluable_days"] == 3 and put_support["alerts_per_month"] == 0.0
+
+
+def test_all_present_rows_use_three_evaluable_days_for_every_rule():
+    table = alert_threshold_table(make_rows(), "u", target_alerts_per_month=())
+    # 4 days, every value known: every day-to-day rule has 3 evaluable days.
+    assert {entry["evaluable_days"] for entry in table["alerts"]} == {3}
+    # HVL moves 2% and 1% at threshold 1%: 2 / (3 / 30.44) = 20.2933 per month.
+    hvl = next(entry for entry in table["alerts"]
+               if entry["alert"] == "hvl_1d_move" and entry["threshold"] == 1.0)
+    assert hvl["alerts_per_month"] == pytest.approx(20.2933, abs=1e-4)
+
+
+def test_bootstrap_blocks_run_over_the_original_day_positions(monkeypatch):
+    from coding.core.analytics import menthorq_levels_backtest_analysis as analysis
+
+    sample_sizes = []
+    real_interval = analysis.moving_block_bootstrap_interval
+
+    def recording_interval(sample_size, statistic, *arguments, **keywords):
+        sample_sizes.append(sample_size)
+        return real_interval(sample_size, statistic, *arguments, **keywords)
+    monkeypatch.setattr(analysis, "moving_block_bootstrap_interval", recording_interval)
+    feature = [1.0, None, 3.0, 4.0, None, 6.0]
+    outcome = [2.0, 5.0, None, 8.0, 1.0, 12.0]
+    result = analysis._correlation_test("t", feature, outcome, block_length=2, resample_count=50, seed=1)
+    assert result["count"] == 3                    # pairs at positions 0, 3, 5
+    assert sample_sizes == [6]                     # blocks drawn over all 6 days, not the 3 pairs
+    group = [True, None, False, True, False, None]
+    analysis._difference_test("d", outcome, group, block_length=2, resample_count=50, seed=1,
+                              group_description="g")
+    assert sample_sizes == [6, 6]
+
+
+def test_placebo_shifts_run_over_the_original_day_positions(monkeypatch):
+    from coding.core.analytics import menthorq_levels_backtest_analysis as analysis
+
+    calls = []
+
+    def recording_rate(spots, levels, maxima, minima, finals):
+        calls.append(list(levels))
+        return {"touched": 1, "rejected": 1, "rejection_rate": 0.5}
+    monkeypatch.setattr(analysis, "barrier_rejection_rate", recording_rate)
+    # Five days, spot 100; Call Resistance 101, 102, missing, 104, 105 (distances 1%, 2%, -, 4%, 5%).
+    rows = [{"index_price": 100.0, "u_call_resistance": level, "next_1d_final_price": 100.0,
+             "next_1d_maximum_price": 110.0, "next_1d_minimum_price": 90.0}
+            for level in (101.0, 102.0, None, 104.0, 105.0)]
+    result = analysis._barrier_test("b", rows, "u_call_resistance", "1d", minimum_shift=2)
+    assert result["days"] == 4                     # days with a level and an outcome
+    # Real levels first, then shifts 2 and 3 over the 5 calendar positions (range(2, 5 - 2 + 1)):
+    # shift 2 -> distances of days 3, 4, 5, 1, 2 -> levels None, 104, 105, 101, 102;
+    # shift 3 -> days 4, 5, 1, 2, 3 -> 104, 105, 101, 102, None.
+    assert calls[0] == [101.0, 102.0, None, 104.0, 105.0]
+    assert [[None if level is None else round(level, 6) for level in levels] for levels in calls[1:]] == [
+        [None, 104.0, 105.0, 101.0, 102.0], [104.0, 105.0, 101.0, 102.0, None]]

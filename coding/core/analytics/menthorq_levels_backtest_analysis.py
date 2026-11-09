@@ -19,7 +19,7 @@ Pure: no database.
 """
 
 import math
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from coding.core.analytics.level_signal_statistics import (
     group_mean_difference,
@@ -128,9 +128,12 @@ def _difference_test(
     estimate = group_mean_difference(values, groups)
     in_values = [value for value, group in pairs if group]
     out_values = [value for value, group in pairs if not group]
+    # Blocks are drawn over the ORIGINAL day positions (missing days included) and the
+    # statistic drops the missing days inside each resample, so a block is always a run of
+    # consecutive calendar days, never days glued together across a gap.
     interval = moving_block_bootstrap_interval(
-        len(pairs),
-        lambda positions: group_mean_difference(select(values, positions), select(groups, positions)),
+        len(outcome),
+        lambda positions: group_mean_difference(select(outcome, positions), select(in_group, positions)),
         block_length, resample_count, seed,
     ) if pairs else {"low": None, "high": None, "share_at_or_below_zero": None, "valid_resamples": 0}
     return {
@@ -155,9 +158,11 @@ def _correlation_test(
              if feature_value is not None and outcome_value is not None]
     features = [feature_value for feature_value, _ in pairs]
     outcomes = [outcome_value for _, outcome_value in pairs]
+    # Blocks over the original day positions; missing pairs dropped inside each resample
+    # (see _difference_test).
     interval = moving_block_bootstrap_interval(
-        len(pairs),
-        lambda positions: spearman_rank_correlation(select(features, positions), select(outcomes, positions)),
+        len(feature),
+        lambda positions: spearman_rank_correlation(select(feature, positions), select(outcome, positions)),
         block_length, resample_count, seed,
     ) if pairs else {"low": None, "high": None, "share_at_or_below_zero": None, "valid_resamples": 0}
     return {
@@ -195,22 +200,26 @@ def _barrier_test(
     Rejection rate at the real level vs placebo levels at the same relative
     distances taken from other days (circular shifts of the distance series,
     shifts of at least ``minimum_shift`` days, so the level's positioning
-    information is removed but the distance distribution is kept).
+    information is removed but the distance distribution is kept). The
+    shifts run over the ORIGINAL day positions (missing days included), so
+    a shift of n is always n calendar days; a day whose own outcome or
+    whose shifted distance is missing is skipped.
     """
-    kept = [row for row in rows if row.get(level_column) is not None
-            and row.get(f"next_{horizon}_final_price") is not None]
-    spots = column(kept, "index_price")
-    levels = column(kept, level_column)
-    maxima = column(kept, f"next_{horizon}_maximum_price")
-    minima = column(kept, f"next_{horizon}_minimum_price")
-    finals = column(kept, f"next_{horizon}_final_price")
+    spots = column(rows, "index_price")
+    levels = column(rows, level_column)
+    maxima = column(rows, f"next_{horizon}_maximum_price")
+    minima = column(rows, f"next_{horizon}_minimum_price")
+    finals = column(rows, f"next_{horizon}_final_price")
+    count = sum(1 for level, final in zip(levels, finals) if level is not None and final is not None)
     real = barrier_rejection_rate(spots, levels, maxima, minima, finals)
-    distances = [(level - spot) / spot for level, spot in zip(levels, spots)]
+    distances = [(level - spot) / spot if level is not None and spot else None
+                 for level, spot in zip(levels, spots)]
     placebo_rates = []
-    count = len(kept)
-    for shift in range(minimum_shift, count - minimum_shift + 1):
-        placebo_levels = [spot * (1.0 + distances[(position + shift) % count])
-                          for position, spot in enumerate(spots)]
+    position_count = len(rows)
+    for shift in range(minimum_shift, position_count - minimum_shift + 1):
+        shifted = [distances[(position + shift) % position_count] for position in range(position_count)]
+        placebo_levels = [None if spot is None or distance is None else spot * (1.0 + distance)
+                          for spot, distance in zip(spots, shifted)]
         rate = barrier_rejection_rate(spots, placebo_levels, maxima, minima, finals)["rejection_rate"]
         if rate is not None:
             placebo_rates.append(rate)
@@ -370,6 +379,16 @@ def _threshold_rows(
     return results
 
 
+def evaluable_pair_count(values: Sequence[Any], is_known: Callable[[Any], bool]) -> int:
+    """
+    Days on which a rule comparing a day with the previous day can be
+    evaluated: both days' values known (``is_known``). The first day never
+    counts (no previous day).
+    """
+    return sum(1 for position in range(1, len(values))
+               if is_known(values[position]) and is_known(values[position - 1]))
+
+
 def alert_threshold_table(
     rows: Sequence[Dict[str, Any]], universe: str,
     target_alerts_per_month: Sequence[float] = (1.0, 2.0, 4.0),
@@ -378,24 +397,39 @@ def alert_threshold_table(
     Historical alert counts for candidate urgent-alert rules, evaluated once
     per day at 23:59 UTC (intraday crossings are not seen). Frequencies are
     in-sample: the data-derived thresholds are fitted to this same history.
+
+    Each rule's alerts per month use that rule's OWN evaluable days
+    (``evaluable_days`` of its entry): a 1-day level move, the days whose
+    move in % of spot is computed; the HVL crossing, the days whose regime
+    and the previous day's are both above / below HVL; the net GEX sign
+    change, the days whose total net GEX and the previous day's are both
+    computed; spot entering a band around a wall, the days whose inside /
+    outside state and the previous day's are both known. The top-level
+    ``evaluated_days`` stays the number of days with an HVL.
     """
-    evaluated = sum(1 for row in rows if row.get(f"{universe}_hvl") is not None)
+    days_with_hvl = sum(1 for row in rows if row.get(f"{universe}_hvl") is not None)
     table: List[Dict[str, Any]] = []
     for level, fixed in (("hvl", (1.0, 2.0, 3.0, 5.0)),
                          ("call_resistance", (2.0, 5.0, 10.0)),
                          ("put_support", (2.0, 5.0, 10.0))):
-        table.extend(_threshold_rows(
-            f"{level}_1d_move", level_change_series(rows, universe, level, 1)["change_percent_of_spot"],
-            column(rows, f"{universe}_{level}_change_attribution"), fixed, target_alerts_per_month,
-            evaluated, "% of spot"))
+        moves = level_change_series(rows, universe, level, 1)["change_percent_of_spot"]
+        evaluable = sum(1 for move in moves if move is not None)
+        for entry in _threshold_rows(
+                f"{level}_1d_move", moves, column(rows, f"{universe}_{level}_change_attribution"),
+                fixed, target_alerts_per_month, evaluable, "% of spot"):
+            table.append({**entry, "evaluable_days": evaluable})
     settlement_day = [bool(value) for value in column(rows, f"{universe}_settled_expirations")]
-    for name, unit, flags in (
-            ("spot_crosses_hvl", "daily close vs HVL", regime_flips(column(rows, f"{universe}_gamma_regime"))),
-            ("total_net_gex_sign_change", "sign",
-             sign_changes(column(rows, f"{universe}_{TOTAL_NET_GEX_COLUMN}")))):
-        count, per_month = alerts_per_month(flags, evaluated)
+    regimes = column(rows, f"{universe}_gamma_regime")
+    total_gex = column(rows, f"{universe}_{TOTAL_NET_GEX_COLUMN}")
+    for name, unit, flags, evaluable in (
+            ("spot_crosses_hvl", "daily close vs HVL", regime_flips(regimes),
+             evaluable_pair_count(regimes, lambda regime: regime in (REGIME_SPOT_ABOVE_HVL,
+                                                                     REGIME_SPOT_BELOW_HVL))),
+            ("total_net_gex_sign_change", "sign", sign_changes(total_gex),
+             evaluable_pair_count(total_gex, lambda value: value is not None))):
+        count, per_month = alerts_per_month(flags, evaluable)
         table.append({"alert": name, "threshold": None, "unit": unit, "threshold_origin": "rule",
-                      "alert_count": count, "alerts_per_month": per_month,
+                      "alert_count": count, "alerts_per_month": per_month, "evaluable_days": evaluable,
                       "alert_count_on_settlement_days": sum(
                           1 for flag, settled in zip(flags, settlement_day) if flag and settled)})
     spots = column(rows, "index_price")
@@ -406,9 +440,10 @@ def alert_threshold_table(
         distances = [None if distance is None else abs(distance) for distance in signed_distances]
         for within in (0.5, 1.0, 2.0):
             inside = [None if distance is None else distance <= within for distance in distances]
-            count, per_month = alerts_per_month(state_entries(inside), evaluated)
+            evaluable = evaluable_pair_count(inside, lambda flag: flag is not None)
+            count, per_month = alerts_per_month(state_entries(inside), evaluable)
             table.append({"alert": f"spot_enters_within_n_percent_of_{level}", "threshold": within,
                           "unit": "% of spot", "threshold_origin": "fixed", "alert_count": count,
-                          "alerts_per_month": per_month,
+                          "alerts_per_month": per_month, "evaluable_days": evaluable,
                           "days_inside": sum(1 for flag in inside if flag)})
-    return {"evaluated_days": evaluated, "months": evaluated / DAYS_PER_MONTH, "alerts": table}
+    return {"evaluated_days": days_with_hvl, "months": days_with_hvl / DAYS_PER_MONTH, "alerts": table}
