@@ -1,19 +1,8 @@
-"""Tests for DefinedRiskAlertRule and format_defined_risk_alert."""
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+"""Tests for format_defined_risk_alert."""
+from datetime import datetime, timezone
+from typing import Optional
 
-from coding.service.scanner.defined_risk_alert_rules import (
-    DefinedRiskAlertRule,
-    format_defined_risk_alert,
-)
-
-
-class FakeRepository:
-    def __init__(self, last_alert: Optional[Dict[str, Any]] = None):
-        self._last_alert = last_alert
-
-    def get_last_alert_for_defined_risk(self, currency, expiration, structure_type):
-        return self._last_alert
+from coding.service.scanner.defined_risk_alert_rules import format_defined_risk_alert
 
 
 def _candidate(ev=10.0, gate_pass=True):
@@ -65,36 +54,6 @@ def _butterfly_scan_result(ev: Optional[float], expiry="1SEP26", gate_pass=True)
             "best": candidate, "candidates": [candidate],
         }],
     }
-
-
-class TestShouldAlert:
-    def test_no_expiries_never_alerts(self):
-        rule = DefinedRiskAlertRule("iron_condor", repository=FakeRepository())
-        should_send, top, reason = rule.should_alert(_scan_result(None))
-        assert should_send is False
-        assert top is None
-
-    def test_negative_ev_does_not_alert(self):
-        rule = DefinedRiskAlertRule("iron_condor", repository=FakeRepository())
-        should_send, top, reason = rule.should_alert(_scan_result(-5.0))
-        assert should_send is False
-
-    def test_positive_ev_no_prior_alert_sends(self):
-        rule = DefinedRiskAlertRule("iron_condor", repository=FakeRepository(last_alert=None))
-        should_send, top, reason = rule.should_alert(_scan_result(10.0))
-        assert should_send is True
-
-    def test_recent_alert_no_improvement_skips(self):
-        last_alert = {"ev": 10.0, "alert_sent_at": datetime.now(timezone.utc) - timedelta(hours=1)}
-        rule = DefinedRiskAlertRule("iron_condor", repository=FakeRepository(last_alert=last_alert))
-        should_send, top, reason = rule.should_alert(_scan_result(10.5))
-        assert should_send is False
-
-    def test_past_rate_limit_window_sends_again(self):
-        last_alert = {"ev": 10.0, "alert_sent_at": datetime.now(timezone.utc) - timedelta(hours=25)}
-        rule = DefinedRiskAlertRule("iron_condor", repository=FakeRepository(last_alert=last_alert))
-        should_send, top, reason = rule.should_alert(_scan_result(10.0))
-        assert should_send is True
 
 
 class TestFormatAlert:

@@ -16,7 +16,7 @@ from coding.service.health.checkers.forward_test_checker import (
 from coding.service.health.checkers.iv_percentile_checker import IvPercentileWindowCheck
 from coding.service.health.checkers.morning_note_checker import MorningNoteSmokeTestCheck
 from coding.service.health.checkers.scanner_checker import ScannerActivityCheck
-from coding.service.health.checkers.telegram_checker import TelegramConfigCheck, TelegramDeliveryCheck
+from coding.service.health.checkers.telegram_checker import TelegramConfigCheck
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,6 @@ CHECKERS: List[HealthCheck] = [
     ScannerActivityCheck(),
     DaemonServiceCheck(),
     TelegramConfigCheck(),
-    TelegramDeliveryCheck(),
     OnChainForwardTestCheck(),
     StraddleForwardTestCheck(),
     IvPercentileWindowCheck(),

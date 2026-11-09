@@ -14,6 +14,7 @@ Import-only test (no DB connection, no SSH tunnel) -- sync_from_vps.py has
 no import-time side effects beyond logging.basicConfig and load_dotenv.
 """
 
+from coding.core.analytics.menthorq_monitor.level_record import has_levels_sql_condition
 from scripts.sync_from_vps import SYNC_TABLES
 
 
@@ -95,6 +96,27 @@ class TestLiveTablesAreSynced:
     def test_table_names_are_unique(self):
         names = [entry["name"] for entry in SYNC_TABLES]
         assert len(names) == len(set(names))
+
+
+class TestOptionalTables:
+    def test_only_the_menthorq_tables_are_optional(self):
+        optional = {entry["name"] for entry in SYNC_TABLES if entry.get("optional")}
+        assert optional == {"menthorq_level_snapshots"}
+
+    def test_optional_is_a_boolean_when_present(self):
+        for entry in SYNC_TABLES:
+            assert isinstance(entry.get("optional", False), bool), entry["name"]
+
+
+class TestMenthorqLevelSnapshotsReplaceRule:
+    def test_the_sync_replaces_a_row_with_the_repository_s_has_levels_rule(self):
+        # The script cannot import coding/ when run as a file, so it spells the SQL out.
+        entry = _find("menthorq_level_snapshots")
+        assert entry is not None
+        conflict_target = entry["conflict_target"]
+        assert conflict_target.endswith(
+            f"WHERE NOT {has_levels_sql_condition('menthorq_level_snapshots')} "
+            f"AND {has_levels_sql_condition('EXCLUDED')}")
 
 
 class TestLookbackWindows:

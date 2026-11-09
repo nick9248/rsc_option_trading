@@ -31,7 +31,7 @@ The checks are registered in `coding/service/health/registry.py`. Each one runs 
 | Database - VPS Sync | local | Local database compared with the last synced VPS row counts |
 | Scanner Activity | both | The straddle scanner writes rows every cycle |
 | Daemon Service | VPS | The `option-trading` systemd service is active |
-| Telegram | both | Bot token valid (no message sent); alert delivery |
+| Telegram | both | Bot token valid (no message sent) |
 | Forward-Test Harnesses | both | On-chain predictions are recorded; straddle forward tests resolve settlements |
 | IV-Percentile Window | local | The IV-percentile history window is fresh enough |
 | Morning Note | local | The on-chain analysis and morning-note pipeline runs end to end |

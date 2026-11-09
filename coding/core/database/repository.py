@@ -8,17 +8,32 @@ import json
 import logging
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from psycopg2.extras import Json, execute_values
 
 from coding.core.analytics.market_wide_calculator import DERIBIT_SETTLEMENT_HOUR_UTC
+from coding.core.analytics.menthorq_monitor.alert_mute import MenthorqMonitorState
+from coding.core.analytics.menthorq_monitor.level_record import (
+    MenthorqLevelRecord,
+    has_levels_sql_condition,
+)
 from coding.core.analytics.results.delta_flow_results import FlowBucket
 from coding.core.analytics.results.expiry_results import ExpirationAnalysisResult
 from coding.core.analytics.results.gex_dex_results import GexDexResult
 from coding.core.database.config import ConnectionPool, DatabaseConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _float_or_none(value: Any) -> Optional[float]:
+    """A NUMERIC/REAL column value as float; NULL stays None."""
+    return float(value) if value is not None else None
+
+
+def _utc_or_none(value: Optional[datetime]) -> Optional[datetime]:
+    """A timestamptz value (returned in the session time zone) in UTC; NULL stays None."""
+    return value.astimezone(timezone.utc) if value is not None else None
 
 
 class DatabaseRepository:
@@ -1019,6 +1034,389 @@ class DatabaseRepository:
                 """, (currency,))
                 row = cursor.fetchone()
         return float(row[0]) if row else None
+
+    def get_index_price_at_or_before(
+        self, currency: str, as_of: datetime
+    ) -> Optional[Tuple[float, datetime]]:
+        """
+        Point-in-time index (spot) price: the index price stamped on the
+        newest stored option trade whose exchange timestamp is at or before
+        ``as_of`` (no lookahead). ``historical_trades`` is used because it is
+        the only table that carries Deribit's index price at trade time with
+        sub-hour resolution; ``hourly_snapshots``/``onchain_analysis_snapshots``
+        are hourly and their rows for the current hour are written after it.
+
+        Args:
+            currency: "BTC" or "ETH".
+            as_of: Timezone-aware UTC instant.
+
+        Returns:
+            (index_price, trade_time_utc) or None when no trade exists at or
+            before ``as_of``.
+        """
+        as_of_milliseconds = int(as_of.timestamp() * 1000)
+        with self._db_cursor() as cursor:
+            cursor.execute("""
+                SELECT index_price, trade_timestamp FROM historical_trades
+                WHERE currency = %s AND index_price IS NOT NULL
+                  AND trade_timestamp <= %s
+                ORDER BY trade_timestamp DESC LIMIT 1
+            """, (currency, as_of_milliseconds))
+            row = cursor.fetchone()
+        if row is None:
+            return None
+        return float(row[0]), self._from_epoch_ms(int(row[1]))
+
+    @staticmethod
+    def _newest_snapshot_capture(cursor: Any, currency: str, as_of_naive_utc: datetime) -> Optional[datetime]:
+        """MAX(snapshots.captured_at) at or before ``as_of_naive_utc`` (naive UTC, as stored), or None."""
+        cursor.execute("""
+            SELECT MAX(captured_at) FROM snapshots
+            WHERE currency = %s AND captured_at <= %s
+        """, (currency, as_of_naive_utc))
+        return cursor.fetchone()[0]
+
+    def get_latest_option_chain_capture_at_or_before(
+        self, currency: str, as_of: datetime
+    ) -> Optional[datetime]:
+        """
+        Capture time (UTC-aware) of the newest ``snapshots`` capture at or
+        before ``as_of``, or None when there is none. One MAX query, no
+        chain rows: a cheap check whether newer input data has arrived.
+        """
+        as_of_naive_utc = as_of.astimezone(timezone.utc).replace(tzinfo=None)
+        with self._db_cursor() as cursor:
+            captured_at = self._newest_snapshot_capture(cursor, currency, as_of_naive_utc)
+        return captured_at.replace(tzinfo=timezone.utc) if captured_at is not None else None
+
+    def get_option_chain_snapshot_at_or_before(
+        self, currency: str, as_of: datetime
+    ) -> Optional[Tuple[datetime, List[Dict[str, Any]]]]:
+        """
+        The full option chain from the newest ``snapshots`` capture at or
+        before ``as_of`` (no lookahead). ``snapshots.captured_at`` is stored
+        as naive UTC, so ``as_of`` is converted to naive UTC for the query
+        and the returned capture time is made UTC-aware again.
+
+        Args:
+            currency: "BTC" or "ETH".
+            as_of: Timezone-aware UTC instant.
+
+        Returns:
+            (captured_at_utc, rows) where each row has instrument_name,
+            expiration, strike, option_type, open_interest, mark_iv (percent,
+            as stored), mark_price (in the underlying, e.g. BTC) and
+            underlying_price (the expiry's forward). Numeric NULLs stay
+            None. None when no capture exists at or before ``as_of``.
+        """
+        as_of_naive_utc = as_of.astimezone(timezone.utc).replace(tzinfo=None)
+        with self._db_cursor() as cursor:
+            captured_at = self._newest_snapshot_capture(cursor, currency, as_of_naive_utc)
+            if captured_at is None:
+                return None
+            cursor.execute("""
+                SELECT instrument_name, expiration, strike, option_type,
+                       open_interest, mark_iv, underlying_price, mark_price
+                FROM snapshots
+                WHERE currency = %s AND captured_at = %s
+                ORDER BY expiration, strike, option_type
+            """, (currency, captured_at))
+            fetched_rows = cursor.fetchall()
+
+        rows = [
+            {
+                "instrument_name": row[0],
+                "expiration": row[1],
+                "strike": _float_or_none(row[2]),
+                "option_type": row[3],
+                "open_interest": _float_or_none(row[4]),
+                "mark_iv": _float_or_none(row[5]),
+                "underlying_price": _float_or_none(row[6]),
+                "mark_price": _float_or_none(row[7]),
+            }
+            for row in fetched_rows
+        ]
+        return captured_at.replace(tzinfo=timezone.utc), rows
+
+    # ------------------------------------------------------------------
+    # MenthorQ-style level monitor (migration 031)
+    # ------------------------------------------------------------------
+
+    def missing_tables(self, table_names: Sequence[str]) -> List[str]:
+        """
+        The names in ``table_names`` that do not exist in the database's
+        search path (one ``to_regclass`` query; reads no table).
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                "SELECT name FROM unnest(%s::text[]) AS name WHERE to_regclass(name) IS NULL",
+                (list(table_names),),
+            )
+            return [row[0] for row in cursor.fetchall()]
+
+    _MENTHORQ_LEVEL_COLUMNS = (
+        "id, currency, mode, as_of_utc, computed_at, expiry_universe, gamma_underlying, "
+        "spot, spot_time_utc, snapshot_captured_at_utc, open_interest_captured_at_utc, "
+        "call_resistance, put_support, hvl, total_net_gex, gamma_regime, expirations, "
+        "panel_levels, iv_source_counts, not_computed_reasons"
+    )
+
+    @staticmethod
+    def _menthorq_level_record_from_row(row: Tuple[Any, ...]) -> MenthorqLevelRecord:
+        """A ``menthorq_level_snapshots`` row (``_MENTHORQ_LEVEL_COLUMNS`` order) as a record."""
+        return MenthorqLevelRecord(
+            record_id=row[0], currency=row[1], mode=row[2],
+            as_of_utc=row[3].astimezone(timezone.utc),          # NOT NULL column
+            computed_at_utc=row[4].astimezone(timezone.utc),    # NOT NULL column
+            expiry_universe=row[5], gamma_underlying=row[6],
+            spot=_float_or_none(row[7]), spot_time_utc=_utc_or_none(row[8]),
+            snapshot_captured_at_utc=_utc_or_none(row[9]),
+            open_interest_captured_at_utc=_utc_or_none(row[10]), call_resistance=_float_or_none(row[11]),
+            put_support=_float_or_none(row[12]), hvl=_float_or_none(row[13]),
+            total_net_gex=_float_or_none(row[14]), gamma_regime=row[15],
+            expirations=list(row[16]), panel_levels=dict(row[17]),
+            iv_source_counts=dict(row[18]), not_computed_reasons=list(row[19]),
+        )
+
+    def save_menthorq_level_snapshot(self, record: MenthorqLevelRecord) -> Optional[int]:
+        """
+        Store one monitor run in ``menthorq_level_snapshots``.
+
+        When a row with the same (currency, mode, expiry_universe,
+        gamma_underlying, as_of_utc) exists, it is replaced only if it was
+        NOT computed (no levels, ``MenthorqLevelRecord.has_levels``) and
+        ``record`` is computed: a row with levels is never overwritten, and
+        a not-computed retry does not rewrite a not-computed row. The replacement gets the new
+        ``computed_at``, so the incremental VPS sync picks it up.
+
+        Returns:
+            The row id when a row was inserted or replaced, else None (the
+            existing row is kept unchanged).
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                f"""
+                INSERT INTO menthorq_level_snapshots (
+                    currency, mode, as_of_utc, computed_at, expiry_universe, gamma_underlying,
+                    spot, spot_time_utc, snapshot_captured_at_utc, open_interest_captured_at_utc,
+                    call_resistance, put_support, hvl, total_net_gex, gamma_regime,
+                    expirations, panel_levels, iv_source_counts, not_computed_reasons)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (currency, mode, expiry_universe, gamma_underlying, as_of_utc)
+                DO UPDATE SET
+                    computed_at = EXCLUDED.computed_at, spot = EXCLUDED.spot,
+                    spot_time_utc = EXCLUDED.spot_time_utc,
+                    snapshot_captured_at_utc = EXCLUDED.snapshot_captured_at_utc,
+                    open_interest_captured_at_utc = EXCLUDED.open_interest_captured_at_utc,
+                    call_resistance = EXCLUDED.call_resistance, put_support = EXCLUDED.put_support,
+                    hvl = EXCLUDED.hvl, total_net_gex = EXCLUDED.total_net_gex,
+                    gamma_regime = EXCLUDED.gamma_regime, expirations = EXCLUDED.expirations,
+                    panel_levels = EXCLUDED.panel_levels, iv_source_counts = EXCLUDED.iv_source_counts,
+                    not_computed_reasons = EXCLUDED.not_computed_reasons
+                WHERE NOT {has_levels_sql_condition('menthorq_level_snapshots')}
+                  AND {has_levels_sql_condition('EXCLUDED')}
+                RETURNING id
+                """,
+                (
+                    record.currency, record.mode, record.as_of_utc, record.computed_at_utc,
+                    record.expiry_universe, record.gamma_underlying, record.spot,
+                    record.spot_time_utc, record.snapshot_captured_at_utc,
+                    record.open_interest_captured_at_utc, record.call_resistance,
+                    record.put_support, record.hvl, record.total_net_gex, record.gamma_regime,
+                    Json(record.expirations), Json(record.panel_levels),
+                    Json(record.iv_source_counts), Json(record.not_computed_reasons),
+                ),
+            )
+            row = cursor.fetchone()
+        return int(row[0]) if row else None
+
+    def get_menthorq_level_snapshot(
+        self, currency: str, mode: str, expiry_universe: str, gamma_underlying: str,
+        as_of_utc: datetime,
+    ) -> Optional[MenthorqLevelRecord]:
+        """The stored run with exactly this key, computed or not, or None when none is stored."""
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                f"SELECT {self._MENTHORQ_LEVEL_COLUMNS} FROM menthorq_level_snapshots "
+                "WHERE currency = %s AND mode = %s AND expiry_universe = %s "
+                "AND gamma_underlying = %s AND as_of_utc = %s",
+                (currency, mode, expiry_universe, gamma_underlying, as_of_utc),
+            )
+            row = cursor.fetchone()
+        return self._menthorq_level_record_from_row(row) if row else None
+
+    def get_menthorq_level_snapshot_at_or_before(
+        self, currency: str, mode: str, expiry_universe: str, gamma_underlying: str,
+        instant: datetime, earliest: Optional[datetime] = None, strictly_before: bool = False,
+    ) -> Optional[MenthorqLevelRecord]:
+        """
+        Newest computed run (with levels, ``has_levels``) at or before ``instant``
+        (strictly before with ``strictly_before``) and, when ``earliest`` is
+        given, not older than it.
+
+        Returns:
+            The record, or None when no such row exists.
+        """
+        comparison = "<" if strictly_before else "<="
+        query = (
+            f"SELECT {self._MENTHORQ_LEVEL_COLUMNS} FROM menthorq_level_snapshots "
+            "WHERE currency = %s AND mode = %s AND expiry_universe = %s "
+            "AND gamma_underlying = %s "
+            f"AND {has_levels_sql_condition('menthorq_level_snapshots')} "
+            f"AND as_of_utc {comparison} %s"
+        )
+        parameters: List[Any] = [currency, mode, expiry_universe, gamma_underlying, instant]
+        if earliest is not None:
+            query += " AND as_of_utc >= %s"
+            parameters.append(earliest)
+        query += " ORDER BY as_of_utc DESC LIMIT 1"
+        with self._db_cursor() as cursor:
+            cursor.execute(query, tuple(parameters))
+            row = cursor.fetchone()
+        return self._menthorq_level_record_from_row(row) if row else None
+
+    def get_menthorq_level_snapshots_between(
+        self, currency: str, mode: str, expiry_universe: str, gamma_underlying: str,
+        earliest: datetime, before: datetime,
+    ) -> List[MenthorqLevelRecord]:
+        """
+        Every computed run (with levels, ``has_levels``) with ``earliest`` <=
+        ``as_of_utc`` < ``before``, oldest first (empty when none).
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                f"SELECT {self._MENTHORQ_LEVEL_COLUMNS} FROM menthorq_level_snapshots "
+                "WHERE currency = %s AND mode = %s AND expiry_universe = %s "
+                "AND gamma_underlying = %s "
+                f"AND {has_levels_sql_condition('menthorq_level_snapshots')} "
+                "AND as_of_utc >= %s AND as_of_utc < %s ORDER BY as_of_utc",
+                (currency, mode, expiry_universe, gamma_underlying, earliest, before),
+            )
+            rows = cursor.fetchall()
+        return [self._menthorq_level_record_from_row(row) for row in rows]
+
+    def save_menthorq_alert_deliveries(
+        self, currency: str, alert_keys: List[str], delivered_at: datetime, message: str,
+        level_snapshot_id: Optional[int] = None,
+    ) -> None:
+        """
+        Record one delivered message under several alert keys in ONE
+        transaction: either every key is saved or, on an error, none.
+        """
+        with self._db_cursor() as cursor:
+            for alert_key in alert_keys:
+                cursor.execute(
+                    """
+                    INSERT INTO menthorq_alert_deliveries
+                        (currency, alert_key, delivered_at, level_snapshot_id, message)
+                    VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (currency, alert_key, delivered_at, level_snapshot_id, message),
+                )
+
+    def get_last_menthorq_alert_delivery(self, currency: str, alert_key: str) -> Optional[datetime]:
+        """When a message with ``alert_key`` was last delivered (UTC-aware), or None."""
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT MAX(delivered_at) FROM menthorq_alert_deliveries
+                WHERE currency = %s AND alert_key = %s
+                """,
+                (currency, alert_key),
+            )
+            row = cursor.fetchone()
+        return row[0].astimezone(timezone.utc) if row and row[0] is not None else None
+
+    def get_latest_menthorq_level_run(
+        self, currency: str, mode: str, expiry_universe: str, gamma_underlying: str,
+    ) -> Optional[MenthorqLevelRecord]:
+        """
+        The newest stored run of ``mode``, computed or not (a not-computed
+        run has no levels, ``has_levels`` False), or None when no run is stored.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                f"SELECT {self._MENTHORQ_LEVEL_COLUMNS} FROM menthorq_level_snapshots "
+                "WHERE currency = %s AND mode = %s AND expiry_universe = %s "
+                "AND gamma_underlying = %s ORDER BY as_of_utc DESC LIMIT 1",
+                (currency, mode, expiry_universe, gamma_underlying),
+            )
+            row = cursor.fetchone()
+        return self._menthorq_level_record_from_row(row) if row else None
+
+    def get_last_menthorq_alert_delivery_of_keys(
+        self, currency: str, alert_keys: List[str],
+    ) -> Optional[Tuple[str, datetime]]:
+        """
+        The newest delivered message whose key is one of ``alert_keys``:
+        (alert_key, delivered_at UTC-aware), or None when none was delivered.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT alert_key, delivered_at FROM menthorq_alert_deliveries
+                WHERE currency = %s AND alert_key = ANY(%s)
+                ORDER BY delivered_at DESC LIMIT 1
+                """,
+                (currency, list(alert_keys)),
+            )
+            row = cursor.fetchone()
+        return (row[0], row[1].astimezone(timezone.utc)) if row else None
+
+    # MenthorQ-style monitor alert state (migration 032)
+
+    def get_menthorq_monitor_state(self, currency: str) -> Optional[MenthorqMonitorState]:
+        """The persisted alert state (mute, last suppressed alert), or None when no row exists."""
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT alerts_muted_until, mute_updated_at, last_suppressed_at,
+                       last_suppressed_alert_keys
+                FROM menthorq_monitor_state WHERE currency = %s
+                """,
+                (currency,),
+            )
+            row = cursor.fetchone()
+        if row is None:
+            return None
+        return MenthorqMonitorState(
+            currency=currency, alerts_muted_until=_utc_or_none(row[0]),
+            mute_updated_at=_utc_or_none(row[1]),
+            last_suppressed_at=_utc_or_none(row[2]), last_suppressed_alert_keys=list(row[3]),
+        )
+
+    def save_menthorq_alert_mute(
+        self, currency: str, alerts_muted_until: Optional[datetime], updated_at: datetime,
+    ) -> None:
+        """Set (or with None clear) the end of the urgent-alert mute."""
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO menthorq_monitor_state (currency, alerts_muted_until, mute_updated_at)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (currency) DO UPDATE
+                SET alerts_muted_until = EXCLUDED.alerts_muted_until,
+                    mute_updated_at = EXCLUDED.mute_updated_at
+                """,
+                (currency, alerts_muted_until, updated_at),
+            )
+
+    def save_menthorq_suppressed_alerts(
+        self, currency: str, alert_keys: List[str], suppressed_at: datetime,
+    ) -> None:
+        """Record the urgent alerts held back by the mute (newest only)."""
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO menthorq_monitor_state
+                    (currency, last_suppressed_at, last_suppressed_alert_keys)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (currency) DO UPDATE
+                SET last_suppressed_at = EXCLUDED.last_suppressed_at,
+                    last_suppressed_alert_keys = EXCLUDED.last_suppressed_alert_keys
+                """,
+                (currency, suppressed_at, Json(list(alert_keys))),
+            )
 
     def save_futures_basis(self, rows: List[Dict[str, Any]]) -> int:
         """
@@ -2650,61 +3048,6 @@ class DatabaseRepository:
                 settlement_return_pct, resolved_at, scan_id,
             ))
 
-    def get_last_alert_for_expiry(
-        self,
-        currency: str,
-        expiration: str
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Return the most recently alerted straddle_scan_history row for
-        (currency, expiration) — used by the alert rate-limit rule.
-
-        Args:
-            currency: Currency symbol (e.g., "BTC", "ETH").
-            expiration: Expiration date string (e.g., "25SEP26").
-
-        Returns:
-            Dict {iv_percentile, alert_sent_at}, or None if never alerted.
-        """
-        with self._db_cursor() as cursor:
-            cursor.execute("""
-                SELECT iv_percentile, alert_sent_at
-                FROM straddle_scan_history
-                WHERE currency = %s AND expiration = %s AND alert_sent = TRUE
-                ORDER BY alert_sent_at DESC
-                LIMIT 1
-            """, (currency, expiration))
-            row = cursor.fetchone()
-            if row is None:
-                return None
-            return {
-                "iv_percentile": float(row[0]) if row[0] is not None else None,
-                "alert_sent_at": row[1],
-            }
-
-    def mark_straddle_scan_alert_sent(
-        self,
-        currency: str,
-        expiration: str,
-        scan_time,
-    ) -> None:
-        """
-        Mark the straddle_scan_history row for this (currency, expiration,
-        scan_time) as alerted — called right after a successful Telegram send.
-
-        Args:
-            currency: Currency symbol (e.g., "BTC", "ETH").
-            expiration: Expiration date string (e.g., "25SEP26").
-            scan_time: The scan cycle's timestamp (same value passed to
-                save_straddle_scan for this row).
-        """
-        with self._db_cursor() as cursor:
-            cursor.execute("""
-                UPDATE straddle_scan_history
-                SET alert_sent = TRUE, alert_sent_at = NOW()
-                WHERE currency = %s AND expiration = %s AND scan_time = %s
-            """, (currency, expiration, scan_time))
-
     # ── Defined-Risk Scanner (Iron Condor / Butterfly) ──────────────────────────
 
     def save_defined_risk_scan(self, row: Dict[str, Any]) -> bool:
@@ -2786,34 +3129,6 @@ class DatabaseRepository:
                     resolved_at = %s
                 WHERE id = %s
             """, (settlement_index_price, settlement_pnl_usd, settlement_return_pct, resolved_at, scan_id))
-
-    def get_last_alert_for_defined_risk(
-        self, currency: str, expiration: str, structure_type: str
-    ) -> Optional[Dict[str, Any]]:
-        """Return the most recently alerted row for (currency, expiration, structure_type), or None."""
-        with self._db_cursor() as cursor:
-            cursor.execute("""
-                SELECT ev, alert_sent_at
-                FROM defined_risk_scan_history
-                WHERE currency = %s AND expiration = %s AND structure_type = %s AND alert_sent = TRUE
-                ORDER BY alert_sent_at DESC
-                LIMIT 1
-            """, (currency, expiration, structure_type))
-            row = cursor.fetchone()
-            if row is None:
-                return None
-            return {"ev": float(row[0]) if row[0] is not None else None, "alert_sent_at": row[1]}
-
-    def mark_defined_risk_scan_alert_sent(
-        self, currency: str, expiration: str, structure_type: str, scan_time
-    ) -> None:
-        """Mark the row for this (currency, expiration, structure_type, scan_time) as alerted."""
-        with self._db_cursor() as cursor:
-            cursor.execute("""
-                UPDATE defined_risk_scan_history
-                SET alert_sent = TRUE, alert_sent_at = NOW()
-                WHERE currency = %s AND expiration = %s AND structure_type = %s AND scan_time = %s
-            """, (currency, expiration, structure_type, scan_time))
 
     # ── OTM Contract Finder ───────────────────────────────────────────────────
 

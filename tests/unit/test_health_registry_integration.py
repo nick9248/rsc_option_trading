@@ -5,7 +5,7 @@ from coding.service.health.registry import CHECKERS
 
 
 def test_all_checkers_are_health_check_instances():
-    assert len(CHECKERS) == 12
+    assert len(CHECKERS) == 11
     for checker in CHECKERS:
         assert isinstance(checker, HealthCheck)
         assert checker.category

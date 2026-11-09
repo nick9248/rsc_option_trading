@@ -29,6 +29,7 @@ from coding.core.logging.logging_setup import init_logging
 from coding.service.data_collection.prospective_collector import ProspectiveCollector
 from coding.service.data_collection.trade_collector import TradeCollector
 from coding.core.database.repository import DatabaseRepository
+from coding.service.on_chain.menthorq_monitor.menthorq_monitor_job import start_menthorq_monitor_job
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,8 @@ class UnifiedScheduler:
     Manages:
     - ProspectiveCollector: Every 30 minutes (hourly snapshots, greeks)
     - TradeCollector: Every 60 seconds (trade-level flow data)
+    - MenthorQ-style level monitor: hourly cron (UTC), weekly brief, /brief polling
+      (coding/service/on_chain/menthorq_monitor/menthorq_monitor_job.py)
 
     Architecture:
     - Single process, two independent schedulers
@@ -87,6 +90,11 @@ class UnifiedScheduler:
             collection_interval_seconds=self.trade_interval,
             lookback_minutes=self.trade_lookback
         )
+
+        # MenthorQ-style level monitor (numbers only). A bad MENTHORQ_* setting or
+        # a construction error disables only the monitor, never the collectors
+        # (logged at ERROR, one Telegram notice to the owner when configured).
+        self.menthorq_monitor_job = start_menthorq_monitor_job(repository=repository)
 
         # Scheduler
         self.scheduler = BackgroundScheduler()
@@ -170,6 +178,10 @@ class UnifiedScheduler:
             max_instances=1
         )
         logger.info(f"[OK] Trade Collector scheduled (every {self.trade_interval} sec)")
+
+        # MenthorQ-style monitor (cron jobs in UTC; no run at startup)
+        if self.menthorq_monitor_job is not None:
+            self.menthorq_monitor_job.register(self.scheduler)
 
         # Start scheduler
         self.scheduler.start()

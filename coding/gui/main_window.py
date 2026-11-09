@@ -28,11 +28,13 @@ from coding.gui.tabs.on_chain_analysis_tab import OnChainAnalysisTab
 from coding.gui.tabs.database_tab import DatabaseTab
 from coding.gui.tabs.system_validation_tab import SystemValidationTab
 from coding.gui.tabs.automation_tab import AutomationTab
+from coding.gui.tabs.menthorq_charts_tab import MenthorqChartsTab
+from coding.gui.tabs.menthorq_monitor_tab import MenthorqMonitorTab
 
 
 logger = logging.getLogger(__name__)
 
-# Stack indices 1–6 are active modules. 7–9 are placeholder modules.
+# Stack indices 1–8 are active modules. 9–11 are placeholder modules.
 # NavigationPage is index 0 (not counted in position indicator).
 MODULE_DEFS: list[dict] = [
     {"index": 1,  "icon": "🔗", "name": "API Connection",    "subtitle": "Test endpoints"},
@@ -41,16 +43,18 @@ MODULE_DEFS: list[dict] = [
     {"index": 4,  "icon": "🗄",  "name": "Database",          "subtitle": "Capture & sync"},
     {"index": 5,  "icon": "✅", "name": "System Health",     "subtitle": "Diagnostics"},
     {"index": 6,  "icon": "🤖", "name": "Automation",        "subtitle": "Scanners · manual trigger"},
-    {"index": 7,  "icon": "📈", "name": "Market Data",       "subtitle": "Coming soon"},
-    {"index": 8,  "icon": "💹", "name": "Trading",           "subtitle": "Coming soon"},
-    {"index": 9,  "icon": "🧮", "name": "Analytics",         "subtitle": "Coming soon"},
+    {"index": 7,  "icon": "📊", "name": "MenthorQ Charts",   "subtitle": "IV*OI · Net GEX · Net DEX"},
+    {"index": 8,  "icon": "🔔", "name": "MenthorQ Monitor",  "subtitle": "Brief · alerts preview"},
+    {"index": 9,  "icon": "📈", "name": "Market Data",       "subtitle": "Coming soon"},
+    {"index": 10, "icon": "💹", "name": "Trading",           "subtitle": "Coming soon"},
+    {"index": 11, "icon": "🧮", "name": "Analytics",         "subtitle": "Coming soon"},
 ]
 
 # Last active module index (used for wrap-around navigation)
-_LAST_ACTIVE = 6
+_LAST_ACTIVE = 8
 
 # Stack indices that are permanent placeholders (never active modules)
-_PLACEHOLDER_INDICES = {7, 8, 9}
+_PLACEHOLDER_INDICES = {9, 10, 11}
 
 
 class MainWindow(QMainWindow):
@@ -59,7 +63,7 @@ class MainWindow(QMainWindow):
 
     Layout:
         top_bar (fixed 36px)  —  logo | position_label | [← Prev][⌂ Home][Next →]
-        stack (QStackedWidget) — index 0: NavigationPage, 1–9: module tabs
+        stack (QStackedWidget) — index 0: NavigationPage, 1–11: module tabs
     """
 
     def __init__(self):
@@ -176,7 +180,13 @@ class MainWindow(QMainWindow):
         # Index 6: Automation
         self.stack.addWidget(AutomationTab())
 
-        # Indices 7–9: Future placeholders
+        # Index 7: MenthorQ Charts
+        self.stack.addWidget(MenthorqChartsTab())
+
+        # Index 8: MenthorQ Monitor
+        self.stack.addWidget(MenthorqMonitorTab())
+
+        # Indices 9–11: Future placeholders
         self.stack.addWidget(self._placeholder_widget("Market data visualization coming soon…"))
         self.stack.addWidget(self._placeholder_widget("Trading interface coming soon…"))
         self.stack.addWidget(self._placeholder_widget("Analytics dashboard coming soon…"))
@@ -186,7 +196,9 @@ class MainWindow(QMainWindow):
         from coding.gui.tabs.navigation_page import NavigationPage
         nav_page = NavigationPage(module_defs=MODULE_DEFS, failed_indices=failed_indices | _PLACEHOLDER_INDICES)
         nav_page.module_selected.connect(self._go_to)
-        self.stack.removeWidget(self.stack.widget(0))
+        temporary_slot = self.stack.widget(0)
+        assert temporary_slot is not None
+        self.stack.removeWidget(temporary_slot)
         self.stack.insertWidget(0, nav_page)
         self.stack.setCurrentIndex(0)
 

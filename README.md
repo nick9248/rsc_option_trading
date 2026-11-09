@@ -11,9 +11,9 @@ Automated crypto options trading for BTC and ETH on Deribit. The long-term goal 
 | **Data collection daemon** | Runs 24/7 on a Hetzner VPS (systemd). Every 30 minutes it collects trades, book summaries, on-chain analysis, DVOL, funding rate, daily OHLCV, dated-futures basis and the owner's own Deribit account (read-only). |
 | **On-chain analysis** | GEX/DEX by strike, max pain, put/call ratios, volatility surface, buy/sell flow (computed on demand from stored trades), dealer inventory, exposure profiles. |
 | **Morning note** | Turns the on-chain analysis into a scored executive summary (`synthesis_logic.md`). |
-| **Scanners and forward tests** | Straddle, iron condor and butterfly scanners with Telegram alerts; forward-test harnesses that record predictions and resolve them at settlement. |
+| **Scanners and forward tests** | Straddle, iron condor and butterfly scanners; forward-test harnesses that record predictions and resolve them at settlement. |
 | **Health checks** | One shared check registry, run locally (`scripts/validate_system.py`) and on the VPS (`scripts/check_vps_health.py`, hourly cron). |
-| **Desktop GUI** | PySide6 app: API connection, snapshot, on-chain analysis, database sync, system health and automation tabs. |
+| **Desktop GUI** | PySide6 app: API connection, snapshot, on-chain analysis, database sync, system health and automation tabs, plus the MenthorQ charts and MenthorQ monitor tabs. |
 
 No code in this repo places real orders.
 
@@ -76,7 +76,7 @@ Copy `.env.example` to `.env` and fill in the values. The code reads these keys:
 | `DB_PASSWORD` | PostgreSQL password (required) |
 | `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_NAME` | Optional. Defaults: `localhost`, `5433`, `postgres`, `option_trading` |
 | `client_id`, `deribit_key` | Optional. Read-only Deribit API credentials for the account collector. Without them the account tables stay empty. |
-| `OSF_TELEGRAM_BOT_TOKEN`, `OSF_TELEGRAM_CHAT_ID` | Optional. Telegram scanner alerts |
+| `OSF_TELEGRAM_BOT_TOKEN`, `OSF_TELEGRAM_CHAT_ID` | Optional. Telegram bot of the MenthorQ monitor (level alerts, weekly brief, `/brief` command) |
 
 ### 3. Database
 

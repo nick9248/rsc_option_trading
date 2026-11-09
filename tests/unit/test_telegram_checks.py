@@ -1,7 +1,9 @@
-"""Unit tests for Telegram health checks."""
+"""Unit tests for the Telegram config health check."""
+
+import types
 
 from coding.core.health.models import CheckStatus
-from coding.service.health.checkers.telegram_checker import TelegramConfigCheck, TelegramDeliveryCheck
+from coding.service.health.checkers.telegram_checker import TelegramConfigCheck
 
 
 class _FakeResponse:
@@ -49,55 +51,22 @@ def test_config_fail_when_token_rejected(monkeypatch, tmp_path):
     assert results[0].status == CheckStatus.FAIL
 
 
-class _FakeCursor:
-    def __init__(self, results_by_currency):
-        self._results_by_currency = results_by_currency
-        self._last_currency = None
-
-    def execute(self, query, params):
-        self._last_currency = params[0]
-
-    def fetchone(self):
-        return self._results_by_currency[self._last_currency]
-
-    def close(self):
-        pass
+def _failing_requests_module():
+    """A stand-in requests module whose get raises like requests does (URL in the text)."""
+    def get(url, timeout):
+        raise ConnectionError(f"Max retries exceeded with url: {url}")
+    module = types.ModuleType("failing_requests")
+    setattr(module, "get", get)
+    return module
 
 
-class _FakeConnection:
-    def __init__(self, cursor):
-        self._cursor = cursor
-
-    def cursor(self):
-        return self._cursor
-
-
-class _FakeRepo:
-    def __init__(self, results_by_currency):
-        self._conn = _FakeConnection(_FakeCursor(results_by_currency))
-
-    def _get_connection(self):
-        return self._conn
-
-    def _return_connection(self, conn):
-        pass
-
-
-def test_delivery_passes_when_no_triggers():
-    repo = _FakeRepo({"BTC": (0, 0), "ETH": (0, 0)})
-    results = TelegramDeliveryCheck().run(repo)
-    assert all(r.status == CheckStatus.PASS for r in results)
-
-
-def test_delivery_warns_when_triggered_but_never_sent():
-    repo = _FakeRepo({"BTC": (3, 0), "ETH": (0, 0)})
-    results = TelegramDeliveryCheck().run(repo)
-    btc_result = next(r for r in results if "BTC" in r.name)
-    assert btc_result.status == CheckStatus.WARN
-
-
-def test_delivery_passes_when_triggered_and_sent():
-    repo = _FakeRepo({"BTC": (3, 2), "ETH": (0, 0)})
-    results = TelegramDeliveryCheck().run(repo)
-    btc_result = next(r for r in results if "BTC" in r.name)
-    assert btc_result.status == CheckStatus.PASS
+def test_unreachable_message_hides_the_token(monkeypatch, tmp_path):
+    monkeypatch.setenv("OSF_TELEGRAM_BOT_TOKEN", "secret-token")
+    monkeypatch.setenv("OSF_TELEGRAM_CHAT_ID", "12345")
+    empty_env = tmp_path / ".env"
+    empty_env.write_text("")
+    check = TelegramConfigCheck(requests_module=_failing_requests_module(), env_path=empty_env)
+    results = check.run(repo=None)
+    assert results[0].status == CheckStatus.FAIL
+    assert "secret-token" not in results[0].message
+    assert "/bot<bot token>/getMe" in results[0].message

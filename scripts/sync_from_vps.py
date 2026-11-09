@@ -21,7 +21,7 @@ import subprocess
 from datetime import datetime, timedelta
 
 import psycopg2
-from psycopg2.extras import execute_values
+from psycopg2.extras import Json, execute_values
 from dotenv import load_dotenv
 from pathlib import Path
 
@@ -74,6 +74,9 @@ TUNNEL_WAIT_SEC = 3          # Seconds to wait for tunnel to establish
 #                  the newest local watermark instead of the whole table. Use it when
 #                  rows are only ever changed shortly after insertion. Timestamp
 #                  watermarks only.
+# optional       : optional, default False. True only for a table whose migration may
+#                  not be applied on the VPS yet: missing there, it is SKIPPED (logged).
+#                  Any other table missing on the VPS is an error (a schema fault).
 # ─────────────────────────────────────────────
 SYNC_TABLES = [
     {
@@ -196,6 +199,36 @@ SYNC_TABLES = [
         "conflict_target": "(futures_instrument, timestamp) DO NOTHING",
     },
     {
+        # MenthorQ-style level monitor (migration 031). A computed row (one with levels)
+        # is never changed; a NOT-computed row (call_resistance, put_support, hvl and
+        # total_net_gex all NULL) is replaced on the VPS by a computed one with a new
+        # computed_at, so the watermark sees it and the same rule replaces it here. The
+        # condition is the repository's (has_levels_sql_condition in level_record.py;
+        # a test keeps the two equal).
+        "name": "menthorq_level_snapshots",
+        "optional": True,   # migration 031 is applied on the VPS only when the monitor is deployed
+        "watermark_col": "computed_at",
+        "watermark_type": "timestamp",
+        "conflict_target": (
+            "(currency, mode, expiry_universe, gamma_underlying, as_of_utc) DO UPDATE SET "
+            "computed_at = EXCLUDED.computed_at, spot = EXCLUDED.spot, "
+            "spot_time_utc = EXCLUDED.spot_time_utc, "
+            "snapshot_captured_at_utc = EXCLUDED.snapshot_captured_at_utc, "
+            "open_interest_captured_at_utc = EXCLUDED.open_interest_captured_at_utc, "
+            "call_resistance = EXCLUDED.call_resistance, put_support = EXCLUDED.put_support, "
+            "hvl = EXCLUDED.hvl, total_net_gex = EXCLUDED.total_net_gex, "
+            "gamma_regime = EXCLUDED.gamma_regime, expirations = EXCLUDED.expirations, "
+            "panel_levels = EXCLUDED.panel_levels, iv_source_counts = EXCLUDED.iv_source_counts, "
+            "not_computed_reasons = EXCLUDED.not_computed_reasons "
+            "WHERE NOT (menthorq_level_snapshots.call_resistance IS NOT NULL "
+            "OR menthorq_level_snapshots.put_support IS NOT NULL "
+            "OR menthorq_level_snapshots.hvl IS NOT NULL "
+            "OR menthorq_level_snapshots.total_net_gex IS NOT NULL) "
+            "AND (EXCLUDED.call_resistance IS NOT NULL OR EXCLUDED.put_support IS NOT NULL "
+            "OR EXCLUDED.hvl IS NOT NULL OR EXCLUDED.total_net_gex IS NOT NULL)"
+        ),
+    },
+    {
         # Hourly DVOL candle closes. The daemon re-checks the last 48 hours every
         # cycle and corrects values that were captured while a candle was forming,
         # so only the last 72 hours are re-read (older history never changes, and
@@ -234,6 +267,11 @@ SYNC_TABLES = [
 ]
 
 
+# Status message prefix of a table marked "optional" that does not exist on the VPS
+# (its migration has not been applied there yet).
+SKIPPED_PREFIX = "SKIPPED: "
+
+
 def get_columns(cur, table_name: str) -> list[str]:
     """Get all columns for a table, excluding 'id' (auto-generated locally)."""
     cur.execute("""
@@ -243,6 +281,43 @@ def get_columns(cur, table_name: str) -> list[str]:
         ORDER BY ordinal_position
     """, (table_name,))
     return [row[0] for row in cur.fetchall() if row[0] != "id"]
+
+
+def get_json_columns(cursor, table_name: str) -> set[str]:
+    """Names of the table's json and jsonb columns.
+
+    psycopg2 reads those columns as Python dict/list/str/int/float/bool, and writing
+    them back needs psycopg2.extras.Json (a dict cannot be adapted, a list would become
+    an array, a str or number would not be JSON).
+    Real array columns (text[] etc.) report data_type 'ARRAY' and are not included.
+    """
+    cursor.execute("""
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = %s AND data_type IN ('json', 'jsonb')
+    """, (table_name,))
+    return {row[0] for row in cursor.fetchall()}
+
+
+def wrap_json_values(rows: list, columns: list, json_columns: set[str]) -> list:
+    """Return the rows with every non-None value of a json/jsonb column wrapped in Json.
+
+    Objects, arrays and scalars alike: psycopg2 reads a JSON string, number or bool
+    as a Python str/int/float/bool, and sent back unwrapped Postgres rejects it.
+    None stays None (NULL; a JSON null is also read as None, so it arrives as NULL);
+    other columns, including real array columns, are left untouched.
+    """
+    json_indexes = [index for index, column in enumerate(columns) if column in json_columns]
+    if not json_indexes:
+        return rows
+    wrapped_rows = []
+    for row in rows:
+        values = list(row)
+        for index in json_indexes:
+            if values[index] is not None:
+                values[index] = Json(values[index])
+        wrapped_rows.append(tuple(values))
+    return wrapped_rows
 
 
 def get_local_watermark(cur, table: dict):
@@ -402,6 +477,10 @@ def sync_table(vps_conn, local_conn, table: dict) -> tuple[int, str]:
     differ from the local copy are written. Nothing is resumed; each run starts
     from the beginning of that range. The local database is a read-only mirror: rows
     deleted on the VPS are not removed locally.
+
+    A table that does not exist on the VPS is skipped only when it is marked "optional"
+    in SYNC_TABLES: nothing is read or written, and the returned message starts with
+    SKIPPED_PREFIX so the caller can log it. Any other missing table is an error (-1).
     """
     vps_cur = None
     local_cur = None
@@ -414,6 +493,15 @@ def sync_table(vps_conn, local_conn, table: dict) -> tuple[int, str]:
         # Get columns from VPS (source of truth — avoids local schema drift)
         columns = get_columns(vps_cur, table["name"])
         vps_cur.close()  # nothing may stay open on the VPS connection while paging
+        if not columns:
+            if not table.get("optional", False):
+                logger.error(f"Table {table['name']} not found on the VPS (schema fault: it is "
+                             f"not marked optional)")
+                return -1, "ERROR: table not found on the VPS (not marked optional: check the VPS schema)"
+            logger.warning(f"Optional table {table['name']} not found on the VPS: skipped "
+                           f"(apply its migration on the VPS to sync it)")
+            return 0, (f"{SKIPPED_PREFIX}table not found on the VPS "
+                       f"(apply its migration there to sync it)")
 
         # Tables whose rows change after insertion are re-read in full and upserted;
         # all others are read incrementally from the local watermark.
@@ -429,12 +517,14 @@ def sync_table(vps_conn, local_conn, table: dict) -> tuple[int, str]:
         else:
             local_max = get_local_watermark(local_cur, table)
             write_rows = insert_rows
+        # The local column types decide how values are written (json/jsonb need wrapping).
+        json_columns = get_json_columns(local_cur, table["name"])
 
         # Copy rows from VPS, committing batch by batch
         batch_number = 0
         for rows in iter_new_row_batches(vps_conn, table, columns, local_max, FETCH_BATCH_SIZE):
             fetched += len(rows)
-            inserted += write_rows(local_cur, table, columns, rows)
+            inserted += write_rows(local_cur, table, columns, wrap_json_values(rows, columns, json_columns))
             local_conn.commit()
             batch_number += 1
             if batch_number % LOG_EVERY_BATCHES == 0:
@@ -532,14 +622,18 @@ def run():
 
         total_rows = 0
         errors = []
+        skipped = []
 
         for table in SYNC_TABLES:
             count, msg = sync_table(vps_conn, local_conn, table)
-            status = "OK " if count >= 0 else "ERR"
+            was_skipped = msg.startswith(SKIPPED_PREFIX)
+            status = "SKIP" if was_skipped else ("OK " if count >= 0 else "ERR")
             logger.info(f"  [{status}] {table['name']:<35} {msg}")
             if count > 0:
                 total_rows += count
-            if count < 0:
+            if was_skipped:
+                skipped.append(table["name"])
+            elif count < 0:
                 errors.append(f"{table['name']}: {msg}")
 
         # 5. Pull VPS health JSON
@@ -550,7 +644,9 @@ def run():
         logger.info("-" * 60)
         logger.info(f"\nSYNC COMPLETE in {duration:.1f}s")
         logger.info(f"  Total rows synced: {total_rows:,}")
-        logger.info(f"  Tables synced: {len(SYNC_TABLES)}")
+        logger.info(f"  Tables synced: {len(SYNC_TABLES) - len(skipped)}")
+        if skipped:
+            logger.warning(f"  Optional tables SKIPPED (not on the VPS): {', '.join(skipped)}")
 
         if errors:
             logger.error(f"\nERRORS ({len(errors)}):")

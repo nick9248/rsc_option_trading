@@ -31,14 +31,11 @@ from coding.service.deribit.dvol_fetcher import DVOLFetcher
 from coding.service.on_chain.forward_testing_harness import ForwardTestingHarness
 from coding.service.on_chain.volatility_reconstruction_service import VolatilityReconstructionService
 from coding.service.scanner.butterfly_scan_service import ButterflyScanService
-from coding.service.scanner.defined_risk_alert_rules import DefinedRiskAlertRule, format_defined_risk_alert
 from coding.service.scanner.defined_risk_forward_test_harness import DefinedRiskForwardTestHarness
 from coding.service.scanner.iron_condor_scan_service import IronCondorScanService
 from coding.service.scanner.regime_gate_service import RegimeGateService
-from coding.service.scanner.straddle_alert_rules import StraddleAlertRule
 from coding.service.scanner.straddle_forward_test_harness import StraddleForwardTestHarness
 from coding.service.scanner.straddle_scan_service import StraddleScanService
-from coding.service.scanner.telegram_alert_service import TelegramAlertService
 
 logger = logging.getLogger(__name__)
 
@@ -89,8 +86,6 @@ class ProspectiveCollector:
         # RULE — see straddle_scan_service.py module docstring).
         self._straddle_scan_service = StraddleScanService(api_service=self.api, repository=self.repo)
         self._straddle_harness = StraddleForwardTestHarness(repository=self.repo)
-        self._straddle_alert_rule = StraddleAlertRule(repository=self.repo)
-        self._straddle_telegram = TelegramAlertService()
         # Defined-risk scanners (iron condor + long butterfly): same THE ONE
         # DATA SOURCE RULE as the straddle scanner above, sharing this
         # collector's live api connection and repository.
@@ -100,9 +95,6 @@ class ProspectiveCollector:
         self._butterfly_scan_service = ButterflyScanService(
             api_service=self.api, repository=self.repo, regime_gate_service=self._regime_gate_service)
         self._defined_risk_harness = DefinedRiskForwardTestHarness(repository=self.repo)
-        self._iron_condor_alert_rule = DefinedRiskAlertRule("iron_condor", repository=self.repo)
-        self._butterfly_alert_rule = DefinedRiskAlertRule("butterfly", repository=self.repo)
-        self._defined_risk_telegram = TelegramAlertService()
 
         logger.info("ProspectiveCollector initialized")
 
@@ -234,8 +226,7 @@ class ProspectiveCollector:
             result["volatility_reconstruction"] = reconstruction_summary
 
             # Straddle scanner (increment 2): rank expiries, record scan
-            # history for forward-testing, resolve settled expiries, and
-            # send a rate-limited Telegram alert when the rule fires.
+            # history for forward-testing and resolve settled expiries.
             # Wrapped in an outer try/except AND a per-currency try/except
             # (same isolation pattern as ForwardTestingHarness/
             # VolatilityReconstructionService above) so a scanner failure
@@ -249,21 +240,7 @@ class ProspectiveCollector:
                         inserted = self._straddle_harness.record_scan(scan_result, scan_time=hour)
                         self._straddle_harness.resolve_due(currency)
 
-                        should_send, top_entry, reason = self._straddle_alert_rule.should_alert(scan_result)
-                        alert_sent = False
-                        if should_send:
-                            message = self._straddle_scan_service.format_alert(scan_result)
-                            alert_sent = self._straddle_telegram.send(message)
-                            if alert_sent:
-                                self.repo.mark_straddle_scan_alert_sent(
-                                    currency=currency,
-                                    expiration=top_entry["expiry"],
-                                    scan_time=hour,
-                                )
-
-                        scanner_summary[currency] = {
-                            "inserted": inserted, "alert_sent": alert_sent, "reason": reason,
-                        }
+                        scanner_summary[currency] = {"inserted": inserted}
                         logger.info(f"  {currency} straddle scan: {scanner_summary[currency]}")
                     except Exception as e:
                         logger.warning(f"  Straddle scanner failed for {currency}: {e}")
@@ -280,7 +257,7 @@ class ProspectiveCollector:
         """
         Iron condor + long butterfly scanners (defined-risk complement to
         the straddle scanner). Every candidate is recorded regardless of
-        gate_pass -- the gate only affects the alert's header label (see
+        gate_pass -- the gate is stored with the row, not used as a filter (see
         docs/superpowers/specs/2026-07-20-defined-risk-scanner-design.md).
         Same per-currency try/except isolation as the straddle scanner and
         ForwardTestingHarness above: a failure here -- including a regime
@@ -302,29 +279,16 @@ class ProspectiveCollector:
                     scanner_summary[currency]["regime_gate"] = {"error": str(e)}
                     continue
 
-                for structure_type, scan_service, alert_rule in (
-                    ("iron_condor", self._iron_condor_scan_service, self._iron_condor_alert_rule),
-                    ("butterfly", self._butterfly_scan_service, self._butterfly_alert_rule),
+                for structure_type, scan_service in (
+                    ("iron_condor", self._iron_condor_scan_service),
+                    ("butterfly", self._butterfly_scan_service),
                 ):
                     try:
                         scan_result = scan_service.scan(currency, regime=regime)
                         inserted = self._defined_risk_harness.record_scan(scan_result, structure_type, scan_time=hour)
                         self._defined_risk_harness.resolve_due(currency, structure_type)
 
-                        should_send, top_entry, reason = alert_rule.should_alert(scan_result)
-                        alert_sent = False
-                        if should_send:
-                            message = format_defined_risk_alert(scan_result, structure_type)
-                            alert_sent = self._defined_risk_telegram.send(message)
-                            if alert_sent:
-                                self.repo.mark_defined_risk_scan_alert_sent(
-                                    currency=currency, expiration=top_entry["expiry"],
-                                    structure_type=structure_type, scan_time=hour,
-                                )
-
-                        scanner_summary[currency][structure_type] = {
-                            "inserted": inserted, "alert_sent": alert_sent, "reason": reason,
-                        }
+                        scanner_summary[currency][structure_type] = {"inserted": inserted}
                         logger.info(f"  {currency} {structure_type} scan: {scanner_summary[currency][structure_type]}")
                     except Exception as e:
                         logger.warning(f"  {structure_type} scanner failed for {currency}: {e}")
