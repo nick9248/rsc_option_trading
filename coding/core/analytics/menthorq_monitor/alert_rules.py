@@ -283,6 +283,16 @@ def event_baseline(
     return EventBaseline(reference_states=reference_states, current_states=current_states)
 
 
+def enabled_event_families(thresholds: AlertThresholds) -> List[str]:
+    """The event families whose rule is on: HVL regime (spot crosses HVL), then net GEX sign."""
+    families = []
+    if thresholds.spot_crosses_hvl:
+        families.append(EVENT_FAMILY_HVL_REGIME)
+    if thresholds.net_gex_sign_change:
+        families.append(EVENT_FAMILY_NET_GEX_SIGN)
+    return families
+
+
 def _event_state_to_report(
     family: str,
     latest: MenthorqLevelRecord,
@@ -321,13 +331,8 @@ def _event_alerts(
     baseline: Optional[EventBaseline],
 ) -> List[UrgentAlert]:
     """The HVL-crossing and net-GEX sign-flip alerts that are on and fire."""
-    families = []
-    if thresholds.spot_crosses_hvl:
-        families.append(EVENT_FAMILY_HVL_REGIME)
-    if thresholds.net_gex_sign_change:
-        families.append(EVENT_FAMILY_NET_GEX_SIGN)
     alerts = []
-    for family in families:
+    for family in enabled_event_families(thresholds):
         state = _event_state_to_report(family, latest, previous_comparison, last_reported_states, baseline)
         if state is None:
             continue

@@ -274,6 +274,42 @@ class TestFirstEventAgainstThe24HourBaseline:
         assert telegram.sent == []
 
 
+class TestEventBaselineIsLoadedOnlyForAnEnabledFamilyWithoutDeliveredEvent:
+    """The 24 h baseline query (get_menthorq_level_snapshots_between) runs only when an event
+    rule that is ON has no delivered event yet. Spot crosses HVL is OFF by default."""
+
+    def _run(self, thresholds, delivered_keys=()):
+        previous, day_ago, latest = _crossing_history()
+        service, repository, _, _ = _delivery([previous, day_ago, latest])
+        service.thresholds = thresholds
+        for key in delivered_keys:
+            repository.save_menthorq_alert_deliveries("BTC", [key], FRIDAY_0910 - timedelta(days=2), "earlier")
+        baseline_queries = []
+        real_query = repository.get_menthorq_level_snapshots_between
+
+        def counting_query(*arguments, **keyword_arguments):
+            baseline_queries.append(arguments)
+            return real_query(*arguments, **keyword_arguments)
+
+        repository.get_menthorq_level_snapshots_between = counting_query
+        service.send_urgent_alerts(latest, FRIDAY_0910)
+        return len(baseline_queries)
+
+    def test_both_event_rules_off_means_no_baseline_query(self):
+        assert self._run(AlertThresholds(net_gex_sign_change=False, spot_crosses_hvl=False)) == 0
+
+    def test_net_gex_on_without_a_delivered_event_means_one_baseline_query(self):
+        assert self._run(AlertThresholds()) == 1
+
+    def test_net_gex_on_with_a_delivered_event_and_hvl_off_means_no_baseline_query(self):
+        # The HVL family has no delivered event, but its rule is off: not a reason to load.
+        assert self._run(AlertThresholds(), delivered_keys=["net_gex_turned_positive"]) == 0
+
+    def test_hvl_on_without_a_delivered_event_means_one_baseline_query(self):
+        assert self._run(AlertThresholds(spot_crosses_hvl=True),
+                         delivered_keys=["net_gex_turned_positive"]) == 1
+
+
 class TestEventAlertsAgainstTheLastReportedState:
     """Net GEX: positive was last REPORTED (net_gex_turned_positive delivered 2 days ago).
     08:10 +5M, 09:10 -1M (flip), 10:10 still -1M (no flip vs the previous run)."""

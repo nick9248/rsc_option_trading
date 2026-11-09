@@ -52,6 +52,7 @@ from coding.core.analytics.menthorq_monitor.alert_rules import (
     EventBaseline,
     UrgentAlert,
     apply_cooldown,
+    enabled_event_families,
     evaluate_urgent_alerts,
     event_baseline,
 )
@@ -313,7 +314,8 @@ class MenthorqBriefDeliveryService:
         """
         last_reported_states = self.last_reported_event_states()
         baseline = None
-        if any(family not in last_reported_states for family in EVENT_FAMILY_KEYS):
+        # The 24 h baseline query is needed only by a rule that is on and has no delivered event.
+        if any(family not in last_reported_states for family in enabled_event_families(self.thresholds)):
             baseline = event_baseline(latest, self.monitor_service.event_baseline_records(latest))
         evaluation = evaluate_urgent_alerts_of_record(
             latest, lambda: self.monitor_service.build_comparisons(latest), self.thresholds,
