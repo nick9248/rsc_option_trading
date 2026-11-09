@@ -250,8 +250,10 @@ class MenthorqMonitorService:
                                 utc_date.isoformat(),
                                 newest_capture.isoformat() if newest_capture else "none")
                     continue
-                self._daily_close_attempt_captures[utc_date] = newest_capture
                 stored.append(self.store(self.compute_daily_close_record(utc_date)))
+                # Only after compute and store succeeded: a failed attempt must be
+                # retried next run, not skipped as "already tried with this snapshot".
+                self._daily_close_attempt_captures[utc_date] = newest_capture
             except Exception as error:
                 logger.exception("MenthorQ daily-close record of %s failed", utc_date.isoformat())
                 failed_days.append(utc_date.isoformat())

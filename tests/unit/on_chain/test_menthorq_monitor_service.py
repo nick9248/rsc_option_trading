@@ -293,6 +293,34 @@ class TestNotComputedDailyCloseRetry:
         assert len(restarted.run_daily_close_if_missing(self.NOW + timedelta(hours=2))) == 1
         assert len(loader.calls) == 2
 
+    @pytest.mark.parametrize("failing_step", ["compute", "store"])
+    def test_a_failed_attempt_is_retried_next_run_and_only_success_sets_the_marker(
+            self, monkeypatch, failing_step):
+        """Stored row tried with 22:44; a 23:00 capture exists, so 00:10 retries. The attempt
+        raises (yesterday: the error is raised). Old behaviour set the marker to 23:00 first,
+        so 01:10 saw "already tried with 23:00" and skipped. Now 01:10 retries and computes."""
+        repository = self._repository_with_one_not_computed_day(datetime(2026, 11, 6, 22, 44, tzinfo=timezone.utc))
+        repository.option_chain_captures = [datetime(2026, 11, 6, 23, 0, tzinfo=timezone.utc)]
+        loader = FakeInputLoader()
+        service = _service(repository, loader)
+        failing_owner, failing_name = ((loader, "load_inputs") if failing_step == "compute"
+                                       else (repository, "save_menthorq_level_snapshot"))
+        real_method = getattr(failing_owner, failing_name)
+
+        def raise_once(*arguments, **keyword_arguments):
+            monkeypatch.setattr(failing_owner, failing_name, real_method)
+            raise RuntimeError("database hiccup")
+
+        monkeypatch.setattr(failing_owner, failing_name, raise_once)
+        with pytest.raises(RuntimeError, match="database hiccup"):
+            service.run_daily_close_if_missing(self.NOW)
+        assert self.DAY not in service._daily_close_attempt_captures
+
+        retried = service.run_daily_close_if_missing(self.NOW + timedelta(hours=1))
+        assert [record.as_of_utc for record in retried] == [daily_close_as_of(self.DAY)]
+        assert retried[0].has_levels and repository.records[6].has_levels
+        assert service._daily_close_attempt_captures[self.DAY] == datetime(2026, 11, 6, 23, 0, tzinfo=timezone.utc)
+
     def test_a_row_without_snapshot_time_is_retried_once_per_process(self):
         repository = self._repository_with_one_not_computed_day(None)
         loader = FakeInputLoader(available=False)          # no snapshot at all
