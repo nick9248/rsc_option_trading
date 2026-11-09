@@ -16,7 +16,7 @@ Pure: no database, network or plotting imports.
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from coding.core.analytics.menthorq_replication_calculator import (
     IV_SOURCE_MISSING,
@@ -116,7 +116,7 @@ def classify_gamma_regime(spot: Optional[float], hvl: Optional[float]) -> Option
     return GAMMA_REGIME_AT_HVL
 
 
-def all_expiries_levels(replication: Dict[str, Any]) -> Tuple[Dict[str, Optional[float]], bool]:
+def all_expiries_levels(replication: Mapping[str, Any]) -> Tuple[Dict[str, Optional[float]], bool]:
     """
     Call Resistance, Put Support and HVL of the all-expiry curve of one
     ``replicate_menthorq`` result, with HVL None when it sits at the lowest
