@@ -89,3 +89,52 @@ def test_threads_never_share_a_connection(fake_connection_pool):
 
     assert failures == []
     assert fake_connection_pool._pool._used == {}
+
+
+def test_concurrent_initialize_creates_exactly_one_pool(monkeypatch):
+    """
+    16 threads released together each construct ConnectionPool() and call
+    initialize(): exactly ONE pool object is created. The fake pool sleeps in
+    its constructor to widen the check-then-set window; without the lock every
+    thread passes the `_pool is None` check and builds its own pool (16 pools).
+    """
+    thread_count = 16
+    constructions = []
+    construction_count_lock = threading.Lock()
+
+    class SlowFakePool:
+        """Counts constructions; slow enough that racing threads overlap."""
+
+        def __init__(self, *arguments, **keyword_arguments):
+            with construction_count_lock:
+                constructions.append(self)
+            time.sleep(0.05)
+
+        def closeall(self):
+            """Nothing to close: no real connections exist."""
+
+    monkeypatch.setattr(psycopg2.pool, "ThreadedConnectionPool", SlowFakePool)
+    ConnectionPool._instance = None
+    ConnectionPool._pool = None
+    start_barrier = threading.Barrier(thread_count)
+    instances = []
+
+    def construct_and_initialize():
+        start_barrier.wait()
+        connection_pool = ConnectionPool()
+        connection_pool.initialize(DatabaseConfig(), min_conn=1, max_conn=10)
+        with construction_count_lock:
+            instances.append(connection_pool)
+
+    try:
+        threads = [threading.Thread(target=construct_and_initialize) for _ in range(thread_count)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        assert len(constructions) == 1
+        assert len({id(instance) for instance in instances}) == 1
+        assert instances[0]._pool is constructions[0]
+    finally:
+        ConnectionPool().close_all()
+        ConnectionPool._instance = None

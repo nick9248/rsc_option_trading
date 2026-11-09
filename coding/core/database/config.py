@@ -4,6 +4,7 @@ Database configuration for PostgreSQL connection.
 
 import logging
 import os
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -63,14 +64,22 @@ class ConnectionPool:
     and the command poll: at most 5 at once, each holding one connection at a
     time), so the pool is a psycopg2 ThreadedConnectionPool. The default maximum
     of 10 connections covers those 5 jobs with room to spare.
+
+    Creating the singleton and creating the pool are both guarded by one
+    class-level lock (double-checked), so two threads constructing a
+    DatabaseRepository at the same moment share one pool instead of each
+    opening their own (the loser's connections would never be closed).
     """
 
     _instance: Optional["ConnectionPool"] = None
     _pool: Optional[pool.ThreadedConnectionPool] = None
+    _creation_lock = threading.Lock()
 
     def __new__(cls):
         if cls._instance is None:
-            cls._instance = super().__new__(cls)
+            with cls._creation_lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
         return cls._instance
 
     def initialize(self, config: DatabaseConfig, min_conn: int = 1, max_conn: int = 10):
@@ -83,12 +92,14 @@ class ConnectionPool:
             max_conn: Maximum number of connections.
         """
         if self._pool is None:
-            self._pool = pool.ThreadedConnectionPool(
-                min_conn,
-                max_conn,
-                **config.get_connection_dict()
-            )
-            logger.info("Database connection pool initialized")
+            with self._creation_lock:
+                if self._pool is None:
+                    self._pool = pool.ThreadedConnectionPool(
+                        min_conn,
+                        max_conn,
+                        **config.get_connection_dict()
+                    )
+                    logger.info("Database connection pool initialized")
 
     def get_connection(self):
         """
