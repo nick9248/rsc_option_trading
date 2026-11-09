@@ -201,25 +201,77 @@ def test_muted_alerts_are_not_sent_but_recorded_and_resume_after_the_mute():
     assert len(telegram.sent) == 1
 
 
-def test_without_delivered_event_history_the_previous_run_rule_applies():
-    """No net GEX event was ever delivered, so the trigger is the change since the previous
-    run: +5M (08:10) -> -1M (09:10) flips while muted; at 10:10 the previous record is the
-    09:10 one (-1M), no flip, so nothing is sent."""
-    previous, day_ago, latest = _crossing_history()
-    previous = replace(previous, total_net_gex=5e6)
-    latest = replace(latest, total_net_gex=-1e6)
-    service, repository, telegram, clock = _delivery([previous, day_ago, latest])
-    service.thresholds = AlertThresholds(hvl_move_percent_of_spot=None)   # only the sign flip on
-    repository.save_menthorq_alert_mute("BTC", FRIDAY_0910 + timedelta(hours=1), FRIDAY_0910)
-    assert service.send_urgent_alerts(latest, FRIDAY_0910) == []
-    state = repository.get_menthorq_monitor_state("BTC")
-    assert state is not None and state.last_suppressed_alert_keys == ["net_gex_turned_negative"]
+class TestFirstEventAgainstThe24HourBaseline:
+    """No event of the family was ever delivered, so the baseline is the state about 24 h ago.
+    Net GEX: 2026-11-05 09:10 +5M (the 24 h reference), 11-06 08:10 +5M, 09:10 -1M (flip)."""
 
-    clock["now"] = FRIDAY_0910 + timedelta(hours=1)
-    next_run = make_record(as_of=clock["now"], spot=94000.0, hvl=95000.0, total_net_gex=-1e6)
-    repository.records.append(next_run)
-    assert service.send_urgent_alerts(next_run, clock["now"]) == []
-    assert telegram.sent == []
+    def _setup(self, accept=True):
+        previous, day_ago, latest = _crossing_history()
+        latest = replace(latest, total_net_gex=-1e6)
+        service, repository, telegram, clock = _delivery([previous, day_ago, latest], accept=accept)
+        service.thresholds = AlertThresholds(hvl_move_percent_of_spot=None)   # only the sign flip on
+        return service, repository, telegram, clock, latest
+
+    @staticmethod
+    def _run_at(service, repository, clock, hours_after, total_net_gex):
+        clock["now"] = FRIDAY_0910 + timedelta(hours=hours_after)
+        record = make_record(as_of=clock["now"], spot=94000.0, hvl=95000.0, total_net_gex=total_net_gex)
+        repository.records.append(record)
+        return service.send_urgent_alerts(record, clock["now"])
+
+    def test_first_ever_flip_during_a_mute_is_sent_when_the_mute_ends(self):
+        service, repository, telegram, clock, latest = self._setup()
+        repository.save_menthorq_alert_mute("BTC", FRIDAY_0910 + timedelta(hours=1), FRIDAY_0910)
+        assert service.send_urgent_alerts(latest, FRIDAY_0910) == []          # muted
+        state = repository.get_menthorq_monitor_state("BTC")
+        assert state is not None and state.last_suppressed_alert_keys == ["net_gex_turned_negative"]
+        # 10:10, mute over: 24 h reference = newest record at or before 11-05 10:10 = 11-05 09:10
+        # (+5M, positive); now -1M (negative) differs. vs the previous run (-1M) no flip -> note.
+        assert self._run_at(service, repository, clock, 1, -1e6) == ["net_gex_turned_negative"]
+        assert ("Total net GEX turned NEGATIVE (earlier, not reported yet; about 24h ago: positive)."
+                in telegram.sent[-1]["message"])
+        # reported now: the delivered-state rule takes over, the next run sends nothing
+        assert self._run_at(service, repository, clock, 2, -1e6) == []
+        assert len(telegram.sent) == 1
+
+    def test_first_ever_flip_whose_send_failed_is_sent_at_the_next_run(self):
+        service, repository, telegram, clock, latest = self._setup(accept=False)
+        assert service.send_urgent_alerts(latest, FRIDAY_0910) == []          # send failed
+        assert repository.deliveries == []
+        telegram.accept = True
+        assert self._run_at(service, repository, clock, 1, -1e6) == ["net_gex_turned_negative"]
+
+    def test_flip_and_flip_back_before_it_was_reported_sends_nothing(self):
+        service, repository, telegram, clock, latest = self._setup()
+        repository.save_menthorq_alert_mute("BTC", FRIDAY_0910 + timedelta(hours=1), FRIDAY_0910)
+        assert service.send_urgent_alerts(latest, FRIDAY_0910) == []          # muted
+        # 10:10: back to +3M. vs the previous run (-1M) that is a flip to positive, but the
+        # 24 h baseline is positive too: nothing new to report
+        assert self._run_at(service, repository, clock, 1, 3e6) == []
+        assert telegram.sent == []
+
+    def test_hvl_regime_none_at_the_chain_edge_does_not_hide_a_crossing(self):
+        """07:10 spot 96,000 above HVL 95,000 (positive); 08:10 HVL None (chain edge: regime
+        None); 09:10 spot 94,000 below HVL 95,000 (negative). No record is 24 h old, so the
+        reference is the oldest within 24 h (07:10, positive): crossed below. The previous-run
+        rule alone (08:10 None -> negative) saw no crossing."""
+        two_hours_ago = make_record(as_of=FRIDAY_0910 - timedelta(hours=2), spot=96000.0, hvl=95000.0)
+        at_chain_edge = make_record(as_of=FRIDAY_0910 - timedelta(hours=1), spot=96000.0, hvl=None)
+        latest = make_record(as_of=FRIDAY_0910, spot=94000.0, hvl=95000.0)
+        assert at_chain_edge.has_levels and at_chain_edge.gamma_regime is None
+        service, _, _, _ = _delivery([two_hours_ago, at_chain_edge, latest])
+        service.thresholds = AlertThresholds(hvl_move_percent_of_spot=None, net_gex_sign_change=False,
+                                             spot_crosses_hvl=True)
+        assert service.send_urgent_alerts(latest, FRIDAY_0910) == ["spot_crossed_below_hvl"]
+
+    def test_without_any_earlier_stored_record_the_previous_run_rule_applies(self):
+        """Only the latest record is stored (first hour of a new deployment): no baseline and
+        no previous run, so nothing fires."""
+        latest = make_record(as_of=FRIDAY_0910, total_net_gex=-1e6)
+        service, _, telegram, _ = _delivery([latest])
+        service.thresholds = AlertThresholds(hvl_move_percent_of_spot=None, spot_crosses_hvl=True)
+        assert service.send_urgent_alerts(latest, FRIDAY_0910) == []
+        assert telegram.sent == []
 
 
 class TestEventAlertsAgainstTheLastReportedState:

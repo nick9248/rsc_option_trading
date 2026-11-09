@@ -22,12 +22,14 @@ an event whose send failed or that fell inside a mute is re-evaluated every
 run and sent once it can be (cooldown, mute and stale rules as usual),
 unless the state reverted to the reported one first.
 
-The one remaining limit: the very FIRST event of a family (first-ever sign
-flip, first-ever HVL crossing: no event of that family was ever delivered,
-so there is no reported state) is detected only by the comparison with the
-previous run. A mute or a failed send at exactly that hour loses it (at the
-next run the previous record already has the new state). From the first
-delivered event of a family on, the state-based rule above applies.
+A family with no delivered event yet (first-ever sign flip, first-ever HVL
+crossing) is compared with the state about 24 h ago instead
+(``event_baseline``: the reference record of the 24 h comparison, or the
+oldest stored record within the last 24 h; records whose state is unknown
+are skipped). So a first event that was muted or whose send failed is still
+sent later while the state differs from that baseline. Remaining limit:
+when no stored record older than the latest exists (e.g. the first hour of
+a brand-new deployment) the trigger is the change since the previous run.
 
 When the hourly computation itself raises (``send_monitor_error_alert``),
 one ``monitor_error`` alert names the exception, under the same cooldown
@@ -47,9 +49,11 @@ from coding.core.analytics.menthorq_monitor.alert_rules import (
     EVENT_ALERT_STATES,
     EVENT_FAMILY_KEYS,
     AlertThresholds,
+    EventBaseline,
     UrgentAlert,
     apply_cooldown,
     evaluate_urgent_alerts,
+    event_baseline,
 )
 from coding.core.analytics.menthorq_monitor.level_record import (
     MODE_DAILY_CLOSE,
@@ -126,6 +130,7 @@ def evaluate_urgent_alerts_of_record(
     stale_limit: timedelta,
     now: Optional[datetime] = None,
     last_reported_states: Optional[Mapping[str, str]] = None,
+    baseline: Optional[EventBaseline] = None,
 ) -> UrgentAlertEvaluation:
     """
     The one rule set of the collector and of the GUI preview: for a record
@@ -147,6 +152,9 @@ def evaluate_urgent_alerts_of_record(
         last_reported_states: Event family -> last reported state (see
             ``evaluate_urgent_alerts``); None (the preview, which reads no
             delivery log) uses the change since the previous run.
+        baseline: The 24 h baseline for event families without a
+            delivered event (see ``evaluate_urgent_alerts``); None uses the
+            change since the previous run for them.
     """
     stale_warning = (no_usable_data_warning(latest) if not latest.has_levels
                      else stale_data_warning(latest, stale_limit, now))
@@ -158,7 +166,7 @@ def evaluate_urgent_alerts_of_record(
     return UrgentAlertEvaluation(
         alerts=evaluate_urgent_alerts(latest, by_label[COMPARISON_PREVIOUS],
                                       by_label[COMPARISON_ONE_DAY], thresholds,
-                                      last_reported_states),
+                                      last_reported_states, baseline),
         stale_warning=None)
 
 
@@ -289,8 +297,9 @@ class MenthorqBriefDeliveryService:
         then; so is a held-back or failed EVENT alert (net GEX sign flip,
         spot crossing HVL), because events are judged against the last
         REPORTED state (``last_reported_event_states``), unless the state
-        has reverted to it. Not the first event of a family: with no
-        reported state it is lost (see the module docstring).
+        has reverted to it. A family with no delivered event yet is judged
+        against the state about 24 h ago (``event_baseline``, see the module
+        docstring).
 
         When the data behind ``latest`` is stale (``stale_data_warning``
         with ``now``) or ``latest`` has no levels (not computed: every input
@@ -302,9 +311,13 @@ class MenthorqBriefDeliveryService:
             Keys of the alerts delivered (empty when none fired, all were on
             cooldown, alerts are muted, or the send failed).
         """
+        last_reported_states = self.last_reported_event_states()
+        baseline = None
+        if any(family not in last_reported_states for family in EVENT_FAMILY_KEYS):
+            baseline = event_baseline(latest, self.monitor_service.event_baseline_records(latest))
         evaluation = evaluate_urgent_alerts_of_record(
             latest, lambda: self.monitor_service.build_comparisons(latest), self.thresholds,
-            self.settings.stale_snapshot_limit, now, self.last_reported_event_states())
+            self.settings.stale_snapshot_limit, now, last_reported_states, baseline)
         if evaluation.stale_warning is not None:
             logger.warning("MenthorQ monitor: data stale or not computed (%s); movement alerts paused",
                            evaluation.stale_warning)

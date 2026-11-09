@@ -22,7 +22,11 @@ from the delivered event alerts): the alert for the current state fires
 while it differs from the last reported one, so an event whose send failed
 or fell inside a mute is still reported at a later run, and an event that
 reverted before it was reported is not. Without any delivered event of that
-family the trigger is the change since the previous run.
+family the baseline is the state about 24 h ago (``event_baseline``: the
+reference record of the 24 h comparison, records whose state is unknown
+skipped), so a first-ever event that was muted or failed is still reported
+while it differs from that baseline. Only when no earlier stored record
+exists at all is the trigger the change since the previous run.
 
 The thresholds are chosen by hand, not fitted; a backtest is meant to
 replace them. An alert whose key was delivered less than ``cooldown`` ago
@@ -35,7 +39,7 @@ Pure: no database, network or plotting imports.
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import List, Mapping, Optional
+from typing import List, Mapping, Optional, Sequence
 
 from coding.core.analytics.menthorq_monitor.level_record import (
     GAMMA_REGIME_NEGATIVE,
@@ -212,21 +216,94 @@ def hvl_regime_state(record: MenthorqLevelRecord) -> Optional[str]:
     return None
 
 
+def event_state(family: str, record: MenthorqLevelRecord) -> Optional[str]:
+    """The state of event ``family`` in ``record`` ("positive" / "negative"); None when unknown."""
+    return net_gex_sign_state(record) if family == EVENT_FAMILY_NET_GEX_SIGN else hvl_regime_state(record)
+
+
+@dataclass(frozen=True)
+class EventBaseline:
+    """
+    The 24 h baseline of the event rules for families with NO delivered
+    event (see ``event_baseline``): family -> the state about 24 h ago
+    (``reference_states``) and family -> the current state
+    (``current_states``). A family whose state is unknown is absent.
+    """
+
+    reference_states: Mapping[str, str]
+    current_states: Mapping[str, str]
+
+
+def _newest_known_state(family: str, records: Sequence[MenthorqLevelRecord]) -> Optional[str]:
+    """The state of the newest record of ``records`` (oldest first) whose state is known."""
+    for record in reversed(records):
+        state = event_state(family, record)
+        if state is not None:
+            return state
+    return None
+
+
+def event_baseline(
+    latest: MenthorqLevelRecord, earlier_records: Sequence[MenthorqLevelRecord]
+) -> EventBaseline:
+    """
+    The 24 h baseline for event families without a delivered event.
+
+    Reference record: the newest of ``earlier_records`` at or before
+    ``latest`` minus 24 h (the 24 h comparison reference); when none is
+    that old, the oldest one (the oldest record within the last 24 h). The
+    reference state of a family is the state of the newest record at or
+    before the reference record whose state is known: a record whose state
+    is None (e.g. HVL dropped at the chain edge, spot exactly at HVL, net
+    GEX missing or 0) is skipped, so it cannot hide a crossing. The current
+    state is the latest's or, when that is unknown, the newest known state
+    of ``earlier_records``. Without earlier records both maps are empty
+    (the caller then uses the change since the previous run).
+
+    Args:
+        latest: The record being evaluated.
+        earlier_records: Computed records of the same currency, mode and
+            settings strictly before ``latest``, oldest first, covering the
+            last 24 h and the 24 h comparison tolerance before that.
+    """
+    if not earlier_records:
+        return EventBaseline(reference_states={}, current_states={})
+    target = latest.as_of_utc - ONE_DAY_COMPARISON_OFFSET
+    old_enough = [index for index, record in enumerate(earlier_records) if record.as_of_utc <= target]
+    reference_index = old_enough[-1] if old_enough else 0
+    reference_states = {}
+    current_states = {}
+    for family in EVENT_FAMILY_KEYS:
+        reference_state = _newest_known_state(family, earlier_records[:reference_index + 1])
+        if reference_state is not None:
+            reference_states[family] = reference_state
+        current_state = event_state(family, latest) or _newest_known_state(family, earlier_records)
+        if current_state is not None:
+            current_states[family] = current_state
+    return EventBaseline(reference_states=reference_states, current_states=current_states)
+
+
 def _event_state_to_report(
     family: str,
     latest: MenthorqLevelRecord,
     previous_comparison: RecordComparison,
     last_reported_states: Mapping[str, str],
+    baseline: Optional[EventBaseline],
 ) -> Optional[str]:
     """
     The state whose event alert fires for ``family``, or None. With a
-    reported state: the current state when it differs from it. Without one:
-    the new state when it changed since the previous run.
+    reported state: the current state when it differs from it. Without one
+    but with a 24 h baseline state: the current state (unknown states
+    skipped) when it differs from the baseline. Otherwise: the new state
+    when it changed since the previous run.
     """
-    current = (net_gex_sign_state(latest) if family == EVENT_FAMILY_NET_GEX_SIGN
-               else hvl_regime_state(latest))
+    current = event_state(family, latest)
     if family in last_reported_states:
         return current if current is not None and current != last_reported_states[family] else None
+    if baseline is not None and family in baseline.reference_states:
+        current_known = baseline.current_states.get(family)
+        return (current_known if current_known is not None
+                and current_known != baseline.reference_states[family] else None)
     if family == EVENT_FAMILY_NET_GEX_SIGN:
         return current if previous_comparison.net_gex_sign_flipped else None
     if previous_comparison.hvl_crossing == CROSSED_BELOW_HVL:
@@ -241,6 +318,7 @@ def _event_alerts(
     previous_comparison: RecordComparison,
     thresholds: AlertThresholds,
     last_reported_states: Mapping[str, str],
+    baseline: Optional[EventBaseline],
 ) -> List[UrgentAlert]:
     """The HVL-crossing and net-GEX sign-flip alerts that are on and fire."""
     families = []
@@ -250,7 +328,7 @@ def _event_alerts(
         families.append(EVENT_FAMILY_NET_GEX_SIGN)
     alerts = []
     for family in families:
-        state = _event_state_to_report(family, latest, previous_comparison, last_reported_states)
+        state = _event_state_to_report(family, latest, previous_comparison, last_reported_states, baseline)
         if state is None:
             continue
         negative = state == EVENT_STATE_NEGATIVE
@@ -265,7 +343,10 @@ def _event_alerts(
             changed_since_previous_run = bool(previous_comparison.net_gex_sign_flipped)
         if not changed_since_previous_run:
             # Changed before the previous run but not reported yet (failed send or mute).
-            title += f" (earlier, not reported yet; last reported: {last_reported_states[family]})"
+            if family in last_reported_states:
+                title += f" (earlier, not reported yet; last reported: {last_reported_states[family]})"
+            elif baseline is not None:
+                title += f" (earlier, not reported yet; about 24h ago: {baseline.reference_states[family]})"
         alerts.append(UrgentAlert(
             key=key, title=title, comparison_label=previous_comparison.label,
             change_usd=(previous_comparison.net_gex_change
@@ -280,6 +361,7 @@ def evaluate_urgent_alerts(
     day_comparison: RecordComparison,
     thresholds: AlertThresholds = AlertThresholds(),
     last_reported_states: Optional[Mapping[str, str]] = None,
+    baseline: Optional[EventBaseline] = None,
 ) -> List[UrgentAlert]:
     """
     Every rule that is on and fires, before the cooldown is applied.
@@ -292,11 +374,15 @@ def evaluate_urgent_alerts(
         thresholds: Which rules are on and their thresholds.
         last_reported_states: Event family (``EVENT_FAMILY_*``) -> state
             ("positive" / "negative") of the newest DELIVERED event alert of
-            that family. A family without a delivered event is absent; its
-            trigger is then the change since the previous run.
+            that family. A family without a delivered event is absent; it
+            is then judged against ``baseline``.
+        baseline: The 24 h baseline (``event_baseline``) for families
+            without a delivered event; a family absent from it (or None)
+            uses the change since the previous run.
     """
     alerts = _level_move_alerts(day_comparison, thresholds)
-    alerts.extend(_event_alerts(latest, previous_comparison, thresholds, last_reported_states or {}))
+    alerts.extend(_event_alerts(latest, previous_comparison, thresholds, last_reported_states or {},
+                                baseline))
     if thresholds.spot_near_wall_percent is not None:
         alerts.extend(_near_wall_alerts(latest, thresholds.spot_near_wall_percent))
     return alerts

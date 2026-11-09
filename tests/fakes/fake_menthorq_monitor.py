@@ -124,6 +124,18 @@ class FakeMonitorRepository(DatabaseRepository):
         ]
         return max(candidates, key=lambda r: r.as_of_utc) if candidates else None
 
+    def get_menthorq_level_snapshots_between(
+        self, currency: str, mode: str, expiry_universe: str, gamma_underlying: str,
+        earliest: datetime, before: datetime,
+    ) -> List[MenthorqLevelRecord]:
+        candidates = [
+            r for r in self.records
+            if r.currency == currency and r.mode == mode and r.expiry_universe == expiry_universe
+            and r.gamma_underlying == gamma_underlying and r.has_levels
+            and earliest <= r.as_of_utc < before
+        ]
+        return sorted(candidates, key=lambda r: r.as_of_utc)
+
     def save_menthorq_alert_deliveries(self, currency: str, alert_keys: List[str], delivered_at: datetime,
                                        message: str, level_snapshot_id: Optional[int] = None) -> None:
         if self.fail_deliveries:

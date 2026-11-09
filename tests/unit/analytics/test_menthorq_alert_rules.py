@@ -24,6 +24,7 @@ from coding.core.analytics.menthorq_monitor.alert_rules import (
     apply_cooldown,
     cooldown_for_key,
     evaluate_urgent_alerts,
+    event_baseline,
 )
 from coding.core.analytics.menthorq_monitor.level_trend_calculator import compare_records
 from tests.fakes.fake_menthorq_monitor import BASE_TIME, make_record
@@ -219,3 +220,56 @@ def test_event_rules_against_the_last_reported_state():
     zero = make_record(total_net_gex=0.0)
     assert evaluate_urgent_alerts(zero, compare_records(zero, previous, "previous"),
                                   day_comparison, sign_only, {"net_gex_sign": "positive"}) == []
+
+
+class TestEventBaseline:
+    """event_baseline: the state about 24 h ago for families without a delivered event."""
+
+    def test_reference_is_the_newest_record_at_or_before_24h_and_none_states_are_skipped(self):
+        # 25 h ago positive (spot 100,000 > HVL 95,000; net GEX +5M). 24 h ago HVL None and net
+        # GEX None but Call Resistance set (computed, both states unknown): scanned back past it.
+        older = make_record(as_of=BASE_TIME - timedelta(hours=25))
+        reference = make_record(as_of=DAY_AGO, hvl=None, total_net_gex=None)
+        recent = make_record(as_of=PREVIOUS_TIME, hvl=105000.0, total_net_gex=-2e6)   # negative
+        latest = make_record(hvl=105000.0, total_net_gex=-2e6)
+        baseline = event_baseline(latest, [older, reference, recent])
+        assert baseline.reference_states == {"net_gex_sign": "positive", "hvl_regime": "positive"}
+        assert baseline.current_states == {"net_gex_sign": "negative", "hvl_regime": "negative"}
+
+    def test_without_a_record_24h_old_the_oldest_within_24h_is_the_reference(self):
+        oldest_within = make_record(as_of=BASE_TIME - timedelta(hours=5), total_net_gex=-1e6)
+        newer = make_record(as_of=PREVIOUS_TIME, total_net_gex=4e6)
+        baseline = event_baseline(make_record(total_net_gex=4e6), [oldest_within, newer])
+        assert baseline.reference_states["net_gex_sign"] == "negative"
+
+    def test_unknown_current_state_uses_the_newest_known_one(self):
+        earlier = make_record(as_of=PREVIOUS_TIME, spot=90000.0)   # below HVL 95,000: negative
+        latest = make_record(hvl=None)                             # chain edge: regime None
+        baseline = event_baseline(latest, [make_record(as_of=DAY_AGO), earlier])
+        assert baseline.reference_states["hvl_regime"] == "positive"
+        assert baseline.current_states["hvl_regime"] == "negative"
+
+    def test_no_earlier_record_gives_an_empty_baseline_and_the_previous_run_rule(self):
+        previous = make_record(as_of=PREVIOUS_TIME, total_net_gex=5e6)
+        latest = make_record(total_net_gex=-1e6)
+        baseline = event_baseline(latest, [])
+        assert baseline.reference_states == {} and baseline.current_states == {}
+        sign_only = AlertThresholds(hvl_move_percent_of_spot=None)
+        fired = evaluate_urgent_alerts(latest, compare_records(latest, previous, "previous"),
+                                       compare_records(latest, None, "24h"), sign_only, {}, baseline)
+        assert [alert.key for alert in fired] == ["net_gex_turned_negative"]
+        # 5M -> -1M = -6M, a fresh change: no "not reported yet" note
+        assert fired[0].change_usd == -6e6 and "not reported" not in fired[0].title
+
+    def test_delivered_state_wins_over_the_baseline(self):
+        latest = make_record(total_net_gex=-1e6)
+        previous = make_record(as_of=PREVIOUS_TIME, total_net_gex=-1e6)
+        baseline = event_baseline(latest, [make_record(as_of=DAY_AGO, total_net_gex=5e6), previous])
+        sign_only = AlertThresholds(hvl_move_percent_of_spot=None)
+        previous_comparison = compare_records(latest, previous, "previous")
+        day_comparison = compare_records(latest, None, "24h")
+        assert [alert.key for alert in evaluate_urgent_alerts(
+            latest, previous_comparison, day_comparison, sign_only, {}, baseline)] == \
+            ["net_gex_turned_negative"]
+        assert evaluate_urgent_alerts(latest, previous_comparison, day_comparison, sign_only,
+                                      {"net_gex_sign": "negative"}, baseline) == []

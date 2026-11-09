@@ -84,12 +84,19 @@ or its snapshot is more than 45 min older than the run.
   re-evaluated every run too: one whose condition still holds after the mute ends, or after a
   failed send, is sent at the next hourly run. The current state is always in `/brief` and
   `/levels`. The GUI preview and the dry run read no delivery log and use the previous-run rule.
-- The one remaining limit: the very FIRST event of a family (the first-ever net GEX sign flip, the
-  first-ever HVL crossing: no event of that family has ever been delivered, so there is no reported
-  state to compare with) is detected only by the comparison with the previous run. If alerts are
-  muted, or the send fails, at exactly that hour, that first event is lost; at the next run the
-  previous record already has the new state and nothing fires. From the first delivered event of a
-  family on, the state-based rule above applies and a muted or failed event is sent later.
+- A family with no delivered event yet (the first-ever net GEX sign flip, the first-ever HVL
+  crossing) is compared with the state about 24h ago instead: the state of the stored record the
+  24h comparison uses (the newest one at or before 24h ago, at most 30h old) or, if none is that
+  old, of the oldest stored record within the last 24h. A record whose state is unknown (HVL not
+  computed, for example at the chain edge, spot exactly at HVL, net GEX missing or 0) is skipped,
+  for the baseline and for the current state, so it cannot hide a crossing. So a first event that
+  was muted or whose send failed is sent later while the state still differs from that baseline
+  (the line says `(earlier, not reported yet; about 24h ago: ...)`), and a flip that flips back
+  first sends nothing. Remaining limit: when no stored record older than the latest exists (for
+  example the first hour of a brand-new deployment), the trigger is the change since the previous
+  run.
+- A flip back within 12h of the alert for the same direction is held by that key's cooldown on
+  purpose: it keeps a state that flaps around zero or around HVL from sending an alert every hour.
 - If the state cannot be read (for example, migration 032 is not applied), alerts are treated as
   NOT muted and the error is logged.
 

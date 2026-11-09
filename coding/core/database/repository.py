@@ -1263,6 +1263,26 @@ class DatabaseRepository:
             row = cursor.fetchone()
         return self._menthorq_level_record_from_row(row) if row else None
 
+    def get_menthorq_level_snapshots_between(
+        self, currency: str, mode: str, expiry_universe: str, gamma_underlying: str,
+        earliest: datetime, before: datetime,
+    ) -> List[MenthorqLevelRecord]:
+        """
+        Every computed run (with levels, ``has_levels``) with ``earliest`` <=
+        ``as_of_utc`` < ``before``, oldest first (empty when none).
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                f"SELECT {self._MENTHORQ_LEVEL_COLUMNS} FROM menthorq_level_snapshots "
+                "WHERE currency = %s AND mode = %s AND expiry_universe = %s "
+                "AND gamma_underlying = %s "
+                f"AND {has_levels_sql_condition('menthorq_level_snapshots')} "
+                "AND as_of_utc >= %s AND as_of_utc < %s ORDER BY as_of_utc",
+                (currency, mode, expiry_universe, gamma_underlying, earliest, before),
+            )
+            rows = cursor.fetchall()
+        return [self._menthorq_level_record_from_row(row) for row in rows]
+
     def save_menthorq_alert_deliveries(
         self, currency: str, alert_keys: List[str], delivered_at: datetime, message: str,
         level_snapshot_id: Optional[int] = None,

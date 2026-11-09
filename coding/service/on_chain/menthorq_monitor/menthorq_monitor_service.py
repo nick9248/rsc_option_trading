@@ -277,6 +277,19 @@ class MenthorqMonitorService:
             strictly_before=(label == COMPARISON_PREVIOUS),
         )
 
+    def event_baseline_records(self, latest: MenthorqLevelRecord) -> List[MenthorqLevelRecord]:
+        """
+        The stored computed records the 24 h event baseline needs
+        (``event_baseline``): same currency, mode and settings, strictly
+        before ``latest``, back to the oldest instant the 24 h comparison
+        accepts (24 h plus its tolerance), oldest first.
+        """
+        earliest = (latest.as_of_utc - COMPARISON_OFFSET[COMPARISON_ONE_DAY]
+                    - COMPARISON_TOLERANCE[COMPARISON_ONE_DAY])
+        return self.repository.get_menthorq_level_snapshots_between(
+            latest.currency, latest.mode, latest.expiry_universe, latest.gamma_underlying,
+            earliest, latest.as_of_utc)
+
     def build_comparisons(self, latest: MenthorqLevelRecord) -> List[RecordComparison]:
         """Latest vs previous run, 24 h ago and 7 days ago (stored records)."""
         return [compare_records(latest, self.find_reference(latest, label), label)
