@@ -26,6 +26,7 @@ from coding.service.on_chain.menthorq_monitor.brief_delivery_service import (
     TELEGRAM_PARSE_MODE,
     MenthorqBriefDeliveryService,
 )
+from coding.service.on_chain.menthorq_monitor.brief_formatter import fit_to_telegram_limit
 from coding.service.on_chain.menthorq_monitor.command_formatter import (
     MonitorStatus,
     format_changes_reply,
@@ -93,7 +94,7 @@ class MenthorqBotCommandService:
     ) -> bool:
         """
         Build a reply and send it; a build error is logged and answered
-        with a "failed" line.
+        with a "failed" line. Every reply passes ``fit_to_telegram_limit``.
 
         Args:
             command: The command, for the log and the "failed" line.
@@ -111,6 +112,7 @@ class MenthorqBotCommandService:
             logger.exception("MenthorQ monitor: reply to %s could not be built", command)
             message = format_command_failed_reply(command)
             send = None
+        message = fit_to_telegram_limit(message)
         if send is None:
             accepted = self.telegram.send(message, parse_mode=TELEGRAM_PARSE_MODE)
         else:

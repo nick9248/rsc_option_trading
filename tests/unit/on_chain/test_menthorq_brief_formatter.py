@@ -17,6 +17,7 @@ from coding.service.on_chain.menthorq_monitor.brief_formatter import (
     TELEGRAM_MESSAGE_LIMIT,
     code_block,
     escape,
+    fit_to_telegram_limit,
     format_brief,
     format_duration,
     format_gex,
@@ -325,3 +326,50 @@ def test_regime_sentence_shows_not_computed_instead_of_a_zero_percent():
     assert regime_sentence(make_record(spot=100000.0, hvl=95000.0)) ==         "POSITIVE gamma: spot 5,000 (5.00%) above HVL."
     # spot 0 (no usable spot): the distance exists (95,000) but its percent of spot does not
     assert regime_sentence(make_record(spot=0.0, hvl=95000.0)) ==         "NEGATIVE gamma: spot 95,000 (not computed) below HVL."
+
+
+class TestFitToTelegramLimit:
+    """The last-resort cut of every outgoing message (whole lines, tags closed, a note)."""
+
+    NOTE = "\n<i>...cut to fit Telegram</i>"   # 30 characters
+
+    def test_a_text_within_the_limit_is_unchanged(self):
+        text = "<b>title</b>\n" + "x" * 50
+        assert fit_to_telegram_limit(text, limit=telegram_length(text)) == text
+
+    def test_plain_lines_are_cut_at_a_line_boundary_with_the_note(self):
+        # Lines of 10 characters; "aaaaaaaaaa\nbbbbbbbbbb" is 21, + note 30 = 51 <= 60, a third line
+        # would make 62 > 60, so two lines are kept.
+        text = "\n".join(letter * 10 for letter in "abcdef")
+        assert fit_to_telegram_limit(text, limit=60) == "aaaaaaaaaa\nbbbbbbbbbb" + self.NOTE
+
+    def test_an_oversized_pre_block_is_closed_where_it_is_cut(self):
+        body = "\n".join(f"row {number:04d}" for number in range(2000))     # 8 characters a row
+        text = "<b>BTC changes</b>\n" + code_block(body) + "\n<i>after the block</i>"
+        assert telegram_length(text) > TELEGRAM_MESSAGE_LIMIT
+        fitted = fit_to_telegram_limit(text)
+        assert telegram_length(fitted) <= TELEGRAM_MESSAGE_LIMIT
+        assert fitted.endswith(CODE_BLOCK_CLOSE + self.NOTE)
+        _check_html(fitted)                                       # balanced: pre/code closed
+        # Fixed parts: "<b>BTC changes</b>\n" 19 + CODE_BLOCK_OPEN 33 + CODE_BLOCK_CLOSE 13
+        # + note 30 = 95, leaving 4001; the first row is 8 characters, every further row 9
+        # ("\n" + 8): 8 + 9 * (rows - 1) <= 4001 gives 444 rows (3995 characters) -> 4090 in all;
+        # 445 rows would be 4099 > 4096.
+        assert fitted.count("row ") == 444 and "row 0443" in fitted and "row 0444" not in fitted
+        assert telegram_length(fitted) == 4090
+
+    def test_a_cut_after_a_closed_block_closes_nothing_extra(self):
+        text = code_block("a\nb") + "\n" + "\n".join("z" * 10 for _ in range(10))
+        fitted = fit_to_telegram_limit(text, limit=len(CODE_BLOCK_OPEN) + 3 + len(CODE_BLOCK_CLOSE)
+                                       + 11 + len(self.NOTE))
+        assert fitted == CODE_BLOCK_OPEN + "a\nb" + CODE_BLOCK_CLOSE + "\n" + "z" * 10 + self.NOTE
+        _check_html(fitted)
+
+    def test_when_not_even_the_first_line_fits_only_the_note_is_sent(self):
+        assert fit_to_telegram_limit("<b>" + "x" * 100 + "</b>", limit=40) == "<i>...cut to fit Telegram</i>"
+
+    def test_utf16_units_are_counted(self):
+        # A character outside the BMP counts 2 UTF-16 units (Telegram's count), not 1.
+        text = "\U0001F600" * 20 + "\n" + "y" * 40       # 40 + 1 + 40 = 81 units in all
+        assert fit_to_telegram_limit(text, limit=40 + 29) == "<i>...cut to fit Telegram</i>"
+        assert fit_to_telegram_limit(text, limit=40 + 30) == "\U0001F600" * 20 + self.NOTE

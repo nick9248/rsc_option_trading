@@ -36,7 +36,10 @@ from coding.service.on_chain.menthorq_monitor.brief_delivery_service import (
     error_text_for_telegram,
     scrubbed_traceback,
 )
-from coding.service.on_chain.menthorq_monitor.brief_formatter import format_monitor_not_started_notice
+from coding.service.on_chain.menthorq_monitor.brief_formatter import (
+    fit_to_telegram_limit,
+    format_monitor_not_started_notice,
+)
 from coding.service.on_chain.menthorq_monitor.command_formatter import BOT_COMMANDS
 from coding.service.on_chain.menthorq_monitor.menthorq_monitor_service import MenthorqMonitorService
 from coding.service.on_chain.menthorq_monitor.monitor_settings import MenthorqMonitorSettings
@@ -271,7 +274,8 @@ def _send_not_started_notice(telegram: Optional[TelegramAlertService], reason: s
         if not telegram.has_credentials:
             logger.warning("MenthorQ monitor: no Telegram credentials; not-started notice NOT sent")
             return
-        if not telegram.send(format_monitor_not_started_notice(reason), parse_mode=TELEGRAM_PARSE_MODE):
+        notice = fit_to_telegram_limit(format_monitor_not_started_notice(reason))
+        if not telegram.send(notice, parse_mode=TELEGRAM_PARSE_MODE):
             logger.warning("MenthorQ monitor: not-started notice NOT delivered (Telegram send failed)")
     except Exception:
         logger.exception("MenthorQ monitor: the not-started notice itself failed")

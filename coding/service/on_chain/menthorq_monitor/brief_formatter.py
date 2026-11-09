@@ -17,10 +17,14 @@ tags are parsed, in UTF-16 code units). The raw HTML length is counted here,
 which is never smaller, so a message that passes ``telegram_length`` <=
 ``TELEGRAM_MESSAGE_LIMIT`` is accepted. A brief that would be longer is
 re-rendered shorter step by step (panels dropped, lists cut, comparison
-blocks dropped) and says what it left out.
+blocks dropped) and says what it left out. As a last resort every message
+the monitor sends goes through ``fit_to_telegram_limit`` (cut at a line
+boundary, open tags closed, "...cut to fit Telegram" note), so Telegram
+never rejects one for its length.
 """
 
 import html
+import re
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Sequence
@@ -91,6 +95,48 @@ def code_block(text: str) -> str:
 def telegram_length(text: str) -> int:
     """Length as Telegram counts it (UTF-16 code units)."""
     return len(text.encode("utf-16-le")) // 2
+
+
+CUT_TO_FIT_NOTE = "<i>...cut to fit Telegram</i>"
+_HTML_TAG_PATTERN = re.compile(r"<(/?)([A-Za-z]+)[^>]*>")
+
+
+def _open_tags_after(line: str, open_tags: List[str]) -> List[str]:
+    """The stack of open HTML tags after ``line`` (``open_tags`` before it)."""
+    stack = list(open_tags)
+    for closing, name in _HTML_TAG_PATTERN.findall(line):
+        if not closing:
+            stack.append(name.lower())
+        elif stack and stack[-1] == name.lower():
+            stack.pop()
+    return stack
+
+
+def fit_to_telegram_limit(text: str, limit: int = TELEGRAM_MESSAGE_LIMIT) -> str:
+    """
+    The last resort before every send: ``text`` unchanged when its
+    ``telegram_length`` is within ``limit``; otherwise the longest run of
+    whole leading lines that fits, then the tags still open there closed
+    (e.g. ``</code></pre>`` when the cut falls inside a code block), then
+    "\\n" + ``CUT_TO_FIT_NOTE``. Lines are never split, so no tag or HTML
+    entity is cut. When not even the first line fits, only the note is sent.
+    """
+    if telegram_length(text) <= limit:
+        return text
+    kept: List[str] = []
+    open_tags: List[str] = []
+    for line in text.split("\n"):
+        tags_after = _open_tags_after(line, open_tags)
+        closing = "".join(f"</{name}>" for name in reversed(tags_after))
+        candidate = "\n".join(kept + [line]) + closing + "\n" + CUT_TO_FIT_NOTE
+        if telegram_length(candidate) > limit:
+            break
+        kept.append(line)
+        open_tags = tags_after
+    if not kept:
+        return CUT_TO_FIT_NOTE
+    closing = "".join(f"</{name}>" for name in reversed(open_tags))
+    return "\n".join(kept) + closing + "\n" + CUT_TO_FIT_NOTE
 
 
 def format_strike(value: Optional[float]) -> str:

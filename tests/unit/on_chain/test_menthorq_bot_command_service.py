@@ -446,3 +446,15 @@ def test_end_to_end_owner_only_through_the_listener():
         "Unknown command /nope. Commands: /brief /levels /changes /status /mute /help. Send /help for details.",
     ]
     assert telegram.registered_commands == [list(BOT_COMMANDS)]
+
+
+def test_an_oversized_reply_is_cut_to_fit_before_it_is_sent():
+    commands, repository, telegram, _ = _service([make_record()])
+    oversized = "<b>BTC changes</b>\n" + OPEN + "\n".join("x" * 50 for _ in range(200)) + CLOSE
+    assert telegram_length(oversized) > TELEGRAM_MESSAGE_LIMIT
+    assert commands.reply("/changes", lambda: oversized) is True
+    sent = _valid(telegram.sent[-1]["message"])
+    assert sent.endswith(CLOSE + "\n<i>...cut to fit Telegram</i>")
+    # The /brief path (send records the delivery) stores the text that was actually sent.
+    commands.reply("/brief", lambda: oversized, send=commands.delivery_service.deliver_on_demand_brief)
+    assert repository.deliveries[-1]["message"] == telegram.sent[-1]["message"] == sent

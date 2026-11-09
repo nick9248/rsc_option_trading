@@ -693,3 +693,12 @@ class TestMonitorErrorAlert:
         monkeypatch.setattr(telegram, "send", raise_on_send)
         assert service.send_monitor_error_alert(RuntimeError("down"), FRIDAY_0910) is False
         assert "the monitor-error alert itself failed" in caplog.text
+
+
+def test_an_oversized_urgent_message_is_cut_to_fit_before_it_is_sent():
+    service, repository, telegram, _ = _delivery([])
+    oversized = "<b>URGENT</b>\n" + "\n".join("- " + "y" * 60 for _ in range(100))
+    assert service._send_urgent("BTC", None, ["monitor_error"], oversized, FRIDAY_0910) == ["monitor_error"]
+    sent = telegram.sent[-1]["message"]
+    assert len(sent) <= 4096 and sent.endswith("\n<i>...cut to fit Telegram</i>")
+    assert repository.deliveries[-1]["message"] == sent

@@ -70,6 +70,7 @@ from coding.core.analytics.menthorq_monitor.level_trend_calculator import (
 from coding.core.database.config import DatabaseConfig
 from coding.service.on_chain.menthorq_monitor.brief_formatter import (
     escape,
+    fit_to_telegram_limit,
     format_brief,
     format_monitor_error_alert,
     format_stale_data_alert,
@@ -326,6 +327,7 @@ class MenthorqBriefDeliveryService:
                 self._unsaved_deliveries[key] = delivered_at
 
     def _deliver(self, key: str, message: str, record_id: Optional[int]) -> bool:
+        message = fit_to_telegram_limit(message)
         if not self.telegram.send(message, parse_mode=TELEGRAM_PARSE_MODE):
             logger.warning("MenthorQ monitor: %s NOT delivered (Telegram send failed)", key)
             return False
@@ -428,6 +430,7 @@ class MenthorqBriefDeliveryService:
             except Exception:
                 logger.exception("MenthorQ monitor: could not record the muted alerts")
             return []
+        message = fit_to_telegram_limit(message)
         if not self.telegram.send(message, parse_mode=TELEGRAM_PARSE_MODE):
             logger.warning("MenthorQ monitor: urgent alerts %s NOT delivered (Telegram send failed)", keys)
             return []
