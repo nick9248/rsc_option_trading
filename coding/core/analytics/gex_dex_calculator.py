@@ -576,8 +576,8 @@ class GexDexCalculator:
         # spot, then -- if that also came up empty -- to whichever strike had
         # the smallest |cumulative GEX|, which is never actually zero and
         # will always find SOME strike. Together those fallbacks meant `hvl`
-        # (persisted into the live `hvl_level` DB column, documented as read
-        # by the straddle regime gate and IC/BF scanners) was essentially
+        # (persisted into the live `hvl_level` column of
+        # onchain_analysis_snapshots, stored for analysis only) was essentially
         # ALWAYS populated with a strike, even when cumulative GEX never
         # crossed zero anywhere in the book -- a fabricated level presented
         # as if it answered the same question as a real cumulative
