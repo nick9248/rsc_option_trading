@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from coding.core.analytics.menthorq_chart_renderer import PANEL_TITLES
-from coding.core.analytics.menthorq_monitor.level_record import LEVEL_LABELS
+from coding.core.analytics.menthorq_monitor.level_record import LEVEL_LABELS, all_expiries_levels
 from coding.core.analytics.menthorq_replication_calculator import (
     DEFAULT_GEX_EXPIRING_CANDIDATE,
     DEFAULT_LEVEL_CANDIDATES,
@@ -33,6 +33,7 @@ CHART_IV_TIMES_OPEN_INTEREST_EXPIRY = "iv_times_open_interest_expiry"
 CHART_NET_GEX_PANELS = "net_gex_panels"
 CHART_NET_DEX = "net_dex"
 CHART_ALL = "all"
+HVL_CHAIN_EDGE_NOTE = "(chain edge: not used by the monitor)"
 
 RUN_MODE_DESCRIPTIONS = {
     "as_of": "Replay",
@@ -105,6 +106,7 @@ def _level_row(
         "spot": spot,
         "gex_expiring_percent": gex_expiring_percent,
         "gex_expiring_percent_applies": gex_expiring_percent_applies,
+        "hvl_note": None,
     }
 
 
@@ -124,8 +126,11 @@ def levels_rows(
 
     Returns:
         Rows with scope, expiration, expiration_date, call_resistance,
-        put_support, hvl, spot, gex_expiring_percent and
-        gex_expiring_percent_applies (False where the column has no meaning).
+        put_support, hvl, spot, gex_expiring_percent,
+        gex_expiring_percent_applies (False where the column has no meaning)
+        and hvl_note: ``HVL_CHAIN_EDGE_NOTE`` on the all-expiry row when its
+        HVL sits at the chain edge (shown as drawn, but the monitor and the
+        brief report "n/a"), else None. Display it after the HVL value.
     """
     replication = _primary_replication(output)
     settings = replication["settings"]
@@ -133,10 +138,16 @@ def levels_rows(
     rows: List[Dict[str, Any]] = []
 
     if chart in (CHART_IV_TIMES_OPEN_INTEREST, CHART_NET_DEX, CHART_ALL):
-        rows.append(_level_row(
+        # The chart value is kept (it mirrors MenthorQ's drawing); the note says the monitor
+        # and the brief report "n/a" for an HVL at the chain edge (all_expiries_levels).
+        row = _level_row(
             f"All expiries ({settings['expiry_universe']}, {len(settings['expirations'])})",
             None, select_drawn_levels(replication["iv_times_open_interest"]["levels"]), spot,
-        ))
+        )
+        _, hvl_at_chain_edge = all_expiries_levels(replication)
+        if hvl_at_chain_edge:
+            row["hvl_note"] = HVL_CHAIN_EDGE_NOTE
+        rows.append(row)
     if chart in (CHART_NET_GEX_PANELS, CHART_ALL):
         panels = replication["panels"][PANEL_RANKING_ABSOLUTE_NET]
         for panel_name in PANEL_NAMES:

@@ -30,11 +30,14 @@ def _candidates(call_resistance, put_support, hvl):
     }
 
 
-def _output(currency="BTC", iv_source_counts=None, comparison=None):
+def _output(currency="BTC", iv_source_counts=None, comparison=None,
+            chain_strikes=(75000.0, 79000.0, 80000.0, 85000.0)):
     replication = {
         "settings": {"expiry_universe": "monthly", "gamma_underlying": "index",
                      "expirations": ["27NOV26", "25DEC26"]},
-        "iv_times_open_interest": {"levels": _candidates(80000.0, 75000.0, 79000.0)},
+        "iv_times_open_interest": {
+            "levels": _candidates(80000.0, 75000.0, 79000.0),
+            "all_expiries_exposure": {"strikes": [{"strike": strike} for strike in chain_strikes]}},
         "panels": {"absolute_net_gex": {"first_expiration": "27NOV26",
                                         "next_expiration": "25DEC26",
                                         "highest_gex": None, "second_highest_gex": None}},
@@ -98,7 +101,19 @@ def test_all_expiry_levels_are_the_drawn_candidates_and_gex_percent_does_not_app
     assert (row["call_resistance"], row["put_support"], row["hvl"]) == (80000.0, 75000.0, 79000.0)
     assert row["spot"] == 75755.64
     assert row["gex_expiring_percent_applies"] is False
+    assert row["hvl_note"] is None          # 79,000 is inside the chain 75,000..85,000
     assert levels_rows(_output(), CHART_NET_DEX) == [row]
+
+
+def test_an_all_expiry_hvl_at_the_chain_edge_keeps_its_value_and_gets_the_note():
+    # Lowest chain strike 79,000 = the drawn HVL: the monitor drops it, the chart keeps it.
+    output = _output(chain_strikes=(79000.0, 80000.0, 85000.0))
+    (row,) = levels_rows(output, CHART_IV_TIMES_OPEN_INTEREST)
+    assert row["hvl"] == 79000.0
+    assert row["hvl_note"] == "(chain edge: not used by the monitor)"
+    # The highest strike counts as the edge too; panel and per-expiry rows never get the note.
+    rows = levels_rows(_output(chain_strikes=(70000.0, 79000.0)), CHART_ALL)
+    assert [row["hvl_note"] for row in rows] == ["(chain edge: not used by the monitor)"] + [None] * 6
 
 
 def test_panel_rows_keep_not_computed_as_none_never_zero():
