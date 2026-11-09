@@ -49,10 +49,7 @@ from coding.core.analytics.menthorq_replication_calculator import (
     start_of_utc_day,
 )
 from coding.core.logging.logging_setup import init_logging
-from coding.service.on_chain.menthorq_replication_service import (
-    MenthorqReplicationService,
-    menthorq_daily_close_instants,
-)
+from coding.service.on_chain.menthorq_replication_service import MenthorqReplicationService
 
 logger = logging.getLogger(__name__)
 
@@ -93,29 +90,49 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def resolve_instants(
-    parser: argparse.ArgumentParser, arguments: argparse.Namespace
-) -> Tuple[datetime, Optional[datetime]]:
-    """(as_of, open_interest_as_of) from the parsed arguments."""
-    if arguments.menthorq_date is not None:
-        if arguments.open_interest_as_of is not None or arguments.open_interest_at_start_of_utc_day:
-            parser.error("--menthorq-date already sets the open-interest instant")
-        return menthorq_daily_close_instants(arguments.menthorq_date)
+def resolve_instants(arguments: argparse.Namespace) -> Tuple[datetime, Optional[datetime]]:
+    """(as_of, open_interest_as_of) of an --as-of run from the parsed arguments."""
     if arguments.open_interest_at_start_of_utc_day:
         return arguments.as_of, start_of_utc_day(arguments.as_of)
     return arguments.as_of, arguments.open_interest_as_of
 
 
-def main(argv: Optional[Sequence[str]] = None) -> None:
-    """Parse arguments and run the replication."""
+def main(
+    argv: Optional[Sequence[str]] = None,
+    service: Optional[MenthorqReplicationService] = None,
+) -> None:
+    """
+    Parse arguments and run the replication. --menthorq-date goes through
+    ``MenthorqReplicationService.run_menthorq_daily_close`` (its "UTC day
+    not ended" guard and the "menthorq_daily_close" run mode); --as-of
+    through ``run``.
+
+    Args:
+        argv: Command-line arguments (``sys.argv[1:]`` when omitted).
+        service: The replication service (a default one when omitted).
+    """
     parser = build_parser()
     arguments = parser.parse_args(argv)
-    as_of, open_interest_as_of = resolve_instants(parser, arguments)
+    if arguments.menthorq_date is not None and (
+            arguments.open_interest_as_of is not None or arguments.open_interest_at_start_of_utc_day):
+        parser.error("--menthorq-date already sets the open-interest instant")
 
     init_logging(level="INFO", task_name="replicate_menthorq")
     reference = (json.loads(arguments.reference.read_text(encoding="utf-8"))
                  if arguments.reference else None)
-    MenthorqReplicationService().run(
+    service = service or MenthorqReplicationService()
+    if arguments.menthorq_date is not None:
+        service.run_menthorq_daily_close(
+            currency=arguments.currency,
+            menthorq_date=arguments.menthorq_date,
+            output_directory=arguments.output_directory,
+            expiry_universe=arguments.expiry_universe,
+            gamma_underlying=arguments.gamma_underlying,
+            reference=reference,
+        )
+        return
+    as_of, open_interest_as_of = resolve_instants(arguments)
+    service.run(
         currency=arguments.currency,
         as_of=as_of,
         output_directory=arguments.output_directory,
