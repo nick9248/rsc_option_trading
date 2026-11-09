@@ -32,7 +32,8 @@ The thresholds are chosen by hand, not fitted; a backtest is meant to
 replace them. An alert whose key was delivered less than ``cooldown`` ago
 is not repeated (crossings and sign flips carry their direction in the key,
 so a crossing back is a different alert). The three 24 h level-move alerts
-use at least the 24 h comparison window as cooldown (``cooldown_for_key``).
+use at least the 24 h comparison window as cooldown, the four event alerts
+at most ``EVENT_ALERT_COOLDOWN`` (2 h) (``cooldown_for_key``).
 
 Pure: no database, network or plotting imports.
 """
@@ -77,6 +78,11 @@ ALERT_KEY_MONITOR_ERROR = "monitor_error"
 # move, so these keys are held for at least that window (one move, one alert).
 LEVEL_MOVE_ALERT_KEYS = (ALERT_KEY_HVL_MOVE, ALERT_KEY_CALL_RESISTANCE_MOVE, ALERT_KEY_PUT_SUPPORT_MOVE)
 LEVEL_MOVE_ALERT_COOLDOWN = ONE_DAY_COMPARISON_OFFSET
+# An event alert reports a state change; a flip back is judged against the
+# state last reported, so holding the same key for the full cooldown would
+# leave the owner's last message showing the wrong state. These keys are held
+# for at most this long (still enough to stop an hourly flap).
+EVENT_ALERT_COOLDOWN = timedelta(hours=2)
 # Event families: the state an event alert reports, by key (see last_reported_states).
 EVENT_FAMILY_NET_GEX_SIGN = "net_gex_sign"
 EVENT_FAMILY_HVL_REGIME = "hvl_regime"
@@ -135,7 +141,9 @@ class AlertThresholds:
             f"Spot crosses HVL: {'ON' if self.spot_crosses_hvl else 'OFF'}",
             near_wall,
             f"Cooldown per alert: {self.cooldown.total_seconds() / 3600:g}h "
-            f"(24h moves: {cooldown_for_key(ALERT_KEY_HVL_MOVE, self.cooldown).total_seconds() / 3600:g}h)",
+            f"(24h moves: {cooldown_for_key(ALERT_KEY_HVL_MOVE, self.cooldown).total_seconds() / 3600:g}h, "
+            f"sign flips and HVL crossings: "
+            f"{cooldown_for_key(ALERT_KEY_NET_GEX_TURNED_NEGATIVE, self.cooldown).total_seconds() / 3600:g}h)",
         ]
 
 
@@ -397,10 +405,15 @@ def cooldown_for_key(key: str, cooldown: timedelta) -> timedelta:
     """
     The cooldown of one alert key: the configured ``cooldown``, but at least
     the 24 h comparison window for the 24 h level-move keys (their condition
-    stays true for that whole window after one move).
+    stays true for that whole window after one move), and at most
+    ``EVENT_ALERT_COOLDOWN`` for the event keys (net GEX sign flip, spot
+    crossing HVL), so a flip back and forth is reported and the owner's last
+    message matches the current state.
     """
     if key in LEVEL_MOVE_ALERT_KEYS:
         return max(cooldown, LEVEL_MOVE_ALERT_COOLDOWN)
+    if key in EVENT_ALERT_STATES:
+        return min(cooldown, EVENT_ALERT_COOLDOWN)
     return cooldown
 
 

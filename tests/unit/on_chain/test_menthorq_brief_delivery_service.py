@@ -378,6 +378,27 @@ class TestEventAlertsAgainstTheLastReportedState:
         assert "Total net GEX turned NEGATIVE: net GEX change -$6.00M." in message
         assert "not reported yet" not in message
 
+    def test_a_flip_back_after_four_hours_is_reported_despite_the_twelve_hour_cooldown(self):
+        """09:10 negative reported, 11:10 positive reported, 13:10 negative again: the second
+        net_gex_turned_negative is 4 h after the first (>= the 2 h event cooldown), so it is
+        sent and the owner's last message says negative (with the 12 h cooldown it was dropped)."""
+        service, repository, telegram, clock, latest = self._setup()
+        assert service.send_urgent_alerts(latest, FRIDAY_0910) == ["net_gex_turned_negative"]
+        assert self._run_at(service, repository, clock, 2, 3e6) == ["net_gex_turned_positive"]
+        assert self._run_at(service, repository, clock, 4, -1e6) == ["net_gex_turned_negative"]
+        assert len(telegram.sent) == 3
+        assert service.last_reported_event_states() == {"net_gex_sign": "negative"}
+
+    def test_a_flip_back_within_two_hours_of_the_same_key_is_held(self):
+        """Negative reported at 09:10, positive at 10:10, negative again at 11:09 (1 h 59 min
+        after the first negative): held by the 2 h event cooldown; at 11:10 (2 h) it is sent."""
+        service, repository, telegram, clock, latest = self._setup()
+        assert service.send_urgent_alerts(latest, FRIDAY_0910) == ["net_gex_turned_negative"]
+        assert self._run_at(service, repository, clock, 1, 3e6) == ["net_gex_turned_positive"]
+        assert self._run_at(service, repository, clock, 1 + 59 / 60, -1e6) == []
+        assert self._run_at(service, repository, clock, 2, -1e6) == ["net_gex_turned_negative"]
+        assert len(telegram.sent) == 3
+
     def test_hvl_crossing_family_uses_its_own_reported_state(self):
         # Spot 96,000 above HVL 95,000 at 08:10 -> 94,000 below at 09:10 (crossed below).
         previous, day_ago, latest = _crossing_history()

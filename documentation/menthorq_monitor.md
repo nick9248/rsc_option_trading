@@ -102,8 +102,12 @@ the same limit as the brief's "DATA STALE" line) older than the run.
   first sends nothing. Remaining limit: when no stored record older than the latest exists (for
   example the first hour of a brand-new deployment), the trigger is the change since the previous
   run.
-- A flip back within 12h of the alert for the same direction is held by that key's cooldown on
-  purpose: it keeps a state that flaps around zero or around HVL from sending an alert every hour.
+- The four event keys (`net_gex_turned_negative`/`_positive`, `spot_crossed_below_hvl`/`_above_hvl`)
+  use a cooldown of at most 2h (`EVENT_ALERT_COOLDOWN`; the configured cooldown if that is shorter).
+  A flip back within 2h of the alert for the same direction is held on purpose: it keeps a state
+  that flaps around zero or around HVL from sending an alert every hour. After 2h it is sent, so
+  the owner's last message matches the current state (negative at 09:10, positive at 11:10,
+  negative again at 13:10: all three are sent; with the old 12h cooldown the third was dropped).
 - If the state cannot be read (for example, migration 032 is not applied), alerts are treated as
   NOT muted and the error is logged.
 
@@ -126,7 +130,7 @@ test. They were chosen by hand, not fitted by a backtest.
 - A percent setting takes a number in (0, 100] or `off`. An invalid value raises an error and the
   monitor does not start (the collector logs it). A typo never silently falls back to the default.
 - Cooldown: an alert key delivered less than 12h ago is not sent again. A crossing and a sign flip
-  carry their direction in the key. The three "vs 24h ago" move alerts use at least 24h (the
+  carry their direction in the key and use at most 2h (see Mute). The three "vs 24h ago" move alerts use at least 24h (the
   comparison window): one move stays visible in that comparison for 24h, so a 12h cooldown would
   report it twice. Delivered 23h59 ago: held; 24h ago: may repeat.
 - If Telegram accepted a message but its `menthorq_alert_deliveries` row cannot be written, the

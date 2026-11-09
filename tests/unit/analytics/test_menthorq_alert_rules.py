@@ -20,7 +20,9 @@ from coding.core.analytics.menthorq_monitor.alert_rules import (
     ALERT_KEY_PUT_SUPPORT_MOVE,
     ALERT_KEY_SPOT_NEAR_CALL_RESISTANCE,
     ALERT_KEY_SPOT_NEAR_PUT_SUPPORT,
+    EVENT_ALERT_COOLDOWN,
     AlertThresholds,
+    UrgentAlert,
     apply_cooldown,
     cooldown_for_key,
     evaluate_urgent_alerts,
@@ -135,7 +137,7 @@ def test_describe_lists_every_rule_with_its_state():
         "Total net GEX sign change: ON",
         "Spot crosses HVL: OFF",
         "Spot near Call Resistance / Put Support: OFF",
-        "Cooldown per alert: 12h (24h moves: 24h)",
+        "Cooldown per alert: 12h (24h moves: 24h, sign flips and HVL crossings: 2h)",
     ]
     described = AlertThresholds(hvl_move_percent_of_spot=None, spot_crosses_hvl=True,
                                 spot_near_wall_percent=1.5).describe()
@@ -155,25 +157,36 @@ def test_no_references_no_alerts():
     assert _keys(make_record(), None, None, ALL_ON) == {}
 
 
-def test_cooldown_blocks_within_twelve_hours_only_for_the_same_key():
+def test_cooldown_blocks_only_the_same_key():
+    """Event keys are held for min(12 h, 2 h) = 2 h: 1 h 59 min held, 2 h may repeat."""
     previous = make_record(as_of=PREVIOUS_TIME, spot=96000.0, hvl=95000.0, total_net_gex=2e6)
     latest = make_record(spot=94000.0, hvl=95000.0, total_net_gex=-1e6)
     alerts = list(_keys(latest, previous, None, AlertThresholds(spot_crosses_hvl=True)).values())
     now = BASE_TIME
 
-    recent = {ALERT_KEY_CROSSED_BELOW_HVL: now - timedelta(hours=11, minutes=59)}
+    recent = {ALERT_KEY_CROSSED_BELOW_HVL: now - timedelta(hours=1, minutes=59)}
     kept = apply_cooldown(alerts, recent, now, timedelta(hours=12))
     assert [alert.key for alert in kept] == [ALERT_KEY_NET_GEX_TURNED_NEGATIVE]
 
-    exactly_twelve = {ALERT_KEY_CROSSED_BELOW_HVL: now - timedelta(hours=12)}
-    assert len(apply_cooldown(alerts, exactly_twelve, now, timedelta(hours=12))) == 2
+    exactly_two = {ALERT_KEY_CROSSED_BELOW_HVL: now - timedelta(hours=2)}
+    assert len(apply_cooldown(alerts, exactly_two, now, timedelta(hours=12))) == 2
     assert len(apply_cooldown(alerts, {}, now)) == 2
+
+
+def test_event_flip_back_four_hours_after_the_same_key_is_kept():
+    """net_gex_turned_negative delivered at T0, positive at T0+2h, negative fires again at
+    T0+4h: 4 h >= 2 h, so it is not dropped (the 12 h cooldown dropped it)."""
+    alerts = [UrgentAlert(key=ALERT_KEY_NET_GEX_TURNED_NEGATIVE, title="t", comparison_label="previous")]
+    now = BASE_TIME + timedelta(hours=4)
+    delivered = {ALERT_KEY_NET_GEX_TURNED_NEGATIVE: BASE_TIME,
+                 ALERT_KEY_NET_GEX_TURNED_POSITIVE: BASE_TIME + timedelta(hours=2)}
+    assert apply_cooldown(alerts, delivered, now, timedelta(hours=12)) == alerts
 
 
 def test_level_move_alerts_are_held_for_the_whole_24h_comparison_window():
     """A move vs 24 h ago stays true for 24 h; with the 12 h cooldown it alerted twice.
     HVL 89,000 -> 95,000 = 6% (fires), PS 95,010 -> 90,000 = -5.01% (fires),
-    CR 99,990 -> 110,000 = +10.01% (fires), plus the net GEX sign flip (12 h key)."""
+    CR 99,990 -> 110,000 = +10.01% (fires), plus the net GEX sign flip (2 h event key)."""
     latest = make_record(hvl=95000.0, call_resistance=110000.0, put_support=90000.0, total_net_gex=-1e6)
     previous = make_record(as_of=PREVIOUS_TIME, total_net_gex=2e6)
     day_ago = make_record(as_of=DAY_AGO, hvl=89000.0, call_resistance=99990.0, put_support=95010.0)
@@ -186,17 +199,24 @@ def test_level_move_alerts_are_held_for_the_whole_24h_comparison_window():
         delivered = {alert.key: now - age for alert in alerts}
         return {alert.key for alert in apply_cooldown(alerts, delivered, now, timedelta(hours=12))}
 
-    assert kept_after(timedelta(hours=11, minutes=59)) == set()
-    assert kept_after(timedelta(hours=12)) == {ALERT_KEY_NET_GEX_TURNED_NEGATIVE}  # 12 h key repeats
+    assert kept_after(timedelta(hours=1, minutes=59)) == set()
+    assert kept_after(timedelta(hours=2)) == {ALERT_KEY_NET_GEX_TURNED_NEGATIVE}  # 2 h event key repeats
+    assert kept_after(timedelta(hours=11, minutes=59)) == {ALERT_KEY_NET_GEX_TURNED_NEGATIVE}
     assert kept_after(timedelta(hours=23, minutes=59)) == {ALERT_KEY_NET_GEX_TURNED_NEGATIVE}
     assert kept_after(timedelta(hours=24)) == move_keys | {ALERT_KEY_NET_GEX_TURNED_NEGATIVE}
 
 
-def test_cooldown_for_key_uses_the_longer_of_configured_and_comparison_window():
+def test_cooldown_for_key_move_keys_longer_event_keys_shorter():
     assert cooldown_for_key(ALERT_KEY_HVL_MOVE, timedelta(hours=12)) == timedelta(hours=24)
     assert cooldown_for_key(ALERT_KEY_PUT_SUPPORT_MOVE, timedelta(hours=30)) == timedelta(hours=30)
-    for key in (ALERT_KEY_CROSSED_BELOW_HVL, ALERT_KEY_NET_GEX_TURNED_POSITIVE,
-                ALERT_KEY_SPOT_NEAR_CALL_RESISTANCE, ALERT_KEY_DATA_STALE):
+    assert cooldown_for_key(ALERT_KEY_CALL_RESISTANCE_MOVE, timedelta(hours=1)) == timedelta(hours=24)
+    for key in (ALERT_KEY_CROSSED_BELOW_HVL, ALERT_KEY_CROSSED_ABOVE_HVL,
+                ALERT_KEY_NET_GEX_TURNED_NEGATIVE, ALERT_KEY_NET_GEX_TURNED_POSITIVE):
+        assert cooldown_for_key(key, timedelta(hours=12)) == EVENT_ALERT_COOLDOWN == timedelta(hours=2)
+        # a configured cooldown below 2 h is kept (min)
+        assert cooldown_for_key(key, timedelta(hours=1)) == timedelta(hours=1)
+    for key in (ALERT_KEY_SPOT_NEAR_CALL_RESISTANCE, ALERT_KEY_SPOT_NEAR_PUT_SUPPORT,
+                ALERT_KEY_DATA_STALE):
         assert cooldown_for_key(key, timedelta(hours=12)) == timedelta(hours=12)
 
 
