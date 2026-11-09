@@ -37,8 +37,14 @@ At its first poll after each start the listener also skips everything Telegram s
 (`getUpdates` with offset -1, no wait: Telegram returns only the newest update and forgets the older
 ones; the listener continues after it and logs `skipped the pending updates up to update_id N`).
 So a restart never runs a command a second time. The cost: commands sent while the collector was
-down (or restarting) are lost, not run late. Send them again. If that first call fails, nothing is
-run and it is retried at the next poll.
+down (or restarting) are lost, not run late. Send them again. When the newest skipped update is an
+owner command that would have run (owner chat and user, at most 10 min old), the bot sends one
+notice: `Monitor restarted. The command /xyz sent while it was restarting was skipped; please send
+it again.` (only the command word, at most 20 characters, no arguments). Nothing is sent when no
+owner command was pending; a failed notice is only logged. Only the newest update is visible, so
+an older command followed by plain text gets no notice, and a command handled just before the
+shutdown but not yet confirmed to Telegram can get one. If that first call fails, nothing is run
+and it is retried at the next poll.
 
 With `MENTHORQ_COMMANDS_ENABLED=1` but no `OSF_TELEGRAM_CHAT_ID`, the collector logs one warning at
 start-up and does not schedule command polling.

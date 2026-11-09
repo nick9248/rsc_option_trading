@@ -278,6 +278,69 @@ def test_first_poll_skips_what_was_pending_so_a_restart_does_not_rerun_a_command
     assert calls == [("brief", "")]
 
 
+class TestSkippedOwnerCommandNotice:
+    """At start the pending updates are skipped; a skipped OWNER command gets one notice."""
+
+    NOTICE = ("<b>Monitor restarted.</b> The command <code>/mute</code> sent while it was "
+              "restarting was skipped; please send it again.")
+
+    def test_a_pending_owner_command_gets_one_notice_without_its_arguments(self):
+        listener, telegram, calls = _listener([_update(80, "/mute 24h", sent=NOW - timedelta(minutes=2))],
+                                              started=False)
+        assert listener.poll_once() == 0
+        assert calls == []
+        assert telegram.sent == [{"message": self.NOTICE, "parse_mode": "HTML"}]
+        assert listener.poll_once() == 0                                    # never repeated
+        assert len(telegram.sent) == 1
+
+    def test_only_the_newest_pending_update_counts(self):
+        # Telegram returns only the newest update for offset -1: a plain text after the command
+        listener, telegram, _ = _listener([_update(80, "/mute 24h"), _update(81, "thanks")], started=False)
+        listener.poll_once()
+        assert telegram.sent == []
+
+    def test_nothing_is_sent_without_a_pending_owner_command(self):
+        cases = [
+            [],                                                              # nothing pending
+            [_update(80, "hello")],                                          # not a command
+            [_update(80, "/mute 24h", chat_id="999")],                       # another chat
+            [_update(80, "/mute 24h", sent=NOW - timedelta(minutes=11))],    # stale: not run anyway
+            [_update(80, "/mute@OtherBot 24h")],                             # addressed to another bot
+        ]
+        for pending in cases:
+            listener, telegram, _ = _listener(pending, started=False)
+            listener.poll_once()
+            assert telegram.sent == [], pending
+
+    def test_a_long_command_word_is_cut_to_20_characters_and_escaped(self):
+        listener, telegram, _ = _listener([_update(80, "/<b>abcdefghijklmnopqrstuvwxyz secret")],
+                                          started=False)
+        listener.poll_once()
+        # "/<b>abcdefghijklmnop" is the first 20 characters; "<" and ">" escaped, no arguments
+        assert telegram.sent[0]["message"] == (
+            "<b>Monitor restarted.</b> The command <code>/&lt;b&gt;abcdefghijklmnop</code> sent "
+            "while it was restarting was skipped; please send it again.")
+        assert "secret" not in telegram.sent[0]["message"]
+
+    def test_a_failed_or_raising_notice_is_logged_and_polling_goes_on(self, caplog, monkeypatch):
+        listener, telegram, _ = _listener([_update(80, "/brief")], started=False)
+        telegram.accept = False
+        with caplog.at_level(logging.WARNING):
+            assert listener.poll_once() == 0
+        assert "skipped-command notice for /brief was NOT delivered" in caplog.text
+
+        listener, telegram, calls = _listener([_update(80, "/brief")], started=False)
+
+        def raising_send(message, parse_mode=None):
+            raise RuntimeError("network down")
+
+        monkeypatch.setattr(telegram, "send", raising_send)
+        assert listener.poll_once() == 0
+        assert "the skipped-command notice failed" in caplog.text
+        telegram.updates.append(_update(81, "/brief"))
+        assert listener.poll_once() == 1 and calls == [("brief", "")]
+
+
 def test_skip_that_fails_is_retried_and_nothing_runs_meanwhile():
     listener, telegram, calls = _listener([_update(5, "/brief")], started=False)
     telegram.fail_updates = True

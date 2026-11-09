@@ -33,7 +33,15 @@ Rules:
     and makes Telegram forget the older ones, and the offset is set after
     it. A restart therefore never re-runs a command that was already
     handled (the offset is kept in memory only). Commands sent while the
-    service was down are lost too; the owner sends them again.
+    service was down are not run either. When the newest pending update
+    (the only one Telegram returns) is an owner command that would have
+    run (owner chat and user, not stale), ONE notice goes to the owner
+    chat: "Monitor restarted. The command /xyz sent while it was
+    restarting was skipped; please send it again." (only the command
+    word, at most 20 characters, escaped; no arguments). Nothing is sent
+    otherwise; a failed notice is logged and ignored. A command handled
+    just before a shutdown but not yet confirmed to Telegram (confirmed at
+    the next poll, seconds later) can also get this notice.
   - Without an owner chat id, or without an owner user id (a group chat
     without MENTHORQ_OWNER_USER_ID), one warning is logged at construction
     and ``poll_once`` does nothing (the job does not even schedule polling).
@@ -41,6 +49,7 @@ Rules:
     polls the same bot token (Telegram answers 409); that is logged.
 """
 
+import html
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, Optional, Sequence, Tuple
@@ -51,6 +60,8 @@ logger = logging.getLogger(__name__)
 
 LONG_POLL_SECONDS = 10
 MAXIMUM_COMMAND_AGE = timedelta(minutes=10)
+# The restart notice names at most this many characters of the skipped command.
+SKIPPED_COMMAND_MAXIMUM_LENGTH = 20
 
 # A handler gets the text after the command (e.g. "24h" for "/mute 24h"), "" when none.
 CommandHandler = Callable[[str], object]
@@ -144,6 +155,12 @@ class TelegramCommandListener:
                         "before this start are not run", max(update_ids), len(update_ids))
         else:
             logger.info("TelegramCommandListener: no pending updates at start")
+        newest_updates = [update for update in newest if isinstance(update.get("update_id"), int)]
+        if newest_updates:
+            newest_update = max(newest_updates, key=lambda update: update["update_id"])
+            owner_command = self._owner_command(newest_update.get("message") or {})
+            if owner_command is not None:
+                self._notify_skipped_command(owner_command[0])
         return True
 
     def register_command_menu(self) -> bool:
@@ -218,42 +235,10 @@ class TelegramCommandListener:
         return handled
 
     def _handle(self, message: Dict) -> bool:
-        text = (message.get("text") or "").strip()
-        if not text.startswith("/"):
+        owner_command = self._owner_command(message)
+        if owner_command is None:
             return False
-        parts = text.split(maxsplit=1)
-        command, _, addressed_to = parts[0].partition("@")
-        command = command.lower()
-        arguments = parts[1].strip() if len(parts) > 1 else ""
-        if addressed_to and (self._bot_username is None
-                             or addressed_to.lower() != self._bot_username.lower()):
-            logger.debug("TelegramCommandListener: ignoring %s addressed to @%s (this bot: %s)",
-                         command, addressed_to, f"@{self._bot_username}" if self._bot_username else "unknown")
-            return False
-        chat = message.get("chat") or {}
-        chat_id = str(chat.get("id", "")).strip()
-        sender = message.get("from")
-        if not isinstance(sender, dict) or "id" not in sender:
-            logger.info("TelegramCommandListener: ignoring %s from chat %s: no sender", command,
-                        chat_id or "unknown")
-            return False
-        sender_name = sender.get("username")
-        if chat_id != self._owner_chat_id:
-            logger.warning("TelegramCommandListener: REJECTED %s from chat %s (user %s): not the owner chat",
-                           command, chat_id or "unknown", sender_name or "unknown")
-            return False
-        sender_id = str(sender["id"]).strip()
-        if sender_id != self._owner_user_id:
-            logger.warning("TelegramCommandListener: REJECTED %s in the owner chat from user %s (%s): "
-                           "not the owner user", command, sender_id, sender_name or "unknown")
-            return False
-        sent_at = message.get("date")
-        if isinstance(sent_at, (int, float)):
-            age = self._clock() - datetime.fromtimestamp(sent_at, tz=timezone.utc)
-            if age > MAXIMUM_COMMAND_AGE:
-                logger.info("TelegramCommandListener: skipping %s sent %.0f min ago (stale)",
-                            command, age.total_seconds() / 60)
-                return False
+        command, arguments = owner_command
         handler = self._handlers.get(command)
         if handler is None:
             if self._unknown_command_handler is None:
@@ -268,3 +253,67 @@ class TelegramCommandListener:
         except Exception:
             logger.exception("TelegramCommandListener: handler of %s failed", command)
         return True
+
+    def _owner_command(self, message: Dict) -> Optional[Tuple[str, str]]:
+        """
+        (command in lower case, argument text) when ``message`` is a command
+        this listener runs: from the owner chat and the owner user, addressed
+        to no other bot, not older than ``MAXIMUM_COMMAND_AGE``. None
+        otherwise (a rejection is logged).
+        """
+        text = (message.get("text") or "").strip()
+        if not text.startswith("/"):
+            return None
+        parts = text.split(maxsplit=1)
+        command, _, addressed_to = parts[0].partition("@")
+        command = command.lower()
+        arguments = parts[1].strip() if len(parts) > 1 else ""
+        if addressed_to and (self._bot_username is None
+                             or addressed_to.lower() != self._bot_username.lower()):
+            logger.debug("TelegramCommandListener: ignoring %s addressed to @%s (this bot: %s)",
+                         command, addressed_to, f"@{self._bot_username}" if self._bot_username else "unknown")
+            return None
+        chat = message.get("chat") or {}
+        chat_id = str(chat.get("id", "")).strip()
+        sender = message.get("from")
+        if not isinstance(sender, dict) or "id" not in sender:
+            logger.info("TelegramCommandListener: ignoring %s from chat %s: no sender", command,
+                        chat_id or "unknown")
+            return None
+        sender_name = sender.get("username")
+        if chat_id != self._owner_chat_id:
+            logger.warning("TelegramCommandListener: REJECTED %s from chat %s (user %s): not the owner chat",
+                           command, chat_id or "unknown", sender_name or "unknown")
+            return None
+        sender_id = str(sender["id"]).strip()
+        if sender_id != self._owner_user_id:
+            logger.warning("TelegramCommandListener: REJECTED %s in the owner chat from user %s (%s): "
+                           "not the owner user", command, sender_id, sender_name or "unknown")
+            return None
+        sent_at = message.get("date")
+        if isinstance(sent_at, (int, float)):
+            age = self._clock() - datetime.fromtimestamp(sent_at, tz=timezone.utc)
+            if age > MAXIMUM_COMMAND_AGE:
+                logger.info("TelegramCommandListener: skipping %s sent %.0f min ago (stale)",
+                            command, age.total_seconds() / 60)
+                return None
+        return command, arguments
+
+    def _notify_skipped_command(self, command: str) -> None:
+        """
+        Tell the owner that ``command`` (sent while the collector restarted)
+        was skipped: one short message naming only the command word (cut to
+        ``SKIPPED_COMMAND_MAXIMUM_LENGTH`` characters, escaped), never its
+        arguments. A failure is logged and ignored.
+        """
+        command_text = html.escape(command[:SKIPPED_COMMAND_MAXIMUM_LENGTH], quote=False)
+        message = (f"<b>Monitor restarted.</b> The command <code>{command_text}</code> sent while it "
+                   "was restarting was skipped; please send it again.")
+        try:
+            if self._telegram.send(message, parse_mode="HTML"):
+                logger.info("TelegramCommandListener: told the owner that %s was skipped at start", command_text)
+            else:
+                logger.warning("TelegramCommandListener: the skipped-command notice for %s was NOT delivered",
+                               command_text)
+        except Exception:
+            logger.exception("TelegramCommandListener: the skipped-command notice failed")
