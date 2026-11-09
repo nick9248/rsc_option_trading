@@ -402,6 +402,45 @@ def test_upsert_path_copies_jsonb_and_keeps_real_array_columns(source_and_copy):
         ]
 
 
+def test_jsonb_scalars_objects_arrays_and_null_are_copied_unchanged(source_and_copy):
+    """psycopg2 reads a jsonb string, number or bool as a Python str/int/float/bool;
+    sent back unwrapped, Postgres rejects it (a str is not valid JSON text, an int or
+    bool is not of type jsonb). Every non-None value is wrapped, so each one arrives
+    with the same JSON value and type; SQL NULL stays NULL. Source rows: 1 "hello",
+    2 42, 3 1.5, 4 true, 5 {"x": 1}, 6 [1, "a"], 7 SQL NULL, 8 JSON null."""
+    source, copy = source_and_copy
+    for connection in (source, copy):
+        with connection.cursor() as cursor:
+            cursor.execute("CREATE TABLE scalars (id serial PRIMARY KEY, version bigint, payload jsonb, "
+                           "tags text[])")
+        connection.commit()
+    with source.cursor() as cursor:
+        cursor.execute(
+            "INSERT INTO scalars (version, payload, tags) VALUES "
+            "(1, '\"hello\"', ARRAY['p']), (2, '42', NULL), (3, '1.5', NULL), (4, 'true', NULL), "
+            "(5, '{\"x\": 1}', NULL), (6, '[1, \"a\"]', NULL), (7, NULL, NULL), (8, 'null', NULL)"
+        )
+    table = {"name": "scalars", "watermark_col": "version", "watermark_type": "bigint",
+             "conflict_target": None}
+
+    assert sync_table(source, copy, table)[0] == 8
+    with copy.cursor() as cursor:
+        cursor.execute("SELECT version, payload::text, jsonb_typeof(payload), payload IS NULL, tags "
+                       "FROM scalars ORDER BY version")
+        assert cursor.fetchall() == [
+            (1, '"hello"', "string", False, ["p"]),
+            (2, "42", "number", False, None),
+            (3, "1.5", "number", False, None),
+            (4, "true", "boolean", False, None),
+            (5, '{"x": 1}', "object", False, None),
+            (6, '[1, "a"]', "array", False, None),
+            (7, None, None, True, None),
+            # A JSON null is read by psycopg2 as None, so it arrives as SQL NULL (the only
+            # value whose form changes; both mean "no value")
+            (8, None, None, True, None),
+        ]
+
+
 def test_migration_027_guard_ignores_the_hour_still_forming_but_blocks_real_gaps(source_and_copy):
     """Migration 027 drops volatility_index_history only if every COMPLETED hour of it
     is in dvol_history. The hour still forming is ignored."""

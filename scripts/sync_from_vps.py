@@ -286,8 +286,9 @@ def get_columns(cur, table_name: str) -> list[str]:
 def get_json_columns(cursor, table_name: str) -> set[str]:
     """Names of the table's json and jsonb columns.
 
-    psycopg2 reads those columns as Python dict/list, and writing them back needs
-    psycopg2.extras.Json (a dict cannot be adapted, a list would become an array).
+    psycopg2 reads those columns as Python dict/list/str/int/float/bool, and writing
+    them back needs psycopg2.extras.Json (a dict cannot be adapted, a list would become
+    an array, a str or number would not be JSON).
     Real array columns (text[] etc.) report data_type 'ARRAY' and are not included.
     """
     cursor.execute("""
@@ -299,9 +300,12 @@ def get_json_columns(cursor, table_name: str) -> set[str]:
 
 
 def wrap_json_values(rows: list, columns: list, json_columns: set[str]) -> list:
-    """Return the rows with each dict/list value of a json/jsonb column wrapped in Json.
+    """Return the rows with every non-None value of a json/jsonb column wrapped in Json.
 
-    None stays None (NULL); other columns are left untouched.
+    Objects, arrays and scalars alike: psycopg2 reads a JSON string, number or bool
+    as a Python str/int/float/bool, and sent back unwrapped Postgres rejects it.
+    None stays None (NULL; a JSON null is also read as None, so it arrives as NULL);
+    other columns, including real array columns, are left untouched.
     """
     json_indexes = [index for index, column in enumerate(columns) if column in json_columns]
     if not json_indexes:
@@ -310,7 +314,7 @@ def wrap_json_values(rows: list, columns: list, json_columns: set[str]) -> list:
     for row in rows:
         values = list(row)
         for index in json_indexes:
-            if isinstance(values[index], (dict, list)):
+            if values[index] is not None:
                 values[index] = Json(values[index])
         wrapped_rows.append(tuple(values))
     return wrapped_rows
