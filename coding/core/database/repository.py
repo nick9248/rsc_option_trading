@@ -26,6 +26,16 @@ from coding.core.database.config import ConnectionPool, DatabaseConfig
 logger = logging.getLogger(__name__)
 
 
+def _float_or_none(value: Any) -> Optional[float]:
+    """A NUMERIC/REAL column value as float; NULL stays None."""
+    return float(value) if value is not None else None
+
+
+def _utc_or_none(value: Optional[datetime]) -> Optional[datetime]:
+    """A timestamptz value (returned in the session time zone) in UTC; NULL stays None."""
+    return value.astimezone(timezone.utc) if value is not None else None
+
+
 class DatabaseRepository:
     """
     Repository for storing and retrieving on-chain analysis data.
@@ -1113,19 +1123,16 @@ class DatabaseRepository:
             """, (currency, captured_at))
             fetched_rows = cursor.fetchall()
 
-        def to_float(value: Any) -> Optional[float]:
-            return float(value) if value is not None else None
-
         rows = [
             {
                 "instrument_name": row[0],
                 "expiration": row[1],
-                "strike": to_float(row[2]),
+                "strike": _float_or_none(row[2]),
                 "option_type": row[3],
-                "open_interest": to_float(row[4]),
-                "mark_iv": to_float(row[5]),
-                "underlying_price": to_float(row[6]),
-                "mark_price": to_float(row[7]),
+                "open_interest": _float_or_none(row[4]),
+                "mark_iv": _float_or_none(row[5]),
+                "underlying_price": _float_or_none(row[6]),
+                "mark_price": _float_or_none(row[7]),
             }
             for row in fetched_rows
         ]
@@ -1145,23 +1152,16 @@ class DatabaseRepository:
     @staticmethod
     def _menthorq_level_record_from_row(row: Tuple[Any, ...]) -> MenthorqLevelRecord:
         """A ``menthorq_level_snapshots`` row (``_MENTHORQ_LEVEL_COLUMNS`` order) as a record."""
-        def to_float(value: Any) -> Optional[float]:
-            return float(value) if value is not None else None
-
-        def to_utc(value: Optional[datetime]) -> Optional[datetime]:
-            # timestamptz comes back in the session time zone; normalise to UTC.
-            return value.astimezone(timezone.utc) if value is not None else None
-
         return MenthorqLevelRecord(
             record_id=row[0], currency=row[1], mode=row[2],
             as_of_utc=row[3].astimezone(timezone.utc),          # NOT NULL column
             computed_at_utc=row[4].astimezone(timezone.utc),    # NOT NULL column
             expiry_universe=row[5], gamma_underlying=row[6],
-            spot=to_float(row[7]), spot_time_utc=to_utc(row[8]),
-            snapshot_captured_at_utc=to_utc(row[9]),
-            open_interest_captured_at_utc=to_utc(row[10]), call_resistance=to_float(row[11]),
-            put_support=to_float(row[12]), hvl=to_float(row[13]),
-            total_net_gex=to_float(row[14]), gamma_regime=row[15],
+            spot=_float_or_none(row[7]), spot_time_utc=_utc_or_none(row[8]),
+            snapshot_captured_at_utc=_utc_or_none(row[9]),
+            open_interest_captured_at_utc=_utc_or_none(row[10]), call_resistance=_float_or_none(row[11]),
+            put_support=_float_or_none(row[12]), hvl=_float_or_none(row[13]),
+            total_net_gex=_float_or_none(row[14]), gamma_regime=row[15],
             expirations=list(row[16]), panel_levels=dict(row[17]),
             iv_source_counts=dict(row[18]), not_computed_reasons=list(row[19]),
         )
@@ -1355,9 +1355,6 @@ class DatabaseRepository:
 
     def get_menthorq_monitor_state(self, currency: str) -> Optional[MenthorqMonitorState]:
         """The persisted alert state (mute, last suppressed alert), or None when no row exists."""
-        def to_utc(value: Optional[datetime]) -> Optional[datetime]:
-            return value.astimezone(timezone.utc) if value is not None else None
-
         with self._db_cursor() as cursor:
             cursor.execute(
                 """
@@ -1371,8 +1368,9 @@ class DatabaseRepository:
         if row is None:
             return None
         return MenthorqMonitorState(
-            currency=currency, alerts_muted_until=to_utc(row[0]), mute_updated_at=to_utc(row[1]),
-            last_suppressed_at=to_utc(row[2]), last_suppressed_alert_keys=list(row[3]),
+            currency=currency, alerts_muted_until=_utc_or_none(row[0]),
+            mute_updated_at=_utc_or_none(row[1]),
+            last_suppressed_at=_utc_or_none(row[2]), last_suppressed_alert_keys=list(row[3]),
         )
 
     def save_menthorq_alert_mute(
