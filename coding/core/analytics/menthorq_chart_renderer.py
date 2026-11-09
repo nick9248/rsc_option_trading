@@ -72,7 +72,7 @@ def _bar_height(strikes: List[float]) -> float:
     """80% of the smallest strike spacing, so neighbouring bars never overlap."""
     if len(strikes) < 2:
         return 500.0
-    spacing = min(b - a for a, b in zip(strikes, strikes[1:]))
+    spacing = min(higher - lower for lower, higher in zip(strikes, strikes[1:]))
     return 0.8 * spacing
 
 

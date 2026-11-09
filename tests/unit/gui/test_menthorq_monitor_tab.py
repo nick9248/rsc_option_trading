@@ -254,6 +254,32 @@ class TestTabDisplay:
         assert not tab.date_edit.isEnabled()
         tab.close()
 
+    def test_date_maximum_follows_the_utc_midnight_while_the_tab_stays_open(self, qapp, monkeypatch):
+        clock = {"now": datetime(2026, 11, 7, 23, 59, 30, tzinfo=timezone.utc)}
+        tab = MenthorqMonitorTab()
+        tab.clock = lambda: clock["now"]
+        tab.refresh_newest_date()
+        # 23:59:30 UTC on 7 Nov: 7 Nov has not ended, the newest complete day is 6 Nov.
+        assert tab.date_edit.maximumDate() == QDate(2026, 11, 6)
+        tab.date_edit.setDate(QDate(2026, 11, 6))
+        # 00:00 UTC on 8 Nov: 7 Nov has ended; showing the tab moves the maximum on.
+        clock["now"] = datetime(2026, 11, 8, 0, 0, tzinfo=timezone.utc)
+        tab.show()
+        assert tab.date_edit.maximumDate() == QDate(2026, 11, 7)
+        assert tab.date_edit.date() == QDate(2026, 11, 6)      # the selected date is kept
+        tab.hide()
+        # One day later, a Run refreshes the maximum first (the worker is replaced by a stub).
+        clock["now"] = datetime(2026, 11, 9, 0, 0, 1, tzinfo=timezone.utc)
+        worker_class = MagicMock()
+        monkeypatch.setattr(tab_module, "MenthorqMonitorWorker", worker_class)
+        tab.start_run()
+        assert tab.date_edit.maximumDate() == QDate(2026, 11, 8)
+        tab.date_edit.setDate(QDate(2026, 11, 8))               # now selectable
+        assert tab.date_edit.date() == QDate(2026, 11, 8)
+        worker_class.return_value.start.assert_called_once()
+        tab.worker = None
+        tab.close()
+
     def test_log_handler_removed_on_close(self, qapp):
         import logging
         tab = MenthorqMonitorTab()

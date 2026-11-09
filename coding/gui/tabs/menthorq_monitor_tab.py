@@ -289,10 +289,7 @@ class MenthorqMonitorTab(QWidget):
         self.date_edit = QDateEdit()
         self.date_edit.setCalendarPopup(True)
         self.date_edit.setDisplayFormat("yyyy-MM-dd")
-        newest_day = last_complete_utc_day(datetime.now(timezone.utc))
-        newest_qdate = QDate(newest_day.year, newest_day.month, newest_day.day)
-        self.date_edit.setMaximumDate(newest_qdate)
-        self.date_edit.setDate(newest_qdate)
+        self.date_edit.setDate(self.refresh_newest_date())
         self.date_edit.setToolTip("UTC date; at most the last complete UTC day.")
         self.expiry_universe_combo = choice_combo(EXPIRY_UNIVERSE_CHOICES)
         self.expiry_universe_combo.setToolTip("Expiries in the levels (charts and brief). The "
@@ -509,6 +506,26 @@ class MenthorqMonitorTab(QWidget):
         self.save_button.clicked.connect(self._save_chart_as)
         self.copy_button.clicked.connect(self.copy_brief_as_plain_text)
 
+    def refresh_newest_date(self) -> QDate:
+        """
+        Set the date picker's maximum to the last complete UTC day of
+        ``self.clock()`` (it moves on at 00:00 UTC while the GUI stays open).
+        Called at construction, when the tab is shown and before each Run.
+        The selected date is left as it is (a date the user picked stays).
+
+        Returns:
+            The new maximum.
+        """
+        newest_day = last_complete_utc_day(self.clock())
+        newest_qdate = QDate(newest_day.year, newest_day.month, newest_day.day)
+        self.date_edit.setMaximumDate(newest_qdate)
+        return newest_qdate
+
+    def showEvent(self, event) -> None:
+        """Refresh the date maximum each time the tab is shown."""
+        self.refresh_newest_date()
+        super().showEvent(event)
+
     def _on_mode_changed(self, _index: Optional[int] = None) -> None:
         """The date only applies to the daily-close mode."""
         self.date_edit.setEnabled(self.mode_combo.currentData() == RUN_MODE_MENTHORQ_DAILY_CLOSE)
@@ -546,6 +563,7 @@ class MenthorqMonitorTab(QWidget):
         if self.worker is not None and self.worker.isRunning():
             self.log_viewer.log_warning("A Run is already in progress")
             return
+        self.refresh_newest_date()
         request = self.build_request()
         description = ("live" if request.mode == RUN_MODE_LIVE
                        else f"daily close {request.menthorq_date.isoformat()}")

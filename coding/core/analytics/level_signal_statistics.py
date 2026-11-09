@@ -43,9 +43,10 @@ def pearson_correlation(first: Sequence[float], second: Sequence[float]) -> Opti
         return None
     mean_first = sum(first) / count
     mean_second = sum(second) / count
-    covariance = sum((a - mean_first) * (b - mean_second) for a, b in zip(first, second))
-    variance_first = sum((a - mean_first) ** 2 for a in first)
-    variance_second = sum((b - mean_second) ** 2 for b in second)
+    covariance = sum((first_value - mean_first) * (second_value - mean_second)
+                     for first_value, second_value in zip(first, second))
+    variance_first = sum((first_value - mean_first) ** 2 for first_value in first)
+    variance_second = sum((second_value - mean_second) ** 2 for second_value in second)
     if variance_first == 0 or variance_second == 0:
         return None
     return covariance / math.sqrt(variance_first * variance_second)
@@ -55,11 +56,12 @@ def spearman_rank_correlation(
     first: Sequence[Optional[float]], second: Sequence[Optional[float]]
 ) -> Optional[float]:
     """Spearman correlation over the pairs where both values are present."""
-    pairs = [(a, b) for a, b in zip(first, second) if _is_present(a) and _is_present(b)]
+    pairs = [(first_value, second_value) for first_value, second_value in zip(first, second)
+             if _is_present(first_value) and _is_present(second_value)]
     if len(pairs) < 3:
         return None
-    return pearson_correlation(average_ranks([a for a, _ in pairs]),
-                               average_ranks([b for _, b in pairs]))
+    return pearson_correlation(average_ranks([first_value for first_value, _ in pairs]),
+                               average_ranks([second_value for _, second_value in pairs]))
 
 
 def group_mean_difference(
@@ -148,5 +150,6 @@ def paired_present(
     first: Sequence[Optional[float]], second: Sequence[Optional[float]]
 ) -> Tuple[List[float], List[float]]:
     """The two series restricted to rows where both are present."""
-    kept = [(a, b) for a, b in zip(first, second) if _is_present(a) and _is_present(b)]
-    return [a for a, _ in kept], [b for _, b in kept]
+    kept = [(first_value, second_value) for first_value, second_value in zip(first, second)
+            if _is_present(first_value) and _is_present(second_value)]
+    return [first_value for first_value, _ in kept], [second_value for _, second_value in kept]
