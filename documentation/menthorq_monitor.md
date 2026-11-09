@@ -25,8 +25,9 @@ member writes into the same chat, so `MENTHORQ_OWNER_USER_ID` (the owner's Teleg
 required; without it the collector logs one warning at start-up and does not schedule command polling.
 A command from any other chat or any other sender is logged as `REJECTED` and gets no reply; a message
 without a sender is ignored. A command older than 10 minutes is skipped. At its first poll the
-listener sends the command menu to Telegram once (`setMyCommands`). If that fails, it logs the
-failure and the commands still work.
+listener sends the command menu to Telegram (`setMyCommands`). If that fails, it logs the
+failure (a warning the first time, debug after), the commands still work, and the next poll tries
+again until Telegram accepts it once.
 
 A command addressed to a bot (`/mute@SomeBot 24h`) runs only when that bot is this one (its
 username from `getMe`, asked at the first poll and cached; compared without case). A command for

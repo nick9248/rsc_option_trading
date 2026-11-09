@@ -194,23 +194,31 @@ def test_command_menu_is_registered_once_at_the_first_poll():
     assert telegram.registered_commands == [list(MENU)]
 
 
-def test_failed_menu_registration_is_logged_and_polling_goes_on(caplog):
+def test_failed_menu_registration_is_logged_retried_and_polling_goes_on(caplog):
     listener, telegram, calls = _listener([], started=False)
     telegram.accept_commands = False
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.DEBUG):
         assert listener.poll_once() == 0
-    telegram.updates = [_update(1, "/brief")]
-    assert listener.poll_once() == 1
-    assert "command menu NOT registered" in caplog.text
+        telegram.updates = [_update(1, "/brief")]
+        assert listener.poll_once() == 1
     assert calls == [("brief", "")]
+    assert len(telegram.registered_commands) == 2          # retried at the next poll
+    menu_records = [record for record in caplog.records if "command menu" in record.getMessage()]
+    # first failure WARNING, the repeat DEBUG
+    assert [record.levelname for record in menu_records] == ["WARNING", "DEBUG"]
+    # a transient failure: the third poll registers it, later polls do not send it again
+    telegram.accept_commands = True
     listener.poll_once()
-    assert len(telegram.registered_commands) == 1          # not retried every poll
+    listener.poll_once()
+    assert len(telegram.registered_commands) == 3
 
 
-def test_raising_menu_registration_never_stops_polling(monkeypatch):
+def test_raising_menu_registration_never_stops_polling_and_is_retried(monkeypatch):
     listener, telegram, calls = _listener([], started=False)
+    attempts = []
 
     def broken(commands):
+        attempts.append(list(commands))
         raise RuntimeError("network")
 
     monkeypatch.setattr(telegram, "set_my_commands", broken)
@@ -218,6 +226,7 @@ def test_raising_menu_registration_never_stops_polling(monkeypatch):
     telegram.updates = [_update(1, "/brief")]
     assert listener.poll_once() == 1
     assert calls == [("brief", "")]
+    assert len(attempts) == 2
 
 
 def test_empty_menu_registers_nothing():

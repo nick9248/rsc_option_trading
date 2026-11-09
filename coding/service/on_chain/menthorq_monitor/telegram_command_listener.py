@@ -26,8 +26,9 @@ Rules:
     without case). Addressed to another bot it is ignored (logged at DEBUG).
     While the username is unknown (getMe failed; asked again at the next
     poll) every addressed command is ignored and plain ones still run.
-  - The first poll registers the command menu with Telegram
-    (setMyCommands) once; a failure is logged and polling goes on.
+  - Each poll registers the command menu with Telegram (setMyCommands)
+    until it is accepted once; a failure is logged (the first as a
+    WARNING, repeats at DEBUG), polling goes on and the next poll retries.
   - At the first poll (each start of the collector) every pending update
     is skipped: getUpdates with offset -1 returns only the newest update
     and makes Telegram forget the older ones, and the offset is set after
@@ -113,7 +114,8 @@ class TelegramCommandListener:
             unknown_command_handler: Run with the command (e.g. "/start")
                 for an owner command without a handler; None ignores it.
             command_menu: (command, description) pairs registered with
-                setMyCommands at the first poll; empty registers nothing.
+                setMyCommands at the first poll (retried at each poll until
+                accepted); empty registers nothing.
         """
         self._telegram = telegram
         self._owner_chat_id = str(owner_chat_id).strip()
@@ -122,7 +124,8 @@ class TelegramCommandListener:
         self._long_poll_seconds = long_poll_seconds
         self._unknown_command_handler = unknown_command_handler
         self._command_menu = tuple(command_menu)
-        self._menu_registration_attempted = False
+        self._menu_registered = False
+        self._menu_failure_logged = False   # the first failure is a WARNING, repeats DEBUG
         self._offset: Optional[int] = None
         self._pending_updates_skipped = False
         self._bot_username: Optional[str] = None   # this bot's getMe username, once known
@@ -165,24 +168,37 @@ class TelegramCommandListener:
 
     def register_command_menu(self) -> bool:
         """
-        Send the command menu to Telegram once (later calls do nothing).
+        Send the command menu to Telegram until it is accepted once (later
+        calls then do nothing). A failed attempt is retried at the next call
+        (setMyCommands is cheap); the first failure is logged as a WARNING,
+        repeated ones at DEBUG.
 
         Returns:
-            True when Telegram accepted it. Never raises.
+            True when Telegram accepted it at this call. Never raises.
         """
-        if self._menu_registration_attempted or not self._command_menu:
+        if self._menu_registered or not self._command_menu:
             return False
-        self._menu_registration_attempted = True
         try:
             accepted = self._telegram.set_my_commands(self._command_menu)
         except Exception:
-            logger.exception("TelegramCommandListener: registering the command menu failed")
+            if self._menu_failure_logged:
+                logger.debug("TelegramCommandListener: registering the command menu failed again",
+                             exc_info=True)
+            else:
+                logger.exception("TelegramCommandListener: registering the command menu failed; "
+                                 "retried at the next poll")
+                self._menu_failure_logged = True
             return False
         if accepted:
+            self._menu_registered = True
             logger.info("TelegramCommandListener: command menu registered (%d commands)",
                         len(self._command_menu))
+        elif self._menu_failure_logged:
+            logger.debug("TelegramCommandListener: command menu still NOT registered; retried at the next poll")
         else:
-            logger.warning("TelegramCommandListener: command menu NOT registered; commands still work")
+            logger.warning("TelegramCommandListener: command menu NOT registered; commands still work; "
+                           "retried at the next poll")
+            self._menu_failure_logged = True
         return accepted
 
     def resolve_bot_username(self) -> Optional[str]:
