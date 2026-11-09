@@ -17,7 +17,7 @@ Core (models, calculators)  ->  Service (orchestration)  ->  GUI / CLI
 | Layer | Folder | Contains |
 |-------|--------|----------|
 | Core | `coding/core/` | `analytics/` (calculators, synthesis, charts), `api/`, `database/` (repository), `health/` (result models), `schemas/`, `config.py` |
-| Service | `coding/service/` | `data_collection/`, `on_chain/`, `scanner/` (only the Telegram client used by the MenthorQ monitor), `health/`, `deribit/`, `morning_note/`, `snapshot/`, `analytics/`, `api_testing/`, `database/` (VPS sync) |
+| Service | `coding/service/` | `data_collection/`, `on_chain/`, `notifications/` (Telegram Bot API client used by the MenthorQ monitor), `health/`, `deribit/`, `morning_note/`, `snapshot/`, `analytics/`, `api_testing/`, `database/` (VPS sync) |
 | GUI | `coding/gui/` | PySide6 app (`app.py`, `main_window.py`, `tabs/`, `dialogs/`). No business logic: it calls services. |
 
 Other folders: `scripts/` (backfills, sync, health check), `migrations/` (numbered, forward-only SQL), `tests/`, `strategies/` (sample strategies running on the VPS, left alone).
