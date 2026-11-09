@@ -255,6 +255,20 @@ class TestExpiryHandling:
         assert parse_expiry_settlement("7NOV26") == datetime(2026, 11, 7, 8, 0, tzinfo=timezone.utc)
         assert parse_expiry_settlement("BAD") is None
 
+    @pytest.mark.parametrize("label, month", [
+        ("30JAN26", 1), ("27FEB26", 2), ("27MAR26", 3), ("24APR26", 4), ("29MAY26", 5),
+        ("26JUN26", 6), ("31JUL26", 7), ("28AUG26", 8), ("25SEP26", 9), ("30OCT26", 10),
+        ("27NOV26", 11), ("25DEC26", 12),
+    ])
+    def test_every_english_month_name_parses_without_the_locale(self, label, month):
+        day = int(label[:2])
+        assert parse_expiry_settlement(label) == datetime(2026, month, day, 8, 0, tzinfo=timezone.utc)
+
+    @pytest.mark.parametrize("label", ["27NOX26", "31NOV26", "27NOV2026", "NOV26", "127NOV26",
+                                       " 27NOV26", "27-NOV-26", "", "27NOV26X"])
+    def test_unparseable_labels_stay_none(self, label):
+        assert parse_expiry_settlement(label) is None
+
     def test_monthly_and_quarterly_detection(self):
         assert is_monthly_expiry(parse_expiry_settlement("27NOV26"))
         assert not is_monthly_expiry(parse_expiry_settlement("20NOV26"))

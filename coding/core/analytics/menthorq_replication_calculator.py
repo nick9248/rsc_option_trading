@@ -40,6 +40,7 @@ Pure: no database or network access. The service layer loads the snapshot.
 import calendar
 import logging
 import math
+import re
 from datetime import datetime, time, timezone
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
@@ -158,19 +159,35 @@ def iv_source_text(iv_source_counts: Mapping[str, int]) -> str:
 # Expiry handling
 # --------------------------------------------------------------------------
 
+# English month names of Deribit labels; strptime's %b would follow the process locale.
+EXPIRY_MONTH_NUMBERS = {
+    "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAY": 5, "JUN": 6,
+    "JUL": 7, "AUG": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
+}
+EXPIRY_LABEL_PATTERN = re.compile(r"(\d{1,2})([A-Za-z]{3})(\d{2})")
+
+
 def parse_expiry_settlement(expiration: str) -> Optional[datetime]:
     """
-    Deribit expiry label (e.g. "27NOV26" or "7NOV26") -> 08:00 UTC
-    settlement instant. None when the label does not parse.
+    Deribit expiry label DDMONYY (e.g. "27NOV26" or "7NOV26", English month
+    names, ``EXPIRY_MONTH_NUMBERS``; the year is 2000 + YY) -> 08:00 UTC
+    settlement instant. None when the label does not parse (not a string,
+    another shape, an unknown month, or a day the month does not have).
     """
-    try:
-        expiry_date = datetime.strptime(expiration, "%d%b%y")
-    except (TypeError, ValueError):
+    if not isinstance(expiration, str):
         return None
-    return expiry_date.replace(
-        hour=DERIBIT_SETTLEMENT_HOUR_UTC, minute=0, second=0, microsecond=0,
-        tzinfo=timezone.utc,
-    )
+    match = EXPIRY_LABEL_PATTERN.fullmatch(expiration)
+    if match is None:
+        return None
+    day_text, month_text, year_text = match.groups()
+    month = EXPIRY_MONTH_NUMBERS.get(month_text.upper())
+    if month is None:
+        return None
+    try:
+        return datetime(2000 + int(year_text), month, int(day_text),
+                        DERIBIT_SETTLEMENT_HOUR_UTC, tzinfo=timezone.utc)
+    except ValueError:
+        return None
 
 
 def parse_utc_timestamp(text: str) -> datetime:
