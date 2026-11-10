@@ -346,6 +346,27 @@ def test_status_health_judges_the_newest_database_snapshot_against_the_clock():
                 in message)
 
 
+def test_status_newest_snapshot_problem_names_the_configured_limit():
+    # Limit 45 min; record snapshot 20 min before its run (fine); newest snapshot 09:05 at 10:05 = 60 min.
+    settings = MenthorqMonitorSettings(alerts_enabled=True, commands_enabled=True, stale_snapshot_minutes=45)
+    commands, _, _, _ = _status_service([make_record()], settings=settings,
+                                        newest_snapshot=NOW - timedelta(minutes=60))
+    message = _run(commands, "/status")
+    assert "Health: PROBLEM: newest snapshot is 1 h 0 min old (limit 45 min)\n" in message
+    assert "Newest snapshot: 2026-11-06 09:05 UTC (1 h 0 min old)\n" in message
+
+
+def test_status_lists_a_live_run_problem_and_a_newest_snapshot_problem_together():
+    # Live run 07:05 (3 h before 10:05; its snapshot 20 min before it is within 120 min of the run);
+    # newest snapshot 07:35 = 2 h 30 min old > 2 h 0 min.
+    commands, _, _, _ = _status_service([make_record(as_of=NOW - timedelta(hours=3))],
+                                        newest_snapshot=NOW - timedelta(minutes=150))
+    message = _run(commands, "/status")
+    assert ("Health: PROBLEM: hourly job has not run for 3 h 0 min; "
+            "newest snapshot is 2 h 30 min old (limit 2 h 0 min)\n") in message
+    assert "Hourly job ran in the last 2h: NO\n" in message
+
+
 def test_status_newest_snapshot_ignores_captures_after_now():
     # A capture stamped after the clock (no lookahead): the 09:50 one is the newest at or before now.
     commands, repository, _, _ = _status_service([make_record()])
