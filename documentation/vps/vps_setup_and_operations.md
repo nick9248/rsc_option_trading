@@ -354,3 +354,72 @@ ssh option-server
 sudo systemctl restart option-trading
 sudo systemctl status option-trading
 ```
+
+## 12. Deploying code to the VPS (bundle)
+
+### Why a bundle
+The VPS cannot fetch from GitHub: its deploy key belongs to `root`, and the `nick`
+user gets `Permission denied (publickey)`. So code goes from the PC to the VPS as an
+incremental git bundle (only the commits the VPS does not have yet).
+
+### The command
+Run from the repo root on the PC, after the PR is merged and `git fetch origin`:
+
+```
+.venv\Scripts\python -m scripts.deploy_to_vps --commit origin/main --dry-run
+.venv\Scripts\python -m scripts.deploy_to_vps --commit origin/main
+```
+
+`--commit` takes a hex hash (7 to 40 characters, for example main's merge commit) or
+the literal `origin/main`. `--dry-run` runs only the read-only local git checks and logs
+every other command it would run; it starts no ssh or scp. Exit code 0 means success.
+
+### What the tool does
+Code: `coding/service/deployment/vps_code_staging_service.py`.
+1. Checks the commit is merged: it must be an ancestor of (or equal to) the local
+   `origin/main`.
+2. Read-only checks on the VPS: current HEAD, `main` is checked out, `git status
+   --porcelain` is empty (also no untracked files), and the VPS HEAD is an ancestor of
+   the target (a fast-forward is possible). If the VPS is already at the target, it
+   stops with success.
+3. Builds the bundle in a local temporary folder (with a temporary local tag
+   `deploy-staging-<hash>` when the target is not the origin/main tip; the tag is always
+   removed) and verifies it.
+4. Copies it with scp to `/home/nick/backups/deploy_<UTC date>[_n]/`.
+5. On the VPS: `git bundle verify`, `git fetch <bundle> <ref>:incoming-main`,
+   `git merge --ff-only incoming-main`, then an import smoke test with the VPS venv
+   (`from coding.service.data_collection.unified_scheduler import UnifiedScheduler`).
+6. Logs the old HEAD, the new HEAD and the `git diff --shortstat` summary.
+
+If the smoke test fails after the fast-forward, the tool exits non-zero and logs the
+rollback command (`git -C /home/nick/option_trading reset --hard <old head>`). It never
+runs that command itself.
+
+### What the tool does NOT do
+- It does not restart the service (no `sudo`, no `systemctl`).
+- It does not read or change `.env`.
+- It does not run migrations or any other script on the VPS.
+- It does not reset, clean or check out anything on the VPS.
+
+Every remote command comes from a fixed list of templates in the service, and every
+command passes a guard that refuses the tokens in `FORBIDDEN_REMOTE_TOKENS`.
+
+### Manual steps after staging
+1. Migrations, if the change has new ones: on the VPS,
+   `cd ~/option_trading && .venv/bin/python scripts/run_migration.py migrations/NNN_name.sql`
+   (one at a time, in order).
+2. `.env` changes, if the change needs new settings: edit `~/option_trading/.env`.
+3. Restart: `sudo systemctl restart option-trading`.
+4. Check the logs: `sudo systemctl status option-trading` and
+   `journalctl -u option-trading -n 100 --no-pager`.
+
+### Permission rule for Claude Code
+To let Claude run only this script without a prompt, add this allow rule:
+
+```
+Bash(.venv/Scripts/python -m scripts.deploy_to_vps:*)
+```
+
+It matches only commands that start with `.venv/Scripts/python -m scripts.deploy_to_vps`
+(with any arguments). It does not allow `ssh`, `scp` or any other script; those still
+ask for permission. What the script can do on the VPS is limited by the code above.
