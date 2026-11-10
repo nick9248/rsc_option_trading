@@ -405,6 +405,55 @@ def test_venv_path_is_not_mistaken_for_dot_env():
     guard_command(SSH + [SMOKE_COMMAND])
 
 
+@pytest.mark.parametrize(
+    "local_path",
+    ["C:/work/clean_checkout", "C:/projects/.env_tools/repo", "D:/reset/repo"],
+)
+def test_local_paths_are_not_token_checked(local_path):
+    guard_command(["git", "-C", local_path, "rev-parse", "--verify", "--quiet", "HEAD"])
+    guard_command(["git", "-C", local_path, "bundle", "create", local_path + "/x.bundle",
+                   "refs/remotes/origin/main", "^" + OLD_HEAD])
+    guard_command(["scp", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
+                   local_path + "/x.bundle", "option-server:/home/nick/backups/x.bundle"])
+
+
+@pytest.mark.parametrize("token", FORBIDDEN_REMOTE_TOKENS)
+def test_scp_destination_with_a_forbidden_token_is_refused(token):
+    with pytest.raises(ForbiddenCommandError):
+        guard_command(["scp", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
+                       "x.bundle", f"option-server:/home/nick/{token}x"])
+
+
+@pytest.mark.parametrize(
+    "git_arguments",
+    [
+        ["reset", "--hard", OLD_HEAD],
+        ["checkout", OLD_HEAD],
+        ["clean", "-fdx"],
+        ["push", "origin", "main"],
+        ["tag", "v1.0", TARGET],
+        ["tag", "-d", "v1.0"],
+    ],
+)
+def test_local_git_outside_the_allow_list_is_refused(git_arguments):
+    with pytest.raises(ForbiddenCommandError):
+        guard_command(["git", "-C", "C:/repo", *git_arguments])
+
+
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        ["ssh", "option-server", "git status"],  # options missing
+        SSH[:-1] + ["-o", "ProxyCommand=evil", "option-server", "git status"],
+        ["scp", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "a.bundle", "b.bundle"],
+        ["git", "rev-parse", "HEAD"],  # no -C
+    ],
+)
+def test_malformed_commands_are_refused(malformed):
+    with pytest.raises(ForbiddenCommandError):
+        guard_command(malformed)
+
+
 class TestCommandLine:
     def test_commit_is_required(self):
         with pytest.raises(SystemExit) as raised:

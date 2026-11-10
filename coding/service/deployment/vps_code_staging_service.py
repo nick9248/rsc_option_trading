@@ -27,8 +27,9 @@ from typing import Callable, Dict, List, Optional, Protocol, Sequence, Tuple
 
 logger = logging.getLogger(__name__)
 
-# Substrings that must never appear in any command the service issues. Checked
-# case-insensitively, so "drop" and "DROP" are both refused.
+# Substrings that must never appear in a remote command (the ssh command string or
+# the scp destination path). Checked case-insensitively, so "drop" and "DROP" are
+# both refused. Local paths are not checked; local git is limited by sub-command.
 FORBIDDEN_REMOTE_TOKENS = (
     "sudo",
     "systemctl",
@@ -46,6 +47,8 @@ FORBIDDEN_REMOTE_TOKENS = (
 
 # Programs the service may start at all.
 ALLOWED_PROGRAMS = ("git", "ssh", "scp")
+# The only sub-commands local git may run (read-only, plus the temporary tag and the bundle).
+ALLOWED_LOCAL_GIT_COMMANDS = ("rev-parse", "merge-base", "tag", "bundle", "diff")
 
 COMMIT_PATTERN = re.compile(r"^[0-9a-f]{7,40}$")
 FULL_COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
@@ -176,18 +179,65 @@ def guard_command(arguments: Sequence[str]) -> None:
     """
     Raise ForbiddenCommandError unless the command is allowed to run.
 
-    The program must be one of ALLOWED_PROGRAMS, and the whole command line
-    (arguments joined by spaces) must not contain any FORBIDDEN_REMOTE_TOKENS.
+    Rules:
+    - The program must be one of ALLOWED_PROGRAMS.
+    - ssh: exactly ``ssh <SSH_OPTIONS> <host> <remote command>``; the remote command
+      must not contain any FORBIDDEN_REMOTE_TOKENS.
+    - scp: exactly ``scp <SSH_OPTIONS> <local file> <host>:<remote path>``; the remote
+      path must not contain any FORBIDDEN_REMOTE_TOKENS.
+    - git: exactly ``git -C <path> <sub-command> ...`` with the sub-command in
+      ALLOWED_LOCAL_GIT_COMMANDS; ``tag`` only creates or deletes a tag named with
+      TEMPORARY_TAG_PREFIX.
+    Local paths are never token-checked (a folder may well be called "clean").
     """
     if not arguments:
         raise ForbiddenCommandError("Empty command refused")
-    if arguments[0] not in ALLOWED_PROGRAMS:
-        raise ForbiddenCommandError(f"Program not allowed: {arguments[0]!r}")
-    command_line = " ".join(arguments).lower() + " "
+    program = arguments[0]
+    if program not in ALLOWED_PROGRAMS:
+        raise ForbiddenCommandError(f"Program not allowed: {program!r}")
+    options_end = 1 + len(SSH_OPTIONS)
+    if program == "ssh":
+        if len(arguments) != options_end + 2 or tuple(arguments[1:options_end]) != SSH_OPTIONS:
+            raise ForbiddenCommandError(f"Unexpected ssh command shape: {list(arguments)}")
+        _refuse_forbidden_tokens(arguments[-1])
+    elif program == "scp":
+        if len(arguments) != options_end + 2 or tuple(arguments[1:options_end]) != SSH_OPTIONS:
+            raise ForbiddenCommandError(f"Unexpected scp command shape: {list(arguments)}")
+        host, separator, remote_path = arguments[-1].partition(":")
+        if not separator or not host:
+            raise ForbiddenCommandError(f"scp destination is not remote: {arguments[-1]!r}")
+        _refuse_forbidden_tokens(remote_path)
+    else:
+        _refuse_unexpected_local_git(arguments)
+
+
+def _refuse_forbidden_tokens(remote_text: str) -> None:
+    """Raise if remote_text contains a forbidden token (case-insensitive)."""
+    checked = remote_text.lower() + " "
     for token in FORBIDDEN_REMOTE_TOKENS:
-        if token.lower() in command_line:
+        if token.lower() in checked:
             raise ForbiddenCommandError(
-                f"Command refused, it contains the forbidden token {token!r}: {' '.join(arguments)}"
+                f"Remote command refused, it contains the forbidden token {token!r}: {remote_text}"
+            )
+
+
+def _refuse_unexpected_local_git(arguments: Sequence[str]) -> None:
+    """Raise unless the local git command uses an allowed sub-command."""
+    if len(arguments) < 4 or arguments[1] != "-C":
+        raise ForbiddenCommandError(f"Unexpected git command shape: {list(arguments)}")
+    sub_command = arguments[3]
+    if sub_command not in ALLOWED_LOCAL_GIT_COMMANDS:
+        raise ForbiddenCommandError(f"Local git sub-command not allowed: {sub_command!r}")
+    if sub_command == "tag":
+        tag_arguments = list(arguments[4:])
+        creates = len(tag_arguments) == 2 and tag_arguments[0].startswith(TEMPORARY_TAG_PREFIX)
+        deletes = (
+            len(tag_arguments) == 2 and tag_arguments[0] == "-d"
+            and tag_arguments[1].startswith(TEMPORARY_TAG_PREFIX)
+        )
+        if not (creates or deletes):
+            raise ForbiddenCommandError(
+                f"git tag is only allowed for {TEMPORARY_TAG_PREFIX}* tags: {tag_arguments}"
             )
 
 
