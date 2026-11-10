@@ -307,9 +307,15 @@ class VpsCodeStagingService:
         if dry_run:
             return self._log_dry_run_plan(target, target_is_origin_main=target == origin_main)
 
-        old_head = self._check_remote_state(target)
+        old_head = self._check_remote_state()
         if old_head == target:
             message = f"Already staged: the VPS HEAD is {target}. Nothing to do."
+            logger.info(message)
+            return StagingResult(True, message, old_head=old_head, new_head=old_head)
+        if self._vps_already_contains_target(old_head, target):
+            message = (
+                f"The VPS already contains {target} (VPS HEAD {old_head}). Nothing to stage."
+            )
             logger.info(message)
             return StagingResult(True, message, old_head=old_head, new_head=old_head)
         return self._stage_bundle(target, old_head, target_is_origin_main=target == origin_main)
@@ -359,7 +365,7 @@ class VpsCodeStagingService:
 
     # ------------------------------------------------- step (b): remote checks
 
-    def _check_remote_state(self, target: str) -> str:
+    def _check_remote_state(self) -> str:
         """Read-only checks on the VPS. Returns the VPS HEAD."""
         logger.info("Step 2: read-only checks on the VPS")
         remote_head = self._run_remote_or_fail("read_head").stdout.strip()
@@ -381,9 +387,16 @@ class VpsCodeStagingService:
             )
         logger.info("VPS working tree is clean, branch %s", branch)
 
-        if remote_head == target:
-            return remote_head
+        return remote_head
 
+    def _vps_already_contains_target(self, remote_head: str, target: str) -> bool:
+        """
+        Compare the VPS HEAD with the target in the local repository.
+
+        Returns False when a fast-forward is possible (VPS HEAD is an ancestor of the
+        target), True when the VPS is already ahead (target is an ancestor of the VPS
+        HEAD). Raises StagingError when the VPS HEAD is unknown or the history diverged.
+        """
         known = self._run_local_git(
             ["rev-parse", "--verify", "--quiet", remote_head + "^{commit}"]
         )
@@ -391,13 +404,15 @@ class VpsCodeStagingService:
             raise StagingError(
                 f"Refused: the VPS HEAD {remote_head} does not exist in the local repository"
             )
-        if not self._is_local_ancestor(remote_head, target):
-            raise StagingError(
-                f"Refused: the VPS HEAD {remote_head} is not an ancestor of {target}, "
-                "so a fast-forward is impossible"
-            )
-        logger.info("Fast-forward possible: %s -> %s", remote_head, target)
-        return remote_head
+        if self._is_local_ancestor(remote_head, target):
+            logger.info("Fast-forward possible: %s -> %s", remote_head, target)
+            return False
+        if self._is_local_ancestor(target, remote_head):
+            return True
+        raise StagingError(
+            f"Refused: the VPS HEAD {remote_head} and {target} have diverged (neither "
+            "contains the other), so a fast-forward is impossible"
+        )
 
     # ---------------------------------------------- steps (c) to (f): staging
 

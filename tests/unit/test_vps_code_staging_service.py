@@ -306,12 +306,29 @@ def test_target_not_merged_into_origin_main_is_refused():
     assert runner.programs() == ["git", "git", "git"]
 
 
-def test_vps_head_not_an_ancestor_of_target_is_refused():
+def test_diverged_vps_history_is_refused():
+    # OLD_HEAD and TARGET: neither is an ancestor of the other.
     runner = FakeRunner(ancestors={(TARGET, NEWER_ORIGIN_MAIN)})
-    with pytest.raises(StagingError, match="not an ancestor"):
+    with pytest.raises(StagingError, match="have diverged"):
         _service(runner).stage(TARGET)
     assert "scp" not in runner.programs()
     assert not any("bundle" in a for call in runner.calls for a in call.arguments)
+
+
+def test_vps_ahead_of_the_target_is_success_without_staging():
+    runner = FakeRunner(remote_head=NEWER_ORIGIN_MAIN, origin_main=NEWER_ORIGIN_MAIN)
+    result = _service(runner).stage(TARGET)
+
+    assert result.success is True
+    assert result.message == (
+        f"The VPS already contains {TARGET} (VPS HEAD {NEWER_ORIGIN_MAIN}). Nothing to stage."
+    )
+    assert result.new_head == NEWER_ORIGIN_MAIN
+    assert runner.calls[-1].arguments == _git(
+        "merge-base", "--is-ancestor", TARGET, NEWER_ORIGIN_MAIN
+    )
+    assert "scp" not in runner.programs()
+    assert len(runner.remote_commands()) == 3
 
 
 def test_vps_head_unknown_locally_is_refused():
