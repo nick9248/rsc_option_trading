@@ -172,6 +172,7 @@ class MonitorStatus:
 def monitor_health_problems(
     status: MonitorStatus, stale_limit: timedelta = DEFAULT_STALE_SNAPSHOT_LIMIT, *,
     newest_snapshot_captured_at_utc: Optional[datetime],
+    newest_snapshot_not_readable: bool = False,
 ) -> List[str]:
     """
     Plain-text problems of the monitor job; empty when it looks healthy.
@@ -186,6 +187,9 @@ def monitor_health_problems(
         newest_snapshot_captured_at_utc: Capture time of the newest option
             chain snapshot in the database at or before now (required, so
             None only ever means none in the database, which is a problem).
+        newest_snapshot_not_readable: True when the lookup of the newest
+            snapshot failed (e.g. a database error); a problem of its own,
+            and ``newest_snapshot_captured_at_utc`` is then ignored.
     """
     live = status.latest_live_run
     problems = []
@@ -202,7 +206,9 @@ def monitor_health_problems(
                 live.as_of_utc - live.snapshot_captured_at_utc > stale_limit:
             problems.append(f"snapshot {format_duration(live.as_of_utc - live.snapshot_captured_at_utc)} "
                             "older than the latest run")
-    if newest_snapshot_captured_at_utc is None:
+    if newest_snapshot_not_readable:
+        problems.append("newest snapshot not readable")
+    elif newest_snapshot_captured_at_utc is None:
         problems.append("no snapshot in the database")
     elif status.now - newest_snapshot_captured_at_utc > stale_limit:
         problems.append(f"newest snapshot is {format_duration(status.now - newest_snapshot_captured_at_utc)} "
@@ -247,10 +253,12 @@ def _alert_state_lines(status: MonitorStatus) -> List[str]:
 def format_status_reply(
     status: MonitorStatus, stale_limit: timedelta = DEFAULT_STALE_SNAPSHOT_LIMIT, *,
     newest_snapshot_captured_at_utc: Optional[datetime],
+    newest_snapshot_not_readable: bool = False,
 ) -> str:
     """
-    /status: health of the monitor job (``stale_limit`` and
-    ``newest_snapshot_captured_at_utc``: see ``monitor_health_problems``),
+    /status: health of the monitor job (``stale_limit``,
+    ``newest_snapshot_captured_at_utc`` and ``newest_snapshot_not_readable``:
+    see ``monitor_health_problems``),
     last run per mode, the newest snapshot in the database and its age, the
     snapshot and open-interest instants the latest live record used,
     whether the hourly job ran in the last 2 h, the alert state (muted or
@@ -259,14 +267,17 @@ def format_status_reply(
     now = status.now
     live = status.latest_live_run
     problems = monitor_health_problems(
-        status, stale_limit, newest_snapshot_captured_at_utc=newest_snapshot_captured_at_utc)
+        status, stale_limit, newest_snapshot_captured_at_utc=newest_snapshot_captured_at_utc,
+        newest_snapshot_not_readable=newest_snapshot_not_readable)
     lines = [
         f"<b>{escape(status.currency)} MenthorQ monitor status</b> | {escape(format_utc(now))}",
         "Health: OK" if not problems else f"Health: PROBLEM: {escape('; '.join(problems))}",
         escape(_run_line("Live run", live, now)),
         escape(_run_line("Daily close", status.latest_daily_close_run, now)),
     ]
-    if newest_snapshot_captured_at_utc is not None:
+    if newest_snapshot_not_readable:
+        lines.append("Newest snapshot: not readable (see the collector log)")
+    elif newest_snapshot_captured_at_utc is not None:
         lines.append(escape(
             f"Newest snapshot: {format_utc(newest_snapshot_captured_at_utc)} "
             f"({format_duration(now - newest_snapshot_captured_at_utc)} old)"))

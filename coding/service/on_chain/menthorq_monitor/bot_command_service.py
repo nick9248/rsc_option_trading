@@ -164,9 +164,17 @@ class MenthorqBotCommandService:
         )
         # The newest snapshot in the database, not the one the last stored record used:
         # a newer snapshot may have arrived since the last hourly run.
-        newest_snapshot = repository.get_latest_option_chain_capture_at_or_before(settings.currency, now)
+        # A failed lookup is logged and shown, like the mute state; the rest of the reply stays.
+        newest_snapshot: Optional[datetime] = None
+        newest_snapshot_not_readable = False
+        try:
+            newest_snapshot = repository.get_latest_option_chain_capture_at_or_before(settings.currency, now)
+        except Exception:
+            logger.exception("MenthorQ monitor: newest snapshot not readable for /status")
+            newest_snapshot_not_readable = True
         return format_status_reply(status, settings.stale_snapshot_limit,
-                                   newest_snapshot_captured_at_utc=newest_snapshot)
+                                   newest_snapshot_captured_at_utc=newest_snapshot,
+                                   newest_snapshot_not_readable=newest_snapshot_not_readable)
 
     def apply_mute(self, arguments: str) -> str:
         """

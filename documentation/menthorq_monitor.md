@@ -72,7 +72,9 @@ Health in `/status` is `OK` unless one of these holds: no live run is stored, th
 was computed more than 2h ago, the newest live run was not computed (the stored reason is shown),
 its snapshot is more than the stale limit (`MENTHORQ_STALE_SNAPSHOT_MINUTES`, default 120 min,
 the same limit as the brief's "DATA STALE" line) older than the run, the newest snapshot in the
-database is more than the stale limit older than now, or there is no snapshot in the database.
+database is more than the stale limit older than now, there is no snapshot in the database, or
+the newest snapshot could not be read (the reply then says `Newest snapshot: not readable (see the
+collector log)` and shows everything else as usual).
 Exactly the limit is not a problem.
 
 ## Mute

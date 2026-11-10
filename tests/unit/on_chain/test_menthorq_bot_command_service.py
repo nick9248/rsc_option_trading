@@ -353,6 +353,27 @@ def test_status_newest_snapshot_ignores_captures_after_now():
     assert "Newest snapshot: 2026-11-06 09:50 UTC (15 min old)\n" in _run(commands, "/status")
 
 
+def test_status_still_answers_when_the_newest_snapshot_lookup_raises(monkeypatch):
+    commands, repository, _, _ = _status_service(_status_records())
+
+    def broken(*arguments):
+        raise RuntimeError("database down")
+
+    monkeypatch.setattr(repository, "get_latest_option_chain_capture_at_or_before", broken)
+    # Only that line and one health problem change; every other line is the healthy reply's.
+    assert _run(commands, "/status") == (
+        "<b>BTC MenthorQ monitor status</b> | 2026-11-06 10:05 UTC\n"
+        "Health: PROBLEM: newest snapshot not readable\n"
+        "Live run: 2026-11-06 09:10 UTC (55 min ago), computed\n"
+        "Daily close: 2026-11-05 23:59 UTC (10 h 6 min ago), computed\n"
+        "Newest snapshot: not readable (see the collector log)\n"
+        "Last record used: snapshot 2026-11-06 08:50 UTC, open interest 2026-11-06 08:50 UTC\n"
+        "Hourly job ran in the last 2h: yes\n"
+        "Urgent alerts: on, not muted\n"
+        "Last alert delivered: none"
+    )
+
+
 def test_status_with_no_run_at_all():
     commands, _, _, _ = _status_service([], newest_snapshot=None)
     message = _run(commands, "/status")
