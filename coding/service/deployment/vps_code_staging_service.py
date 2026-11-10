@@ -150,6 +150,11 @@ class SubprocessCommandRunner:
                 list(arguments),
                 capture_output=True,
                 text=True,
+                # Remote output may not be valid in the Windows code page.
+                encoding="utf-8",
+                errors="replace",
+                # BatchMode ssh must never wait for keyboard input.
+                stdin=subprocess.DEVNULL,
                 timeout=timeout_seconds,
                 cwd=working_directory,
                 check=False,

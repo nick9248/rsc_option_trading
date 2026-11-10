@@ -5,6 +5,7 @@ A fake runner records every command and answers like git/ssh/scp would. No real
 git, ssh or scp process is started.
 """
 import logging
+import sys
 import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -19,6 +20,7 @@ from coding.service.deployment.vps_code_staging_service import (
     CommandResult,
     ForbiddenCommandError,
     StagingError,
+    SubprocessCommandRunner,
     VpsCodeStagingService,
     guard_command,
 )
@@ -452,6 +454,16 @@ def test_local_git_outside_the_allow_list_is_refused(git_arguments):
 def test_malformed_commands_are_refused(malformed):
     with pytest.raises(ForbiddenCommandError):
         guard_command(malformed)
+
+
+def test_real_runner_replaces_undecodable_output():
+    # A tiny local python process (not git, ssh or scp) writes invalid UTF-8.
+    result = SubprocessCommandRunner().run(
+        [sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'\\xff\\xfe ok')"],
+        timeout_seconds=30,
+    )
+    assert result.return_code == 0
+    assert result.stdout == "�� ok"
 
 
 class TestCommandLine:
