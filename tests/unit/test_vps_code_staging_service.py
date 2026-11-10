@@ -348,6 +348,56 @@ def test_import_smoke_failure_returns_failure_with_rollback_hint(caplog):
         guard_command(call.arguments)
 
 
+def test_ssh_exit_255_in_the_smoke_step_is_an_ssh_problem_not_an_import_failure():
+    runner = FakeRunner(smoke_stdout="", smoke_return_code=255)
+    result = _service(runner).stage(TARGET)
+
+    assert result.success is False
+    assert result.new_head == TARGET and result.old_head == OLD_HEAD
+    assert result.message == (
+        "Could not run the import smoke test (ssh problem: exit 255: boom). "
+        f"The VPS code is now at {TARGET} (was {OLD_HEAD}); the service was not restarted. "
+        "Run the check yourself or roll back on the VPS yourself: "
+        f"git -C /home/nick/option_trading reset --hard {OLD_HEAD}"
+    )
+    assert "Import smoke test FAILED" not in result.message
+
+
+def test_runner_error_in_the_smoke_step_does_not_escape():
+    class TimeoutInSmokeRunner(FakeRunner):
+        def run(self, arguments, timeout_seconds, working_directory=None):
+            if arguments[-1] == SMOKE_COMMAND:
+                raise StagingError("Command timed out after 120 s")
+            return super().run(arguments, timeout_seconds, working_directory)
+
+    result = _service(TimeoutInSmokeRunner()).stage(TARGET)
+    assert result.success is False
+    assert result.message.startswith(
+        "Could not run the import smoke test (ssh problem: Command timed out after 120 s). "
+        f"The VPS code is now at {TARGET} (was {OLD_HEAD})"
+    )
+
+
+def test_any_exception_after_the_fast_forward_does_not_escape():
+    class BrokenAfterMergeRunner(FakeRunner):
+        def run(self, arguments, timeout_seconds, working_directory=None):
+            if self.remote_head == TARGET:  # the fast-forward has happened
+                raise RuntimeError("connection reset")
+            return super().run(arguments, timeout_seconds, working_directory)
+
+    result = _service(BrokenAfterMergeRunner()).stage(TARGET)
+    assert result.success is False
+    assert "connection reset" in result.message
+    assert f"reset --hard {OLD_HEAD}" in result.message
+
+
+def test_genuine_import_failure_keeps_the_import_failure_message():
+    runner = FakeRunner(smoke_stdout="", smoke_return_code=1)
+    result = _service(runner).stage(TARGET)
+    assert result.success is False
+    assert result.message.startswith(f"Import smoke test FAILED after the fast-forward to {TARGET} (exit 1): boom.")
+
+
 def test_import_smoke_without_marker_is_a_failure():
     runner = FakeRunner(smoke_stdout="Traceback ...\n", smoke_return_code=0)
     assert _service(runner).stage(TARGET).success is False

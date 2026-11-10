@@ -60,6 +60,8 @@ TEMPORARY_TAG_PREFIX = "deploy-staging-"
 SHORT_COMMIT_LENGTH = 12
 
 SSH_OPTIONS = ("-o", "BatchMode=yes", "-o", "ConnectTimeout=15")
+# ssh exits with 255 when ssh itself failed (connection, authentication).
+SSH_FAILURE_EXIT_CODE = 255
 
 LOCAL_GIT_TIMEOUT_SECONDS = 60
 BUNDLE_TIMEOUT_SECONDS = 300
@@ -170,7 +172,7 @@ class SubprocessCommandRunner:
 
 @dataclass(frozen=True)
 class StagingResult:
-    """What stage() did. success is False only when the import smoke test failed."""
+    """What stage() did. success is False when something failed after the fast-forward."""
 
     success: bool
     message: str
@@ -291,8 +293,9 @@ class VpsCodeStagingService:
                 command instead of running it. No ssh or scp is started.
 
         Returns:
-            StagingResult. success is False when the import smoke test failed
-            after the fast-forward (the log then names the rollback command).
+            StagingResult. success is False when anything failed after the
+            fast-forward (import smoke test, or ssh could not run it); the message
+            then names the new state and the rollback command.
 
         Raises:
             StagingError: A precondition failed or a command did not succeed.
@@ -403,7 +406,10 @@ class VpsCodeStagingService:
         short = target[:SHORT_COMMIT_LENGTH]
         temporary_tag: Optional[str] = None
         try:
-            with tempfile.TemporaryDirectory(prefix="deploy_staging_") as temporary_directory:
+            # A cleanup error must not raise once the VPS HEAD may have moved.
+            with tempfile.TemporaryDirectory(
+                prefix="deploy_staging_", ignore_cleanup_errors=True
+            ) as temporary_directory:
                 logger.info("Step 3: build the bundle locally")
                 if target_is_origin_main:
                     bundle_reference = ORIGIN_MAIN_REFERENCE
@@ -445,33 +451,77 @@ class VpsCodeStagingService:
             if temporary_tag is not None:
                 self._remove_temporary_tag(temporary_tag)
 
-        new_head = self._run_remote_or_fail("read_head").stdout.strip()
-        if new_head != target:
-            raise StagingError(
-                f"After the fast-forward the VPS HEAD is {new_head!r}, expected {target}"
-            )
+        return self._finish_after_fast_forward(target, old_head)
 
-        logger.info("Step 6: import smoke test with the VPS virtual environment")
-        smoke = self._run_remote("import_smoke")
-        if smoke.return_code != 0 or IMPORT_SMOKE_MARKER not in smoke.stdout:
-            rollback = (
-                f"git -C {self._settings.remote_repository_directory} reset --hard {old_head}"
-            )
-            message = (
-                f"Import smoke test FAILED after the fast-forward to {target} "
-                f"(exit {smoke.return_code}): {smoke.stderr.strip() or smoke.stdout.strip()}. "
-                f"The VPS code is now at {target} but the service was not restarted. "
-                f"To roll back, run on the VPS yourself: {rollback}"
-            )
+    def _finish_after_fast_forward(self, target: str, old_head: str) -> StagingResult:
+        """
+        Confirm the new HEAD, run the import smoke test and report.
+
+        The VPS HEAD has already moved, so this method never raises: every problem
+        becomes a failed StagingResult that names the new state and the rollback.
+        """
+        rollback = f"git -C {self._settings.remote_repository_directory} reset --hard {old_head}"
+
+        def failure(message: str, new_head: Optional[str]) -> StagingResult:
             logger.error(message)
             return StagingResult(False, message, old_head=old_head, new_head=new_head)
 
-        summary = self._run_local_git_or_fail(
-            ["diff", "--shortstat", old_head, new_head]
-        ).stdout.strip()
+        try:
+            new_head = self._run_remote_or_fail("read_head").stdout.strip()
+        except Exception as error:
+            return failure(
+                f"Could not read the VPS HEAD after the fast-forward to {target} ({error}). "
+                f"The VPS code is probably at {target} (was {old_head}); the service was not "
+                f"restarted. Check it yourself or roll back on the VPS yourself: {rollback}",
+                new_head=None,
+            )
+        if new_head != target:
+            return failure(
+                f"After the fast-forward the VPS HEAD is {new_head!r}, expected {target} "
+                f"(was {old_head}); the service was not restarted. Check it yourself or roll "
+                f"back on the VPS yourself: {rollback}",
+                new_head=new_head,
+            )
+
+        logger.info("Step 6: import smoke test with the VPS virtual environment")
+        try:
+            smoke: Optional[CommandResult] = self._run_remote("import_smoke")
+            ssh_problem = (
+                f"exit {SSH_FAILURE_EXIT_CODE}: {smoke.stderr.strip()}"
+                if smoke.return_code == SSH_FAILURE_EXIT_CODE else None
+            )
+        except Exception as error:
+            smoke = None
+            ssh_problem = str(error)
+        if ssh_problem is not None or smoke is None:
+            return failure(
+                f"Could not run the import smoke test (ssh problem: {ssh_problem}). "
+                f"The VPS code is now at {new_head} (was {old_head}); the service was not "
+                f"restarted. Run the check yourself or roll back on the VPS yourself: {rollback}",
+                new_head=new_head,
+            )
+        if smoke.return_code != 0 or IMPORT_SMOKE_MARKER not in smoke.stdout:
+            return failure(
+                f"Import smoke test FAILED after the fast-forward to {target} "
+                f"(exit {smoke.return_code}): {smoke.stderr.strip() or smoke.stdout.strip()}. "
+                f"The VPS code is now at {new_head} but the service was not restarted. "
+                f"To roll back, run on the VPS yourself: {rollback}",
+                new_head=new_head,
+            )
+
+        try:
+            summary: Optional[str] = self._run_local_git_or_fail(
+                ["diff", "--shortstat", old_head, new_head]
+            ).stdout.strip()
+        except Exception as error:
+            logger.warning("Could not compute the change summary: %s", error)
+            summary = None
         logger.info("Old HEAD: %s", old_head)
         logger.info("New HEAD: %s", new_head)
-        logger.info("Changes: %s", summary or "no file changes")
+        if summary is None:
+            logger.info("Changes: not computed")
+        else:
+            logger.info("Changes: %s", summary or "no file changes")
         logger.info(RESTART_REMINDER)
         return StagingResult(
             True, RESTART_REMINDER, old_head=old_head, new_head=new_head,
@@ -494,7 +544,7 @@ class VpsCodeStagingService:
     def _remove_temporary_tag(self, tag: str) -> None:
         try:
             result = self._run_local_git(["tag", "-d", tag])
-        except StagingError as error:
+        except Exception as error:
             logger.error("Could not remove the temporary tag %s: %s", tag, error)
             return
         if result.return_code != 0:
