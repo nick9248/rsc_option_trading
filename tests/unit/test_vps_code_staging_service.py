@@ -15,6 +15,7 @@ from typing import Dict, List, Optional, Sequence, Set, Tuple
 import pytest
 
 from coding.service.deployment.vps_code_staging_service import (
+    CONFIGURATION_NOTE,
     FORBIDDEN_REMOTE_TOKENS,
     RESTART_REMINDER,
     CommandResult,
@@ -474,6 +475,8 @@ def test_dry_run_issues_no_ssh_or_scp(caplog):
     assert result.success is True and result.dry_run is True
     assert result.new_head is None and result.old_head is None
     assert "No remote state was read" in result.message
+    assert CONFIGURATION_NOTE in [r.getMessage() for r in caplog.records]
+    assert "does not read, print or edit the VPS .env itself" in CONFIGURATION_NOTE
     assert "the real run may still refuse" in result.message
     assert runner.programs() == ["git", "git", "git"]
     assert all(

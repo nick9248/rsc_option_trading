@@ -1,7 +1,9 @@
 """
 Stage merged code on the VPS as a git bundle (fast-forward of main).
 
-Does NOT restart the service, change .env or run migrations. See
+Does NOT restart the service or run migrations, and does not read, print or edit the
+VPS .env itself (the import smoke test imports the application, which loads its own
+configuration the way the service does). See
 documentation/vps/vps_setup_and_operations.md, "Deploying code to the VPS (bundle)".
 
 Usage:

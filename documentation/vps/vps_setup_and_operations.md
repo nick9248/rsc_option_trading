@@ -403,7 +403,9 @@ runs that command itself.
 
 ### What the tool does NOT do
 - It does not restart the service (no `sudo`, no `systemctl`).
-- It does not read or change `.env`.
+- It does not read, print or edit the VPS `.env` itself. Note: the import smoke test
+  imports the application, which loads its own configuration (including `.env`) the
+  way the service does.
 - It does not run migrations or any other script on the VPS.
 - It does not reset, clean or check out anything on the VPS.
 

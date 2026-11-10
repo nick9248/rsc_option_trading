@@ -10,9 +10,10 @@ The service is deliberately narrow. Every remote command comes from the fixed
 templates in ``REMOTE_COMMAND_TEMPLATES``; the only values filled in are the
 validated commit hash, the generated bundle path and the UTC date. Every command
 (local and remote) passes ``guard_command`` before it runs. The service never
-restarts the collector, never touches ``.env``, never runs migrations and never
-resets, cleans or checks out anything on the VPS. Restarting the service is left
-to the owner.
+restarts the collector, never runs migrations and never resets, cleans or checks
+out anything on the VPS. It does not read, print or edit the VPS ``.env`` itself;
+the import smoke test, however, imports the application, which loads its own
+configuration the way the service does. Restarting the service is left to the owner.
 """
 
 import logging
@@ -84,6 +85,13 @@ IMPORT_SMOKE_MARKER = "imports OK"
 RESTART_REMINDER = (
     "Code staged. The running service is NOT restarted: "
     "run sudo systemctl restart option-trading yourself."
+)
+
+# Logged in the dry run, so nobody reads "no .env access" as "nothing loads it".
+CONFIGURATION_NOTE = (
+    "The tool does not read, print or edit the VPS .env itself, but the import smoke "
+    "test imports the application, which loads its own configuration the way the "
+    "service does."
 )
 
 # The only remote commands the service can send. Placeholders are filled with
@@ -657,6 +665,7 @@ class VpsCodeStagingService:
         for arguments in planned:
             guard_command(arguments)
             logger.info("  WOULD RUN: %s", " ".join(arguments))
+        logger.info(CONFIGURATION_NOTE)
         message = (
             f"Dry run finished for {target}. No remote state was read and nothing was "
             "copied or changed; the real run may still refuse (for example a dirty VPS "
