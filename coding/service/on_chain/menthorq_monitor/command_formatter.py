@@ -170,8 +170,8 @@ class MonitorStatus:
 
 
 def monitor_health_problems(
-    status: MonitorStatus, stale_limit: timedelta = DEFAULT_STALE_SNAPSHOT_LIMIT,
-    newest_snapshot_captured_at_utc: Optional[datetime] = None,
+    status: MonitorStatus, stale_limit: timedelta = DEFAULT_STALE_SNAPSHOT_LIMIT, *,
+    newest_snapshot_captured_at_utc: Optional[datetime],
 ) -> List[str]:
     """
     Plain-text problems of the monitor job; empty when it looks healthy.
@@ -184,8 +184,8 @@ def monitor_health_problems(
             newest database snapshot more than this older than now, is a
             problem (exactly the limit is not).
         newest_snapshot_captured_at_utc: Capture time of the newest option
-            chain snapshot in the database at or before now; None (none in
-            the database, or not looked up) is a problem.
+            chain snapshot in the database at or before now (required, so
+            None only ever means none in the database, which is a problem).
     """
     live = status.latest_live_run
     problems = []
@@ -245,8 +245,8 @@ def _alert_state_lines(status: MonitorStatus) -> List[str]:
 
 
 def format_status_reply(
-    status: MonitorStatus, stale_limit: timedelta = DEFAULT_STALE_SNAPSHOT_LIMIT,
-    newest_snapshot_captured_at_utc: Optional[datetime] = None,
+    status: MonitorStatus, stale_limit: timedelta = DEFAULT_STALE_SNAPSHOT_LIMIT, *,
+    newest_snapshot_captured_at_utc: Optional[datetime],
 ) -> str:
     """
     /status: health of the monitor job (``stale_limit`` and
@@ -258,7 +258,8 @@ def format_status_reply(
     """
     now = status.now
     live = status.latest_live_run
-    problems = monitor_health_problems(status, stale_limit, newest_snapshot_captured_at_utc)
+    problems = monitor_health_problems(
+        status, stale_limit, newest_snapshot_captured_at_utc=newest_snapshot_captured_at_utc)
     lines = [
         f"<b>{escape(status.currency)} MenthorQ monitor status</b> | {escape(format_utc(now))}",
         "Health: OK" if not problems else f"Health: PROBLEM: {escape('; '.join(problems))}",

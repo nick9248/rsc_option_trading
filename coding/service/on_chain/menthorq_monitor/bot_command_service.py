@@ -165,7 +165,8 @@ class MenthorqBotCommandService:
         # The newest snapshot in the database, not the one the last stored record used:
         # a newer snapshot may have arrived since the last hourly run.
         newest_snapshot = repository.get_latest_option_chain_capture_at_or_before(settings.currency, now)
-        return format_status_reply(status, settings.stale_snapshot_limit, newest_snapshot)
+        return format_status_reply(status, settings.stale_snapshot_limit,
+                                   newest_snapshot_captured_at_utc=newest_snapshot)
 
     def apply_mute(self, arguments: str) -> str:
         """

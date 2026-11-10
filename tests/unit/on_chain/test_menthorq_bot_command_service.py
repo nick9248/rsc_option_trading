@@ -11,6 +11,8 @@ from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 from typing import Optional
 
+import pytest
+
 from coding.core.analytics.menthorq_monitor.level_record import MODE_DAILY_CLOSE
 from coding.service.on_chain.menthorq_monitor.bot_command_service import MenthorqBotCommandService
 from coding.service.on_chain.menthorq_monitor.brief_delivery_service import MenthorqBriefDeliveryService
@@ -23,7 +25,10 @@ from coding.service.on_chain.menthorq_monitor.brief_formatter import (
 from coding.service.on_chain.menthorq_monitor.command_formatter import (
     BOT_COMMANDS,
     MUTE_USAGE,
+    MonitorStatus,
     format_changes_reply,
+    format_status_reply,
+    monitor_health_problems,
 )
 from coding.service.on_chain.menthorq_monitor.menthorq_monitor_service import MenthorqMonitorService
 from coding.service.on_chain.menthorq_monitor.monitor_settings import MenthorqMonitorSettings
@@ -353,6 +358,20 @@ def test_status_with_no_run_at_all():
     message = _run(commands, "/status")
     assert "Health: PROBLEM: no live run stored; no snapshot in the database\n" in message
     assert "Live run: none stored" in message
+
+
+def test_status_formatter_requires_the_newest_snapshot_argument():
+    # Required keyword: a caller cannot forget it and have "not looked up" read as "none in the database".
+    status = MonitorStatus(currency="BTC", now=NOW, latest_live_run=make_record(),
+                           latest_daily_close_run=None, alerts_enabled=True, monitor_state=None,
+                           monitor_state_error=None, last_alert_delivered=None)
+    with pytest.raises(TypeError):
+        format_status_reply(status)  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        monitor_health_problems(status)  # type: ignore[call-arg]
+    assert monitor_health_problems(status, newest_snapshot_captured_at_utc=NEWEST_SNAPSHOT) == []
+    assert monitor_health_problems(status, newest_snapshot_captured_at_utc=None) == [
+        "no snapshot in the database"]
 
 
 def test_mute_for_a_duration_persists_and_expires():
