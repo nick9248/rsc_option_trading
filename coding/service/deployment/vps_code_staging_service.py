@@ -625,9 +625,13 @@ class VpsCodeStagingService:
         for arguments in planned:
             guard_command(arguments)
             logger.info("  WOULD RUN: %s", " ".join(arguments))
-        message = f"Dry run finished for {target}. Nothing was copied or changed."
+        message = (
+            f"Dry run finished for {target}. No remote state was read and nothing was "
+            "copied or changed; the real run may still refuse (for example a dirty VPS "
+            "working tree or diverged history)."
+        )
         logger.info(message)
-        return StagingResult(True, message, new_head=target, dry_run=True)
+        return StagingResult(True, message, new_head=None, dry_run=True)
 
     # ------------------------------------------------------- command building
 

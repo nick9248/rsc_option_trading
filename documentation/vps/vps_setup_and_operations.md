@@ -372,7 +372,9 @@ Run from the repo root on the PC, after the PR is merged and `git fetch origin`:
 
 `--commit` takes a hex hash (7 to 40 characters, for example main's merge commit) or
 the literal `origin/main`. `--dry-run` runs only the read-only local git checks and logs
-every other command it would run; it starts no ssh or scp. Exit code 0 means success.
+every other command it would run; it starts no ssh or scp. It reads no VPS state, so a
+dry run that passes can still be refused by the real run (for example a dirty VPS tree
+or diverged history). Exit code 0 means success.
 
 ### What the tool does
 Code: `coding/service/deployment/vps_code_staging_service.py`.

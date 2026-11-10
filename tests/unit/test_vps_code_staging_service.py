@@ -446,6 +446,9 @@ def test_dry_run_issues_no_ssh_or_scp(caplog):
         result = _service(runner).stage(TARGET, dry_run=True)
 
     assert result.success is True and result.dry_run is True
+    assert result.new_head is None and result.old_head is None
+    assert "No remote state was read" in result.message
+    assert "the real run may still refuse" in result.message
     assert runner.programs() == ["git", "git", "git"]
     assert all(
         call.arguments[3] in ("rev-parse", "merge-base") for call in runner.calls
