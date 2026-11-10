@@ -174,7 +174,7 @@ def test_happy_path_issues_the_expected_commands_in_order(caplog):
          "rsc_main_bbbbbbbbbbbb.bundle", "option-server:" + remote_bundle],
         SSH + ["git -C /home/nick/option_trading bundle verify " + remote_bundle],
         SSH + ["git -C /home/nick/option_trading fetch --no-tags " + remote_bundle
-               + " refs/remotes/origin/main:incoming-main"],
+               + " +refs/remotes/origin/main:incoming-main"],
         SSH + ["git -C /home/nick/option_trading merge --ff-only incoming-main"],
         SSH + ["git -C /home/nick/option_trading rev-parse HEAD"],
         SSH + [SMOKE_COMMAND],
@@ -219,7 +219,7 @@ def test_older_commit_uses_a_temporary_tag_that_is_removed():
     bundle_create = next(a for a in arguments if a[3:5] == ["bundle", "create"])
     assert bundle_create[6:] == ["refs/tags/deploy-staging-bbbbbbbbbbbb", "^" + OLD_HEAD]
     fetch = next(c for c in runner.remote_commands() if " fetch " in c)
-    assert fetch.endswith(" refs/tags/deploy-staging-bbbbbbbbbbbb:incoming-main")
+    assert fetch.endswith(" +refs/tags/deploy-staging-bbbbbbbbbbbb:incoming-main")
 
 
 def test_temporary_tag_is_removed_when_a_later_step_fails():
@@ -416,6 +416,7 @@ def test_dry_run_issues_no_ssh_or_scp(caplog):
     planned = [r.getMessage() for r in caplog.records if "WOULD RUN" in r.getMessage()]
     assert any(message.startswith("  WOULD RUN: scp ") for message in planned)
     assert any("merge --ff-only incoming-main" in message for message in planned)
+    assert any(message.endswith(" +refs/remotes/origin/main:incoming-main") for message in planned)
 
 
 def test_dry_run_of_an_older_commit_plans_but_does_not_create_the_tag(caplog):

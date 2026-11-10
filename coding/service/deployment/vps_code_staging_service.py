@@ -89,8 +89,9 @@ REMOTE_COMMAND_TEMPLATES: Dict[str, str] = {
     "list_backups": "mkdir -p {backups} && ls -1 {backups}",
     "make_deploy_directory": "mkdir {deploy_directory}",
     "verify_bundle": "git -C {repository} bundle verify {bundle}",
+    # Forced ('+'): incoming-main is a scratch branch; main itself only moves with --ff-only.
     "fetch_bundle": (
-        "git -C {repository} fetch --no-tags {bundle} {bundle_reference}:" + INCOMING_BRANCH
+        "git -C {repository} fetch --no-tags {bundle} +{bundle_reference}:" + INCOMING_BRANCH
     ),
     "fast_forward": "git -C {repository} merge --ff-only " + INCOMING_BRANCH,
     "import_smoke": "cd {repository} && {python} -c {smoke_code}",

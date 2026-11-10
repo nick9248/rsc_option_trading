@@ -386,7 +386,8 @@ Code: `coding/service/deployment/vps_code_staging_service.py`.
    `deploy-staging-<hash>` when the target is not the origin/main tip; the tag is always
    removed) and verifies it.
 4. Copies it with scp to `/home/nick/backups/deploy_<UTC date>[_n]/`.
-5. On the VPS: `git bundle verify`, `git fetch <bundle> <ref>:incoming-main`,
+5. On the VPS: `git bundle verify`, `git fetch --no-tags <bundle> +<ref>:incoming-main`
+   (forced, because `incoming-main` is only a scratch branch),
    `git merge --ff-only incoming-main`, then an import smoke test with the VPS venv
    (`from coding.service.data_collection.unified_scheduler import UnifiedScheduler`).
 6. Logs the old HEAD, the new HEAD and the `git diff --shortstat` summary.
