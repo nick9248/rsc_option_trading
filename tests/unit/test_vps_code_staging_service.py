@@ -65,6 +65,8 @@ class FakeRunner:
     backups_listing: str = "deploy_20261012\n"
     smoke_stdout: str = "imports OK\n"
     smoke_return_code: int = 0
+    # Tags or branches whose names win over a hash prefix in git rev-parse.
+    named_references: Dict[str, str] = field(default_factory=dict)
     calls: List[RecordedCall] = field(default_factory=list)
 
     def run(
@@ -91,6 +93,8 @@ class FakeRunner:
             revision = git_arguments[3].removesuffix("^{commit}")
             if revision in ("refs/remotes/origin/main", "origin/main"):
                 return CommandResult(0, self.origin_main + "\n", "")
+            if revision in self.named_references:
+                return CommandResult(0, self.named_references[revision] + "\n", "")
             for commit in self.known_local:
                 if commit.startswith(revision):
                     return CommandResult(0, commit + "\n", "")
@@ -340,13 +344,29 @@ def test_vps_head_unknown_locally_is_refused():
 
 @pytest.mark.parametrize(
     "bad_commit",
-    ["", "abc12", "BBBBBBB", "bbbbbbb; sudo reboot", "main", "b" * 41, "origin/main^", "-bbbbbbb"],
+    [
+        "", "abc12", "BBBBBBB", "bbbbbbb; sudo reboot", "main", "b" * 41, "origin/main^",
+        "-bbbbbbb", "bbbbbbb\n", TARGET + "\n",
+    ],
 )
 def test_invalid_commit_is_refused_before_any_command(bad_commit):
     runner = FakeRunner()
     with pytest.raises(StagingError, match="Invalid commit"):
         _service(runner).stage(bad_commit)
     assert runner.calls == []
+
+
+def test_a_tag_named_like_the_hash_is_refused():
+    # A tag "bbbbbbb" points at OLD_HEAD; git would resolve the name, not the hash prefix.
+    runner = FakeRunner(named_references={"bbbbbbb": OLD_HEAD})
+    with pytest.raises(StagingError, match="does not start with it"):
+        _service(runner).stage("bbbbbbb")
+    assert runner.programs() == ["git"]
+
+
+def test_full_hash_input_resolves_to_itself():
+    runner = FakeRunner()
+    assert _service(runner).stage(TARGET, dry_run=True).success is True
 
 
 def test_import_smoke_failure_returns_failure_with_rollback_hint(caplog):

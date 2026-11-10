@@ -50,8 +50,9 @@ ALLOWED_PROGRAMS = ("git", "ssh", "scp")
 # The only sub-commands local git may run (read-only, plus the temporary tag and the bundle).
 ALLOWED_LOCAL_GIT_COMMANDS = ("rev-parse", "merge-base", "tag", "bundle", "diff")
 
-COMMIT_PATTERN = re.compile(r"^[0-9a-f]{7,40}$")
-FULL_COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+# Used with fullmatch: "$" alone would also accept a trailing newline.
+COMMIT_PATTERN = re.compile(r"[0-9a-f]{7,40}")
+FULL_COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}")
 ORIGIN_MAIN = "origin/main"
 ORIGIN_MAIN_REFERENCE = "refs/remotes/origin/main"
 INCOMING_BRANCH = "incoming-main"
@@ -329,12 +330,18 @@ class VpsCodeStagingService:
         Returns (full target hash, full origin/main hash).
         """
         logger.info("Step 1: validate and resolve the target commit %r", target_commit)
-        if target_commit != ORIGIN_MAIN and not COMMIT_PATTERN.match(target_commit):
+        if target_commit != ORIGIN_MAIN and not COMMIT_PATTERN.fullmatch(target_commit):
             raise StagingError(
                 f"Invalid commit {target_commit!r}: expected 7 to 40 lowercase hex "
                 f"characters or {ORIGIN_MAIN!r}"
             )
         target = self._resolve_local_commit(target_commit)
+        if target_commit != ORIGIN_MAIN and not target.startswith(target_commit):
+            # git prefers a tag or branch named like the hash over the hash itself.
+            raise StagingError(
+                f"Refused: {target_commit!r} resolved to {target}, which does not start with "
+                "it (a tag or branch with that name exists). Pass the full commit hash."
+            )
         origin_main = self._resolve_local_commit(ORIGIN_MAIN_REFERENCE)
         if not self._is_local_ancestor(target, origin_main):
             raise StagingError(
@@ -349,7 +356,7 @@ class VpsCodeStagingService:
             ["rev-parse", "--verify", "--quiet", revision + "^{commit}"]
         )
         full_commit = result.stdout.strip()
-        if result.return_code != 0 or not FULL_COMMIT_PATTERN.match(full_commit):
+        if result.return_code != 0 or not FULL_COMMIT_PATTERN.fullmatch(full_commit):
             raise StagingError(f"Commit {revision!r} does not exist in the local repository")
         return full_commit
 
@@ -369,7 +376,7 @@ class VpsCodeStagingService:
         """Read-only checks on the VPS. Returns the VPS HEAD."""
         logger.info("Step 2: read-only checks on the VPS")
         remote_head = self._run_remote_or_fail("read_head").stdout.strip()
-        if not FULL_COMMIT_PATTERN.match(remote_head):
+        if not FULL_COMMIT_PATTERN.fullmatch(remote_head):
             raise StagingError(f"The VPS HEAD is not a commit hash: {remote_head!r}")
         logger.info("VPS HEAD: %s", remote_head)
 
