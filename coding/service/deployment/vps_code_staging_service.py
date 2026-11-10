@@ -694,6 +694,7 @@ class VpsCodeStagingService:
             self._remote_arguments("read_head"),
             self._remote_arguments("read_branch"),
             self._remote_arguments("read_status"),
+            self._local_git_arguments(["rev-parse", "--verify", "--quiet", "<VPS_HEAD>^{commit}"]),
             self._local_git_arguments(["merge-base", "--is-ancestor", "<VPS_HEAD>", target]),
         ]
         if not target_is_origin_main:

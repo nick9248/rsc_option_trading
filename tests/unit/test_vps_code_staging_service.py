@@ -561,6 +561,35 @@ def test_dry_run_of_an_older_commit_plans_but_does_not_create_the_tag(caplog):
     assert any(m.endswith("tag -d deploy-staging-bbbbbbbbbbbb-20261110T183000") for m in planned)
 
 
+@pytest.mark.parametrize("origin_main", [TARGET, NEWER_ORIGIN_MAIN], ids=["tip", "older"])
+def test_dry_run_plan_matches_the_commands_a_real_run_issues(caplog, origin_main):
+    # Real run on the happy path, commands as issued.
+    real_runner = FakeRunner(origin_main=origin_main)
+    _service(real_runner).stage(TARGET)
+    temporary_directory = str(Path(_bundle_path(real_runner)).parent)
+
+    def normalise(arguments: List[str]) -> str:
+        line = " ".join(arguments)
+        line = line.replace(temporary_directory + "\\", "<temporary directory>/")
+        line = line.replace(temporary_directory + "/", "<temporary directory>/")
+        return line.replace(OLD_HEAD, "<VPS_HEAD>")
+
+    real = [normalise(call.arguments) for call in real_runner.calls]
+
+    # Dry run: the same local checks are run, the rest is only logged.
+    dry_runner = FakeRunner(origin_main=origin_main)
+    with caplog.at_level(logging.INFO):
+        _service(dry_runner).stage(TARGET, dry_run=True)
+    prefix = "  WOULD RUN: "
+    planned = [r.getMessage()[len(prefix):] for r in caplog.records
+               if r.getMessage().startswith(prefix)]
+    dry_local_checks = [normalise(call.arguments) for call in dry_runner.calls]
+
+    assert len(dry_local_checks) == 3 and len(planned) >= 16
+    assert real[:len(dry_local_checks)] == dry_local_checks
+    assert real[len(dry_local_checks):] == planned
+
+
 def test_dry_run_still_refuses_unmerged_commits():
     runner = FakeRunner(origin_main=OLD_HEAD)
     with pytest.raises(StagingError, match="not part of origin/main"):
