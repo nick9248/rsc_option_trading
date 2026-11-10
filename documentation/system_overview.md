@@ -81,6 +81,7 @@ Run from the repo root (Windows):
 .venv\Scripts\python -m scripts.validate_system              # local health check
 .venv\Scripts\python -m coding.gui.app                       # GUI
 .venv\Scripts\python -m scripts.sync_from_vps                # copy VPS data into the local database
+.venv\Scripts\python -m scripts.deploy_to_vps --commit origin/main [--dry-run]  # stage merged code on the VPS (no restart)
 python scripts/run_migration.py migrations/NNN_name.sql      # apply one migration
 ```
 
