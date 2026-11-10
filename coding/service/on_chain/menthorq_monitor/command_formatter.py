@@ -224,6 +224,18 @@ def _run_line(label: str, run: Optional[MenthorqLevelRecord], now: datetime) -> 
             f"{computed}")
 
 
+def _record_used_line(live: Optional[MenthorqLevelRecord]) -> str:
+    """The inputs of the latest live record and how old its snapshot was at the run's data time."""
+    if live is None:
+        return "Last record used: not computed (no live run stored)"
+    snapshot = live.snapshot_captured_at_utc
+    snapshot_text = "not computed" if snapshot is None else (
+        f"{format_utc(snapshot)} ({format_duration(live.as_of_utc - snapshot)} before the run)")
+    open_interest = live.open_interest_captured_at_utc
+    open_interest_text = "not computed" if open_interest is None else format_utc(open_interest)
+    return f"Last record used: snapshot {snapshot_text}, open interest {open_interest_text}"
+
+
 def _alert_state_lines(status: MonitorStatus) -> List[str]:
     if not status.alerts_enabled:
         lines = ["Urgent alerts: OFF (MENTHORQ_ALERTS_ENABLED=0)"]
@@ -283,12 +295,7 @@ def format_status_reply(
             f"({format_duration(now - newest_snapshot_captured_at_utc)} old)"))
     else:
         lines.append("Newest snapshot: not computed (none in the database)")
-    if live is not None and live.snapshot_captured_at_utc is not None:
-        lines.append(escape(
-            f"Last record used: snapshot {format_utc(live.snapshot_captured_at_utc)}, open interest "
-            f"{format_utc(live.open_interest_captured_at_utc)}"))
-    else:
-        lines.append("Last record used: n/a (no computed live run)")
+    lines.append(escape(_record_used_line(live)))
     ran_recently = live is not None and now - live.computed_at_utc <= HOURLY_JOB_EXPECTED_WITHIN
     lines.append(f"Hourly job ran in the last 2h: {'yes' if ran_recently else 'NO'}")
     lines.extend(escape(line) for line in _alert_state_lines(status))

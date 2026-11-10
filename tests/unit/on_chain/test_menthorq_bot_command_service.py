@@ -248,7 +248,8 @@ def test_status_reply_by_hand_healthy_not_muted():
         "Live run: 2026-11-06 09:10 UTC (55 min ago), computed\n"
         "Daily close: 2026-11-05 23:59 UTC (10 h 6 min ago), computed\n"
         "Newest snapshot: 2026-11-06 09:50 UTC (15 min old)\n"
-        "Last record used: snapshot 2026-11-06 08:50 UTC, open interest 2026-11-06 08:50 UTC\n"
+        "Last record used: snapshot 2026-11-06 08:50 UTC (20 min before the run), "
+        "open interest 2026-11-06 08:50 UTC\n"
         "Hourly job ran in the last 2h: yes\n"
         "Urgent alerts: on, not muted\n"
         "Last alert delivered: none"
@@ -279,7 +280,8 @@ def test_status_reply_reports_problems():
     assert "Live run: 2026-11-06 07:05 UTC (3 h 0 min ago), NOT computed" in message
     assert "Daily close: none stored" in message
     assert "Newest snapshot: not computed (none in the database)" in message
-    assert "Last record used: n/a (no computed live run)" in message
+    # The stored record has no snapshot time; its open interest is 20 min before its 07:05 run.
+    assert "Last record used: snapshot not computed, open interest 2026-11-06 06:45 UTC\n" in message
     assert "Hourly job ran in the last 2h: NO" in message
 
 
@@ -342,8 +344,8 @@ def test_status_health_judges_the_newest_database_snapshot_against_the_clock():
     assert "Newest snapshot: not computed (none in the database)\n" in missing
     # The record-used line always shows the stored record's own (older) inputs.
     for message in (fresh, old, missing):
-        assert ("Last record used: snapshot 2026-11-06 08:50 UTC, open interest 2026-11-06 08:50 UTC\n"
-                in message)
+        assert ("Last record used: snapshot 2026-11-06 08:50 UTC (20 min before the run), "
+                "open interest 2026-11-06 08:50 UTC\n") in message
 
 
 def test_status_newest_snapshot_problem_names_the_configured_limit():
@@ -388,7 +390,8 @@ def test_status_still_answers_when_the_newest_snapshot_lookup_raises(monkeypatch
         "Live run: 2026-11-06 09:10 UTC (55 min ago), computed\n"
         "Daily close: 2026-11-05 23:59 UTC (10 h 6 min ago), computed\n"
         "Newest snapshot: not readable (see the collector log)\n"
-        "Last record used: snapshot 2026-11-06 08:50 UTC, open interest 2026-11-06 08:50 UTC\n"
+        "Last record used: snapshot 2026-11-06 08:50 UTC (20 min before the run), "
+        "open interest 2026-11-06 08:50 UTC\n"
         "Hourly job ran in the last 2h: yes\n"
         "Urgent alerts: on, not muted\n"
         "Last alert delivered: none"
@@ -400,6 +403,22 @@ def test_status_with_no_run_at_all():
     message = _run(commands, "/status")
     assert "Health: PROBLEM: no live run stored; no snapshot in the database\n" in message
     assert "Live run: none stored" in message
+    assert "Last record used: not computed (no live run stored)\n" in message
+
+
+def test_status_record_used_line_shows_the_snapshot_age_at_the_run():
+    # Owner's case: run 17:10 used the 16:47 snapshot -> 23 min before the run; open interest missing.
+    run = make_record(as_of=datetime(2026, 11, 10, 17, 10, tzinfo=timezone.utc),
+                      snapshot_captured_at_utc=datetime(2026, 11, 10, 16, 47, tzinfo=timezone.utc),
+                      open_interest_captured_at_utc=None)
+    status = MonitorStatus(currency="BTC", now=datetime(2026, 11, 10, 18, 3, tzinfo=timezone.utc),
+                           latest_live_run=run, latest_daily_close_run=None, alerts_enabled=True,
+                           monitor_state=None, monitor_state_error=None, last_alert_delivered=None)
+    message = format_status_reply(
+        status, newest_snapshot_captured_at_utc=datetime(2026, 11, 10, 17, 48, tzinfo=timezone.utc))
+    assert "Newest snapshot: 2026-11-10 17:48 UTC (15 min old)\n" in message
+    assert ("Last record used: snapshot 2026-11-10 16:47 UTC (23 min before the run), "
+            "open interest not computed\n") in message
 
 
 def test_status_formatter_requires_the_newest_snapshot_argument():
