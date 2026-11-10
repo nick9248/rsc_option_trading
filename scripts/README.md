@@ -9,6 +9,7 @@ Run every script from the repo root, for example `.venv\Scripts\python -m script
 | `sync_from_vps.py` | Copies the VPS data into the local database through an SSH tunnel (the tables in `SYNC_TABLES`) and pulls `logs/vps_health.json`. The GUI "Sync from VPS" button runs it. |
 | `validate_system.py` | Runs every LOCAL health check (shared registry in `coding/service/health/`) and prints a grouped summary. |
 | `check_vps_health.py` | Runs the VPS health checks. Runs on the VPS (hourly cron). Writes `logs/vps_health.json` and stores each run in the `health_check_runs` table. |
+| `deploy_to_vps.py` | Stages a merged commit on the VPS as a git bundle (fast-forward of `main`, then an import smoke test). Does not restart the service or run migrations. `--dry-run` only logs the commands. See `documentation/vps/vps_setup_and_operations.md`, section 12. |
 
 ## Database
 
