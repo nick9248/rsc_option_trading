@@ -237,6 +237,21 @@ def test_temporary_tag_is_removed_when_a_later_step_fails():
     assert not any("merge --ff-only" in c for c in runner.remote_commands())
 
 
+def test_failed_tag_creation_never_deletes_the_existing_tag():
+    class ExistingTagRunner(FakeRunner):
+        def _git(self, git_arguments):
+            if git_arguments[0] == "tag":
+                return CommandResult(128, "", "fatal: tag 'deploy-staging-bbbbbbbbbbbb' already exists")
+            return super()._git(git_arguments)
+
+    runner = ExistingTagRunner(origin_main=NEWER_ORIGIN_MAIN)
+    with pytest.raises(StagingError, match="already exists"):
+        _service(runner).stage(TARGET)
+    tag_calls = [call.arguments[3:] for call in runner.calls if call.arguments[3:4] == ["tag"]]
+    assert tag_calls == [["tag", "deploy-staging-bbbbbbbbbbbb", TARGET]]
+    assert "scp" not in runner.programs()
+
+
 def test_bundle_stays_inside_a_temporary_directory_that_is_removed():
     runner = FakeRunner()
     _service(runner).stage(TARGET)

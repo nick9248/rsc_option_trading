@@ -408,9 +408,12 @@ class VpsCodeStagingService:
                 if target_is_origin_main:
                     bundle_reference = ORIGIN_MAIN_REFERENCE
                 else:
-                    temporary_tag = TEMPORARY_TAG_PREFIX + short
-                    self._run_local_git_or_fail(["tag", temporary_tag, target])
-                    bundle_reference = "refs/tags/" + temporary_tag
+                    tag_name = TEMPORARY_TAG_PREFIX + short
+                    self._run_local_git_or_fail(["tag", tag_name, target])
+                    # Only now is the tag ours to delete; a pre-existing tag of the
+                    # same name made 'git tag' fail and must be left alone.
+                    temporary_tag = tag_name
+                    bundle_reference = "refs/tags/" + tag_name
                 bundle_name = f"rsc_main_{short}.bundle"
                 bundle_path = Path(temporary_directory) / bundle_name
                 self._run_local_git_or_fail(
