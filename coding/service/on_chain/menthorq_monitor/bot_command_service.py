@@ -137,7 +137,7 @@ class MenthorqBotCommandService:
                                     stale_limit=self.settings.stale_snapshot_limit, now=now)
 
     def build_status_reply(self) -> str:
-        """/status: runs, data age, health and alert state."""
+        """/status: runs, newest snapshot in the database, data the last record used, health and alert state."""
         settings = self.settings
         repository = self.repository
         state: Optional[MenthorqMonitorState] = None
@@ -147,9 +147,10 @@ class MenthorqBotCommandService:
         except Exception as error:
             logger.exception("MenthorQ monitor: mute state not readable for /status")
             state_error = type(error).__name__
+        now = self.clock()
         status = MonitorStatus(
             currency=settings.currency,
-            now=self.clock(),
+            now=now,
             latest_live_run=repository.get_latest_menthorq_level_run(
                 settings.currency, MODE_LIVE, settings.expiry_universe, settings.gamma_underlying),
             latest_daily_close_run=repository.get_latest_menthorq_level_run(
@@ -161,7 +162,19 @@ class MenthorqBotCommandService:
             last_alert_delivered=repository.get_last_menthorq_alert_delivery_of_keys(
                 settings.currency, list(URGENT_ALERT_KEYS)),
         )
-        return format_status_reply(status, settings.stale_snapshot_limit)
+        # The newest snapshot in the database, not the one the last stored record used:
+        # a newer snapshot may have arrived since the last hourly run.
+        # A failed lookup is logged and shown, like the mute state; the rest of the reply stays.
+        newest_snapshot: Optional[datetime] = None
+        newest_snapshot_not_readable = False
+        try:
+            newest_snapshot = repository.get_latest_option_chain_capture_at_or_before(settings.currency, now)
+        except Exception:
+            logger.exception("MenthorQ monitor: newest snapshot not readable for /status")
+            newest_snapshot_not_readable = True
+        return format_status_reply(status, settings.stale_snapshot_limit,
+                                   newest_snapshot_captured_at_utc=newest_snapshot,
+                                   newest_snapshot_not_readable=newest_snapshot_not_readable)
 
     def apply_mute(self, arguments: str) -> str:
         """

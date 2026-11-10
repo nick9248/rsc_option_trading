@@ -55,7 +55,7 @@ start-up and does not schedule command polling.
 | `/brief` | The full brief: header (with the DATA STALE line when it applies), key levels, gamma regime, changes vs previous run / 24h / 7d (a missing comparison is one "no stored record" line there, not repeated in the caveats), panels with a CR / PS / HVL legend, events, caveats. |
 | `/levels` | Call Resistance, HVL and Put Support of the newest stored live record, each with its distance to spot (level minus spot, in USD and in % of spot), plus spot, the regime sentence and total net GEX. |
 | `/changes` | The newest live record compared with the previous run, 24h ago and 7d ago: spot, the three levels and net GEX, with expiries that settled in each window. The events list says when a level move coincides with an expiry roll-off. |
-| `/status` | Health of the monitor job, the last run of each mode (live, daily_close), data age and the snapshot and open-interest instants, whether the hourly job ran in the last 2h, the alert state (off, muted until, or not muted), the last delivered urgent alert, and the last alert held back by a mute. |
+| `/status` | Health of the monitor job, the last run of each mode (live, daily_close), the newest option-chain snapshot in the database and its age (`Newest snapshot: <time> (<age> old)`, or `not computed (none in the database)`), the snapshot and open-interest instants the newest live record used (`Last record used: snapshot <time> (<age> before the run), open interest <time>`, a missing instant shown as `not computed`; older than the newest snapshot when a snapshot arrived after the last hourly run), whether the hourly job ran in the last 2h, the alert state (off, muted until, or not muted), the last delivered urgent alert, and the last alert held back by a mute. |
 | `/mute <duration>` | `/mute 24h`, `/mute 3d`, `/mute 90m` (units m, h, d; at most 30d) mutes URGENT alerts until now + duration. `/mute off` unmutes. `/mute` with no argument shows the current state. |
 | `/help` | The command list and which urgent alert rules are on. |
 | anything else | `Unknown command ... Send /help for details.` |
@@ -70,8 +70,12 @@ be built (for example, the database is down), the bot answers `<command> failed 
 
 Health in `/status` is `OK` unless one of these holds: no live run is stored, the newest live run
 was computed more than 2h ago, the newest live run was not computed (the stored reason is shown),
-or its snapshot is more than the stale limit (`MENTHORQ_STALE_SNAPSHOT_MINUTES`, default 120 min,
-the same limit as the brief's "DATA STALE" line) older than the run.
+its snapshot is more than the stale limit (`MENTHORQ_STALE_SNAPSHOT_MINUTES`, default 120 min,
+the same limit as the brief's "DATA STALE" line) older than the run, the newest snapshot in the
+database is more than the stale limit older than now, there is no snapshot in the database, or
+the newest snapshot could not be read (the reply then says `Newest snapshot: not readable (see the
+collector log)` and shows everything else as usual).
+Exactly the limit is not a problem.
 
 ## Mute
 
@@ -231,7 +235,8 @@ data time, for example:
   the check against "now" for a live run (and a past daily close is not called stale for being past).
 - Exactly the limit is not stale; one minute more is. Durations are whole minutes, rounded down.
 - A spot trade more than 15 min but not more than the limit before the data time is a normal
-  caveat line instead. `/status` uses the same limit for its health line (snapshot vs the latest run).
+  caveat line instead. `/status` uses the same limit for its health line (snapshot vs the latest run, and the newest
+  database snapshot vs now).
 
 The usual cause is a collector that stopped writing snapshots (or a local database that was not
 synced from the VPS), so the newest snapshot is hours behind the time the brief was asked for.
