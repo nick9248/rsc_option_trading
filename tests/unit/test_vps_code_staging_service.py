@@ -601,6 +601,50 @@ def test_a_doctored_template_is_rejected_before_it_runs(monkeypatch):
     assert not any("clean" in c for c in runner.remote_commands())
 
 
+@pytest.mark.parametrize(
+    "doctored",
+    [
+        SSH + ['r""m -rf /home/nick/option_trading'],
+        SSH + ['cat ~/option_trading/.e""nv'],
+        SSH + ['echo $(cat ~/option_trading/.e""nv)'],
+        SSH[:-1] + ["other-server", "git -C /home/nick/option_trading rev-parse HEAD"],
+        SSH[:-1] + ["-o", "ProxyCommand=evil", "option-server",
+                    "git -C /home/nick/option_trading rev-parse HEAD"],
+        ["scp", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "x.bundle",
+         "option-server:/home/nick/option_trading/.env"],
+        ["scp", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "x.bundle",
+         "option-server:/home/nick/option_trading/coding/service/x.py"],
+        ["scp", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "x.bundle",
+         "other-server:/home/nick/backups/deploy_20261110/rsc_main_bbbbbbbbbbbb.bundle"],
+        ["git", "-C", "C:/somewhere/else", "rev-parse", "HEAD"],
+    ],
+)
+def test_service_runs_only_commands_it_rendered(doctored):
+    runner = FakeRunner()
+    service = _service(runner)
+    service.stage(TARGET)  # a normal run fills the allow-list
+    issued = len(runner.calls)
+    with pytest.raises(ForbiddenCommandError):
+        service._run(doctored, 10)
+    assert len(runner.calls) == issued
+
+
+def test_quoting_tricks_pass_the_blocklist_but_not_the_allow_list():
+    # Shows why the allow-list is needed: the token blocklist alone accepts these.
+    for remote_command in ['r""m -rf /home/nick/option_trading', 'cat ~/option_trading/.e""nv']:
+        guard_command(SSH + [remote_command])
+        with pytest.raises(ForbiddenCommandError, match="not rendered from a template"):
+            _service(FakeRunner())._run(SSH + [remote_command], 10)
+
+
+def test_scp_before_the_deploy_directory_exists_is_refused():
+    destination = "option-server:/home/nick/backups/deploy_20261110/rsc_main_bbbbbbbbbbbb.bundle"
+    with pytest.raises(ForbiddenCommandError, match="not this run's bundle path"):
+        _service(FakeRunner())._run(
+            ["scp", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "x.bundle", destination], 10
+        )
+
+
 def test_venv_path_is_not_mistaken_for_dot_env():
     guard_command(SSH + [SMOKE_COMMAND])
 

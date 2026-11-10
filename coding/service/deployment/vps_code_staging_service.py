@@ -24,7 +24,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Protocol, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Protocol, Sequence, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +64,11 @@ SHORT_COMMIT_LENGTH = 12
 # by a killed run never collides with a new one.
 TEMPORARY_TAG_PATTERN = re.compile(
     re.escape(TEMPORARY_TAG_PREFIX) + r"[0-9a-f]{%d}-[0-9]{8}T[0-9]{6}" % SHORT_COMMIT_LENGTH
+)
+
+# Path of the bundle below the remote backups directory: /deploy_<date>[_n]/rsc_main_<short>.bundle
+REMOTE_BUNDLE_PATTERN = re.compile(
+    r"/deploy_[0-9]{8}(_[0-9]+)?/rsc_main_[0-9a-f]{%d}\.bundle" % SHORT_COMMIT_LENGTH
 )
 
 SSH_OPTIONS = ("-o", "BatchMode=yes", "-o", "ConnectTimeout=15")
@@ -299,6 +304,9 @@ class VpsCodeStagingService:
         self._settings = settings
         self._local_repository = local_repository or _default_local_repository()
         self._clock = clock
+        # Allow-list for _run, filled while this run renders its commands.
+        self._rendered_remote_commands: Set[str] = set()
+        self._allowed_copy_destination: Optional[str] = None
 
     # ------------------------------------------------------------------ public
 
@@ -323,6 +331,8 @@ class VpsCodeStagingService:
                 Until the fast-forward succeeds the VPS code is unchanged (at most a
                 backup folder and the incoming-main branch were written).
         """
+        self._rendered_remote_commands = set()
+        self._allowed_copy_destination = None
         target, origin_main = self._resolve_target(target_commit)
         if dry_run:
             return self._log_dry_run_plan(target, target_is_origin_main=target == origin_main)
@@ -481,6 +491,7 @@ class VpsCodeStagingService:
                 logger.info("Step 4: copy the bundle to the VPS")
                 deploy_directory = self._make_remote_deploy_directory()
                 remote_bundle = f"{deploy_directory}/{bundle_name}"
+                self._allowed_copy_destination = remote_bundle
                 self._run_or_fail(
                     ["scp", *SSH_OPTIONS, bundle_name,
                      f"{self._settings.host_alias}:{remote_bundle}"],
@@ -739,9 +750,43 @@ class VpsCodeStagingService:
         }
         quoted = {name: shlex.quote(value) for name, value in fields.items()}
         remote_command = REMOTE_COMMAND_TEMPLATES[template_name].format(**quoted)
+        self._rendered_remote_commands.add(remote_command)
         return ["ssh", *SSH_OPTIONS, settings.host_alias, remote_command]
 
     # -------------------------------------------------------- command running
+
+    def _refuse_unrendered_command(self, arguments: Sequence[str]) -> None:
+        """
+        Allow-list on top of guard_command: run only what this service rendered.
+
+        ssh: the host must be the configured alias and the remote command must be a
+        string _remote_arguments rendered from a template in this run. scp: the
+        destination must be exactly the bundle path generated in this run. Local
+        git: it must run in the configured local repository.
+        """
+        program = arguments[0]
+        if program == "ssh":
+            if arguments[-2] != self._settings.host_alias:
+                raise ForbiddenCommandError(f"ssh host not allowed: {arguments[-2]!r}")
+            if arguments[-1] not in self._rendered_remote_commands:
+                raise ForbiddenCommandError(
+                    f"Remote command was not rendered from a template: {arguments[-1]!r}"
+                )
+        elif program == "scp":
+            host, _, remote_path = arguments[-1].partition(":")
+            if host != self._settings.host_alias:
+                raise ForbiddenCommandError(f"scp host not allowed: {host!r}")
+            backups = self._settings.remote_backups_directory
+            if (
+                remote_path != self._allowed_copy_destination
+                or not remote_path.startswith(backups)
+                or not REMOTE_BUNDLE_PATTERN.fullmatch(remote_path[len(backups):])
+            ):
+                raise ForbiddenCommandError(
+                    f"scp destination is not this run's bundle path: {remote_path!r}"
+                )
+        elif arguments[2] != str(self._local_repository):
+            raise ForbiddenCommandError(f"git must run in the local repository: {arguments[2]!r}")
 
     def _run(
         self,
@@ -750,6 +795,7 @@ class VpsCodeStagingService:
         working_directory: Optional[Path] = None,
     ) -> CommandResult:
         guard_command(arguments)
+        self._refuse_unrendered_command(arguments)
         logger.info("RUN: %s", " ".join(arguments))
         return self._runner.run(arguments, timeout_seconds, working_directory)
 

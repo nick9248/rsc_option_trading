@@ -415,8 +415,14 @@ rev-parse HEAD` on the VPS.
 - It does not run migrations or any other script on the VPS.
 - It does not reset, clean or check out anything on the VPS.
 
-Every remote command comes from a fixed list of templates in the service, and every
-command passes a guard that refuses the tokens in `FORBIDDEN_REMOTE_TOKENS`.
+Two layers protect what runs:
+- An allow-list: the service runs an ssh command only if the host is `option-server`
+  and the remote command is one it rendered from its fixed templates in this run; an
+  scp only to the exact bundle path it generated in this run; local git only in the
+  local repository.
+- A guard on the command shape: fixed ssh/scp options, local git limited to
+  `rev-parse`, `merge-base`, `tag` (temporary tags only), `bundle` and `diff`, and the
+  tokens in `FORBIDDEN_REMOTE_TOKENS` refused in any remote command or scp path.
 
 ### Manual steps after staging
 1. Migrations, if the change has new ones: on the VPS,
