@@ -22,6 +22,7 @@ from coding.service.deployment.vps_code_staging_service import (
     StagingError,
     SubprocessCommandRunner,
     VpsCodeStagingService,
+    VpsSettings,
     guard_command,
 )
 from scripts import deploy_to_vps
@@ -570,6 +571,14 @@ def test_real_runner_replaces_undecodable_output():
     )
     assert result.return_code == 0
     assert result.stdout == "�� ok"
+
+
+def test_settings_use_the_same_ssh_host_as_the_sync_script():
+    # sync_from_vps.py has no remote repository path constant (it only inlines
+    # /home/nick/option_trading/logs/... in one command), so only the host is compared.
+    from scripts import sync_from_vps
+
+    assert VpsSettings().host_alias == sync_from_vps.SSH_HOST
 
 
 class TestCommandLine:
