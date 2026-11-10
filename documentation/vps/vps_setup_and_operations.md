@@ -401,6 +401,12 @@ If the smoke test fails after the fast-forward, the tool exits non-zero and logs
 rollback command (`git -C /home/nick/option_trading reset --hard <old head>`). It never
 runs that command itself.
 
+If the fast-forward command itself fails (for example the connection drops), the tool
+reads the VPS HEAD again: at the target it carries on with the smoke test; at the old
+HEAD it reports "fast-forward did not happen, VPS unchanged"; if the HEAD cannot be read
+it reports an unknown state and asks you to check `git -C /home/nick/option_trading
+rev-parse HEAD` on the VPS.
+
 ### What the tool does NOT do
 - It does not restart the service (no `sudo`, no `systemctl`).
 - It does not read, print or edit the VPS `.env` itself. Note: the import smoke test

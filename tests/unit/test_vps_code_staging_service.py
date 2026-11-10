@@ -455,6 +455,69 @@ def test_any_exception_after_the_fast_forward_does_not_escape():
     assert f"reset --hard {OLD_HEAD}" in result.message
 
 
+class FastForwardTroubleRunner(FakeRunner):
+    """The fast-forward ssh call fails; optionally the merge still happened on the VPS."""
+
+    def __init__(self, merged: bool, raise_error: bool, head_unreadable: bool = False):
+        super().__init__()
+        self.merged = merged
+        self.raise_error = raise_error
+        self.head_unreadable = head_unreadable
+        self.fast_forward_attempted = False
+
+    def run(self, arguments, timeout_seconds, working_directory=None):
+        remote_command = arguments[-1]
+        if remote_command.endswith("merge --ff-only incoming-main"):
+            self.calls.append(RecordedCall(list(arguments), timeout_seconds, working_directory))
+            self.fast_forward_attempted = True
+            if self.merged:
+                self.remote_head = TARGET
+            if self.raise_error:
+                raise StagingError("Command timed out after 120 s")
+            return CommandResult(255, "", "Connection reset by peer")
+        if (self.fast_forward_attempted and self.head_unreadable
+                and remote_command.endswith("rev-parse HEAD")):
+            self.calls.append(RecordedCall(list(arguments), timeout_seconds, working_directory))
+            return CommandResult(255, "", "Connection refused")
+        return super().run(arguments, timeout_seconds, working_directory)
+
+
+def test_fast_forward_error_but_merged_continues_like_a_success():
+    runner = FastForwardTroubleRunner(merged=True, raise_error=False)
+    result = _service(runner).stage(TARGET)
+
+    assert result.success is True
+    assert result.message == RESTART_REMINDER
+    assert result.new_head == TARGET
+    assert runner.remote_commands()[-1] == SMOKE_COMMAND
+
+
+def test_fast_forward_error_and_not_merged_reports_vps_unchanged():
+    runner = FastForwardTroubleRunner(merged=False, raise_error=True)
+    result = _service(runner).stage(TARGET)
+
+    assert result.success is False
+    assert result.message == (
+        f"The fast-forward did not happen, VPS unchanged (HEAD {OLD_HEAD}): "
+        "Command timed out after 120 s"
+    )
+    assert result.new_head == OLD_HEAD
+    assert SMOKE_COMMAND not in runner.remote_commands()
+
+
+def test_fast_forward_error_and_unreadable_head_reports_unknown_state():
+    runner = FastForwardTroubleRunner(merged=False, raise_error=False, head_unreadable=True)
+    result = _service(runner).stage(TARGET)
+
+    assert result.success is False
+    assert result.new_head is None
+    assert result.message.startswith(
+        "VPS state unknown: check git -C /home/nick/option_trading rev-parse HEAD on the VPS."
+    )
+    assert "Connection refused" in result.message
+    assert SMOKE_COMMAND not in runner.remote_commands()
+
+
 def test_genuine_import_failure_keeps_the_import_failure_message():
     runner = FakeRunner(smoke_stdout="", smoke_return_code=1)
     result = _service(runner).stage(TARGET)

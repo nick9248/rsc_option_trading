@@ -493,12 +493,60 @@ class VpsCodeStagingService:
                 self._run_remote_or_fail(
                     "fetch_bundle", bundle=remote_bundle, bundle_reference=bundle_reference
                 )
-                self._run_remote_or_fail("fast_forward")
+                fast_forward_error: Optional[Exception] = None
+                try:
+                    self._run_remote_or_fail("fast_forward")
+                except Exception as error:
+                    # The merge may still have happened (for example the connection
+                    # dropped afterwards); the VPS HEAD is checked below.
+                    fast_forward_error = error
         finally:
             if temporary_tag is not None:
                 self._remove_temporary_tag(temporary_tag)
 
+        if fast_forward_error is not None:
+            return self._after_failed_fast_forward(target, old_head, fast_forward_error)
         return self._finish_after_fast_forward(target, old_head)
+
+    def _after_failed_fast_forward(
+        self, target: str, old_head: str, fast_forward_error: Exception
+    ) -> StagingResult:
+        """
+        The fast-forward command failed: find out whether the merge happened anyway.
+
+        Never raises. A VPS at the target continues like a success; a VPS at the old
+        HEAD is reported unchanged; anything else is reported as an unknown state.
+        """
+        logger.warning(
+            "The fast-forward command failed (%s); reading the VPS HEAD again", fast_forward_error
+        )
+        try:
+            head: Optional[str] = self._run_remote_or_fail("read_head").stdout.strip()
+            read_error: Optional[Exception] = None
+        except Exception as error:
+            head = None
+            read_error = error
+        if head == target:
+            logger.info("The VPS HEAD is %s: the fast-forward happened despite the error", target)
+            return self._finish_after_fast_forward(target, old_head)
+        if head == old_head:
+            message = (
+                f"The fast-forward did not happen, VPS unchanged (HEAD {old_head}): "
+                f"{fast_forward_error}"
+            )
+            logger.error(message)
+            return StagingResult(False, message, old_head=old_head, new_head=old_head)
+        seen = f"the VPS HEAD reads {head!r}" if read_error is None else (
+            f"the VPS HEAD could not be read ({read_error})"
+        )
+        message = (
+            f"VPS state unknown: check git -C {self._settings.remote_repository_directory} "
+            f"rev-parse HEAD on the VPS. The fast-forward command failed ({fast_forward_error}) "
+            f"and {seen}. Expected {target} or the old HEAD {old_head}; the service was not "
+            "restarted."
+        )
+        logger.error(message)
+        return StagingResult(False, message, old_head=old_head, new_head=None)
 
     def _finish_after_fast_forward(self, target: str, old_head: str) -> StagingResult:
         """
