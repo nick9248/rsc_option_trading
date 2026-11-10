@@ -87,7 +87,8 @@ REMOTE_COMMAND_TEMPLATES: Dict[str, str] = {
     "read_head": "git -C {repository} rev-parse HEAD",
     "read_branch": "git -C {repository} symbolic-ref --short HEAD",
     "read_status": "git -C {repository} status --porcelain",
-    "list_backups": "mkdir -p {backups} && ls -1 {backups}",
+    "list_backups": "ls -1 {backups}",
+    # No -p: the backups directory must already exist, and an existing folder is an error.
     "make_deploy_directory": "mkdir {deploy_directory}",
     "verify_bundle": "git -C {repository} bundle verify {bundle}",
     # Forced ('+'): incoming-main is a scratch branch; main itself only moves with --ff-only.
@@ -558,7 +559,18 @@ class VpsCodeStagingService:
 
     def _make_remote_deploy_directory(self) -> str:
         """Create <backups>/deploy_<UTC date>[_n] on the VPS and return its path."""
-        listing = self._run_remote_or_fail("list_backups").stdout.split()
+        listed = self._run_remote("list_backups")
+        if listed.return_code != 0:
+            if "No such file or directory" in listed.stderr:
+                raise StagingError(
+                    "backups directory missing on the VPS: create it by hand "
+                    f"(mkdir {self._settings.remote_backups_directory})"
+                )
+            raise StagingError(
+                f"Could not list {self._settings.remote_backups_directory} on the VPS "
+                f"({listed.return_code}): {listed.stderr.strip()}"
+            )
+        listing = listed.stdout.split()
         base_name = "deploy_" + self._clock().astimezone(timezone.utc).strftime("%Y%m%d")
         name = base_name
         counter = 2

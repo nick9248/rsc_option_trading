@@ -64,6 +64,7 @@ class FakeRunner:
     remote_status: str = ""
     remote_branch: str = "main"
     backups_listing: str = "deploy_20261012\n"
+    backups_missing: bool = False
     smoke_stdout: str = "imports OK\n"
     smoke_return_code: int = 0
     # Tags or branches whose names win over a hash prefix in git rev-parse.
@@ -117,7 +118,11 @@ class FakeRunner:
             return CommandResult(0, self.remote_branch + "\n", "")
         if remote_command.endswith("status --porcelain"):
             return CommandResult(0, self.remote_status, "")
-        if "ls -1" in remote_command:
+        if remote_command == "ls -1 /home/nick/backups":
+            if self.backups_missing:
+                return CommandResult(
+                    2, "", "ls: cannot access '/home/nick/backups': No such file or directory\n"
+                )
             return CommandResult(0, self.backups_listing, "")
         if remote_command.startswith("mkdir ") or " bundle verify " in remote_command:
             return CommandResult(0, "", "")
@@ -173,7 +178,7 @@ def test_happy_path_issues_the_expected_commands_in_order(caplog):
         # The target is the origin/main tip, so that ref names the bundle content.
         _git("bundle", "create", bundle_path, "refs/remotes/origin/main", "^" + OLD_HEAD),
         _git("bundle", "verify", bundle_path),
-        SSH + ["mkdir -p /home/nick/backups && ls -1 /home/nick/backups"],
+        SSH + ["ls -1 /home/nick/backups"],
         SSH + ["mkdir /home/nick/backups/deploy_20261110"],
         ["scp", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
          "rsc_main_bbbbbbbbbbbb.bundle", "option-server:" + remote_bundle],
@@ -276,6 +281,23 @@ def test_existing_backup_folder_of_the_day_gets_a_suffix():
     runner = FakeRunner(backups_listing="deploy_20261110\ndeploy_20261110_2\n")
     _service(runner).stage(TARGET)
     assert "mkdir /home/nick/backups/deploy_20261110_3" in runner.remote_commands()
+
+
+def test_missing_backups_directory_is_a_clear_error_and_is_not_created():
+    runner = FakeRunner(backups_missing=True)
+    with pytest.raises(StagingError, match="backups directory missing on the VPS: create it by hand"):
+        _service(runner).stage(TARGET)
+    assert not any(c.startswith("mkdir") for c in runner.remote_commands())
+    assert "scp" not in runner.programs()
+
+
+def test_only_make_deploy_directory_writes_before_the_copy():
+    runner = FakeRunner()
+    _service(runner).stage(TARGET)
+    remote = runner.remote_commands()
+    writing = [c for c in remote if "mkdir" in c]
+    assert writing == ["mkdir /home/nick/backups/deploy_20261110"]
+    assert "-p" not in writing[0].split()
 
 
 def test_already_staged_stops_after_the_read_only_checks():

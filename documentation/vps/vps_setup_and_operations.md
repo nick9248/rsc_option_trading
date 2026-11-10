@@ -380,14 +380,17 @@ or diverged history). Exit code 0 means success.
 Code: `coding/service/deployment/vps_code_staging_service.py`.
 1. Checks the commit is merged: it must be an ancestor of (or equal to) the local
    `origin/main`.
-2. Read-only checks on the VPS: current HEAD, `main` is checked out, `git status
-   --porcelain` is empty (also no untracked files), and the VPS HEAD is an ancestor of
-   the target (a fast-forward is possible). If the VPS is already at the target, it
-   stops with success.
+2. Read-only checks on the VPS (nothing is written in this phase): current HEAD,
+   `main` is checked out, `git status --porcelain` is empty (also no untracked files),
+   and the VPS HEAD is an ancestor of the target (a fast-forward is possible). If the
+   VPS is already at the target, or already contains it, it stops with success; if the
+   histories diverged, it refuses.
 3. Builds the bundle in a local temporary folder (with a temporary local tag
    `deploy-staging-<hash>` when the target is not the origin/main tip; the tag is always
    removed) and verifies it.
-4. Copies it with scp to `/home/nick/backups/deploy_<UTC date>[_n]/`.
+4. Lists `/home/nick/backups` (read-only; if it is missing the tool stops and asks you
+   to create it by hand), creates `/home/nick/backups/deploy_<UTC date>[_n]/` with a plain
+   `mkdir` (no `-p`) and copies the bundle there with scp.
 5. On the VPS: `git bundle verify`, `git fetch --no-tags <bundle> +<ref>:incoming-main`
    (forced, because `incoming-main` is only a scratch branch),
    `git merge --ff-only incoming-main`, then an import smoke test with the VPS venv
