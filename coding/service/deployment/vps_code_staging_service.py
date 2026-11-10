@@ -335,14 +335,19 @@ class VpsCodeStagingService:
                 f"Invalid commit {target_commit!r}: expected 7 to 40 lowercase hex "
                 f"characters or {ORIGIN_MAIN!r}"
             )
-        target = self._resolve_local_commit(target_commit)
-        if target_commit != ORIGIN_MAIN and not target.startswith(target_commit):
-            # git prefers a tag or branch named like the hash over the hash itself.
-            raise StagingError(
-                f"Refused: {target_commit!r} resolved to {target}, which does not start with "
-                "it (a tag or branch with that name exists). Pass the full commit hash."
-            )
-        origin_main = self._resolve_local_commit(ORIGIN_MAIN_REFERENCE)
+        if target_commit == ORIGIN_MAIN:
+            # The full reference, so a local branch or tag called "origin/main" cannot shadow it.
+            target = self._resolve_local_commit(ORIGIN_MAIN_REFERENCE)
+            origin_main = target
+        else:
+            target = self._resolve_local_commit(target_commit)
+            if not target.startswith(target_commit):
+                # git prefers a tag or branch named like the hash over the hash itself.
+                raise StagingError(
+                    f"Refused: {target_commit!r} resolved to {target}, which does not start "
+                    "with it (a tag or branch with that name exists). Pass the full commit hash."
+                )
+            origin_main = self._resolve_local_commit(ORIGIN_MAIN_REFERENCE)
         if not self._is_local_ancestor(target, origin_main):
             raise StagingError(
                 f"Refused: {target} is not part of origin/main ({origin_main}). Only merged "

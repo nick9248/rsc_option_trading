@@ -92,7 +92,7 @@ class FakeRunner:
     def _git(self, git_arguments: List[str]) -> CommandResult:
         if git_arguments[:3] == ["rev-parse", "--verify", "--quiet"]:
             revision = git_arguments[3].removesuffix("^{commit}")
-            if revision in ("refs/remotes/origin/main", "origin/main"):
+            if revision == "refs/remotes/origin/main":
                 return CommandResult(0, self.origin_main + "\n", "")
             if revision in self.named_references:
                 return CommandResult(0, self.named_references[revision] + "\n", "")
@@ -202,13 +202,16 @@ def test_every_issued_command_passes_the_guard():
         guard_command(call.arguments)
 
 
-def test_literal_origin_main_is_accepted():
-    runner = FakeRunner()
+def test_literal_origin_main_is_resolved_through_the_full_reference():
+    # A local branch called "origin/main" pointing elsewhere must not shadow the remote one.
+    runner = FakeRunner(named_references={"origin/main": OLD_HEAD})
     result = _service(runner).stage("origin/main")
     assert result.success is True
+    assert result.new_head == TARGET
     assert runner.calls[0].arguments == _git(
-        "rev-parse", "--verify", "--quiet", "origin/main^{commit}"
+        "rev-parse", "--verify", "--quiet", "refs/remotes/origin/main^{commit}"
     )
+    assert not any("origin/main^{commit}" == a for call in runner.calls for a in call.arguments)
 
 
 def test_older_commit_uses_a_temporary_tag_that_is_removed():
