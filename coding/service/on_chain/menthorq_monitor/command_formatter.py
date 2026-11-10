@@ -170,7 +170,8 @@ class MonitorStatus:
 
 
 def monitor_health_problems(
-    status: MonitorStatus, stale_limit: timedelta = DEFAULT_STALE_SNAPSHOT_LIMIT
+    status: MonitorStatus, stale_limit: timedelta = DEFAULT_STALE_SNAPSHOT_LIMIT,
+    newest_snapshot_captured_at_utc: Optional[datetime] = None,
 ) -> List[str]:
     """
     Plain-text problems of the monitor job; empty when it looks healthy.
@@ -179,23 +180,33 @@ def monitor_health_problems(
         status: What /status shows.
         stale_limit: ``MenthorqMonitorSettings.stale_snapshot_limit``, the
             limit the brief and the alerts use, so they never disagree; a
-            snapshot more than this older than the latest live run is a
+            snapshot more than this older than the latest live run, or a
+            newest database snapshot more than this older than now, is a
             problem (exactly the limit is not).
+        newest_snapshot_captured_at_utc: Capture time of the newest option
+            chain snapshot in the database at or before now; None (none in
+            the database, or not looked up) is a problem.
     """
     live = status.latest_live_run
-    if live is None:
-        return ["no live run stored"]
     problems = []
-    since_run = status.now - live.computed_at_utc
-    if since_run > HOURLY_JOB_EXPECTED_WITHIN:
-        problems.append(f"hourly job has not run for {format_duration(since_run)}")
-    if not live.has_levels:
-        reason = live.not_computed_reasons[0] if live.not_computed_reasons else "reason not stored"
-        problems.append(f"latest live run not computed: {reason}")
-    elif live.snapshot_captured_at_utc is not None and \
-            live.as_of_utc - live.snapshot_captured_at_utc > stale_limit:
-        problems.append(f"snapshot {format_duration(live.as_of_utc - live.snapshot_captured_at_utc)} "
-                        "older than the latest run")
+    if live is None:
+        problems.append("no live run stored")
+    else:
+        since_run = status.now - live.computed_at_utc
+        if since_run > HOURLY_JOB_EXPECTED_WITHIN:
+            problems.append(f"hourly job has not run for {format_duration(since_run)}")
+        if not live.has_levels:
+            reason = live.not_computed_reasons[0] if live.not_computed_reasons else "reason not stored"
+            problems.append(f"latest live run not computed: {reason}")
+        elif live.snapshot_captured_at_utc is not None and \
+                live.as_of_utc - live.snapshot_captured_at_utc > stale_limit:
+            problems.append(f"snapshot {format_duration(live.as_of_utc - live.snapshot_captured_at_utc)} "
+                            "older than the latest run")
+    if newest_snapshot_captured_at_utc is None:
+        problems.append("no snapshot in the database")
+    elif status.now - newest_snapshot_captured_at_utc > stale_limit:
+        problems.append(f"newest snapshot is {format_duration(status.now - newest_snapshot_captured_at_utc)} "
+                        f"old (limit {format_duration(stale_limit)})")
     return problems
 
 
@@ -234,30 +245,38 @@ def _alert_state_lines(status: MonitorStatus) -> List[str]:
 
 
 def format_status_reply(
-    status: MonitorStatus, stale_limit: timedelta = DEFAULT_STALE_SNAPSHOT_LIMIT
+    status: MonitorStatus, stale_limit: timedelta = DEFAULT_STALE_SNAPSHOT_LIMIT,
+    newest_snapshot_captured_at_utc: Optional[datetime] = None,
 ) -> str:
     """
-    /status: health of the monitor job (``stale_limit``: see
-    ``monitor_health_problems``), last run per mode, data age and capture
-    instants, whether the hourly job ran in the last 2 h, the alert state
-    (muted or not) and the last delivered alert.
+    /status: health of the monitor job (``stale_limit`` and
+    ``newest_snapshot_captured_at_utc``: see ``monitor_health_problems``),
+    last run per mode, the newest snapshot in the database and its age, the
+    snapshot and open-interest instants the latest live record used,
+    whether the hourly job ran in the last 2 h, the alert state (muted or
+    not) and the last delivered alert.
     """
     now = status.now
     live = status.latest_live_run
-    problems = monitor_health_problems(status, stale_limit)
+    problems = monitor_health_problems(status, stale_limit, newest_snapshot_captured_at_utc)
     lines = [
         f"<b>{escape(status.currency)} MenthorQ monitor status</b> | {escape(format_utc(now))}",
         "Health: OK" if not problems else f"Health: PROBLEM: {escape('; '.join(problems))}",
         escape(_run_line("Live run", live, now)),
         escape(_run_line("Daily close", status.latest_daily_close_run, now)),
     ]
+    if newest_snapshot_captured_at_utc is not None:
+        lines.append(escape(
+            f"Newest snapshot: {format_utc(newest_snapshot_captured_at_utc)} "
+            f"({format_duration(now - newest_snapshot_captured_at_utc)} old)"))
+    else:
+        lines.append("Newest snapshot: not computed (none in the database)")
     if live is not None and live.snapshot_captured_at_utc is not None:
         lines.append(escape(
-            f"Data age: snapshot {format_utc(live.snapshot_captured_at_utc)} "
-            f"({format_duration(now - live.snapshot_captured_at_utc)} old), open interest "
+            f"Last record used: snapshot {format_utc(live.snapshot_captured_at_utc)}, open interest "
             f"{format_utc(live.open_interest_captured_at_utc)}"))
     else:
-        lines.append("Data age: n/a (no computed live run)")
+        lines.append("Last record used: n/a (no computed live run)")
     ran_recently = live is not None and now - live.computed_at_utc <= HOURLY_JOB_EXPECTED_WITHIN
     lines.append(f"Hourly job ran in the last 2h: {'yes' if ran_recently else 'NO'}")
     lines.extend(escape(line) for line in _alert_state_lines(status))

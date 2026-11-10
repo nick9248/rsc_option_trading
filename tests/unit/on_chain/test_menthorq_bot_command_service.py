@@ -9,6 +9,7 @@ numbers of ``make_record``: spot 100,000, Call Resistance 110,000, HVL
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
+from typing import Optional
 
 from coding.core.analytics.menthorq_monitor.level_record import MODE_DAILY_CLOSE
 from coding.service.on_chain.menthorq_monitor.bot_command_service import MenthorqBotCommandService
@@ -213,6 +214,18 @@ def test_changes_reply_is_shortened_below_the_limit():
     assert "- ... and 7 more" in tiny
 
 
+# Newest snapshot in the database for /status: 09:50 UTC, 15 min before NOW (10:05).
+NEWEST_SNAPSHOT = NOW - timedelta(minutes=15)
+
+
+def _status_service(records, settings=None, newest_snapshot: Optional[datetime] = NEWEST_SNAPSHOT):
+    """``_service`` with one option-chain capture (none when ``newest_snapshot`` is None)."""
+    commands, repository, telegram, clock = _service(records, settings)
+    if newest_snapshot is not None:
+        repository.option_chain_captures = [newest_snapshot]
+    return commands, repository, telegram, clock
+
+
 def _status_records():
     live = make_record()                                     # as_of = computed 09:10, snapshot 08:50
     daily_close = make_record(as_of=datetime(2026, 11, 5, 23, 59, tzinfo=timezone.utc),
@@ -221,14 +234,16 @@ def _status_records():
 
 
 def test_status_reply_by_hand_healthy_not_muted():
-    commands, _, _, _ = _service(_status_records())
-    # now 10:05: live 55 min ago; daily close 23:59 -> 10 h 6 min; snapshot 08:50 = 1 h 15 min old
+    commands, _, _, _ = _status_service(_status_records())
+    # now 10:05: live 55 min ago; daily close 23:59 -> 10 h 6 min; newest snapshot 09:50 = 15 min
+    # old (within 120 min); the live record still used the 08:50 snapshot and open interest.
     assert _run(commands, "/status") == (
         "<b>BTC MenthorQ monitor status</b> | 2026-11-06 10:05 UTC\n"
         "Health: OK\n"
         "Live run: 2026-11-06 09:10 UTC (55 min ago), computed\n"
         "Daily close: 2026-11-05 23:59 UTC (10 h 6 min ago), computed\n"
-        "Data age: snapshot 2026-11-06 08:50 UTC (1 h 15 min old), open interest 2026-11-06 08:50 UTC\n"
+        "Newest snapshot: 2026-11-06 09:50 UTC (15 min old)\n"
+        "Last record used: snapshot 2026-11-06 08:50 UTC, open interest 2026-11-06 08:50 UTC\n"
         "Hourly job ran in the last 2h: yes\n"
         "Urgent alerts: on, not muted\n"
         "Last alert delivered: none"
@@ -236,7 +251,7 @@ def test_status_reply_by_hand_healthy_not_muted():
 
 
 def test_status_reply_muted_with_last_alert_and_held_back_alert():
-    commands, repository, _, _ = _service(_status_records())
+    commands, repository, _, _ = _status_service(_status_records())
     repository.save_menthorq_alert_deliveries("BTC", ["hvl_move_24h"], BASE_TIME + timedelta(minutes=1), "m")
     repository.save_menthorq_alert_deliveries("BTC", ["weekly_brief"], BASE_TIME + timedelta(minutes=20), "b")
     repository.save_menthorq_alert_mute("BTC", NOW + timedelta(hours=24), NOW)
@@ -252,22 +267,23 @@ def test_status_reply_reports_problems():
     stale_failed = make_record_without_levels(as_of=NOW - timedelta(hours=3), spot=None,
                                               snapshot_captured_at_utc=None,
                                               not_computed_reasons=["inputs not available: no snapshot"])
-    commands, _, _, _ = _service([stale_failed])
+    commands, _, _, _ = _status_service([stale_failed], newest_snapshot=None)
     message = _run(commands, "/status")
     assert ("Health: PROBLEM: hourly job has not run for 3 h 0 min; latest live run not computed: "
-            "inputs not available: no snapshot") in message
+            "inputs not available: no snapshot; no snapshot in the database\n") in message
     assert "Live run: 2026-11-06 07:05 UTC (3 h 0 min ago), NOT computed" in message
     assert "Daily close: none stored" in message
-    assert "Data age: n/a (no computed live run)" in message
+    assert "Newest snapshot: not computed (none in the database)" in message
+    assert "Last record used: n/a (no computed live run)" in message
     assert "Hourly job ran in the last 2h: NO" in message
 
 
 def test_status_says_problem_when_the_latest_live_run_has_spot_but_no_levels():
     # Inputs loaded (spot, snapshot 20 min old, run 55 min ago) but no level computed.
     without_levels = make_record_without_levels(not_computed_reasons=["HVL not computed: no net GEX by strike"])
-    commands, _, _, _ = _service([without_levels])
+    commands, _, _, _ = _status_service([without_levels])
     message = _run(commands, "/status")
-    assert "Health: PROBLEM: latest live run not computed: HVL not computed: no net GEX by strike" in message
+    assert "Health: PROBLEM: latest live run not computed: HVL not computed: no net GEX by strike\n" in message
     assert "Live run: 2026-11-06 09:10 UTC (55 min ago), NOT computed" in message
 
 
@@ -275,11 +291,11 @@ def test_status_reply_with_stale_snapshot_unreadable_state_and_alerts_off():
     old_snapshot = make_record(snapshot_captured_at_utc=BASE_TIME - timedelta(minutes=50))
     settings = MenthorqMonitorSettings(alerts_enabled=False, commands_enabled=True,
                                        stale_snapshot_minutes=45)
-    commands, repository, _, _ = _service([old_snapshot], settings=settings)
+    commands, repository, _, _ = _status_service([old_snapshot], settings=settings)
     message = _run(commands, "/status")
-    assert "Health: PROBLEM: snapshot 50 min older than the latest run" in message
+    assert "Health: PROBLEM: snapshot 50 min older than the latest run\n" in message
     assert "Urgent alerts: OFF (MENTHORQ_ALERTS_ENABLED=0)" in message
-    commands, repository, _, _ = _service([make_record()])
+    commands, repository, _, _ = _status_service([make_record()])
     repository.fail_state = True
     assert ("Urgent alerts: on; mute state not readable (RuntimeError), treated as not muted"
             in _run(commands, "/status"))
@@ -293,18 +309,49 @@ def test_status_health_uses_the_configured_stale_limit():
     def status_with_limit(minutes):
         settings = MenthorqMonitorSettings(alerts_enabled=True, commands_enabled=True,
                                            stale_snapshot_minutes=minutes)
-        commands, _, _, _ = _service([old_snapshot], settings=settings)
+        commands, _, _, _ = _status_service([old_snapshot], settings=settings)
         return _run(commands, "/status")
 
-    assert "Health: OK" in status_with_limit(240)
-    assert "Health: OK" in status_with_limit(100)
-    assert "Health: PROBLEM: snapshot 1 h 40 min older than the latest run" in status_with_limit(45)
+    assert "Health: OK\n" in status_with_limit(240)
+    assert "Health: OK\n" in status_with_limit(100)
+    assert "Health: PROBLEM: snapshot 1 h 40 min older than the latest run\n" in status_with_limit(45)
+
+
+def test_status_health_judges_the_newest_database_snapshot_against_the_clock():
+    """Live record 09:10 with its 08:50 snapshot (fine), now 10:05, limit 120 min.
+    Newest snapshot 09:50 -> 15 min old -> OK. Newest 08:05 -> exactly 120 min -> OK.
+    Newest 08:04 -> 121 min = 2 h 1 min -> PROBLEM. None in the database -> PROBLEM."""
+    def status_with_newest(newest_snapshot):
+        commands, _, _, _ = _status_service([make_record()], newest_snapshot=newest_snapshot)
+        return _run(commands, "/status")
+
+    fresh = status_with_newest(NOW - timedelta(minutes=15))
+    assert "Health: OK\n" in fresh
+    assert "Newest snapshot: 2026-11-06 09:50 UTC (15 min old)\n" in fresh
+    assert "Health: OK\n" in status_with_newest(NOW - timedelta(minutes=120))
+    old = status_with_newest(NOW - timedelta(minutes=121))
+    assert "Health: PROBLEM: newest snapshot is 2 h 1 min old (limit 2 h 0 min)\n" in old
+    assert "Newest snapshot: 2026-11-06 08:04 UTC (2 h 1 min old)\n" in old
+    missing = status_with_newest(None)
+    assert "Health: PROBLEM: no snapshot in the database\n" in missing
+    assert "Newest snapshot: not computed (none in the database)\n" in missing
+    # The record-used line always shows the stored record's own (older) inputs.
+    for message in (fresh, old, missing):
+        assert ("Last record used: snapshot 2026-11-06 08:50 UTC, open interest 2026-11-06 08:50 UTC\n"
+                in message)
+
+
+def test_status_newest_snapshot_ignores_captures_after_now():
+    # A capture stamped after the clock (no lookahead): the 09:50 one is the newest at or before now.
+    commands, repository, _, _ = _status_service([make_record()])
+    repository.option_chain_captures.append(NOW + timedelta(minutes=5))
+    assert "Newest snapshot: 2026-11-06 09:50 UTC (15 min old)\n" in _run(commands, "/status")
 
 
 def test_status_with_no_run_at_all():
-    commands, _, _, _ = _service([])
+    commands, _, _, _ = _status_service([], newest_snapshot=None)
     message = _run(commands, "/status")
-    assert "Health: PROBLEM: no live run stored" in message
+    assert "Health: PROBLEM: no live run stored; no snapshot in the database\n" in message
     assert "Live run: none stored" in message
 
 
