@@ -59,6 +59,11 @@ INCOMING_BRANCH = "incoming-main"
 REMOTE_BRANCH = "main"
 TEMPORARY_TAG_PREFIX = "deploy-staging-"
 SHORT_COMMIT_LENGTH = 12
+# deploy-staging-<12 hex>-<UTC YYYYMMDDTHHMMSS>: unique per run, so a stale tag left
+# by a killed run never collides with a new one.
+TEMPORARY_TAG_PATTERN = re.compile(
+    re.escape(TEMPORARY_TAG_PREFIX) + r"[0-9a-f]{%d}-[0-9]{8}T[0-9]{6}" % SHORT_COMMIT_LENGTH
+)
 
 SSH_OPTIONS = ("-o", "BatchMode=yes", "-o", "ConnectTimeout=15")
 # ssh exits with 255 when ssh itself failed (connection, authentication).
@@ -240,14 +245,19 @@ def _refuse_unexpected_local_git(arguments: Sequence[str]) -> None:
         raise ForbiddenCommandError(f"Local git sub-command not allowed: {sub_command!r}")
     if sub_command == "tag":
         tag_arguments = list(arguments[4:])
-        creates = len(tag_arguments) == 2 and tag_arguments[0].startswith(TEMPORARY_TAG_PREFIX)
+        creates = (
+            len(tag_arguments) == 2
+            and TEMPORARY_TAG_PATTERN.fullmatch(tag_arguments[0]) is not None
+            and FULL_COMMIT_PATTERN.fullmatch(tag_arguments[1]) is not None
+        )
         deletes = (
             len(tag_arguments) == 2 and tag_arguments[0] == "-d"
-            and tag_arguments[1].startswith(TEMPORARY_TAG_PREFIX)
+            and TEMPORARY_TAG_PATTERN.fullmatch(tag_arguments[1]) is not None
         )
         if not (creates or deletes):
             raise ForbiddenCommandError(
-                f"git tag is only allowed for {TEMPORARY_TAG_PREFIX}* tags: {tag_arguments}"
+                f"git tag is only allowed for temporary {TEMPORARY_TAG_PREFIX}<hash>-<time> "
+                f"tags: {tag_arguments}"
             )
 
 
@@ -443,7 +453,7 @@ class VpsCodeStagingService:
                 if target_is_origin_main:
                     bundle_reference = ORIGIN_MAIN_REFERENCE
                 else:
-                    tag_name = TEMPORARY_TAG_PREFIX + short
+                    tag_name = self._temporary_tag_name(short)
                     self._run_local_git_or_fail(["tag", tag_name, target])
                     # Only now is the tag ours to delete; a pre-existing tag of the
                     # same name made 'git tag' fail and must be left alone.
@@ -581,6 +591,11 @@ class VpsCodeStagingService:
         self._run_remote_or_fail("make_deploy_directory", deploy_directory=deploy_directory)
         return deploy_directory
 
+    def _temporary_tag_name(self, short: str) -> str:
+        """deploy-staging-<short>-<UTC YYYYMMDDTHHMMSS>, unique per run."""
+        timestamp = self._clock().astimezone(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        return f"{TEMPORARY_TAG_PREFIX}{short}-{timestamp}"
+
     def _remove_temporary_tag(self, tag: str) -> None:
         try:
             result = self._run_local_git(["tag", "-d", tag])
@@ -604,7 +619,7 @@ class VpsCodeStagingService:
             + self._clock().astimezone(timezone.utc).strftime("%Y%m%d")
         )
         remote_bundle = f"{deploy_directory}/{bundle_name}"
-        temporary_tag = TEMPORARY_TAG_PREFIX + short
+        temporary_tag = self._temporary_tag_name(short)
         bundle_reference = (
             ORIGIN_MAIN_REFERENCE if target_is_origin_main else "refs/tags/" + temporary_tag
         )

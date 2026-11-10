@@ -386,8 +386,8 @@ Code: `coding/service/deployment/vps_code_staging_service.py`.
    VPS is already at the target, or already contains it, it stops with success; if the
    histories diverged, it refuses.
 3. Builds the bundle in a local temporary folder (with a temporary local tag
-   `deploy-staging-<hash>` when the target is not the origin/main tip; the tag is always
-   removed) and verifies it.
+   `deploy-staging-<hash>-<UTC time>` when the target is not the origin/main tip; the
+   name is unique per run and the tag is always removed) and verifies it.
 4. Lists `/home/nick/backups` (read-only; if it is missing the tool stops and asks you
    to create it by hand), creates `/home/nick/backups/deploy_<UTC date>[_n]/` with a plain
    `mkdir` (no `-p`) and copies the bundle there with scp.

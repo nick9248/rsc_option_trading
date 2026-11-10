@@ -225,14 +225,14 @@ def test_older_commit_uses_a_temporary_tag_that_is_removed():
 
     assert result.success is True
     arguments = [call.arguments for call in runner.calls]
-    tag_create = _git("tag", "deploy-staging-bbbbbbbbbbbb", TARGET)
-    tag_delete = _git("tag", "-d", "deploy-staging-bbbbbbbbbbbb")
+    tag_create = _git("tag", "deploy-staging-bbbbbbbbbbbb-20261110T183000", TARGET)
+    tag_delete = _git("tag", "-d", "deploy-staging-bbbbbbbbbbbb-20261110T183000")
     assert tag_create in arguments and tag_delete in arguments
     assert arguments.index(tag_create) < arguments.index(tag_delete)
     bundle_create = next(a for a in arguments if a[3:5] == ["bundle", "create"])
-    assert bundle_create[6:] == ["refs/tags/deploy-staging-bbbbbbbbbbbb", "^" + OLD_HEAD]
+    assert bundle_create[6:] == ["refs/tags/deploy-staging-bbbbbbbbbbbb-20261110T183000", "^" + OLD_HEAD]
     fetch = next(c for c in runner.remote_commands() if " fetch " in c)
-    assert fetch.endswith(" +refs/tags/deploy-staging-bbbbbbbbbbbb:incoming-main")
+    assert fetch.endswith(" +refs/tags/deploy-staging-bbbbbbbbbbbb-20261110T183000:incoming-main")
 
 
 def test_temporary_tag_is_removed_when_a_later_step_fails():
@@ -246,7 +246,7 @@ def test_temporary_tag_is_removed_when_a_later_step_fails():
     runner = FailingCopyRunner(origin_main=NEWER_ORIGIN_MAIN)
     with pytest.raises(StagingError, match="connection lost"):
         _service(runner).stage(TARGET)
-    assert runner.calls[-1].arguments == _git("tag", "-d", "deploy-staging-bbbbbbbbbbbb")
+    assert runner.calls[-1].arguments == _git("tag", "-d", "deploy-staging-bbbbbbbbbbbb-20261110T183000")
     assert not any("merge --ff-only" in c for c in runner.remote_commands())
 
 
@@ -254,14 +254,14 @@ def test_failed_tag_creation_never_deletes_the_existing_tag():
     class ExistingTagRunner(FakeRunner):
         def _git(self, git_arguments):
             if git_arguments[0] == "tag":
-                return CommandResult(128, "", "fatal: tag 'deploy-staging-bbbbbbbbbbbb' already exists")
+                return CommandResult(128, "", "fatal: tag 'deploy-staging-bbbbbbbbbbbb-20261110T183000' already exists")
             return super()._git(git_arguments)
 
     runner = ExistingTagRunner(origin_main=NEWER_ORIGIN_MAIN)
     with pytest.raises(StagingError, match="already exists"):
         _service(runner).stage(TARGET)
     tag_calls = [call.arguments[3:] for call in runner.calls if call.arguments[3:4] == ["tag"]]
-    assert tag_calls == [["tag", "deploy-staging-bbbbbbbbbbbb", TARGET]]
+    assert tag_calls == [["tag", "deploy-staging-bbbbbbbbbbbb-20261110T183000", TARGET]]
     assert "scp" not in runner.programs()
 
 
@@ -491,8 +491,8 @@ def test_dry_run_of_an_older_commit_plans_but_does_not_create_the_tag(caplog):
         _service(runner).stage(TARGET, dry_run=True)
     assert runner.programs() == ["git", "git", "git"]
     planned = [r.getMessage() for r in caplog.records if "WOULD RUN" in r.getMessage()]
-    assert any(m.endswith(f"tag deploy-staging-bbbbbbbbbbbb {TARGET}") for m in planned)
-    assert any(m.endswith("tag -d deploy-staging-bbbbbbbbbbbb") for m in planned)
+    assert any(m.endswith(f"tag deploy-staging-bbbbbbbbbbbb-20261110T183000 {TARGET}") for m in planned)
+    assert any(m.endswith("tag -d deploy-staging-bbbbbbbbbbbb-20261110T183000") for m in planned)
 
 
 def test_dry_run_still_refuses_unmerged_commits():
@@ -567,11 +567,30 @@ def test_scp_destination_with_a_forbidden_token_is_refused(token):
         ["push", "origin", "main"],
         ["tag", "v1.0", TARGET],
         ["tag", "-d", "v1.0"],
+        ["tag", "deploy-staging-bbbbbbbbbbbb", TARGET],  # old form without the time
+        ["tag", "-d", "deploy-staging-bbbbbbbbbbbb"],
+        ["tag", "deploy-staging-bbbbbbbbbbbb-20261110T183000", "HEAD"],  # not a hash
+        ["tag", "-f", "deploy-staging-bbbbbbbbbbbb-20261110T183000"],
     ],
 )
 def test_local_git_outside_the_allow_list_is_refused(git_arguments):
     with pytest.raises(ForbiddenCommandError):
         guard_command(["git", "-C", "C:/repo", *git_arguments])
+
+
+def test_temporary_tag_name_is_unique_per_run():
+    later = datetime(2026, 11, 10, 18, 30, 1, tzinfo=timezone.utc)
+    names = []
+    for clock_time in (FIXED_NOW, later):
+        runner = FakeRunner(origin_main=NEWER_ORIGIN_MAIN)
+        VpsCodeStagingService(
+            runner=runner, local_repository=LOCAL_REPOSITORY, clock=lambda: clock_time
+        ).stage(TARGET)
+        names.append(next(c.arguments[4] for c in runner.calls if c.arguments[3:4] == ["tag"]))
+    assert names == [
+        "deploy-staging-bbbbbbbbbbbb-20261110T183000",
+        "deploy-staging-bbbbbbbbbbbb-20261110T183001",
+    ]
 
 
 @pytest.mark.parametrize(
