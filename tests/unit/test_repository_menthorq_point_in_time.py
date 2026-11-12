@@ -139,6 +139,18 @@ def test_index_price_is_none_when_only_later_trades_exist(repo):
     assert repository.get_index_price_at_or_before("BTC", AS_OF) is None
 
 
+def test_earliest_capture_is_the_oldest_of_the_currency_or_none(repo):
+    repository, scratch_connection = repo
+    assert repository.get_earliest_option_chain_capture("BTC") is None
+    _insert_snapshot_rows(scratch_connection, [
+        (AS_OF - timedelta(minutes=10), "BTC-27NOV26-80000-C", 200.0, 46.5, 76100.0),
+        (AS_OF - timedelta(minutes=40), "BTC-27NOV26-80000-C", 100.0, 45.0, 76000.0),
+    ])
+    earliest = repository.get_earliest_option_chain_capture("BTC")
+    assert earliest == AS_OF - timedelta(minutes=40) and earliest is not None and earliest.tzinfo is not None
+    assert repository.get_earliest_option_chain_capture("ETH") is None
+
+
 def test_snapshot_ignores_a_capture_after_as_of(repo):
     repository, scratch_connection = repo
     before = AS_OF - timedelta(minutes=10)

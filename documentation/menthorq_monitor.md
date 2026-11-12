@@ -30,14 +30,23 @@ days (`MenthorqMonitorService.run_live_backfill`), after the alerts:
   Existing rows are never replaced.
 - Each missing instant is replayed point in time with the live run's loader path: the snapshot,
   its open interest and the index price at or before the instant, nothing after it.
-- An instant is skipped (nothing stored) when no snapshot exists at or before it, or the newest one
-  is older than `MENTHORQ_STALE_SNAPSHOT_MINUTES` before it (one MAX query, no chain load), or the
-  loaded snapshot, open interest or index trade is older than that limit. A replay never stores a
-  stale not-computed row. A skipped instant is checked again at the next run (MAX query only).
-- At most 48 instants are computed per run, so a 7-day gap fills over 4 hourly runs.
-- A failing instant does not stop the others; one WARNING gives the count and the first error.
-- The rows are mode `live` and carry the caveat `backfilled (point-in-time replay)` as the last entry
-  of `not_computed_reasons`. They are normal live rows for the comparisons and the event baseline.
+- Every instant before the earliest snapshot capture (one MIN query per run) is skipped without
+  further work. For each other instant `compute_backfill_record` decides, cheapest first: no
+  snapshot at or before it, or the newest one older than `MENTHORQ_STALE_SNAPSHOT_MINUTES` (one MAX
+  query, no chain load); then the inputs are loaded: no index price, an input older than the limit,
+  or no level computed. In each of these cases nothing is stored: a replay never stores a stale or
+  not-computed row.
+- At most 48 instants whose inputs were loaded count per run (the cheap skips do not), so
+  unfillable old hours never block newer fillable ones and a 7-day gap fills over a few runs.
+- Instants unfillable for a permanent reason (before the earliest snapshot, stale input, no
+  levels) are remembered in the collector process and not queried or logged again; no index price,
+  a late missing snapshot and failures are retried at the next run.
+- One INFO line per run gives the counts: stored, no snapshot, stale input, no index price, no
+  levels, failed. A failing instant does not stop the others; one WARNING lists the failed instants
+  (at most 5) and the first error.
+- The rows are mode `live` and carry the caveat `backfilled (point-in-time replay)`, appended after
+  the record's own caveats in `not_computed_reasons`. They are normal live rows for the comparisons
+  and the event baseline.
   No alert is evaluated for them, nothing is sent and no delivery row is written.
 - There is no run at collector start; the first hourly run after a start does the backfill.
 

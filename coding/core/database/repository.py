@@ -1089,6 +1089,17 @@ class DatabaseRepository:
             captured_at = self._newest_snapshot_capture(cursor, currency, as_of_naive_utc)
         return captured_at.replace(tzinfo=timezone.utc) if captured_at is not None else None
 
+    def get_earliest_option_chain_capture(self, currency: str) -> Optional[datetime]:
+        """
+        Capture time (UTC-aware) of the oldest ``snapshots`` capture of
+        ``currency``, or None when there is none. One MIN query, no chain
+        rows: no instant before it can have a snapshot.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute("SELECT MIN(captured_at) FROM snapshots WHERE currency = %s", (currency,))
+            captured_at = cursor.fetchone()[0]
+        return captured_at.replace(tzinfo=timezone.utc) if captured_at is not None else None
+
     def get_option_chain_snapshot_at_or_before(
         self, currency: str, as_of: datetime
     ) -> Optional[Tuple[datetime, List[Dict[str, Any]]]]:

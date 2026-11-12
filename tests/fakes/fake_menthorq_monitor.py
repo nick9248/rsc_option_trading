@@ -81,6 +81,7 @@ class FakeMonitorRepository(DatabaseRepository):
         self.option_chain_captures: List[datetime] = []
         self.capture_queries = 0
         self.run_instant_queries = 0   # get_menthorq_level_run_instants_between calls
+        self.earliest_capture_queries = 0   # get_earliest_option_chain_capture calls
         self.absent_tables: List[str] = []   # tables missing_tables reports as not existing
         self.fail_table_check = False        # True: missing_tables raises
 
@@ -118,6 +119,10 @@ class FakeMonitorRepository(DatabaseRepository):
         self.capture_queries += 1
         earlier = [capture for capture in self.option_chain_captures if capture <= as_of]
         return max(earlier) if earlier else None
+
+    def get_earliest_option_chain_capture(self, currency: str) -> Optional[datetime]:
+        self.earliest_capture_queries += 1
+        return min(self.option_chain_captures) if self.option_chain_captures else None
 
     def get_menthorq_level_snapshot_at_or_before(
         self, currency: str, mode: str, expiry_universe: str, gamma_underlying: str,

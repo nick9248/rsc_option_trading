@@ -21,6 +21,7 @@ from coding.service.on_chain.menthorq_monitor.menthorq_monitor_service import (
     daily_close_as_of,
     live_as_of,
 )
+from coding.service.on_chain.menthorq_input_loader import MissingIndexPriceError
 from coding.service.on_chain.menthorq_monitor.monitor_settings import MenthorqMonitorSettings
 from tests.fakes.fake_menthorq_monitor import (
     BASE_TIME,
@@ -595,8 +596,8 @@ class TestLiveBackfill:
         # Point in time: the live loader path at each instant itself, no open-interest instant.
         assert loader.calls == [(instant, None) for instant in gap[:48]]
         assert all(as_of < self.NOW for as_of, _ in loader.calls)
-        assert "48 of 72 missing hours stored, 0 skipped" in caplog.text
-        assert "24 left for the next runs" in caplog.text
+        assert ("72 missing hours: 48 stored, 0 no snapshot, 0 stale input (limit 120 min), "
+                "0 no index price, 0 no levels, 0 failed") in caplog.text
 
         second = service.run_live_backfill(self.NOW + timedelta(seconds=30))
         assert [record.as_of_utc for record in second] == gap[48:]
@@ -612,6 +613,8 @@ class TestLiveBackfill:
         [record] = _service(repository).run_live_backfill(self.NOW)
         assert record.mode == MODE_LIVE and record.has_levels and record.record_id is not None
         assert record.not_computed_reasons[-1] == BACKFILLED_LIVE_CAVEAT == "backfilled (point-in-time replay)"
+        # The record's own caveats come first, the marker after them.
+        assert record.not_computed_reasons[0] == "panel next_expiration: no expiry with computed GEX"
         assert record.snapshot_captured_at_utc == gap[0] - timedelta(minutes=21)
         # A normal live row: the 7-day comparison of a run 7 days later finds it.
         latest = make_record(as_of=gap[0] + timedelta(days=7))
@@ -671,6 +674,111 @@ class TestLiveBackfill:
         assert [as_of for as_of, _ in loader.calls] == [gap[2], gap[3]]   # gap[0], gap[1]: no chain load
         stored_instants = {record.as_of_utc for record in repository.records}
         assert not stored_instants & {gap[0], gap[1], gap[3]}          # no stale not-computed row
+
+    def test_48_cheaply_unfillable_oldest_hours_do_not_block_newer_fillable_hours(self):
+        window = self._window()
+        gap = window[:60]
+        repository = self._repository_with_gap(gap)
+        # The 48 oldest missing hours: the newest snapshot is 3 h or more old (stale, no chain
+        # load); the 12 newer ones: snapshot 21 min old.
+        repository.option_chain_captures = ([gap[0] - timedelta(hours=3)]
+                                            + [instant - timedelta(minutes=21) for instant in gap[48:]])
+        loader = FakeInputLoader()
+        stored = _service(repository, loader).run_live_backfill(self.NOW)
+        assert [record.as_of_utc for record in stored] == gap[48:]
+        assert [as_of for as_of, _ in loader.calls] == gap[48:]
+
+    def test_the_cap_counts_only_loaded_instants_and_no_level_hours_are_memoised(self, caplog):
+        window = self._window()
+        gap = window[:60]
+        repository = self._repository_with_gap(gap)
+
+        class _NoLevelsForTheOldest(FakeInputLoader):
+            def load_inputs(self, currency, as_of, open_interest_as_of=None):
+                inputs = super().load_inputs(currency, as_of, open_interest_as_of)
+                if as_of in gap[:48]:
+                    for row in inputs["chain_rows"]:
+                        row["open_interest"] = None     # nothing computable: no levels
+                return inputs
+
+        loader = _NoLevelsForTheOldest()
+        service = _service(repository, loader)
+        with caplog.at_level("INFO"):
+            assert service.run_live_backfill(self.NOW) == []           # 48 loads used up the cap
+        assert ("60 missing hours: 0 stored, 0 no snapshot, 0 stale input (limit 120 min), "
+                "0 no index price, 48 no levels, 0 failed") in caplog.text
+        assert not any(record.as_of_utc in gap[:48] for record in repository.records)   # nothing stored
+
+        captures_before = repository.capture_queries
+        second = service.run_live_backfill(self.NOW + timedelta(seconds=30))
+        assert [record.as_of_utc for record in second] == gap[48:]
+        # The memo: the 48 no-level hours are neither queried nor loaded again.
+        assert repository.capture_queries - captures_before == 12
+        assert len(loader.calls) == 48 + 12
+
+        captures_before = repository.capture_queries
+        earliest_before = repository.earliest_capture_queries
+        assert service.run_live_backfill(self.NOW + timedelta(seconds=40)) == []
+        assert repository.capture_queries == captures_before
+        assert repository.earliest_capture_queries == earliest_before    # nothing missing: no query
+
+    def test_hours_before_the_earliest_snapshot_are_skipped_with_one_query_and_memoised(self, caplog):
+        window = self._window()
+        gap = window[:10]
+        repository = self._repository_with_gap(gap)
+        # One snapshot only, 21 min before gap[5]: gap[0..4] are before it, gap[5] and gap[6]
+        # (81 min) are fillable, gap[7..9] (141, 201, 261 min) are stale.
+        repository.option_chain_captures = [gap[5] - timedelta(minutes=21)]
+        service = _service(repository)
+        with caplog.at_level("INFO"):
+            stored = service.run_live_backfill(self.NOW)
+        assert [record.as_of_utc for record in stored] == [gap[5], gap[6]]
+        assert repository.earliest_capture_queries == 1
+        assert repository.capture_queries == 5          # gap[5..9] only: the first five need no query
+        assert ("10 missing hours: 2 stored, 5 no snapshot, 3 stale input (limit 120 min), "
+                "0 no index price, 0 no levels, 0 failed") in caplog.text
+        captures_before = repository.capture_queries
+        assert service.run_live_backfill(self.NOW + timedelta(seconds=30)) == []
+        assert repository.capture_queries == captures_before    # all eight are memoised
+
+    def test_a_late_lookup_error_is_counted_and_retried_and_the_loop_goes_on(self, caplog, monkeypatch):
+        gap = self._window()[100:104]
+        repository = self._repository_with_gap(gap)
+        loader = FakeInputLoader()
+        real_load_inputs = loader.load_inputs
+        requested = []
+
+        def missing_inputs(currency, as_of, open_interest_as_of=None):
+            requested.append(as_of)
+            if as_of == gap[0]:
+                raise MissingIndexPriceError("No BTC index price at or before ...")
+            if as_of == gap[1]:
+                raise LookupError("No BTC option-chain snapshot at or before ...")
+            return real_load_inputs(currency, as_of, open_interest_as_of)
+
+        monkeypatch.setattr(loader, "load_inputs", missing_inputs)
+        service = _service(repository, loader)
+        with caplog.at_level("INFO"):
+            stored = service.run_live_backfill(self.NOW)
+        assert [record.as_of_utc for record in stored] == gap[2:]
+        assert ("4 missing hours: 2 stored, 1 no snapshot, 0 stale input (limit 120 min), "
+                "1 no index price, 0 no levels, 0 failed") in caplog.text
+        assert not [record for record in caplog.records if record.levelname == "WARNING"]
+        # Neither reason is permanent: both hours are tried again next run.
+        service.run_live_backfill(self.NOW + timedelta(seconds=30))
+        assert requested.count(gap[0]) == 2 and requested.count(gap[1]) == 2
+
+    def test_failed_instants_are_listed_at_warning_at_most_five(self, caplog, monkeypatch):
+        gap = self._window()[100:107]
+        repository = self._repository_with_gap(gap)
+        loader = FakeInputLoader()
+        monkeypatch.setattr(loader, "load_inputs", lambda *arguments, **keywords: 1 / 0)
+        with caplog.at_level("INFO"):
+            assert _service(repository, loader).run_live_backfill(self.NOW) == []
+        [warning] = [record.getMessage() for record in caplog.records if record.levelname == "WARNING"]
+        listed = ", ".join(instant.isoformat() for instant in gap[:5])
+        assert warning == (f"MenthorQ live backfill: 7 instant(s) failed ({listed} and 2 more); "
+                           "first error: ZeroDivisionError: division by zero")
 
     def test_the_hourly_job_backfills_without_alerts_or_deliveries(self):
         settings = MenthorqMonitorSettings(monitor_enabled=True, alerts_enabled=True, commands_enabled=True)
