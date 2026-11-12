@@ -81,7 +81,8 @@ class TelegramAlertService:
         # getUpdates keeps one connection open between polls (keep-alive); a new
         # session is opened after a network error.
         self._updates_session: Optional[requests.Session] = None
-        self._consecutive_get_updates_failures = 0
+        # getUpdates timeouts / network errors in a row (HTTP errors are counted apart).
+        self._consecutive_network_failures = 0
         # HTTP status / malformed body -> failures of that kind since the last successful poll.
         self._get_updates_error_repeats: Dict[str, int] = {}
 
@@ -270,7 +271,7 @@ class TelegramAlertService:
                 f"unexpected getUpdates body: {self._without_token(body if body is not None else response.text)}",
                 error_kind="malformed body")
             return None
-        self._consecutive_get_updates_failures = 0
+        self._consecutive_network_failures = 0
         self._get_updates_error_repeats.clear()
         return body["result"]
 
@@ -289,23 +290,25 @@ class TelegramAlertService:
         Count one failed getUpdates and log ``message`` (already free of the
         token) at WARNING or INFO.
 
-        - ``error_kind`` None (a timeout or network error): INFO until the
-          consecutive failures reach ``GET_UPDATES_FAILURE_WARNING_THRESHOLD``
-          (3): one WARNING then, and again every
-          ``GET_UPDATES_FAILURE_WARNING_REPEAT`` (20) failures after it.
+        - ``error_kind`` None (a timeout or network error): counted on their
+          own counter (an HTTP error does not add to it). INFO until it
+          reaches ``GET_UPDATES_FAILURE_WARNING_THRESHOLD`` (3): one WARNING
+          then, and again every ``GET_UPDATES_FAILURE_WARNING_REPEAT`` (20)
+          after it.
         - ``error_kind`` set (an HTTP status such as "HTTP 409", or "malformed
-          body"): a WARNING at its first occurrence, then INFO, with a WARNING
-          again at every ``GET_UPDATES_ERROR_WARNING_REPEAT`` (20th) repeat of
-          the same kind, so a lasting 409 does not fill the log.
+          body"): counted per kind (a timeout does not add to it). A WARNING
+          at its first occurrence, then INFO, with a WARNING again at every
+          ``GET_UPDATES_ERROR_WARNING_REPEAT`` (20th) repeat of the same
+          kind, so a lasting 409 does not fill the log.
 
-        A successful poll resets both counts.
+        A successful poll resets both counters.
         """
-        self._consecutive_get_updates_failures += 1
-        count = self._consecutive_get_updates_failures
         if error_kind is None:
+            self._consecutive_network_failures += 1
+            count = self._consecutive_network_failures
             warn = (count >= GET_UPDATES_FAILURE_WARNING_THRESHOLD
                     and (count - GET_UPDATES_FAILURE_WARNING_THRESHOLD) % GET_UPDATES_FAILURE_WARNING_REPEAT == 0)
-            suffix = f" ({count} consecutive getUpdates failures)" if warn else ""
+            suffix = f" ({count} consecutive getUpdates timeouts or network errors)" if warn else ""
         else:
             repeats = self._get_updates_error_repeats.get(error_kind, 0) + 1
             self._get_updates_error_repeats[error_kind] = repeats

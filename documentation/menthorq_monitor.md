@@ -301,8 +301,10 @@ poll, so one poll could last longer than the 20 s interval; the VPS log then sho
 `maximum number of running instances reached` warnings and about 40 read timeouts a day.
 
 Logging: a timeout or network error is expected now and then on a long poll and is logged at INFO
-(`getUpdates timed out, will retry`); the 3rd consecutive failure is a WARNING (`... (3 consecutive
-getUpdates failures)`), then every 20th after it (23, 43, ...). An HTTP error status (401, 409 or
+(`getUpdates timed out, will retry`); the 3rd one since the last successful poll is a WARNING
+(`... (3 consecutive getUpdates timeouts or network errors)`), then every 20th after it (23, 43,
+...). Timeouts and HTTP errors have separate counters, so two 409s followed by one timeout log no
+warning for the timeout. An HTTP error status (401, 409 or
 any other) or a malformed body is a WARNING at its first occurrence, then INFO, with a WARNING again
 at every 20th repeat of the same status (21st, 41st, ...), so a lasting 409 (another process polls
 the same bot) does not fill the log. A successful poll resets the counts. The bot token is scrubbed

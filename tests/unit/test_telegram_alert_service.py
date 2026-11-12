@@ -146,9 +146,28 @@ class TestGetUpdates:
         warnings = [record.getMessage() for record in caplog.records if record.levelname == "WARNING"]
         # 2 failures, a success, then 43 failures: warnings at the 3rd, 23rd and 43rd of the new run.
         assert warnings == [
-            f"TelegramAlertService: getUpdates timed out, will retry ({count} consecutive getUpdates failures)"
+            f"TelegramAlertService: getUpdates timed out, will retry ({count} consecutive getUpdates "
+            "timeouts or network errors)"
             for count in (3, 23, 43)]
         assert sum(record.levelname == "INFO" for record in caplog.records) == 2 + 40
+
+    def test_http_errors_and_timeouts_have_separate_counters(self, caplog):
+        service = TelegramAlertService(token="abc123", chat_id="999")
+        conflict = MagicMock(ok=False, status_code=409, text="Conflict")
+        timeout = requests.ReadTimeout("read timed out")
+        factory = _SessionFactory([conflict, conflict, timeout, timeout, conflict, timeout])
+        with caplog.at_level("INFO"), patch(SESSION_PATH, factory):
+            for _ in range(6):
+                service.get_updates(offset=None, timeout_seconds=5)
+        levels = [(record.levelname, record.getMessage()) for record in caplog.records]
+        # Two 409s then a timeout: the timeout is the 1st of its kind, INFO.
+        assert levels[2] == ("INFO", "TelegramAlertService: getUpdates timed out, will retry")
+        assert levels[3][0] == "INFO"
+        assert levels[4] == ("INFO", "TelegramAlertService: getUpdates returned 409: Conflict "
+                                     "(occurrence 3 since the last successful poll)")
+        # The 3rd timeout warns, counting timeouts only.
+        assert levels[5] == ("WARNING", "TelegramAlertService: getUpdates timed out, will retry "
+                                        "(3 consecutive getUpdates timeouts or network errors)")
 
     def test_a_repeated_http_status_warns_first_then_every_20th_per_status(self, caplog):
         service = TelegramAlertService(token="abc123", chat_id="999")
