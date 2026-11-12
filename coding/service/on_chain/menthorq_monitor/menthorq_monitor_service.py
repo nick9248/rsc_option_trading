@@ -29,7 +29,7 @@ import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from coding.core.analytics.menthorq_monitor.input_age import (
     DAILY_CLOSE_MAXIMUM_INPUT_AGE,
@@ -96,6 +96,23 @@ class BackfillOutcome:
     record: Optional[MenthorqLevelRecord] = None
     skip_reason: Optional[BackfillSkipReason] = None
     attempted: bool = True
+
+
+@dataclass(frozen=True)
+class _InputComputation:
+    """
+    Result of ``MenthorqMonitorService._compute_from_inputs``: exactly one of
+    ``missing_input_error`` (an input has no row at or before its instant),
+    ``stale_reasons`` (an input is too old) or ``record`` (computed, with or
+    without levels) is set. ``inputs`` are the loaded inputs, when loaded.
+    """
+
+    record: Optional[MenthorqLevelRecord] = None
+    missing_input_error: Optional[LookupError] = None
+    stale_reasons: Tuple[str, ...] = ()
+    inputs: Optional[Dict[str, Any]] = None
+
+
 # How far a comparison record may be from its target instant (e.g. "24 h
 # ago" accepts a record between 30 h and 24 h ago). Older -> "no record".
 COMPARISON_TOLERANCE = {
@@ -162,35 +179,54 @@ class MenthorqMonitorService:
         instant (``stale_input_reasons``) give such a record too.
         """
         settings = self.settings
-        try:
-            inputs = self.input_loader.load_inputs(settings.currency, as_of, open_interest_as_of)
-        except LookupError as error:
+        computation = self._compute_from_inputs(mode, as_of, open_interest_as_of, maximum_input_age)
+        if computation.missing_input_error is not None:
+            error = computation.missing_input_error
             logger.warning("MenthorQ %s record at %s not computed: %s", mode, as_of.isoformat(), error)
             return build_not_computed_record(
                 settings.currency, mode, as_of, self.clock(), settings.expiry_universe,
                 settings.gamma_underlying, f"inputs not available: {error}")
+        if computation.stale_reasons:
+            reason = "; ".join(computation.stale_reasons)
+            logger.warning("MenthorQ %s record at %s not computed: %s", mode, as_of.isoformat(), reason)
+            inputs = computation.inputs or {}
+            # The snapshots used are known: keep their capture times, so a retry after a
+            # restart sees that no newer snapshot exists (_daily_close_retry_is_due).
+            return build_not_computed_record(
+                settings.currency, mode, as_of, self.clock(), settings.expiry_universe,
+                settings.gamma_underlying, reason,
+                snapshot_captured_at_utc=inputs.get("snapshot_captured_at_utc"),
+                open_interest_captured_at_utc=inputs.get("open_interest_captured_at_utc"))
+        if computation.record is None:
+            raise ValueError("an input computation without an error must carry its record")
+        return computation.record
+
+    def _compute_from_inputs(
+        self, mode: str, as_of: datetime, open_interest_as_of: Optional[datetime],
+        maximum_input_age: Optional[timedelta],
+    ) -> "_InputComputation":
+        """
+        The one shared path of ``compute_record`` and
+        ``compute_backfill_record``: load the point-in-time inputs, check
+        their age (only with ``maximum_input_age``), replicate the levels and
+        build the record (not stored). Logs nothing: each caller decides what
+        a missing or stale input means for it.
+        """
+        settings = self.settings
+        try:
+            inputs = self.input_loader.load_inputs(settings.currency, as_of, open_interest_as_of)
+        except LookupError as error:
+            return _InputComputation(missing_input_error=error)
         if maximum_input_age is not None:
             reasons = stale_input_reasons(inputs, as_of, open_interest_as_of or as_of, maximum_input_age)
             if reasons:
-                reason = "; ".join(reasons)
-                logger.warning("MenthorQ %s record at %s not computed: %s", mode, as_of.isoformat(), reason)
-                # The snapshots used are known: keep their capture times, so a retry after a
-                # restart sees that no newer snapshot exists (_daily_close_retry_is_due).
-                return build_not_computed_record(
-                    settings.currency, mode, as_of, self.clock(), settings.expiry_universe,
-                    settings.gamma_underlying, reason,
-                    snapshot_captured_at_utc=inputs.get("snapshot_captured_at_utc"),
-                    open_interest_captured_at_utc=inputs.get("open_interest_captured_at_utc"))
-        return self._record_from_inputs(mode, as_of, inputs)
-
-    def _record_from_inputs(self, mode: str, as_of: datetime, inputs: Dict[str, Any]) -> MenthorqLevelRecord:
-        """Replicate the levels from loaded ``inputs`` and build the record (not stored)."""
-        settings = self.settings
+                return _InputComputation(stale_reasons=tuple(reasons), inputs=inputs)
         replication = replicate_menthorq(
             inputs["chain_rows"], inputs["index_price"], as_of,
             settings.expiry_universe, settings.gamma_underlying, currency=settings.currency,
         )
-        return build_level_record(replication, inputs, settings.currency, mode, as_of, self.clock())
+        record = build_level_record(replication, inputs, settings.currency, mode, as_of, self.clock())
+        return _InputComputation(record=record, inputs=inputs)
 
     def compute_live_record(self, now: datetime) -> MenthorqLevelRecord:
         """Live record at ``now`` (newest snapshot, its own open interest)."""
@@ -376,16 +412,15 @@ class MenthorqMonitorService:
             return BackfillOutcome(skip_reason=BackfillSkipReason.NO_SNAPSHOT, attempted=False)
         if as_of - newest_capture > settings.stale_snapshot_limit:
             return BackfillOutcome(skip_reason=BackfillSkipReason.STALE_INPUT, attempted=False)
-        try:
-            inputs = self.input_loader.load_inputs(settings.currency, as_of)
-        except MissingIndexPriceError:
+        computation = self._compute_from_inputs(MODE_LIVE, as_of, None, settings.stale_snapshot_limit)
+        if isinstance(computation.missing_input_error, MissingIndexPriceError):
             return BackfillOutcome(skip_reason=BackfillSkipReason.NO_INDEX_PRICE)
-        except LookupError:
+        if computation.missing_input_error is not None:
             return BackfillOutcome(skip_reason=BackfillSkipReason.NO_SNAPSHOT)
-        if stale_input_reasons(inputs, as_of, as_of, settings.stale_snapshot_limit):
+        if computation.stale_reasons:
             return BackfillOutcome(skip_reason=BackfillSkipReason.STALE_INPUT)
-        record = self._record_from_inputs(MODE_LIVE, as_of, inputs)
-        if not record.has_levels:
+        record = computation.record
+        if record is None or not record.has_levels:
             return BackfillOutcome(skip_reason=BackfillSkipReason.NO_LEVELS)
         record.not_computed_reasons.append(BACKFILLED_LIVE_CAVEAT)
         return BackfillOutcome(record=record)
