@@ -12,9 +12,34 @@ set on the VPS only). Its jobs, all in UTC:
 
 | Job id | When | What |
 |---|---|---|
-| `menthorq_monitor_hourly` | every hour at `MENTHORQ_LIVE_RUN_MINUTE` | stores the live record, stores every missing or not-computed daily-close record of the last 7 ended UTC days (oldest first; a stored not-computed row (no Call Resistance, Put Support, HVL or total net GEX) is retried only when a snapshot newer than the one it was last tried with exists at or before its 23:59 UTC (one MAX query, no chain load; a row without a snapshot time is retried once per collector start; a skip is logged at INFO), and a computed result replaces it; a row with levels is never overwritten; a day that fails is logged and the others still run; today is never computed; like the backtest, a daily close is stored as not computed when its snapshot or index trade is more than 60 min older than 23:59 UTC, or its open-interest snapshot more than 60 min older than 00:00 UTC), sends urgent alerts and catches up a missed weekly brief (both only with `MENTHORQ_ALERTS_ENABLED=1`) |
+| `menthorq_monitor_hourly` | every hour at `MENTHORQ_LIVE_RUN_MINUTE` | stores the live record, stores every missing or not-computed daily-close record of the last 7 ended UTC days (oldest first; a stored not-computed row (no Call Resistance, Put Support, HVL or total net GEX) is retried only when a snapshot newer than the one it was last tried with exists at or before its 23:59 UTC (one MAX query, no chain load; a row without a snapshot time is retried once per collector start; a skip is logged at INFO), and a computed result replaces it; a row with levels is never overwritten; a day that fails is logged and the others still run; today is never computed; like the backtest, a daily close is stored as not computed when its snapshot or index trade is more than 60 min older than 23:59 UTC, or its open-interest snapshot more than 60 min older than 00:00 UTC), sends urgent alerts and catches up a missed weekly brief (both only with `MENTHORQ_ALERTS_ENABLED=1`), then backfills missing live records of the last 7 days (see Live backfill) |
 | `menthorq_weekly_brief` | `MENTHORQ_WEEKLY_BRIEF_DAY` at `MENTHORQ_WEEKLY_BRIEF_TIME_UTC` | sends the weekly brief once per week; registered only with `MENTHORQ_ALERTS_ENABLED=1` |
 | `menthorq_command_poll` | every `MENTHORQ_COMMAND_POLL_SECONDS` | polls Telegram for bot commands (getUpdates); registered only with `MENTHORQ_COMMANDS_ENABLED=1` |
+
+### Live backfill
+
+The "vs 24h ago" and "vs 7d ago" comparisons need a stored live record near that instant. A monitor
+that started recently (or a collector that was down) has none, so `/changes` and `/brief` said
+`no stored record`. The hourly run therefore also stores the MISSING live records of the last 7
+days (`MenthorqMonitorService.run_live_backfill`), after the alerts:
+
+- The instants are the live schedule: minute `MENTHORQ_LIVE_RUN_MINUTE` of every UTC hour, from
+  7 days before the current run up to the hour before it, oldest first.
+- An hour counts as stored when any live row (computed or not) of the same settings has its
+  `as_of_utc` in that UTC hour. One query lists them (`get_menthorq_level_run_instants_between`).
+  Existing rows are never replaced.
+- Each missing instant is replayed point in time with the live run's loader path: the snapshot,
+  its open interest and the index price at or before the instant, nothing after it.
+- An instant is skipped (nothing stored) when no snapshot exists at or before it, or the newest one
+  is older than `MENTHORQ_STALE_SNAPSHOT_MINUTES` before it (one MAX query, no chain load), or the
+  loaded snapshot, open interest or index trade is older than that limit. A replay never stores a
+  stale not-computed row. A skipped instant is checked again at the next run (MAX query only).
+- At most 48 instants are computed per run, so a 7-day gap fills over 4 hourly runs.
+- A failing instant does not stop the others; one WARNING gives the count and the first error.
+- The rows are mode `live` and carry the caveat `backfilled (point-in-time replay)` as the last entry
+  of `not_computed_reasons`. They are normal live rows for the comparisons and the event baseline.
+  No alert is evaluated for them, nothing is sent and no delivery row is written.
+- There is no run at collector start; the first hourly run after a start does the backfill.
 
 ## Bot commands
 

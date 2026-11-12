@@ -8,7 +8,8 @@ all three off by default, the VPS .env sets them):
   - ``menthorq_monitor_hourly``  every hour at MENTHORQ_LIVE_RUN_MINUTE: store
     the live record, store the missing or not-computed daily-close records
     of the last 7 ended days, send urgent alerts, catch up a missed weekly
-    brief.
+    brief, then store missing live records of the last 7 days (backfill,
+    at most 48 per run, no alert).
   - ``menthorq_weekly_brief``    MENTHORQ_WEEKLY_BRIEF_DAY at
     MENTHORQ_WEEKLY_BRIEF_TIME_UTC.
   - ``menthorq_command_poll``    every MENTHORQ_COMMAND_POLL_SECONDS: the bot commands
@@ -28,6 +29,7 @@ from typing import Callable, List, Optional, Sequence
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
+from coding.core.analytics.menthorq_monitor.level_record import MenthorqLevelRecord
 from coding.core.database.repository import DatabaseRepository
 from coding.service.on_chain.menthorq_monitor.bot_command_service import MenthorqBotCommandService
 from coding.service.on_chain.menthorq_monitor.brief_delivery_service import (
@@ -105,9 +107,11 @@ class MenthorqMonitorJob:
     def run_hourly(self) -> None:
         """
         Live record, daily-close catch-up, urgent alerts, weekly-brief
-        catch-up. When the live record or yesterday's daily close raised,
-        one ``monitor_error`` alert names the first error (alerts enabled
-        only; cooldown and mute as for the other urgent alerts).
+        catch-up, then the live backfill (``run_live_backfill``: missing
+        live records of the last 7 days, no alert). When the live record or
+        yesterday's daily close raised, one ``monitor_error`` alert names
+        the first error (alerts enabled only; cooldown and mute as for the
+        other urgent alerts). A failing backfill is only logged.
         """
         now = self.clock()
         live = None
@@ -124,8 +128,18 @@ class MenthorqMonitorJob:
             log_scrubbed_exception("MenthorQ monitor: daily-close record failed", error,
                                    self.delivery_service.telegram)
             computation_error = computation_error or error
-        if not self.settings.alerts_enabled:
-            return
+        if self.settings.alerts_enabled:
+            self._send_hourly_alerts(now, live, computation_error)
+        # Last, so the alerts above are not delayed; never alerted on, never raises.
+        try:
+            self.monitor_service.run_live_backfill(now)
+        except Exception as error:
+            log_scrubbed_exception("MenthorQ monitor: live backfill failed", error,
+                                   self.delivery_service.telegram)
+
+    def _send_hourly_alerts(self, now: datetime, live: Optional[MenthorqLevelRecord],
+                            computation_error: Optional[Exception]) -> None:
+        """The monitor-error alert, the urgent alerts of ``live`` and the weekly-brief catch-up."""
         if computation_error is not None:
             try:
                 self.delivery_service.send_monitor_error_alert(computation_error, now)

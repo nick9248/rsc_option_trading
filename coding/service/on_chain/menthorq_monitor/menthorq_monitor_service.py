@@ -17,6 +17,11 @@ Two modes (column ``mode``):
     (``stale_input_reasons`` and ``DAILY_CLOSE_MAXIMUM_INPUT_AGE`` in
     core/analytics/menthorq_monitor/input_age.py, shared with the backtest).
 
+The hourly run also stores missing LIVE records of the last 7 days
+(``run_live_backfill``: point-in-time replay of the live schedule, marked
+``BACKFILLED_LIVE_CAVEAT``, never alerted on), so the comparisons have a
+reference after a monitor start or an outage.
+
 Reuses ``MenthorqInputLoader`` and ``replicate_menthorq`` (no chart import).
 """
 
@@ -29,6 +34,7 @@ from coding.core.analytics.menthorq_monitor.input_age import (
     stale_input_reasons,
 )
 from coding.core.analytics.menthorq_monitor.level_record import (
+    BACKFILLED_LIVE_CAVEAT,
     MODE_DAILY_CLOSE,
     MODE_LIVE,
     MenthorqLevelRecord,
@@ -56,6 +62,10 @@ logger = logging.getLogger(__name__)
 
 # The hourly run fills missing daily-close records of this many ended UTC days.
 DAILY_CLOSE_BACKFILL_DAYS = 7
+# The hourly run fills missing live records of this many days (run_live_backfill),
+# computing at most this many per run so the run stays short.
+LIVE_BACKFILL_DAYS = 7
+LIVE_BACKFILL_MAXIMUM_RECORDS_PER_RUN = 48
 # How far a comparison record may be from its target instant (e.g. "24 h
 # ago" accepts a record between 30 h and 24 h ago). Older -> "no record".
 COMPARISON_TOLERANCE = {
@@ -139,6 +149,11 @@ class MenthorqMonitorService:
                     settings.gamma_underlying, reason,
                     snapshot_captured_at_utc=inputs.get("snapshot_captured_at_utc"),
                     open_interest_captured_at_utc=inputs.get("open_interest_captured_at_utc"))
+        return self._record_from_inputs(mode, as_of, inputs)
+
+    def _record_from_inputs(self, mode: str, as_of: datetime, inputs: Dict[str, Any]) -> MenthorqLevelRecord:
+        """Replicate the levels from loaded ``inputs`` and build the record (not stored)."""
+        settings = self.settings
         replication = replicate_menthorq(
             inputs["chain_rows"], inputs["index_price"], as_of,
             settings.expiry_universe, settings.gamma_underlying, currency=settings.currency,
@@ -281,6 +296,114 @@ class MenthorqMonitorService:
                         len(failed_days), f" ({', '.join(failed_days)})" if failed_days else "")
         if latest_day_error is not None:
             raise latest_day_error
+        return stored
+
+    def live_backfill_instants(self, now: datetime) -> List[datetime]:
+        """
+        The live-schedule instants (minute ``settings.live_run_minute`` of
+        every UTC hour) of the last ``LIVE_BACKFILL_DAYS`` days, strictly
+        before the current live run's instant (``live_as_of(now)``), oldest
+        first.
+        """
+        current = live_as_of(now)
+        newest = current.replace(minute=self.settings.live_run_minute)
+        if newest >= current:
+            newest -= timedelta(hours=1)
+        earliest = current - timedelta(days=LIVE_BACKFILL_DAYS)
+        instants = []
+        instant = newest
+        while instant >= earliest:
+            instants.append(instant)
+            instant -= timedelta(hours=1)
+        return instants[::-1]
+
+    def compute_backfill_record(self, as_of: datetime) -> Optional[MenthorqLevelRecord]:
+        """
+        The live record the hourly run would have stored at ``as_of``: the
+        same loader path as ``compute_live_record`` (snapshot, its open
+        interest and the index price at or before ``as_of``, nothing after
+        it), with ``BACKFILLED_LIVE_CAVEAT`` added to its reasons. None (not
+        a not-computed row) when the inputs cannot be loaded or one of them
+        is older than ``settings.stale_snapshot_limit`` before ``as_of``: a
+        replay must not store a gap the live run never saw.
+        """
+        settings = self.settings
+        try:
+            inputs = self.input_loader.load_inputs(settings.currency, as_of)
+        except LookupError as error:
+            logger.info("MenthorQ live backfill at %s skipped: %s", as_of.isoformat(), error)
+            return None
+        reasons = stale_input_reasons(inputs, as_of, as_of, settings.stale_snapshot_limit)
+        if reasons:
+            logger.info("MenthorQ live backfill at %s skipped: %s", as_of.isoformat(), "; ".join(reasons))
+            return None
+        record = self._record_from_inputs(MODE_LIVE, as_of, inputs)
+        record.not_computed_reasons.append(BACKFILLED_LIVE_CAVEAT)
+        return record
+
+    def run_live_backfill(self, now: datetime) -> List[MenthorqLevelRecord]:
+        """
+        Store the MISSING live records of the last ``LIVE_BACKFILL_DAYS``
+        days (``live_backfill_instants``), oldest first, so the "7 days ago"
+        and "24 h ago" comparisons have a reference after a monitor start or
+        an outage. An hour counts as stored when any live row (computed or
+        not) of the same key has its ``as_of_utc`` in that UTC hour (one
+        query, ``get_menthorq_level_run_instants_between``). An instant is
+        only computed when a snapshot exists at or before it that is not
+        older than ``settings.stale_snapshot_limit`` (one MAX query, no
+        chain load); otherwise it is skipped and nothing is stored. At most
+        ``LIVE_BACKFILL_MAXIMUM_RECORDS_PER_RUN`` instants are computed per
+        call, so a long gap fills over a few hourly runs. Stored with mode
+        "live" and ``BACKFILLED_LIVE_CAVEAT``; the save rule keeps every
+        existing row. No alert is evaluated and nothing is sent. A failing
+        instant is counted and the others are still computed (one WARNING
+        with the count).
+
+        Returns:
+            The records stored by this call, oldest first.
+        """
+        settings = self.settings
+        instants = self.live_backfill_instants(now)
+        if not instants:
+            return []
+        stored_instants = self.repository.get_menthorq_level_run_instants_between(
+            settings.currency, MODE_LIVE, settings.expiry_universe, settings.gamma_underlying,
+            instants[0].replace(minute=0), instants[-1].replace(minute=0) + timedelta(hours=1))
+        stored_hours = {instant.replace(minute=0, second=0, microsecond=0) for instant in stored_instants}
+        missing = [instant for instant in instants if instant.replace(minute=0) not in stored_hours]
+        stored: List[MenthorqLevelRecord] = []
+        skipped = 0
+        computed = 0
+        failed: List[str] = []
+        first_error: Optional[Exception] = None
+        for instant in missing:
+            if computed >= LIVE_BACKFILL_MAXIMUM_RECORDS_PER_RUN:
+                break
+            try:
+                newest_capture = self.repository.get_latest_option_chain_capture_at_or_before(
+                    settings.currency, instant)
+                if newest_capture is None or instant - newest_capture > settings.stale_snapshot_limit:
+                    skipped += 1
+                    continue
+                computed += 1
+                record = self.compute_backfill_record(instant)
+                if record is None:
+                    skipped += 1
+                    continue
+                stored.append(self.store(record))
+            except Exception as error:
+                logger.debug("MenthorQ live backfill at %s failed", instant.isoformat(), exc_info=True)
+                failed.append(instant.isoformat())
+                first_error = first_error or error
+        remaining = len(missing) - len(stored) - skipped - len(failed)
+        if stored or skipped or failed:
+            logger.info("MenthorQ live backfill: %d of %d missing hours stored, %d skipped (no snapshot "
+                        "within %d min before the instant), %d failed, %d left for the next runs",
+                        len(stored), len(missing), skipped, settings.stale_snapshot_minutes,
+                        len(failed), remaining)
+        if failed:
+            logger.warning("MenthorQ live backfill: %d instant(s) failed (%s); first error: %s: %s",
+                           len(failed), ", ".join(failed), type(first_error).__name__, first_error)
         return stored
 
     def is_usable_reference(self, record: MenthorqLevelRecord) -> bool:

@@ -6,15 +6,22 @@ instants, the not-computed path, storage idempotence and reference lookup.
 
 import math
 from datetime import date, datetime, timedelta, timezone
+from unittest.mock import MagicMock
 
 import pytest
 
-from coding.core.analytics.menthorq_monitor.level_record import MODE_DAILY_CLOSE, MODE_LIVE
+from coding.core.analytics.menthorq_monitor.level_record import (
+    BACKFILLED_LIVE_CAVEAT,
+    MODE_DAILY_CLOSE,
+    MODE_LIVE,
+)
+from coding.service.on_chain.menthorq_monitor.menthorq_monitor_job import MenthorqMonitorJob
 from coding.service.on_chain.menthorq_monitor.menthorq_monitor_service import (
     MenthorqMonitorService,
     daily_close_as_of,
     live_as_of,
 )
+from coding.service.on_chain.menthorq_monitor.monitor_settings import MenthorqMonitorSettings
 from tests.fakes.fake_menthorq_monitor import (
     BASE_TIME,
     FAKE_CHAIN_SPOT as SPOT,
@@ -542,3 +549,142 @@ class TestOutdatedSnapshotRecordsAreNoReference:
         normal_late = self._record(1, timedelta(minutes=120))   # boundary: kept
         repository = FakeMonitorRepository([latest, normal_early, outage, normal_late])
         assert _service(repository).event_baseline_records(latest) == [normal_early, normal_late]
+
+
+class TestLiveBackfill:
+    """
+    run_live_backfill: the missing live records of the last 7 days, oldest
+    first, point in time, at most 48 per run, marked as backfilled, nothing
+    sent. now = Thu 12 Nov 22:10 UTC (the hourly run's instant); the window
+    is 5 Nov 22:10 .. 12 Nov 21:10 (168 hourly :10 instants). Default stale
+    limit 120 min; the fake snapshots are 21 min old.
+    """
+
+    NOW = datetime(2026, 11, 12, 22, 10, 4, tzinfo=timezone.utc)
+
+    @classmethod
+    def _window(cls):
+        first = datetime(2026, 11, 5, 22, 10, tzinfo=timezone.utc)
+        return [first + timedelta(hours=offset) for offset in range(168)]
+
+    @classmethod
+    def _repository_with_gap(cls, gap):
+        """Every window hour stored except ``gap``; a snapshot 21 min before every instant."""
+        window = cls._window()
+        repository = FakeMonitorRepository([make_record(as_of=instant) for instant in window
+                                            if instant not in gap])
+        repository.option_chain_captures = [instant - timedelta(minutes=21) for instant in window]
+        return repository
+
+    def test_the_window_is_the_live_schedule_of_the_last_7_days_before_the_current_run(self):
+        instants = _service().live_backfill_instants(self.NOW)
+        assert instants == self._window()
+        assert instants[0] == self.NOW.replace(second=0) - timedelta(days=7)
+        assert instants[-1] == datetime(2026, 11, 12, 21, 10, tzinfo=timezone.utc)
+
+    def test_a_three_day_gap_is_filled_oldest_first_48_per_run_and_a_third_run_stores_nothing(self, caplog):
+        window = self._window()
+        gap = window[24:96]                                   # 6 Nov 22:10 .. 9 Nov 21:10, 72 hours
+        repository = self._repository_with_gap(gap)
+        loader = FakeInputLoader()
+        service = _service(repository, loader)
+
+        with caplog.at_level("INFO"):
+            first = service.run_live_backfill(self.NOW)
+        assert [record.as_of_utc for record in first] == gap[:48]
+        # Point in time: the live loader path at each instant itself, no open-interest instant.
+        assert loader.calls == [(instant, None) for instant in gap[:48]]
+        assert all(as_of < self.NOW for as_of, _ in loader.calls)
+        assert "48 of 72 missing hours stored, 0 skipped" in caplog.text
+        assert "24 left for the next runs" in caplog.text
+
+        second = service.run_live_backfill(self.NOW + timedelta(seconds=30))
+        assert [record.as_of_utc for record in second] == gap[48:]
+        queries_before = repository.run_instant_queries
+        loads_before = len(loader.calls)
+        assert service.run_live_backfill(self.NOW + timedelta(seconds=40)) == []
+        assert repository.run_instant_queries == queries_before + 1     # one list query per run
+        assert len(loader.calls) == loads_before                         # nothing reloaded
+
+    def test_a_backfilled_record_is_live_computed_and_carries_the_caveat(self):
+        gap = [self._window()[10]]
+        repository = self._repository_with_gap(gap)
+        [record] = _service(repository).run_live_backfill(self.NOW)
+        assert record.mode == MODE_LIVE and record.has_levels and record.record_id is not None
+        assert record.not_computed_reasons[-1] == BACKFILLED_LIVE_CAVEAT == "backfilled (point-in-time replay)"
+        assert record.snapshot_captured_at_utc == gap[0] - timedelta(minutes=21)
+        # A normal live row: the 7-day comparison of a run 7 days later finds it.
+        latest = make_record(as_of=gap[0] + timedelta(days=7))
+        assert _service(repository).find_reference(latest, "7d") is record
+
+    def test_existing_rows_are_kept_and_a_row_in_the_same_hour_counts_as_stored(self):
+        window = self._window()
+        late_run = make_record(as_of=window[5] + timedelta(minutes=1))          # e.g. a misfired :11 run
+        not_computed = make_record_without_levels(as_of=window[6])
+        repository = self._repository_with_gap({window[5], window[6]})
+        repository.records += [late_run, not_computed]
+        loader = FakeInputLoader()
+        assert _service(repository, loader).run_live_backfill(self.NOW) == []
+        assert loader.calls == []
+        assert repository.get_menthorq_level_snapshot("BTC", MODE_LIVE, "monthly", "index",
+                                                      window[6]) is not_computed
+
+    def test_one_failing_instant_does_not_stop_the_others(self, caplog, monkeypatch):
+        gap = self._window()[100:103]
+        repository = self._repository_with_gap(gap)
+        loader = FakeInputLoader()
+        real_load_inputs = loader.load_inputs
+
+        def fail_on_the_middle_instant(currency, as_of, open_interest_as_of=None):
+            if as_of == gap[1]:
+                raise RuntimeError("database hiccup")
+            return real_load_inputs(currency, as_of, open_interest_as_of)
+
+        monkeypatch.setattr(loader, "load_inputs", fail_on_the_middle_instant)
+        with caplog.at_level("INFO"):
+            stored = _service(repository, loader).run_live_backfill(self.NOW)
+        assert [record.as_of_utc for record in stored] == [gap[0], gap[2]]
+        warnings = [record.getMessage() for record in caplog.records if record.levelname == "WARNING"]
+        assert len(warnings) == 1
+        assert warnings[0].startswith(f"MenthorQ live backfill: 1 instant(s) failed ({gap[1].isoformat()})")
+        assert "RuntimeError: database hiccup" in warnings[0]
+
+    def test_instants_without_a_recent_snapshot_are_skipped_and_nothing_is_stored(self):
+        window = self._window()
+        gap = [window[20], window[30], window[40], window[50]]
+        repository = self._repository_with_gap(gap)
+        # gap[0]: no snapshot at or before it; gap[1]: the newest one 121 min old (limit 120);
+        # gap[2]: exactly 120 min old (computed); gap[3]: snapshot fresh, index trade 3 h old.
+        repository.option_chain_captures = [gap[1] - timedelta(minutes=121), gap[2] - timedelta(minutes=120),
+                                            gap[3] - timedelta(minutes=5)]
+
+        class _AgeByInstant(FakeInputLoader):
+            def load_inputs(self, currency, as_of, open_interest_as_of=None):
+                self.snapshot_age = timedelta(minutes=120) if as_of == gap[2] else timedelta(minutes=5)
+                self.open_interest_age = self.snapshot_age
+                self.index_age = timedelta(hours=3) if as_of == gap[3] else timedelta(seconds=5)
+                return super().load_inputs(currency, as_of, open_interest_as_of)
+
+        loader = _AgeByInstant()
+        stored = _service(repository, loader).run_live_backfill(self.NOW)
+        assert [record.as_of_utc for record in stored] == [gap[2]]
+        assert [as_of for as_of, _ in loader.calls] == [gap[2], gap[3]]   # gap[0], gap[1]: no chain load
+        stored_instants = {record.as_of_utc for record in repository.records}
+        assert not stored_instants & {gap[0], gap[1], gap[3]}          # no stale not-computed row
+
+    def test_the_hourly_job_backfills_without_alerts_or_deliveries(self):
+        settings = MenthorqMonitorSettings(monitor_enabled=True, alerts_enabled=True, commands_enabled=True)
+        gap = self._window()[:3]
+        repository = self._repository_with_gap(gap)
+        monitor = MenthorqMonitorService(repository=repository, settings=settings,
+                                         input_loader=FakeInputLoader(), clock=lambda: self.NOW)
+        delivery = MagicMock()
+        MenthorqMonitorJob(settings, monitor, delivery, clock=lambda: self.NOW).run_hourly()
+
+        backfilled = [record for record in repository.records
+                      if BACKFILLED_LIVE_CAVEAT in record.not_computed_reasons]
+        assert [record.as_of_utc for record in backfilled] == gap
+        # Alerts are evaluated once, for the current live record only; nothing is delivered.
+        delivery.send_urgent_alerts.assert_called_once()
+        assert delivery.send_urgent_alerts.call_args.args[0].as_of_utc == live_as_of(self.NOW)
+        assert repository.deliveries == []

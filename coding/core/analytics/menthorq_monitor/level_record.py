@@ -44,6 +44,10 @@ HVL_AT_CHAIN_EDGE_REASON = "HVL at the edge of the chain (cumulative net GEX has
 # A run counts as COMPUTED when at least one of these is set (``has_levels``).
 # Spot alone does not count: a run can load its inputs and still compute nothing.
 LEVEL_PRESENCE_COLUMNS = ("call_resistance", "put_support", "hvl", "total_net_gex")
+# Caveat of a live record the hourly run stored later for a missed hour
+# (MenthorqMonitorService.run_live_backfill): computed from the data at or
+# before its own instant, never alerted on.
+BACKFILLED_LIVE_CAVEAT = "backfilled (point-in-time replay)"
 
 
 def has_levels_sql_condition(row_reference: str) -> str:
