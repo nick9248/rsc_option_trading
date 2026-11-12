@@ -230,6 +230,19 @@ class TestTabDisplay:
         assert "0.00%" not in tab.brief_browser.toPlainText()
         tab.close()
 
+    def test_an_expiry_listed_after_the_open_interest_snapshot_is_a_note_in_the_caveats(
+            self, qapp, tmp_path, monkeypatch):
+        tab = _tab(tmp_path, {})
+        monkeypatch.setattr(tab_module, "data_warnings", lambda output, reference: ["real problem"])
+        monkeypatch.setattr(tab_module, "data_notes", lambda output: ["Expiry 15NOV26 is not in the "
+                                                                      "open-interest snapshot"])
+        monkeypatch.setattr(tab_module, "info_line", lambda output: "charts info")
+        tab._show_preview(None, "not run", {"fake": "output"}, None)
+        assert tab.caveats_browser.toPlainText() == (
+            "- real problem\n- Note: Expiry 15NOV26 is not in the open-interest snapshot")
+        assert "15NOV26" not in tab.warning_label.text()      # never in the orange line
+        tab.close()
+
     def test_failed_brief_is_reported_and_charts_still_shown(self, qapp, tmp_path):
         tab = _tab(tmp_path, {})
 

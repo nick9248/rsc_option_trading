@@ -388,3 +388,82 @@ def test_nested_rerun_overwrites_its_files_and_keeps_other_files(tmp_path):
 def test_unknown_chart_layout_is_rejected(tmp_path):
     with pytest.raises(ValueError, match="chart_layout"):
         _daily_close(tmp_path, chart_layout="tree")
+
+
+# --------------------------------------------------------------------------
+# Expiries without open interest: listed after the OI snapshot (expected) vs partial
+# --------------------------------------------------------------------------
+
+SERVICE_LOGGER = "coding.service.on_chain.menthorq_replication_service"
+
+
+class RepositoryWithAWeekly(RecordingRepository):
+    """
+    The two-row 27NOV26 chain plus a weekly 13NOV26 with two rows. ``weekly_open_interest``
+    gives their open interest: (None, None) = listed after the OI snapshot, (5.0, None) = partial.
+    """
+
+    def __init__(self, weekly_open_interest):
+        super().__init__()
+        self.weekly_open_interest = weekly_open_interest
+
+    def get_option_chain_snapshot_at_or_before(self, currency, as_of):
+        snapshot = super().get_option_chain_snapshot_at_or_before(currency, as_of)
+        assert snapshot is not None
+        captured, rows = snapshot
+        call_open_interest, put_open_interest = self.weekly_open_interest
+        rows += [
+            {"instrument_name": "BTC-13NOV26-100-C", "expiration": "13NOV26", "strike": 100.0,
+             "option_type": "C", "open_interest": call_open_interest, "mark_iv": 50.0,
+             "underlying_price": 100.0, "mark_price": None},
+            {"instrument_name": "BTC-13NOV26-90-P", "expiration": "13NOV26", "strike": 90.0,
+             "option_type": "P", "open_interest": put_open_interest, "mark_iv": 50.0,
+             "underlying_price": 100.0, "mark_price": None},
+        ]
+        return captured, rows
+
+
+def _service_messages(caplog, level):
+    return [record.getMessage() for record in caplog.records
+            if record.name == SERVICE_LOGGER and record.levelname == level]
+
+
+def test_an_expiry_listed_after_the_open_interest_snapshot_gives_one_info_line_and_no_warning(
+        tmp_path, caplog):
+    with caplog.at_level("INFO"):
+        output = _service(RepositoryWithAWeekly((None, None))).run("BTC", AS_OF, tmp_path)
+    assert _service_messages(caplog, "WARNING") == []
+    notes = [message for message in _service_messages(caplog, "INFO") if "13NOV26" in message]
+    assert notes == ["Expiry 13NOV26 is not in the open-interest snapshot (listed after it): no open "
+                     "interest, left out of IV*OI and GEX; its levels show as not computed"]
+    assert output["expiries_not_in_open_interest_snapshot"] == ["13NOV26"]
+    # Its levels stay None (not computed), never 0.
+    all_expiries = output["configurations"]["all__gamma_at_index"]["replication"]
+    assert all_expiries["gex_by_expiration"]["13NOV26"]["total_net_gex"] is None
+
+
+def test_an_expiry_where_only_some_rows_lack_open_interest_is_still_a_warning(tmp_path, caplog):
+    with caplog.at_level("INFO"):
+        output = _service(RepositoryWithAWeekly((5.0, None))).run("BTC", AS_OF, tmp_path)
+    assert _service_messages(caplog, "WARNING") == [
+        "13NOV26: 1 rows have no open interest; left out of IV*OI and GEX"]
+    assert output["expiries_not_in_open_interest_snapshot"] == []
+    assert not any("is not in the open-interest snapshot" in message
+                   for message in _service_messages(caplog, "INFO"))
+
+
+def test_gex_not_computed_for_another_reason_is_still_a_warning(tmp_path, caplog):
+    # The weekly has open interest but no IV at all: GEX not computed, not an open-interest gap.
+    class WithoutIv(RepositoryWithAWeekly):
+        def get_option_chain_snapshot_at_or_before(self, currency, as_of):
+            captured, rows = super().get_option_chain_snapshot_at_or_before(currency, as_of)
+            for row in rows:
+                if row["expiration"] == "13NOV26":
+                    row["mark_iv"] = None
+            return captured, rows
+
+    with caplog.at_level("INFO"):
+        _service(WithoutIv((5.0, 6.0))).run("BTC", AS_OF, tmp_path)
+    warnings = _service_messages(caplog, "WARNING")
+    assert len(warnings) == 2          # "all" universe at index and at forward
+    assert all(warning.startswith("all / gamma at ") and "['13NOV26']" in warning for warning in warnings)

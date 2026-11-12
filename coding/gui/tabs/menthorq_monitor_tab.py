@@ -44,7 +44,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from coding.core.analytics.menthorq_chart_summary import comparison_rows, data_warnings, info_line
+from coding.core.analytics.menthorq_chart_summary import (
+    comparison_rows,
+    data_notes,
+    data_warnings,
+    info_line,
+)
 from coding.gui.components.log_viewer import GuiLogHandler, LogViewer
 from coding.gui.components.menthorq_widgets import (
     COMPARISON_COLUMN_LABELS,
@@ -733,6 +738,9 @@ class MenthorqMonitorTab(QWidget):
     ) -> None:
         """Brief, alert table, urgent message, info rows and caveats."""
         chart_warnings = data_warnings(chart_output, reference) if chart_output is not None else []
+        # Expected gaps (an expiry listed after the open-interest snapshot) as neutral notes.
+        if chart_output is not None:
+            chart_warnings += [f"Note: {note}" for note in data_notes(chart_output)]
         # The charts' own inputs (daily close: open interest from 00:00 UTC), one part per row.
         chart_rows = ([("Charts" if index == 0 else "", part)
                        for index, part in enumerate(info_line(chart_output).split(" | "))]

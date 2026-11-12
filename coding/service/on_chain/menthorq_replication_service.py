@@ -10,7 +10,7 @@ import json
 import logging
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from coding.core.analytics.menthorq_chart_renderer import (
     render_expiry_iv_times_open_interest_chart,
@@ -28,6 +28,8 @@ from coding.core.analytics.menthorq_replication_calculator import (
     GAMMA_UNDERLYINGS,
     compare_with_reference,
     compute_expiry_iv_times_open_interest,
+    expiries_without_any_open_interest,
+    expiry_not_in_open_interest_snapshot_text,
     iv_source_text,
     replicate_menthorq,
     start_of_utc_day,
@@ -237,6 +239,10 @@ class MenthorqReplicationService:
             output_directory = nested_date_folder(output_directory, as_of.astimezone(timezone.utc).date())
         output_directory.mkdir(parents=True, exist_ok=True)
 
+        # Expiries listed after the open-interest snapshot (no row has open interest) are
+        # expected: ONE info line per run each (below), not a warning per configuration.
+        listed_after_open_interest = set(expiries_without_any_open_interest(
+            inputs["chain_rows"], {row.get("expiration") for row in inputs["chain_rows"]}))
         configurations: Dict[str, Dict[str, Any]] = {}
         for universe in EXPIRY_UNIVERSES:
             for underlying in GAMMA_UNDERLYINGS:
@@ -246,7 +252,8 @@ class MenthorqReplicationService:
                 )
                 not_computed = [expiration for expiration, exposure
                                 in replication["gex_by_expiration"].items()
-                                if exposure["total_net_gex"] is None]
+                                if exposure["total_net_gex"] is None
+                                and expiration not in listed_after_open_interest]
                 if not_computed:
                     logger.warning(
                         "%s / gamma at %s: GEX not computed (no leg has both gamma and open "
@@ -262,6 +269,15 @@ class MenthorqReplicationService:
                         if reference is not None else None
                     ),
                 }
+
+        # The "all" universe holds every unsettled expiry of every universe.
+        all_expiries_replication = configurations[
+            f"{EXPIRY_UNIVERSE_ALL}__gamma_at_{gamma_underlying}"]["replication"]
+        not_in_open_interest_snapshot = [expiration for expiration
+                                         in all_expiries_replication["settings"]["expirations"]
+                                         if expiration in listed_after_open_interest]
+        for expiration in not_in_open_interest_snapshot:
+            logger.info(expiry_not_in_open_interest_snapshot_text(expiration))
 
         primary_name = f"{expiry_universe}__gamma_at_{gamma_underlying}"
         primary = configurations[primary_name]["replication"]
@@ -290,10 +306,10 @@ class MenthorqReplicationService:
                 charts[f"{chart_name}{suffix}"] = relative_path.as_posix()
 
         per_expiry = self._render_per_expiry_iv_times_open_interest(
-            inputs["chain_rows"],
-            configurations[f"{EXPIRY_UNIVERSE_ALL}__gamma_at_{gamma_underlying}"]["replication"],
+            inputs["chain_rows"], all_expiries_replication,
             output_directory, stem, timestamp_label, currency,
             FOLDER_IV_TIMES_OPEN_INTEREST_PER_EXPIRY if nested else None,
+            expected_without_open_interest=set(not_in_open_interest_snapshot),
         )
 
         output = {
@@ -313,6 +329,8 @@ class MenthorqReplicationService:
             "drawn_level_candidates": DEFAULT_LEVEL_CANDIDATES,
             "charts": charts,
             "per_expiry_iv_times_open_interest": per_expiry,
+            # Listed after the open-interest snapshot: expected, a note rather than a warning.
+            "expiries_not_in_open_interest_snapshot": not_in_open_interest_snapshot,
             "configurations": configurations,
         }
         if nested:
@@ -411,6 +429,7 @@ class MenthorqReplicationService:
         chain_rows: List[Dict[str, Any]], all_expiries_replication: Dict[str, Any],
         output_directory: Path, stem: str, timestamp_label: str, currency: str,
         subfolder: Optional[str] = None,
+        expected_without_open_interest: Optional[Set[str]] = None,
     ) -> List[Dict[str, Any]]:
         """
         One IV*OI chart per expiry listed in the snapshot and not settled at
@@ -419,6 +438,9 @@ class MenthorqReplicationService:
         Args:
             subfolder: Folder under ``output_directory`` for the PNGs (None:
                 directly in it).
+            expected_without_open_interest: Expiries listed after the
+                open-interest snapshot (already logged at INFO by ``run``):
+                their missing open interest is not warned about again.
 
         Returns:
             Per expiry: expiration, levels, level_rule, chart path relative
@@ -443,7 +465,7 @@ class MenthorqReplicationService:
                 1 for row in chain_rows
                 if row.get("expiration") == expiration and row.get("open_interest") is None
             )
-            if rows_without_open_interest:
+            if rows_without_open_interest and expiration not in (expected_without_open_interest or set()):
                 logger.warning("%s: %d rows have no open interest; left out of IV*OI and GEX",
                                expiration, rows_without_open_interest)
             results.append({
