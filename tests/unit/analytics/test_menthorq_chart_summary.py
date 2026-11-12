@@ -13,6 +13,7 @@ from coding.core.analytics.menthorq_chart_summary import (
     CHART_NET_GEX_PANELS,
     chart_file_names,
     comparison_rows,
+    data_notes,
     data_warnings,
     expiry_choices,
     info_line,
@@ -172,6 +173,25 @@ def test_no_warnings_for_clean_btc_inputs():
     output["configurations"]["all__gamma_at_index"]["replication"]["gex_by_expiration"] = {
         "27NOV26": {"total_net_gex": -4.0}}
     assert data_warnings(output, {"timestamp_utc": "2026-11-06T20:59:00Z"}) == []
+
+
+def test_an_expiry_listed_after_the_open_interest_snapshot_is_a_note_not_a_warning():
+    # 10NOV26: all 52 rows without open interest (listed after the OI snapshot); 25DEC26 stays a
+    # real "GEX not computed" warning.
+    output = _output()
+    output["expiries_not_in_open_interest_snapshot"] = ["10NOV26"]
+    warnings = data_warnings(output)
+    assert warnings == ["GEX not computed for 1 expiry (25DEC26): no leg has both gamma and open "
+                        "interest; their levels show as not computed"]
+    assert data_notes(output) == [
+        "Expiry 10NOV26 is not in the open-interest snapshot (listed after it): no open interest, "
+        "left out of IV*OI and GEX; its levels show as not computed"]
+
+
+def test_without_the_key_there_is_no_note_and_the_warnings_are_unchanged():
+    output = _output()                       # e.g. a JSON written before the key existed
+    assert data_notes(output) == []
+    assert any(warning.startswith("52 rows have no open interest") for warning in data_warnings(output))
 
 
 def test_comparison_rows_use_drawn_candidates_and_hand_calculated_differences():

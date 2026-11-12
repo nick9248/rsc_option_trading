@@ -20,6 +20,10 @@ from coding.core.database.repository import DatabaseRepository
 logger = logging.getLogger(__name__)
 
 
+class MissingIndexPriceError(LookupError):
+    """No index price at or before the instant (a ``LookupError``, so existing callers are unchanged)."""
+
+
 class MenthorqInputLoader:
     """Loads the newest chain snapshot and index price at or before an instant."""
 
@@ -52,7 +56,8 @@ class MenthorqInputLoader:
 
         Raises:
             LookupError: when an input has no row at or before its instant
-                (the replay never falls back to a later row).
+                (the replay never falls back to a later row);
+                ``MissingIndexPriceError`` when it is the index price.
             ValueError: when ``open_interest_as_of`` is after ``as_of``.
         """
         snapshot = self.repository.get_option_chain_snapshot_at_or_before(currency, as_of)
@@ -60,7 +65,7 @@ class MenthorqInputLoader:
             raise LookupError(f"No {currency} option-chain snapshot at or before {as_of.isoformat()}")
         index = self.repository.get_index_price_at_or_before(currency, as_of)
         if index is None:
-            raise LookupError(f"No {currency} index price at or before {as_of.isoformat()}")
+            raise MissingIndexPriceError(f"No {currency} index price at or before {as_of.isoformat()}")
         captured_at, chain_rows = snapshot
         index_price, index_time = index
         open_interest_captured_at = captured_at

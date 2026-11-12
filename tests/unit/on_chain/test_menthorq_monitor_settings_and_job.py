@@ -29,6 +29,7 @@ from coding.service.on_chain.menthorq_monitor.monitor_settings import (
     MenthorqMonitorSettings,
 )
 from coding.service.on_chain.menthorq_monitor.telegram_command_listener import LONG_POLL_SECONDS
+from coding.service.notifications.telegram_alert_service import get_updates_worst_case_seconds
 from coding.service.on_chain.menthorq_monitor.brief_delivery_service import MenthorqBriefDeliveryService
 from coding.service.on_chain.menthorq_monitor.menthorq_monitor_service import MenthorqMonitorService
 from tests.fakes.fake_menthorq_monitor import BASE_TIME, FakeInputLoader, FakeMonitorRepository, FakeTelegram
@@ -83,14 +84,30 @@ def test_invalid_values_raise_instead_of_falling_back(name, value):
         MenthorqMonitorSettings.from_environment({name: value})
 
 
-def test_command_poll_minimum_is_the_long_poll_wait_plus_two_seconds():
-    # LONG_POLL_SECONDS = 10 -> minimum 12; 11 would make APScheduler skip runs.
-    assert LONG_POLL_SECONDS == 10 and MINIMUM_COMMAND_POLL_SECONDS == 12
+def test_command_poll_interval_is_strictly_above_the_worst_case_poll():
+    # One poll blocks at most connect 4 s + read (long poll 5 s + 3 s) = 12 s; the interval must be
+    # strictly longer (minimum 13), the default 15. 12 would let APScheduler skip runs.
+    assert LONG_POLL_SECONDS == 5
+    assert get_updates_worst_case_seconds(LONG_POLL_SECONDS) == 4 + 5 + 3 == 12
+    assert MINIMUM_COMMAND_POLL_SECONDS == 13
+    assert MenthorqMonitorSettings().command_poll_seconds == 15
+    assert MenthorqMonitorSettings.from_environment({}).command_poll_seconds == 15
     assert MenthorqMonitorSettings.from_environment(
-        {"MENTHORQ_COMMAND_POLL_SECONDS": "12"}).command_poll_seconds == 12
-    for too_short in ("11", "5"):
-        with pytest.raises(ValueError, match=r"MENTHORQ_COMMAND_POLL_SECONDS=\d+ is outside 12\.\.None"):
+        {"MENTHORQ_COMMAND_POLL_SECONDS": "13"}).command_poll_seconds == 13
+    for too_short in ("12", "5"):
+        with pytest.raises(ValueError, match=r"MENTHORQ_COMMAND_POLL_SECONDS=\d+ is outside 13\.\.None"):
             MenthorqMonitorSettings.from_environment({"MENTHORQ_COMMAND_POLL_SECONDS": too_short})
+
+
+def test_the_poll_job_coalesces_and_runs_one_instance_at_the_configured_interval():
+    job = build_menthorq_monitor_job(repository=MagicMock(), settings=ALL_ON, telegram=FakeTelegram())
+    assert job is not None
+    scheduler = BackgroundScheduler(timezone=timezone.utc)
+    job.register(scheduler)
+    poll = scheduler.get_job(COMMAND_POLL_JOB_ID)
+    assert poll is not None
+    assert poll.coalesce is True and poll.max_instances == 1
+    assert poll.trigger.interval == timedelta(seconds=15)
 
 
 @pytest.mark.parametrize("value", ["09:00+02:00", "09:00Z", "09:00+00:00", "07:30-05:00"])

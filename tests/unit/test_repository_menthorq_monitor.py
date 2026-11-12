@@ -153,6 +153,19 @@ def test_snapshots_between_are_computed_rows_in_the_half_open_window_oldest_firs
         "BTC", "live", "all", "index", BASE_TIME - timedelta(hours=30), BASE_TIME) == []
 
 
+def test_computed_run_instants_between_leave_out_not_computed_rows_and_other_keys(repo):
+    repo.save_menthorq_level_snapshot(make_record(as_of=BASE_TIME - timedelta(hours=4)))
+    repo.save_menthorq_level_snapshot(make_record(as_of=BASE_TIME - timedelta(hours=1)))
+    repo.save_menthorq_level_snapshot(make_record_without_levels(as_of=BASE_TIME - timedelta(hours=3)))
+    repo.save_menthorq_level_snapshot(make_record(as_of=BASE_TIME))                     # end: excluded
+    repo.save_menthorq_level_snapshot(make_record(as_of=BASE_TIME - timedelta(hours=2),
+                                                  expiry_universe="all"))               # other key
+    instants = repo.get_computed_menthorq_level_run_instants_between(
+        "BTC", "live", "monthly", "index", BASE_TIME - timedelta(hours=5), BASE_TIME)
+    assert instants == [BASE_TIME - timedelta(hours=4), BASE_TIME - timedelta(hours=1)]
+    assert instants[0].tzinfo == timezone.utc
+
+
 def test_a_row_with_spot_but_no_levels_counts_as_not_computed(repo):
     # spot is set (inputs loaded) but CR, PS, HVL and total net GEX are all None
     without_levels = make_record_without_levels(spot=100000.0)

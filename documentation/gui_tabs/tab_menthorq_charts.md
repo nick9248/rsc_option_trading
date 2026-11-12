@@ -10,6 +10,7 @@ The settings are fixed: BTC, MenthorQ daily close of the last complete UTC day (
 
 - A status line: progress while generating (background thread, a few seconds), then "Generated N charts for <date> ...", or "Generation failed: <error class>: <message>".
 - Orange warnings, when they apply: IV rebuilt from `mark_price` or missing, expiries whose GEX was not computed, rows without open interest.
+- Grey notes for expected gaps: an expiry listed AFTER the open-interest snapshot (for example a new weekly; every one of its rows has no open interest in the snapshot from 00:00 UTC) gets one `Note: Expiry 15NOV26 is not in the open-interest snapshot (listed after it): ...` line instead of the two warnings above. Only SOME rows of an expiry without open interest stays an orange warning, and so does an open-interest snapshot in which NO expiry has open interest (a real fault, not a new listing). The service logs the same case once per run at INFO, not at WARNING.
 - **Folder**: a clickable link to the generated folder, and an **Open folder** button.
 
 ## What it saves
@@ -34,7 +35,7 @@ MenthorqChartsTab (coding/gui/tabs/menthorq_charts_tab.py)
     -> MenthorqChartsWorker (QThread)
         -> MenthorqReplicationService.run_menthorq_daily_close(..., chart_layout="nested")
            (coding/service/on_chain/menthorq_replication_service.py)
-    -> menthorq_chart_summary.data_warnings (coding/core/analytics/)
+    -> menthorq_chart_summary.data_warnings and data_notes (coding/core/analytics/)
 ```
 
 The tab does no calculation and no database access.

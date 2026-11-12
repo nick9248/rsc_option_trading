@@ -42,7 +42,7 @@ import logging
 import math
 import re
 from datetime import datetime, time, timezone
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 from coding.core.analytics.black_scholes_calculator import BlackScholesCalculator
 from coding.core.analytics.gamma_profile_calculator import GammaProfileCalculator
@@ -773,6 +773,38 @@ def select_drawn_levels(
         level_name: level_candidates[level_name].get(candidate_name)
         for level_name, candidate_name in DEFAULT_LEVEL_CANDIDATES.items()
     }
+
+
+def expiries_without_any_open_interest(
+    chain_rows: Sequence[Dict[str, Any]], expirations: Iterable[str]
+) -> List[str]:
+    """
+    The expiries of ``expirations`` (order kept) that have chain rows but
+    not one row with open interest: listed AFTER the open-interest snapshot
+    was taken (e.g. a new weekly), so their GEX cannot be computed. This is
+    expected, not a data fault, but only when at least one OTHER expiry of
+    the chain has open interest: when no row of the chain has any, the
+    open-interest data itself is missing (a real fault) and nothing is
+    returned. An expiry where only SOME rows lack open interest is not
+    returned either.
+    """
+    has_rows: Set[Optional[str]] = set()
+    has_open_interest: Set[Optional[str]] = set()
+    for row in chain_rows:
+        expiration = row.get("expiration")
+        has_rows.add(expiration)
+        if row.get("open_interest") is not None:
+            has_open_interest.add(expiration)
+    if not has_open_interest:
+        return []
+    return [expiration for expiration in expirations
+            if expiration in has_rows and expiration not in has_open_interest]
+
+
+def expiry_not_in_open_interest_snapshot_text(expiration: str) -> str:
+    """The note (log line and GUI) for an expiry of ``expiries_without_any_open_interest``."""
+    return (f"Expiry {expiration} is not in the open-interest snapshot (listed after it): no open "
+            "interest, left out of IV*OI and GEX; its levels show as not computed")
 
 
 def compute_expiry_iv_times_open_interest(

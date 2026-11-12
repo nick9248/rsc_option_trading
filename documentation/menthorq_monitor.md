@@ -12,9 +12,46 @@ set on the VPS only). Its jobs, all in UTC:
 
 | Job id | When | What |
 |---|---|---|
-| `menthorq_monitor_hourly` | every hour at `MENTHORQ_LIVE_RUN_MINUTE` | stores the live record, stores every missing or not-computed daily-close record of the last 7 ended UTC days (oldest first; a stored not-computed row (no Call Resistance, Put Support, HVL or total net GEX) is retried only when a snapshot newer than the one it was last tried with exists at or before its 23:59 UTC (one MAX query, no chain load; a row without a snapshot time is retried once per collector start; a skip is logged at INFO), and a computed result replaces it; a row with levels is never overwritten; a day that fails is logged and the others still run; today is never computed; like the backtest, a daily close is stored as not computed when its snapshot or index trade is more than 60 min older than 23:59 UTC, or its open-interest snapshot more than 60 min older than 00:00 UTC), sends urgent alerts and catches up a missed weekly brief (both only with `MENTHORQ_ALERTS_ENABLED=1`) |
+| `menthorq_monitor_hourly` | every hour at `MENTHORQ_LIVE_RUN_MINUTE` | stores the live record, stores every missing or not-computed daily-close record of the last 7 ended UTC days (oldest first; a stored not-computed row (no Call Resistance, Put Support, HVL or total net GEX) is retried only when a snapshot newer than the one it was last tried with exists at or before its 23:59 UTC (one MAX query, no chain load; a row without a snapshot time is retried once per collector start; a skip is logged at INFO), and a computed result replaces it; a row with levels is never overwritten; a day that fails is logged and the others still run; today is never computed; like the backtest, a daily close is stored as not computed when its snapshot or index trade is more than 60 min older than 23:59 UTC, or its open-interest snapshot more than 60 min older than 00:00 UTC), sends urgent alerts and catches up a missed weekly brief (both only with `MENTHORQ_ALERTS_ENABLED=1`), then backfills missing live records of the last 7 days (see Live backfill) |
 | `menthorq_weekly_brief` | `MENTHORQ_WEEKLY_BRIEF_DAY` at `MENTHORQ_WEEKLY_BRIEF_TIME_UTC` | sends the weekly brief once per week; registered only with `MENTHORQ_ALERTS_ENABLED=1` |
 | `menthorq_command_poll` | every `MENTHORQ_COMMAND_POLL_SECONDS` | polls Telegram for bot commands (getUpdates); registered only with `MENTHORQ_COMMANDS_ENABLED=1` |
+
+### Live backfill
+
+The "vs 24h ago" and "vs 7d ago" comparisons need a stored live record near that instant. A monitor
+that started recently (or a collector that was down) has none, so `/changes` and `/brief` said
+`no stored record`. The hourly run therefore also stores the MISSING live records of the last 7
+days (`MenthorqMonitorService.run_live_backfill`), after the alerts:
+
+- The instants are the live schedule: minute `MENTHORQ_LIVE_RUN_MINUTE` of every UTC hour, from
+  7 days before the current run up to the hour before it, oldest first.
+- An hour counts as stored when a COMPUTED live row (with levels) of the same settings has its
+  `as_of_utc` in that UTC hour. One query lists them
+  (`get_computed_menthorq_level_run_instants_between`). The hour of a not-computed row is replayed;
+  when the replay computes levels, the save rule replaces that row. A computed row is never replaced.
+- Each missing instant is replayed point in time with the live run's loader path: the snapshot,
+  its open interest and the index price at or before the instant, nothing after it.
+- Every instant before the earliest snapshot capture (one MIN query per run) is skipped without
+  further work. For each other instant `compute_backfill_record` decides, cheapest first: no
+  snapshot at or before it, or the newest one older than `MENTHORQ_STALE_SNAPSHOT_MINUTES` (one MAX
+  query, no chain load); then the inputs are loaded: no index price, an input older than the limit,
+  or no level computed. In each of these cases nothing is stored: a replay never stores a stale or
+  not-computed row.
+- At most 48 instants whose inputs were loaded count per run (the cheap skips do not), so
+  unfillable old hours never block newer fillable ones and a 7-day gap fills over a few runs.
+- Instants unfillable for a permanent reason (before the earliest snapshot, stale input, no
+  levels) are remembered in the collector process and not queried or logged again; no index price,
+  a late missing snapshot and failures are retried at the next runs, at most 3 attempts in all
+  (a success resets the count), then they are remembered as unfillable too. Both memories are
+  pruned to the current 7-day window at the start of each run.
+- One INFO line per run gives the counts: stored, no snapshot, stale input, no index price, no
+  levels, failed. A failing instant does not stop the others; one WARNING lists the failed instants
+  (at most 5) and the first error.
+- The rows are mode `live` and carry the caveat `backfilled (point-in-time replay)`, appended after
+  the record's own caveats in `not_computed_reasons`. They are normal live rows for the comparisons
+  and the event baseline.
+  No alert is evaluated for them, nothing is sent and no delivery row is written.
+- There is no run at collector start; the first hourly run after a start does the backfill.
 
 ## Bot commands
 
@@ -182,7 +219,7 @@ positive total net GEX.
 | `MENTHORQ_LIVE_RUN_MINUTE` | 10 | minute past each hour of the live run |
 | `MENTHORQ_WEEKLY_BRIEF_DAY` | fri | mon to sun |
 | `MENTHORQ_WEEKLY_BRIEF_TIME_UTC` | 09:00 | HH:MM, UTC (a value with an offset is refused) |
-| `MENTHORQ_COMMAND_POLL_SECONDS` | 20 | at least 12 (the 10 s long-poll wait + 2 s) |
+| `MENTHORQ_COMMAND_POLL_SECONDS` | 15 | at least 13: strictly above one poll's intended bound of 12 s (see Command polling) |
 | `MENTHORQ_STALE_SNAPSHOT_MINUTES` | 120 | at least 10; stale-data limit, see below |
 | `MENTHORQ_OWNER_USER_ID` | unset | owner's Telegram user id (positive integer); required only when `OSF_TELEGRAM_CHAT_ID` is a group chat (negative id) |
 | `MENTHORQ_ALERT_*` | see the rules table | alert rules |
@@ -246,6 +283,33 @@ The bot token and the owner chat are `OSF_TELEGRAM_BOT_TOKEN` and `OSF_TELEGRAM_
 Only one process can poll a bot token. If another process polls the same token, Telegram answers 409,
 and that is logged.
 
+### Command polling
+
+Each poll is one `getUpdates` call with a 5 s long-poll wait (`LONG_POLL_SECONDS` in
+`telegram_command_listener.py`). `TelegramAlertService.get_updates` keeps one `requests.Session`
+open between polls (keep-alive; it is closed and reopened after a network error) and passes the
+timeouts as a (connect, read) pair: connect 4 s, read = long-poll wait + 3 s = 8 s. requests applies
+the two separately, so the intended bound of one poll is 4 + 8 = 12 s
+(`get_updates_worst_case_seconds`). It is not a hard guarantee: requests applies the read timeout
+to each socket read, not to the whole reply, and DNS resolution is not covered by the connect
+timeout. `MENTHORQ_COMMAND_POLL_SECONDS` (default 15) must be strictly longer, so the minimum is 13;
+the APScheduler job runs one instance at a time and coalesces missed runs. Values of 12 and below
+were valid before this change and are now rejected at start-up; the VPS `.env` sets no
+`MENTHORQ_COMMAND_POLL_SECONDS`, so it uses the default. Before this, a single
+`timeout=20` applied to the connect and the read separately and a new connection was opened for each
+poll, so one poll could last longer than the 20 s interval; the VPS log then showed about 400
+`maximum number of running instances reached` warnings and about 40 read timeouts a day.
+
+Logging: a timeout or network error is expected now and then on a long poll and is logged at INFO
+(`getUpdates timed out, will retry`); the 3rd one since the last successful poll is a WARNING
+(`... (3 consecutive getUpdates timeouts or network errors)`), then every 20th after it (23, 43,
+...). Timeouts and HTTP errors have separate counters, so two 409s followed by one timeout log no
+warning for the timeout. An HTTP error status (401, 409 or
+any other) or a malformed body is a WARNING at its first occurrence, then INFO, with a WARNING again
+at every 20th repeat of the same status (21st, 41st, ...), so a lasting 409 (another process polls
+the same bot) does not fill the log. A successful poll resets the counts. The bot token is scrubbed
+from every logged text.
+
 ## Deployment of the bot commands (migration 032)
 
 Migration 032 depends on 031 being applied first. Both are idempotent (`IF NOT EXISTS`).
@@ -265,7 +329,7 @@ an enabled monitor whose tables are missing is not started (see above).
    command. Set any `MENTHORQ_ALERT_*` overrides there too. Without them the defaults above apply.
 4. Restart the collector: `sudo systemctl restart option-trading`. The log should show
    `MenthorQ monitor scheduled: hourly at :10 UTC, weekly brief fri 09:00 UTC`,
-   `MenthorQ bot command polling every 20 s` and, at the first poll,
+   `MenthorQ bot command polling every 15 s` and, at the first poll,
    `command menu registered (6 commands)`. It must NOT show `MenthorQ monitor OFF` or
    `Telegram OFF`.
 5. In Telegram, send `/help` and then `/status`.

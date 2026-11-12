@@ -1089,6 +1089,18 @@ class DatabaseRepository:
             captured_at = self._newest_snapshot_capture(cursor, currency, as_of_naive_utc)
         return captured_at.replace(tzinfo=timezone.utc) if captured_at is not None else None
 
+    def get_earliest_option_chain_capture(self, currency: str) -> Optional[datetime]:
+        """
+        Capture time (UTC-aware) of the oldest ``snapshots`` capture of
+        ``currency``, or None when there is none. One MIN query, no chain
+        rows: no instant before it can have a snapshot.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute("SELECT MIN(captured_at) FROM snapshots WHERE currency = %s", (currency,))
+            row = cursor.fetchone()
+        captured_at = row[0] if row is not None else None
+        return captured_at.replace(tzinfo=timezone.utc) if captured_at is not None else None
+
     def get_option_chain_snapshot_at_or_before(
         self, currency: str, as_of: datetime
     ) -> Optional[Tuple[datetime, List[Dict[str, Any]]]]:
@@ -1294,6 +1306,30 @@ class DatabaseRepository:
             )
             rows = cursor.fetchall()
         return [self._menthorq_level_record_from_row(row) for row in rows]
+
+    def get_computed_menthorq_level_run_instants_between(
+        self, currency: str, mode: str, expiry_universe: str, gamma_underlying: str,
+        earliest: datetime, before: datetime,
+    ) -> List[datetime]:
+        """
+        ``as_of_utc`` (UTC-aware) of every stored COMPUTED run (with levels,
+        ``has_levels``, the condition the save rule uses) with ``earliest``
+        <= ``as_of_utc`` < ``before``, oldest first. One query on the key and
+        level columns (no record is built): the live backfill's list of the
+        hours that need no replay; a not-computed row's hour is replayed and
+        the save rule replaces that row.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                "SELECT as_of_utc FROM menthorq_level_snapshots "
+                "WHERE currency = %s AND mode = %s AND expiry_universe = %s "
+                "AND gamma_underlying = %s AND as_of_utc >= %s AND as_of_utc < %s "
+                f"AND {has_levels_sql_condition('menthorq_level_snapshots')} "
+                "ORDER BY as_of_utc",
+                (currency, mode, expiry_universe, gamma_underlying, earliest, before),
+            )
+            rows = cursor.fetchall()
+        return [row[0].astimezone(timezone.utc) for row in rows]
 
     def save_menthorq_alert_deliveries(
         self, currency: str, alert_keys: List[str], delivered_at: datetime, message: str,

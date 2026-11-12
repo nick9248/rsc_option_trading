@@ -21,13 +21,42 @@ from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
+# getUpdates timeouts (requests applies a (connect, read) tuple separately):
+# connect 4 s; the read waits the long poll plus 3 s for the reply.
+GET_UPDATES_CONNECT_TIMEOUT_SECONDS = 4
+GET_UPDATES_READ_MARGIN_SECONDS = 3
+# Consecutive timeouts / network errors: a WARNING at the 3rd, then every 20 more.
+GET_UPDATES_FAILURE_WARNING_THRESHOLD = 3
+GET_UPDATES_FAILURE_WARNING_REPEAT = 20
+# An HTTP error status or malformed body: a WARNING at its first occurrence and
+# then at every 20th repeat of the same kind (until a successful poll).
+GET_UPDATES_ERROR_WARNING_REPEAT = 20
+
+
+def get_updates_timeouts(long_poll_seconds: int) -> Tuple[int, int]:
+    """The (connect, read) timeout of one getUpdates call with this long-poll wait."""
+    return GET_UPDATES_CONNECT_TIMEOUT_SECONDS, long_poll_seconds + GET_UPDATES_READ_MARGIN_SECONDS
+
+
+def get_updates_worst_case_seconds(long_poll_seconds: int) -> int:
+    """
+    The intended bound of one getUpdates call: the connect timeout plus the
+    read timeout (e.g. 4 + 5 + 3 = 12 s for a 5 s long poll). The polling
+    interval must be strictly longer. It is not a hard guarantee: requests
+    applies the read timeout to each socket read (not to the whole reply),
+    and DNS resolution is not covered by the connect timeout.
+    """
+    connect_timeout, read_timeout = get_updates_timeouts(long_poll_seconds)
+    return connect_timeout + read_timeout
+
 
 class TelegramAlertService:
     """
     Sends a plain-text message to a Telegram chat via the Bot API.
 
     Never raises: any failure (missing credentials, network error, non-200
-    response) is logged as a warning and send() returns False. Callers
+    response) is logged as a warning (getUpdates: see ``get_updates``) and
+    send() returns False. Callers
     should treat a False return as "alert not delivered" and retry (or
     accept the miss) rather than crash the calling pipeline.
     """
@@ -49,6 +78,13 @@ class TelegramAlertService:
         self._chat_id = chat_id
         self._base_url = f"https://api.telegram.org/bot{self._token}"
         self._bot_username: Optional[str] = None   # getMe result, cached once known
+        # getUpdates keeps one connection open between polls (keep-alive); a new
+        # session is opened after a network error.
+        self._updates_session: Optional[requests.Session] = None
+        # getUpdates timeouts / network errors in a row (HTTP errors are counted apart).
+        self._consecutive_network_failures = 0
+        # HTTP status / malformed body -> failures of that kind since the last successful poll.
+        self._get_updates_error_repeats: Dict[str, int] = {}
 
     @property
     def chat_id(self) -> str:
@@ -178,6 +214,16 @@ class TelegramAlertService:
         with ``offset`` = last update_id + 1 confirms every earlier update,
         so Telegram does not deliver it again.
 
+        Uses one persistent ``requests.Session`` (keep-alive, closed and
+        reopened after a network error) and the (connect, read) timeouts of
+        ``get_updates_timeouts``. Logging (``_log_get_updates_failure``): a
+        timeout or network error is expected now and then on a long poll and
+        is logged at INFO, with a WARNING at the 3rd consecutive failure and
+        every 20th after it; an HTTP error status or a malformed body warns
+        at its first occurrence and at every 20th repeat of the same kind. A
+        success resets the counts. The bot token is scrubbed from every
+        logged text.
+
         Args:
             offset: First update id to return, or None for every unconfirmed one.
             timeout_seconds: Long-polling wait on Telegram's side.
@@ -193,21 +239,82 @@ class TelegramAlertService:
         parameters: Dict[str, Any] = {"timeout": timeout_seconds, "allowed_updates": '["message"]'}
         if offset is not None:
             parameters["offset"] = offset
+        if self._updates_session is None:
+            self._updates_session = requests.Session()
         try:
-            response = requests.get(
+            response = self._updates_session.get(
                 f"{self._base_url}/getUpdates",
                 params=parameters,
-                timeout=timeout_seconds + 10,
+                timeout=get_updates_timeouts(timeout_seconds),
             )
-            if not response.ok:
-                logger.warning("TelegramAlertService: getUpdates returned %s: %s",
-                               response.status_code, response.text)
-                return None
-            body = response.json()
-            if not body.get("ok") or not isinstance(body.get("result"), list):
-                logger.warning("TelegramAlertService: unexpected getUpdates body: %s", body)
-                return None
-            return body["result"]
-        except Exception as error:
-            logger.warning("TelegramAlertService: getUpdates failed: %s", self._without_token(error))
+        except requests.Timeout:
+            # Expected now and then on a long poll; the next poll retries.
+            self._close_updates_session()
+            self._log_get_updates_failure("getUpdates timed out, will retry", error_kind=None)
             return None
+        except Exception as error:
+            self._close_updates_session()
+            self._log_get_updates_failure(
+                f"getUpdates failed, will retry: {self._without_token(error)}", error_kind=None)
+            return None
+        if not response.ok:
+            self._log_get_updates_failure(
+                f"getUpdates returned {response.status_code}: {self._without_token(response.text)}",
+                error_kind=f"HTTP {response.status_code}")
+            return None
+        try:
+            body = response.json()
+        except ValueError:
+            body = None
+        if not isinstance(body, dict) or not body.get("ok") or not isinstance(body.get("result"), list):
+            self._log_get_updates_failure(
+                f"unexpected getUpdates body: {self._without_token(body if body is not None else response.text)}",
+                error_kind="malformed body")
+            return None
+        self._consecutive_network_failures = 0
+        self._get_updates_error_repeats.clear()
+        return body["result"]
+
+    def _close_updates_session(self) -> None:
+        """Close the getUpdates session after a network error; the next poll opens a new one."""
+        if self._updates_session is not None:
+            try:
+                self._updates_session.close()
+            except Exception as error:
+                logger.debug("TelegramAlertService: closing the getUpdates session failed: %s",
+                             self._without_token(error))
+            self._updates_session = None
+
+    def _log_get_updates_failure(self, message: str, error_kind: Optional[str]) -> None:
+        """
+        Count one failed getUpdates and log ``message`` (already free of the
+        token) at WARNING or INFO.
+
+        - ``error_kind`` None (a timeout or network error): counted on their
+          own counter (an HTTP error does not add to it). INFO until it
+          reaches ``GET_UPDATES_FAILURE_WARNING_THRESHOLD`` (3): one WARNING
+          then, and again every ``GET_UPDATES_FAILURE_WARNING_REPEAT`` (20)
+          after it.
+        - ``error_kind`` set (an HTTP status such as "HTTP 409", or "malformed
+          body"): counted per kind (a timeout does not add to it). A WARNING
+          at its first occurrence, then INFO, with a WARNING again at every
+          ``GET_UPDATES_ERROR_WARNING_REPEAT`` (20th) repeat of the same
+          kind, so a lasting 409 does not fill the log.
+
+        A successful poll resets both counters.
+        """
+        if error_kind is None:
+            self._consecutive_network_failures += 1
+            count = self._consecutive_network_failures
+            warn = (count >= GET_UPDATES_FAILURE_WARNING_THRESHOLD
+                    and (count - GET_UPDATES_FAILURE_WARNING_THRESHOLD) % GET_UPDATES_FAILURE_WARNING_REPEAT == 0)
+            suffix = f" ({count} consecutive getUpdates timeouts or network errors)" if warn else ""
+        else:
+            repeats = self._get_updates_error_repeats.get(error_kind, 0) + 1
+            self._get_updates_error_repeats[error_kind] = repeats
+            warn = (repeats - 1) % GET_UPDATES_ERROR_WARNING_REPEAT == 0
+            suffix = f" (occurrence {repeats} since the last successful poll)" if repeats > 1 else ""
+        if warn:
+            logger.warning("TelegramAlertService: %s%s", message, suffix)
+        else:
+            logger.info("TelegramAlertService: %s%s", message, suffix)

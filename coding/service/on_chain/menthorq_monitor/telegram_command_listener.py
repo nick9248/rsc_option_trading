@@ -59,7 +59,10 @@ from coding.service.notifications.telegram_alert_service import TelegramAlertSer
 
 logger = logging.getLogger(__name__)
 
-LONG_POLL_SECONDS = 10
+# Telegram's long-poll wait per getUpdates. With the (connect 4 s, read wait + 3 s)
+# timeouts the intended bound of one poll is 12 s (get_updates_worst_case_seconds),
+# below the 15 s default polling interval, so APScheduler should not have to skip runs.
+LONG_POLL_SECONDS = 5
 MAXIMUM_COMMAND_AGE = timedelta(minutes=10)
 # The restart notice names at most this many characters of the skipped command.
 SKIPPED_COMMAND_MAXIMUM_LENGTH = 20

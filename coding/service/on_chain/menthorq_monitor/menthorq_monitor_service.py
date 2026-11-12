@@ -17,18 +17,26 @@ Two modes (column ``mode``):
     (``stale_input_reasons`` and ``DAILY_CLOSE_MAXIMUM_INPUT_AGE`` in
     core/analytics/menthorq_monitor/input_age.py, shared with the backtest).
 
+The hourly run also stores missing LIVE records of the last 7 days
+(``run_live_backfill``: point-in-time replay of the live schedule, marked
+``BACKFILLED_LIVE_CAVEAT``, never alerted on), so the comparisons have a
+reference after a monitor start or an outage.
+
 Reuses ``MenthorqInputLoader`` and ``replicate_menthorq`` (no chart import).
 """
 
 import logging
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Callable, Dict, List, Optional
+from enum import Enum
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from coding.core.analytics.menthorq_monitor.input_age import (
     DAILY_CLOSE_MAXIMUM_INPUT_AGE,
     stale_input_reasons,
 )
 from coding.core.analytics.menthorq_monitor.level_record import (
+    BACKFILLED_LIVE_CAVEAT,
     MODE_DAILY_CLOSE,
     MODE_LIVE,
     MenthorqLevelRecord,
@@ -49,13 +57,65 @@ from coding.core.analytics.menthorq_replication_calculator import (
     start_of_utc_day,
 )
 from coding.core.database.repository import DatabaseRepository
-from coding.service.on_chain.menthorq_input_loader import MenthorqInputLoader
+from coding.service.on_chain.menthorq_input_loader import MenthorqInputLoader, MissingIndexPriceError
 from coding.service.on_chain.menthorq_monitor.monitor_settings import MenthorqMonitorSettings
 
 logger = logging.getLogger(__name__)
 
 # The hourly run fills missing daily-close records of this many ended UTC days.
 DAILY_CLOSE_BACKFILL_DAYS = 7
+# The hourly run fills missing live records of this many days (run_live_backfill),
+# computing at most this many per run so the run stays short.
+LIVE_BACKFILL_DAYS = 7
+LIVE_BACKFILL_MAXIMUM_RECORDS_PER_RUN = 48   # instants whose inputs were loaded
+BACKFILL_FAILED_INSTANTS_LOGGED = 5
+# A retryable miss (no index price, late missing snapshot, failure) is tried at most
+# this many times per process; then the instant counts as permanently unfillable.
+BACKFILL_MAXIMUM_RETRYABLE_ATTEMPTS = 3
+
+
+class BackfillSkipReason(Enum):
+    """Why a live-backfill instant was not stored."""
+
+    NO_SNAPSHOT = "no snapshot"
+    STALE_INPUT = "stale input"
+    NO_INDEX_PRICE = "no index price"
+    NO_LEVELS = "no levels"
+    FAILED = "failed"
+
+
+# Not retried in this process: the data before the instant will not change.
+PERMANENT_SKIP_REASONS = frozenset({BackfillSkipReason.STALE_INPUT, BackfillSkipReason.NO_LEVELS})
+
+
+@dataclass(frozen=True)
+class BackfillOutcome:
+    """
+    Result of ``compute_backfill_record``: the record to store, or the skip
+    reason. ``attempted`` is True when the inputs were loaded (the costly
+    step that the per-run cap counts).
+    """
+
+    record: Optional[MenthorqLevelRecord] = None
+    skip_reason: Optional[BackfillSkipReason] = None
+    attempted: bool = True
+
+
+@dataclass(frozen=True)
+class _InputComputation:
+    """
+    Result of ``MenthorqMonitorService._compute_from_inputs``: exactly one of
+    ``missing_input_error`` (an input has no row at or before its instant),
+    ``stale_reasons`` (an input is too old) or ``record`` (computed, with or
+    without levels) is set. ``inputs`` are the loaded inputs, when loaded.
+    """
+
+    record: Optional[MenthorqLevelRecord] = None
+    missing_input_error: Optional[LookupError] = None
+    stale_reasons: Tuple[str, ...] = ()
+    inputs: Optional[Dict[str, Any]] = None
+
+
 # How far a comparison record may be from its target instant (e.g. "24 h
 # ago" accepts a record between 30 h and 24 h ago). Older -> "no record".
 COMPARISON_TOLERANCE = {
@@ -108,6 +168,10 @@ class MenthorqMonitorService:
         # Daily-close date -> newest snapshot capture (at or before its 23:59 UTC)
         # when this process last computed it; None when there was none.
         self._daily_close_attempt_captures: Dict[date, Optional[datetime]] = {}
+        # Live-backfill instants judged unfillable for a permanent reason in this process,
+        # and the retryable misses per instant (both pruned to the 7-day window each run).
+        self._backfill_unfillable_instants: Set[datetime] = set()
+        self._backfill_retryable_attempts: Dict[datetime, int] = {}
 
     def compute_record(
         self, mode: str, as_of: datetime, open_interest_as_of: Optional[datetime] = None,
@@ -120,30 +184,54 @@ class MenthorqMonitorService:
         instant (``stale_input_reasons``) give such a record too.
         """
         settings = self.settings
-        try:
-            inputs = self.input_loader.load_inputs(settings.currency, as_of, open_interest_as_of)
-        except LookupError as error:
+        computation = self._compute_from_inputs(mode, as_of, open_interest_as_of, maximum_input_age)
+        if computation.missing_input_error is not None:
+            error = computation.missing_input_error
             logger.warning("MenthorQ %s record at %s not computed: %s", mode, as_of.isoformat(), error)
             return build_not_computed_record(
                 settings.currency, mode, as_of, self.clock(), settings.expiry_universe,
                 settings.gamma_underlying, f"inputs not available: {error}")
+        if computation.stale_reasons:
+            reason = "; ".join(computation.stale_reasons)
+            logger.warning("MenthorQ %s record at %s not computed: %s", mode, as_of.isoformat(), reason)
+            inputs = computation.inputs or {}
+            # The snapshots used are known: keep their capture times, so a retry after a
+            # restart sees that no newer snapshot exists (_daily_close_retry_is_due).
+            return build_not_computed_record(
+                settings.currency, mode, as_of, self.clock(), settings.expiry_universe,
+                settings.gamma_underlying, reason,
+                snapshot_captured_at_utc=inputs.get("snapshot_captured_at_utc"),
+                open_interest_captured_at_utc=inputs.get("open_interest_captured_at_utc"))
+        if computation.record is None:
+            raise ValueError("an input computation without an error must carry its record")
+        return computation.record
+
+    def _compute_from_inputs(
+        self, mode: str, as_of: datetime, open_interest_as_of: Optional[datetime],
+        maximum_input_age: Optional[timedelta],
+    ) -> "_InputComputation":
+        """
+        The one shared path of ``compute_record`` and
+        ``compute_backfill_record``: load the point-in-time inputs, check
+        their age (only with ``maximum_input_age``), replicate the levels and
+        build the record (not stored). Logs nothing: each caller decides what
+        a missing or stale input means for it.
+        """
+        settings = self.settings
+        try:
+            inputs = self.input_loader.load_inputs(settings.currency, as_of, open_interest_as_of)
+        except LookupError as error:
+            return _InputComputation(missing_input_error=error)
         if maximum_input_age is not None:
             reasons = stale_input_reasons(inputs, as_of, open_interest_as_of or as_of, maximum_input_age)
             if reasons:
-                reason = "; ".join(reasons)
-                logger.warning("MenthorQ %s record at %s not computed: %s", mode, as_of.isoformat(), reason)
-                # The snapshots used are known: keep their capture times, so a retry after a
-                # restart sees that no newer snapshot exists (_daily_close_retry_is_due).
-                return build_not_computed_record(
-                    settings.currency, mode, as_of, self.clock(), settings.expiry_universe,
-                    settings.gamma_underlying, reason,
-                    snapshot_captured_at_utc=inputs.get("snapshot_captured_at_utc"),
-                    open_interest_captured_at_utc=inputs.get("open_interest_captured_at_utc"))
+                return _InputComputation(stale_reasons=tuple(reasons), inputs=inputs)
         replication = replicate_menthorq(
             inputs["chain_rows"], inputs["index_price"], as_of,
             settings.expiry_universe, settings.gamma_underlying, currency=settings.currency,
         )
-        return build_level_record(replication, inputs, settings.currency, mode, as_of, self.clock())
+        record = build_level_record(replication, inputs, settings.currency, mode, as_of, self.clock())
+        return _InputComputation(record=record, inputs=inputs)
 
     def compute_live_record(self, now: datetime) -> MenthorqLevelRecord:
         """Live record at ``now`` (newest snapshot, its own open interest)."""
@@ -281,6 +369,189 @@ class MenthorqMonitorService:
                         len(failed_days), f" ({', '.join(failed_days)})" if failed_days else "")
         if latest_day_error is not None:
             raise latest_day_error
+        return stored
+
+    def live_backfill_instants(self, now: datetime) -> List[datetime]:
+        """
+        The live-schedule instants (minute ``settings.live_run_minute`` of
+        every UTC hour) of the last ``LIVE_BACKFILL_DAYS`` days, strictly
+        before the current live run's instant (``live_as_of(now)``), oldest
+        first.
+        """
+        current = live_as_of(now)
+        newest = current.replace(minute=self.settings.live_run_minute)
+        if newest >= current:
+            newest -= timedelta(hours=1)
+        earliest = current - timedelta(days=LIVE_BACKFILL_DAYS)
+        instants = []
+        instant = newest
+        while instant >= earliest:
+            instants.append(instant)
+            instant -= timedelta(hours=1)
+        return instants[::-1]
+
+    def compute_backfill_record(self, as_of: datetime) -> BackfillOutcome:
+        """
+        The live record the hourly run would have stored at ``as_of``, or
+        why none can be stored. Steps, cheapest first:
+
+        1. One MAX query for the newest snapshot capture at or before
+           ``as_of``: none -> ``NO_SNAPSHOT``; older than
+           ``settings.stale_snapshot_limit`` -> ``STALE_INPUT`` (no chain
+           load; ``attempted`` False).
+        2. The live loader path (snapshot, its open interest and the index
+           price at or before ``as_of``, nothing after it): no index price
+           -> ``NO_INDEX_PRICE``, another missing input -> ``NO_SNAPSHOT``,
+           an input older than the limit -> ``STALE_INPUT``.
+        3. The levels: none computed -> ``NO_LEVELS`` (a replay never
+           stores a row without levels). Otherwise the record, with
+           ``BACKFILLED_LIVE_CAVEAT`` appended after its own caveats.
+
+        Raises:
+            Exception: any other error (the caller counts it as ``FAILED``).
+        """
+        settings = self.settings
+        newest_capture = self.repository.get_latest_option_chain_capture_at_or_before(
+            settings.currency, as_of)
+        if newest_capture is None:
+            return BackfillOutcome(skip_reason=BackfillSkipReason.NO_SNAPSHOT, attempted=False)
+        if as_of - newest_capture > settings.stale_snapshot_limit:
+            return BackfillOutcome(skip_reason=BackfillSkipReason.STALE_INPUT, attempted=False)
+        computation = self._compute_from_inputs(MODE_LIVE, as_of, None, settings.stale_snapshot_limit)
+        if isinstance(computation.missing_input_error, MissingIndexPriceError):
+            return BackfillOutcome(skip_reason=BackfillSkipReason.NO_INDEX_PRICE)
+        if computation.missing_input_error is not None:
+            return BackfillOutcome(skip_reason=BackfillSkipReason.NO_SNAPSHOT)
+        if computation.stale_reasons:
+            return BackfillOutcome(skip_reason=BackfillSkipReason.STALE_INPUT)
+        record = computation.record
+        if record is None or not record.has_levels:
+            return BackfillOutcome(skip_reason=BackfillSkipReason.NO_LEVELS)
+        record.not_computed_reasons.append(BACKFILLED_LIVE_CAVEAT)
+        return BackfillOutcome(record=record)
+
+    def _count_retryable_attempt(self, instant: datetime) -> None:
+        """
+        Count one more retryable miss of ``instant`` (no index price, a late
+        missing snapshot, a failure). After
+        ``BACKFILL_MAXIMUM_RETRYABLE_ATTEMPTS`` of them the instant counts as
+        permanently unfillable in this process, so it stops using the cap.
+        """
+        attempts = self._backfill_retryable_attempts.get(instant, 0) + 1
+        if attempts >= BACKFILL_MAXIMUM_RETRYABLE_ATTEMPTS:
+            self._backfill_retryable_attempts.pop(instant, None)
+            self._backfill_unfillable_instants.add(instant)
+        else:
+            self._backfill_retryable_attempts[instant] = attempts
+
+    def run_live_backfill(self, now: datetime) -> List[MenthorqLevelRecord]:
+        """
+        Store the MISSING live records of the last ``LIVE_BACKFILL_DAYS``
+        days (``live_backfill_instants``), oldest first, so the "7 days ago"
+        and "24 h ago" comparisons have a reference after a monitor start or
+        an outage. An hour counts as stored when a COMPUTED live row (with
+        levels) of the same key has its ``as_of_utc`` in that UTC hour (one
+        query, ``get_computed_menthorq_level_run_instants_between``); the hour
+        of a not-computed row is replayed, and the save rule replaces that
+        row when the replay computes levels. Every instant
+        before the earliest snapshot capture (one MIN query) is skipped
+        without further work; each other one goes through
+        ``compute_backfill_record``. Only instants whose inputs were actually
+        loaded (``attempted``) count toward
+        ``LIVE_BACKFILL_MAXIMUM_RECORDS_PER_RUN``, so cheap skips never block
+        newer fillable hours; a long gap fills over a few hourly runs.
+        Instants unfillable for a permanent reason (``PERMANENT_SKIP_REASONS``,
+        or no snapshot found by the cheap check) are remembered in this
+        process and not queried or counted again; ``NO_INDEX_PRICE``, a late
+        missing snapshot and ``FAILED`` are retried next run, at most
+        ``BACKFILL_MAXIMUM_RETRYABLE_ATTEMPTS`` times in all, then they are
+        remembered too. Both memories are pruned to the current window at
+        the start of each run. Stored with
+        mode "live" and ``BACKFILLED_LIVE_CAVEAT``; the save rule never
+        replaces a computed row. No alert is evaluated and nothing is sent. One INFO
+        line per run gives the count of each outcome; failed instants are
+        listed at WARNING (at most ``BACKFILL_FAILED_INSTANTS_LOGGED``).
+
+        Returns:
+            The records stored by this call, oldest first.
+        """
+        settings = self.settings
+        instants = self.live_backfill_instants(now)
+        # Forget instants that left the 7-day window, so the memo stays bounded.
+        window = set(instants)
+        self._backfill_unfillable_instants &= window
+        self._backfill_retryable_attempts = {instant: attempts for instant, attempts
+                                             in self._backfill_retryable_attempts.items()
+                                             if instant in window}
+        if not instants:
+            return []
+        stored_instants = self.repository.get_computed_menthorq_level_run_instants_between(
+            settings.currency, MODE_LIVE, settings.expiry_universe, settings.gamma_underlying,
+            instants[0].replace(minute=0), instants[-1].replace(minute=0) + timedelta(hours=1))
+        stored_hours = {instant.replace(minute=0, second=0, microsecond=0) for instant in stored_instants}
+        missing = [instant for instant in instants
+                   if instant.replace(minute=0) not in stored_hours
+                   and instant not in self._backfill_unfillable_instants]
+        if not missing:
+            return []
+        earliest_capture = self.repository.get_earliest_option_chain_capture(settings.currency)
+        stored: List[MenthorqLevelRecord] = []
+        counts: Dict[BackfillSkipReason, int] = {reason: 0 for reason in BackfillSkipReason}
+        failed: List[datetime] = []
+        errors: List[Exception] = []
+
+        def count_failure(instant: datetime, error: Exception) -> None:
+            logger.debug("MenthorQ live backfill at %s failed", instant.isoformat(), exc_info=error)
+            counts[BackfillSkipReason.FAILED] += 1
+            failed.append(instant)
+            errors.append(error)
+            self._count_retryable_attempt(instant)
+
+        attempted = 0
+        for instant in missing:
+            if earliest_capture is None or instant < earliest_capture:
+                counts[BackfillSkipReason.NO_SNAPSHOT] += 1
+                self._backfill_unfillable_instants.add(instant)
+                continue
+            if attempted >= LIVE_BACKFILL_MAXIMUM_RECORDS_PER_RUN:
+                break
+            try:
+                outcome = self.compute_backfill_record(instant)
+            except Exception as error:
+                attempted += 1
+                count_failure(instant, error)
+                continue
+            if outcome.attempted:
+                attempted += 1
+            if outcome.record is not None:
+                try:
+                    stored.append(self.store(outcome.record))
+                    self._backfill_retryable_attempts.pop(instant, None)
+                except Exception as error:
+                    count_failure(instant, error)
+                continue
+            reason = outcome.skip_reason
+            if reason is None:
+                raise ValueError("a backfill outcome without a record must name its skip reason")
+            counts[reason] += 1
+            if reason in PERMANENT_SKIP_REASONS or (reason is BackfillSkipReason.NO_SNAPSHOT
+                                                    and not outcome.attempted):
+                self._backfill_unfillable_instants.add(instant)
+            else:
+                self._count_retryable_attempt(instant)
+        if stored or any(counts.values()):
+            logger.info("MenthorQ live backfill: %d missing hours: %d stored, %d no snapshot, %d stale input "
+                        "(limit %d min), %d no index price, %d no levels, %d failed",
+                        len(missing), len(stored), counts[BackfillSkipReason.NO_SNAPSHOT],
+                        counts[BackfillSkipReason.STALE_INPUT], settings.stale_snapshot_minutes,
+                        counts[BackfillSkipReason.NO_INDEX_PRICE], counts[BackfillSkipReason.NO_LEVELS],
+                        counts[BackfillSkipReason.FAILED])
+        if failed:
+            listed = ", ".join(instant.isoformat() for instant in failed[:BACKFILL_FAILED_INSTANTS_LOGGED])
+            more = len(failed) - BACKFILL_FAILED_INSTANTS_LOGGED
+            logger.warning("MenthorQ live backfill: %d instant(s) failed (%s%s); first error: %s: %s",
+                           len(failed), listed, f" and {more} more" if more > 0 else "",
+                           type(errors[0]).__name__, errors[0])
         return stored
 
     def is_usable_reference(self, record: MenthorqLevelRecord) -> bool:

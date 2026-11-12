@@ -23,7 +23,7 @@ from PySide6.QtCore import Qt, QThread, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget
 
-from coding.core.analytics.menthorq_chart_summary import data_warnings
+from coding.core.analytics.menthorq_chart_summary import data_notes, data_warnings
 from coding.core.analytics.menthorq_replication_calculator import (
     EXPIRY_UNIVERSE_MONTHLY,
     GAMMA_UNDERLYING_INDEX,
@@ -146,6 +146,13 @@ class MenthorqChartsTab(QWidget):
         self.warning_label.setVisible(False)
         frame_layout.addWidget(self.warning_label)
 
+        # Expected gaps (e.g. an expiry listed after the open-interest snapshot): neutral color.
+        self.note_label = QLabel("")
+        self.note_label.setWordWrap(True)
+        self.note_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY};")
+        self.note_label.setVisible(False)
+        frame_layout.addWidget(self.note_label)
+
         folder_row = QHBoxLayout()
         folder_row.addWidget(QLabel("Folder"))
         self.folder_link_label = QLabel("not generated yet")
@@ -172,6 +179,7 @@ class MenthorqChartsTab(QWidget):
         menthorq_date = last_complete_utc_day(datetime.now(timezone.utc))
         self.generate_button.setEnabled(False)
         self.warning_label.setVisible(False)
+        self.note_label.setVisible(False)
         self._set_status(f"Generating the charts for {menthorq_date.isoformat()} "
                          "(a few seconds)...", Colors.WARNING)
         self.worker = MenthorqChartsWorker(menthorq_date, self.output_directory)
@@ -188,6 +196,9 @@ class MenthorqChartsTab(QWidget):
         warnings = data_warnings(output)
         self.warning_label.setText("\n".join(f"Warning: {warning}" for warning in warnings))
         self.warning_label.setVisible(bool(warnings))
+        notes = data_notes(output)
+        self.note_label.setText("\n".join(f"Note: {note}" for note in notes))
+        self.note_label.setVisible(bool(notes))
         self._show_folder(result["folder"])
         self.generate_button.setEnabled(True)
 

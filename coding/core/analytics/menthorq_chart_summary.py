@@ -23,6 +23,7 @@ from coding.core.analytics.menthorq_replication_calculator import (
     IV_SOURCE_REBUILT_FROM_MARK_PRICE,
     PANEL_NAMES,
     PANEL_RANKING_ABSOLUTE_NET,
+    expiry_not_in_open_interest_snapshot_text,
     iv_source_text,
     parse_expiry_settlement,
     select_drawn_levels,
@@ -196,8 +197,10 @@ def data_warnings(
     Plain-language warnings about the inputs: IV rebuilt or missing, expiries
     whose GEX was not computed, rows without open interest, a currency the
     formulas were not fitted on, and a reference JSON for another date.
-    Empty when there is nothing to warn about.
+    Expiries listed after the open-interest snapshot (``data_notes``) are
+    expected and left out here. Empty when there is nothing to warn about.
     """
+    expected = set(output.get("expiries_not_in_open_interest_snapshot", []))
     warnings: List[str] = []
     inputs = output["inputs"]
     counts = inputs["iv_source_counts"]
@@ -216,7 +219,7 @@ def data_warnings(
     all_expiries = output["configurations"][
         f"{EXPIRY_UNIVERSE_ALL}__gamma_at_{gamma_underlying}"]["replication"]
     not_computed = [expiration for expiration, exposure in all_expiries["gex_by_expiration"].items()
-                    if exposure["total_net_gex"] is None]
+                    if exposure["total_net_gex"] is None and expiration not in expected]
     if not_computed:
         noun = "expiry" if len(not_computed) == 1 else "expiries"
         warnings.append(f"GEX not computed for {len(not_computed)} {noun} "
@@ -225,7 +228,7 @@ def data_warnings(
 
     without_open_interest = {entry["expiration"]: entry["rows_without_open_interest"]
                              for entry in output["per_expiry_iv_times_open_interest"]
-                             if entry["rows_without_open_interest"]}
+                             if entry["rows_without_open_interest"] and entry["expiration"] not in expected}
     if without_open_interest:
         details = ", ".join(f"{expiration} {count}" for expiration, count in without_open_interest.items())
         warnings.append(f"{sum(without_open_interest.values()):,} rows have no open interest in the "
@@ -243,6 +246,18 @@ def data_warnings(
             warnings.append(f"The reference JSON is for {reference_date.isoformat()}, "
                             f"the charts are for {chart_date.isoformat()}")
     return warnings
+
+
+def data_notes(output: Dict[str, Any]) -> List[str]:
+    """
+    Neutral notes about expected gaps (shown as "Note:", not as a warning):
+    one per expiry listed after the open-interest snapshot
+    (``expiries_not_in_open_interest_snapshot`` of the run output), whose
+    levels show as not computed. Empty when there is none, or for an output
+    written before that key existed.
+    """
+    return [expiry_not_in_open_interest_snapshot_text(expiration)
+            for expiration in output.get("expiries_not_in_open_interest_snapshot", [])]
 
 
 def _difference(ours: Optional[float], theirs: Optional[float]) -> Optional[float]:
