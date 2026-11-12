@@ -69,6 +69,9 @@ DAILY_CLOSE_BACKFILL_DAYS = 7
 LIVE_BACKFILL_DAYS = 7
 LIVE_BACKFILL_MAXIMUM_RECORDS_PER_RUN = 48   # instants whose inputs were loaded
 BACKFILL_FAILED_INSTANTS_LOGGED = 5
+# A retryable miss (no index price, late missing snapshot, failure) is tried at most
+# this many times per process; then the instant counts as permanently unfillable.
+BACKFILL_MAXIMUM_RETRYABLE_ATTEMPTS = 3
 
 
 class BackfillSkipReason(Enum):
@@ -165,8 +168,10 @@ class MenthorqMonitorService:
         # Daily-close date -> newest snapshot capture (at or before its 23:59 UTC)
         # when this process last computed it; None when there was none.
         self._daily_close_attempt_captures: Dict[date, Optional[datetime]] = {}
-        # Live-backfill instants judged unfillable for a permanent reason in this process.
+        # Live-backfill instants judged unfillable for a permanent reason in this process,
+        # and the retryable misses per instant (both pruned to the 7-day window each run).
         self._backfill_unfillable_instants: Set[datetime] = set()
+        self._backfill_retryable_attempts: Dict[datetime, int] = {}
 
     def compute_record(
         self, mode: str, as_of: datetime, open_interest_as_of: Optional[datetime] = None,
@@ -425,6 +430,20 @@ class MenthorqMonitorService:
         record.not_computed_reasons.append(BACKFILLED_LIVE_CAVEAT)
         return BackfillOutcome(record=record)
 
+    def _count_retryable_attempt(self, instant: datetime) -> None:
+        """
+        Count one more retryable miss of ``instant`` (no index price, a late
+        missing snapshot, a failure). After
+        ``BACKFILL_MAXIMUM_RETRYABLE_ATTEMPTS`` of them the instant counts as
+        permanently unfillable in this process, so it stops using the cap.
+        """
+        attempts = self._backfill_retryable_attempts.get(instant, 0) + 1
+        if attempts >= BACKFILL_MAXIMUM_RETRYABLE_ATTEMPTS:
+            self._backfill_retryable_attempts.pop(instant, None)
+            self._backfill_unfillable_instants.add(instant)
+        else:
+            self._backfill_retryable_attempts[instant] = attempts
+
     def run_live_backfill(self, now: datetime) -> List[MenthorqLevelRecord]:
         """
         Store the MISSING live records of the last ``LIVE_BACKFILL_DAYS``
@@ -444,7 +463,10 @@ class MenthorqMonitorService:
         Instants unfillable for a permanent reason (``PERMANENT_SKIP_REASONS``,
         or no snapshot found by the cheap check) are remembered in this
         process and not queried or counted again; ``NO_INDEX_PRICE``, a late
-        missing snapshot and ``FAILED`` are retried next run. Stored with
+        missing snapshot and ``FAILED`` are retried next run, at most
+        ``BACKFILL_MAXIMUM_RETRYABLE_ATTEMPTS`` times in all, then they are
+        remembered too. Both memories are pruned to the current window at
+        the start of each run. Stored with
         mode "live" and ``BACKFILLED_LIVE_CAVEAT``; the save rule never
         replaces a computed row. No alert is evaluated and nothing is sent. One INFO
         line per run gives the count of each outcome; failed instants are
@@ -455,6 +477,12 @@ class MenthorqMonitorService:
         """
         settings = self.settings
         instants = self.live_backfill_instants(now)
+        # Forget instants that left the 7-day window, so the memo stays bounded.
+        window = set(instants)
+        self._backfill_unfillable_instants &= window
+        self._backfill_retryable_attempts = {instant: attempts for instant, attempts
+                                             in self._backfill_retryable_attempts.items()
+                                             if instant in window}
         if not instants:
             return []
         stored_instants = self.repository.get_computed_menthorq_level_run_instants_between(
@@ -477,6 +505,7 @@ class MenthorqMonitorService:
             counts[BackfillSkipReason.FAILED] += 1
             failed.append(instant)
             errors.append(error)
+            self._count_retryable_attempt(instant)
 
         attempted = 0
         for instant in missing:
@@ -497,6 +526,7 @@ class MenthorqMonitorService:
             if outcome.record is not None:
                 try:
                     stored.append(self.store(outcome.record))
+                    self._backfill_retryable_attempts.pop(instant, None)
                 except Exception as error:
                     count_failure(instant, error)
                 continue
@@ -507,6 +537,8 @@ class MenthorqMonitorService:
             if reason in PERMANENT_SKIP_REASONS or (reason is BackfillSkipReason.NO_SNAPSHOT
                                                     and not outcome.attempted):
                 self._backfill_unfillable_instants.add(instant)
+            else:
+                self._count_retryable_attempt(instant)
         if stored or any(counts.values()):
             logger.info("MenthorQ live backfill: %d missing hours: %d stored, %d no snapshot, %d stale input "
                         "(limit %d min), %d no index price, %d no levels, %d failed",

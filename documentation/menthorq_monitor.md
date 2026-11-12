@@ -41,7 +41,9 @@ days (`MenthorqMonitorService.run_live_backfill`), after the alerts:
   unfillable old hours never block newer fillable ones and a 7-day gap fills over a few runs.
 - Instants unfillable for a permanent reason (before the earliest snapshot, stale input, no
   levels) are remembered in the collector process and not queried or logged again; no index price,
-  a late missing snapshot and failures are retried at the next run.
+  a late missing snapshot and failures are retried at the next runs, at most 3 attempts in all
+  (a success resets the count), then they are remembered as unfillable too. Both memories are
+  pruned to the current 7-day window at the start of each run.
 - One INFO line per run gives the counts: stored, no snapshot, stale input, no index price, no
   levels, failed. A failing instant does not stop the others; one WARNING lists the failed instants
   (at most 5) and the first error.

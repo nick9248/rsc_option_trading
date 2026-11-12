@@ -778,6 +778,71 @@ class TestLiveBackfill:
         service.run_live_backfill(self.NOW + timedelta(seconds=30))
         assert requested.count(gap[0]) == 2 and requested.count(gap[1]) == 2
 
+    def test_60_always_failing_old_hours_stop_using_the_cap_after_three_attempts(self, monkeypatch):
+        window = self._window()
+        gap = window[:72]
+        failing, fillable = gap[:60], gap[60:]
+        repository = self._repository_with_gap(gap)
+        loader = FakeInputLoader()
+        real_load_inputs = loader.load_inputs
+        requested = []
+
+        def fail_for_the_old_hours(currency, as_of, open_interest_as_of=None):
+            requested.append(as_of)
+            if as_of in failing:
+                raise RuntimeError("database hiccup")
+            return real_load_inputs(currency, as_of, open_interest_as_of)
+
+        monkeypatch.setattr(loader, "load_inputs", fail_for_the_old_hours)
+        service = _service(repository, loader)
+        # Runs 1-3: the 48 oldest fail (the cap); after the 3rd attempt they are given up.
+        for run in range(3):
+            assert service.run_live_backfill(self.NOW + timedelta(seconds=run)) == []
+        assert requested == failing[:48] * 3
+        # Run 4: the other 12 failing hours (1st attempt) and the 12 fillable ones.
+        stored = service.run_live_backfill(self.NOW + timedelta(seconds=3))
+        assert [record.as_of_utc for record in stored] == fillable
+        assert requested[-24:] == failing[48:] + fillable
+        # Runs 5-6 use up the last attempts; then nothing is loaded any more.
+        service.run_live_backfill(self.NOW + timedelta(seconds=4))
+        service.run_live_backfill(self.NOW + timedelta(seconds=5))
+        loads = len(requested)
+        assert service.run_live_backfill(self.NOW + timedelta(seconds=6)) == []
+        assert len(requested) == loads
+
+    def test_a_success_resets_the_retry_count(self, monkeypatch):
+        gap = [self._window()[100]]
+        repository = self._repository_with_gap(gap)
+        loader = FakeInputLoader()
+        real_load_inputs = loader.load_inputs
+        failures = iter([True, True, False])
+
+        def fail_twice(currency, as_of, open_interest_as_of=None):
+            if next(failures):
+                raise MissingIndexPriceError("No BTC index price at or before ...")
+            return real_load_inputs(currency, as_of, open_interest_as_of)
+
+        monkeypatch.setattr(loader, "load_inputs", fail_twice)
+        service = _service(repository, loader)
+        assert service.run_live_backfill(self.NOW) == []
+        assert service.run_live_backfill(self.NOW + timedelta(seconds=1)) == []
+        assert service._backfill_retryable_attempts == {gap[0]: 2}
+        assert [record.as_of_utc for record in service.run_live_backfill(self.NOW + timedelta(seconds=2))] == gap
+        assert service._backfill_retryable_attempts == {}
+
+    def test_the_memo_and_the_retry_counts_are_pruned_to_the_window(self):
+        window = self._window()
+        repository = self._repository_with_gap({window[0], window[1]})
+        repository.option_chain_captures = [window[1] - timedelta(minutes=21)]   # window[0]: before it
+        service = _service(repository, FakeInputLoader(available=False))
+        service.run_live_backfill(self.NOW)
+        assert service._backfill_unfillable_instants == {window[0]}
+        assert service._backfill_retryable_attempts == {window[1]: 1}    # late missing input
+        later = self.NOW + timedelta(hours=2)                            # both left the 7-day window
+        service.run_live_backfill(later)
+        assert window[0] not in service._backfill_unfillable_instants
+        assert window[1] not in service._backfill_retryable_attempts
+
     def test_failed_instants_are_listed_at_warning_at_most_five(self, caplog, monkeypatch):
         gap = self._window()[100:107]
         repository = self._repository_with_gap(gap)
