@@ -467,6 +467,13 @@ class MenthorqMonitorTab(QWidget):
         info_layout.addWidget(caveats_label)
         self.caveats_browser = self._text_browser()
         info_layout.addWidget(self.caveats_browser, 1)
+        # Expected gaps (e.g. an expiry listed after the open-interest snapshot): neutral notes,
+        # the same look as the MenthorQ Charts tab's note label, not in the caveats box.
+        self.note_label = QLabel("")
+        self.note_label.setWordWrap(True)
+        self.note_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY};")
+        self.note_label.setVisible(False)
+        info_layout.addWidget(self.note_label)
         tabs.addTab(info_page, "Info")
 
         self.comparison_table = read_only_table(COMPARISON_COLUMN_LABELS)
@@ -738,9 +745,10 @@ class MenthorqMonitorTab(QWidget):
     ) -> None:
         """Brief, alert table, urgent message, info rows and caveats."""
         chart_warnings = data_warnings(chart_output, reference) if chart_output is not None else []
-        # Expected gaps (an expiry listed after the open-interest snapshot) as neutral notes.
-        if chart_output is not None:
-            chart_warnings += [f"Note: {note}" for note in data_notes(chart_output)]
+        # Expected gaps (an expiry listed after the open-interest snapshot): the neutral note label.
+        notes = data_notes(chart_output) if chart_output is not None else []
+        self.note_label.setText("\n".join(f"Note: {note}" for note in notes))
+        self.note_label.setVisible(bool(notes))
         # The charts' own inputs (daily close: open interest from 00:00 UTC), one part per row.
         chart_rows = ([("Charts" if index == 0 else "", part)
                        for index, part in enumerate(info_line(chart_output).split(" | "))]

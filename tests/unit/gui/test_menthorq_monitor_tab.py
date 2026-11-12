@@ -230,17 +230,27 @@ class TestTabDisplay:
         assert "0.00%" not in tab.brief_browser.toPlainText()
         tab.close()
 
-    def test_an_expiry_listed_after_the_open_interest_snapshot_is_a_note_in_the_caveats(
+    def test_notes_go_to_their_own_neutral_label_not_into_the_caveats_box(
             self, qapp, tmp_path, monkeypatch):
         tab = _tab(tmp_path, {})
-        monkeypatch.setattr(tab_module, "data_warnings", lambda output, reference: ["real problem"])
+        monkeypatch.setattr(tab_module, "data_warnings", lambda output, reference: [])
         monkeypatch.setattr(tab_module, "data_notes", lambda output: ["Expiry 15NOV26 is not in the "
                                                                       "open-interest snapshot"])
         monkeypatch.setattr(tab_module, "info_line", lambda output: "charts info")
         tab._show_preview(None, "not run", {"fake": "output"}, None)
-        assert tab.caveats_browser.toPlainText() == (
-            "- real problem\n- Note: Expiry 15NOV26 is not in the open-interest snapshot")
+        # Only notes: the caveats box stays empty ("none"), the note label shows them, neutral.
+        assert tab.caveats_browser.toPlainText() == "none"
+        assert not tab.note_label.isHidden()
+        assert tab.note_label.text() == "Note: Expiry 15NOV26 is not in the open-interest snapshot"
+        assert tab.note_label.styleSheet() == f"color: {tab_module.Colors.TEXT_SECONDARY};"
         assert "15NOV26" not in tab.warning_label.text()      # never in the orange line
+
+        # A real warning goes to the caveats box; without notes the label hides again.
+        monkeypatch.setattr(tab_module, "data_warnings", lambda output, reference: ["real problem"])
+        monkeypatch.setattr(tab_module, "data_notes", lambda output: [])
+        tab._show_preview(None, "not run", {"fake": "output"}, None)
+        assert tab.caveats_browser.toPlainText() == "- real problem"
+        assert tab.note_label.isHidden()
         tab.close()
 
     def test_failed_brief_is_reported_and_charts_still_shown(self, qapp, tmp_path):
