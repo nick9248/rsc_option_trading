@@ -430,9 +430,11 @@ class MenthorqMonitorService:
         Store the MISSING live records of the last ``LIVE_BACKFILL_DAYS``
         days (``live_backfill_instants``), oldest first, so the "7 days ago"
         and "24 h ago" comparisons have a reference after a monitor start or
-        an outage. An hour counts as stored when any live row (computed or
-        not) of the same key has its ``as_of_utc`` in that UTC hour (one
-        query, ``get_menthorq_level_run_instants_between``). Every instant
+        an outage. An hour counts as stored when a COMPUTED live row (with
+        levels) of the same key has its ``as_of_utc`` in that UTC hour (one
+        query, ``get_computed_menthorq_level_run_instants_between``); the hour
+        of a not-computed row is replayed, and the save rule replaces that
+        row when the replay computes levels. Every instant
         before the earliest snapshot capture (one MIN query) is skipped
         without further work; each other one goes through
         ``compute_backfill_record``. Only instants whose inputs were actually
@@ -443,8 +445,8 @@ class MenthorqMonitorService:
         or no snapshot found by the cheap check) are remembered in this
         process and not queried or counted again; ``NO_INDEX_PRICE``, a late
         missing snapshot and ``FAILED`` are retried next run. Stored with
-        mode "live" and ``BACKFILLED_LIVE_CAVEAT``; the save rule keeps every
-        existing row. No alert is evaluated and nothing is sent. One INFO
+        mode "live" and ``BACKFILLED_LIVE_CAVEAT``; the save rule never
+        replaces a computed row. No alert is evaluated and nothing is sent. One INFO
         line per run gives the count of each outcome; failed instants are
         listed at WARNING (at most ``BACKFILL_FAILED_INSTANTS_LOGGED``).
 
@@ -455,7 +457,7 @@ class MenthorqMonitorService:
         instants = self.live_backfill_instants(now)
         if not instants:
             return []
-        stored_instants = self.repository.get_menthorq_level_run_instants_between(
+        stored_instants = self.repository.get_computed_menthorq_level_run_instants_between(
             settings.currency, MODE_LIVE, settings.expiry_universe, settings.gamma_underlying,
             instants[0].replace(minute=0), instants[-1].replace(minute=0) + timedelta(hours=1))
         stored_hours = {instant.replace(minute=0, second=0, microsecond=0) for instant in stored_instants}

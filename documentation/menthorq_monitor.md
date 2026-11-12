@@ -25,9 +25,10 @@ days (`MenthorqMonitorService.run_live_backfill`), after the alerts:
 
 - The instants are the live schedule: minute `MENTHORQ_LIVE_RUN_MINUTE` of every UTC hour, from
   7 days before the current run up to the hour before it, oldest first.
-- An hour counts as stored when any live row (computed or not) of the same settings has its
-  `as_of_utc` in that UTC hour. One query lists them (`get_menthorq_level_run_instants_between`).
-  Existing rows are never replaced.
+- An hour counts as stored when a COMPUTED live row (with levels) of the same settings has its
+  `as_of_utc` in that UTC hour. One query lists them
+  (`get_computed_menthorq_level_run_instants_between`). The hour of a not-computed row is replayed;
+  when the replay computes levels, the save rule replaces that row. A computed row is never replaced.
 - Each missing instant is replayed point in time with the live run's loader path: the snapshot,
   its open interest and the index price at or before the instant, nothing after it.
 - Every instant before the earliest snapshot capture (one MIN query per run) is skipped without

@@ -80,7 +80,7 @@ class FakeMonitorRepository(DatabaseRepository):
         # Capture times of the "snapshots" table (get_latest_option_chain_capture_at_or_before).
         self.option_chain_captures: List[datetime] = []
         self.capture_queries = 0
-        self.run_instant_queries = 0   # get_menthorq_level_run_instants_between calls
+        self.run_instant_queries = 0   # get_computed_menthorq_level_run_instants_between calls
         self.earliest_capture_queries = 0   # get_earliest_option_chain_capture calls
         self.absent_tables: List[str] = []   # tables missing_tables reports as not existing
         self.fail_table_check = False        # True: missing_tables raises
@@ -149,7 +149,7 @@ class FakeMonitorRepository(DatabaseRepository):
         ]
         return sorted(candidates, key=lambda r: r.as_of_utc)
 
-    def get_menthorq_level_run_instants_between(
+    def get_computed_menthorq_level_run_instants_between(
         self, currency: str, mode: str, expiry_universe: str, gamma_underlying: str,
         earliest: datetime, before: datetime,
     ) -> List[datetime]:
@@ -157,7 +157,7 @@ class FakeMonitorRepository(DatabaseRepository):
         return sorted(r.as_of_utc for r in self.records
                       if (r.currency, r.mode, r.expiry_universe, r.gamma_underlying)
                       == (currency, mode, expiry_universe, gamma_underlying)
-                      and earliest <= r.as_of_utc < before)
+                      and r.has_levels and earliest <= r.as_of_utc < before)
 
     def save_menthorq_alert_deliveries(self, currency: str, alert_keys: List[str], delivered_at: datetime,
                                        message: str, level_snapshot_id: Optional[int] = None) -> None:

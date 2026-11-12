@@ -1307,21 +1307,24 @@ class DatabaseRepository:
             rows = cursor.fetchall()
         return [self._menthorq_level_record_from_row(row) for row in rows]
 
-    def get_menthorq_level_run_instants_between(
+    def get_computed_menthorq_level_run_instants_between(
         self, currency: str, mode: str, expiry_universe: str, gamma_underlying: str,
         earliest: datetime, before: datetime,
     ) -> List[datetime]:
         """
-        ``as_of_utc`` (UTC-aware) of every stored run, computed or not, with
-        ``earliest`` <= ``as_of_utc`` < ``before``, oldest first. One query
-        on the key columns only (no record is built): the live backfill's
-        list of the hours already stored.
+        ``as_of_utc`` (UTC-aware) of every stored COMPUTED run (with levels,
+        ``has_levels``, the condition the save rule uses) with ``earliest``
+        <= ``as_of_utc`` < ``before``, oldest first. One query on the key and
+        level columns (no record is built): the live backfill's list of the
+        hours that need no replay; a not-computed row's hour is replayed and
+        the save rule replaces that row.
         """
         with self._db_cursor() as cursor:
             cursor.execute(
                 "SELECT as_of_utc FROM menthorq_level_snapshots "
                 "WHERE currency = %s AND mode = %s AND expiry_universe = %s "
                 "AND gamma_underlying = %s AND as_of_utc >= %s AND as_of_utc < %s "
+                f"AND {has_levels_sql_condition('menthorq_level_snapshots')} "
                 "ORDER BY as_of_utc",
                 (currency, mode, expiry_universe, gamma_underlying, earliest, before),
             )

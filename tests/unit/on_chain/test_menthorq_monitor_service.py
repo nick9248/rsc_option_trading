@@ -620,17 +620,27 @@ class TestLiveBackfill:
         latest = make_record(as_of=gap[0] + timedelta(days=7))
         assert _service(repository).find_reference(latest, "7d") is record
 
-    def test_existing_rows_are_kept_and_a_row_in_the_same_hour_counts_as_stored(self):
+    def test_a_computed_row_in_the_same_hour_counts_as_stored(self):
         window = self._window()
         late_run = make_record(as_of=window[5] + timedelta(minutes=1))          # e.g. a misfired :11 run
-        not_computed = make_record_without_levels(as_of=window[6])
-        repository = self._repository_with_gap({window[5], window[6]})
-        repository.records += [late_run, not_computed]
+        repository = self._repository_with_gap({window[5]})
+        repository.records.append(late_run)
         loader = FakeInputLoader()
         assert _service(repository, loader).run_live_backfill(self.NOW) == []
         assert loader.calls == []
-        assert repository.get_menthorq_level_snapshot("BTC", MODE_LIVE, "monthly", "index",
-                                                      window[6]) is not_computed
+
+    def test_a_stored_not_computed_hour_is_replayed_and_replaced_by_the_computed_record(self):
+        window = self._window()
+        not_computed = make_record_without_levels(as_of=window[6])
+        repository = self._repository_with_gap({window[6]})
+        repository.records.append(not_computed)
+        loader = FakeInputLoader()
+        [record] = _service(repository, loader).run_live_backfill(self.NOW)
+        assert loader.calls == [(window[6], None)]
+        stored = repository.get_menthorq_level_snapshot("BTC", MODE_LIVE, "monthly", "index", window[6])
+        assert stored is record and stored.has_levels
+        assert stored.not_computed_reasons[-1] == BACKFILLED_LIVE_CAVEAT
+        assert not_computed not in repository.records
 
     def test_one_failing_instant_does_not_stop_the_others(self, caplog, monkeypatch):
         gap = self._window()[100:103]
