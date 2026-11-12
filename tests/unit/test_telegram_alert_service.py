@@ -1,11 +1,17 @@
 """
-Unit tests for TelegramAlertService. requests.post is mocked -- no real
-network call, no real Telegram send.
+Unit tests for TelegramAlertService. requests.post, requests.get and
+requests.Session are mocked -- no real network call, no real Telegram send.
 """
 
 from unittest.mock import MagicMock, patch
 
-from coding.service.notifications.telegram_alert_service import TelegramAlertService
+import requests
+
+from coding.service.notifications.telegram_alert_service import (
+    TelegramAlertService,
+    get_updates_timeouts,
+    get_updates_worst_case_seconds,
+)
 
 
 class TestSendSuccess:
@@ -31,27 +37,124 @@ class TestParseModeAndUpdates:
             service.send("<b>x</b>", parse_mode="HTML")
         assert mock_post.call_args[1]["json"] == {"chat_id": "999", "text": "<b>x</b>", "parse_mode": "HTML"}
 
-    def test_get_updates_returns_the_result_list_and_passes_the_offset(self):
-        service = TelegramAlertService(token="abc123", chat_id="999")
-        response = MagicMock(ok=True)
-        response.json.return_value = {"ok": True, "result": [{"update_id": 5}]}
-        with patch("coding.service.notifications.telegram_alert_service.requests.get",
-                   return_value=response) as mock_get:
-            assert service.get_updates(offset=5, timeout_seconds=10) == [{"update_id": 5}]
-        args, kwargs = mock_get.call_args
-        assert args[0] == "https://api.telegram.org/botabc123/getUpdates"
-        assert kwargs["params"]["offset"] == 5 and kwargs["params"]["timeout"] == 10
-        assert kwargs["timeout"] == 20
 
-    def test_get_updates_failures_return_none_and_hide_the_token(self, caplog):
+def _updates_response(updates):
+    response = MagicMock(ok=True)
+    response.json.return_value = {"ok": True, "result": updates}
+    return response
+
+
+class _SessionFactory:
+    """Stands in for requests.Session: every session's get answers from the shared ``outcomes``."""
+
+    def __init__(self, outcomes):
+        self.outcomes = list(outcomes)
+        self.sessions = []
+
+    def __call__(self):
+        session = MagicMock()
+        session.get.side_effect = self._next_outcome
+        self.sessions.append(session)
+        return session
+
+    def _next_outcome(self, *arguments, **keyword_arguments):
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+
+SESSION_PATH = "coding.service.notifications.telegram_alert_service.requests.Session"
+
+
+class TestGetUpdates:
+    def test_returns_the_result_list_and_passes_the_offset_and_a_connect_read_timeout(self):
+        service = TelegramAlertService(token="abc123", chat_id="999")
+        factory = _SessionFactory([_updates_response([{"update_id": 5}])])
+        with patch(SESSION_PATH, factory):
+            assert service.get_updates(offset=5, timeout_seconds=5) == [{"update_id": 5}]
+        args, kwargs = factory.sessions[0].get.call_args
+        assert args[0] == "https://api.telegram.org/botabc123/getUpdates"
+        assert kwargs["params"]["offset"] == 5 and kwargs["params"]["timeout"] == 5
+        assert kwargs["timeout"] == (4, 8)            # connect 4 s, read = long poll 5 + 3 s
+
+    def test_the_timeout_arithmetic_of_one_poll(self):
+        assert get_updates_timeouts(5) == (4, 8)
+        assert get_updates_timeouts(0) == (4, 3)      # the start-up skip (no wait)
+        assert get_updates_worst_case_seconds(5) == 12
+
+    def test_one_session_is_reused_and_a_new_one_opened_after_a_network_error(self):
+        service = TelegramAlertService(token="abc123", chat_id="999")
+        factory = _SessionFactory([_updates_response([]), _updates_response([]),
+                                   requests.ReadTimeout("read timed out"), _updates_response([])])
+        with patch(SESSION_PATH, factory):
+            assert service.get_updates(offset=None, timeout_seconds=5) == []
+            assert service.get_updates(offset=None, timeout_seconds=5) == []
+            assert len(factory.sessions) == 1 and factory.sessions[0].get.call_count == 2
+            assert service.get_updates(offset=None, timeout_seconds=5) is None
+            factory.sessions[0].close.assert_called_once()
+            assert service.get_updates(offset=None, timeout_seconds=5) == []
+        assert len(factory.sessions) == 2 and factory.sessions[1].get.call_count == 1
+
+    def test_an_http_error_status_keeps_the_session(self):
+        service = TelegramAlertService(token="abc123", chat_id="999")
+        factory = _SessionFactory([MagicMock(ok=False, status_code=409, text="Conflict"),
+                                   _updates_response([])])
+        with patch(SESSION_PATH, factory):
+            assert service.get_updates(offset=None, timeout_seconds=5) is None
+            assert service.get_updates(offset=None, timeout_seconds=5) == []
+        assert len(factory.sessions) == 1
+
+    def test_a_timeout_is_info_an_http_status_or_malformed_body_is_a_warning(self, caplog):
         service = TelegramAlertService(token="secret-token", chat_id="999")
-        with patch("coding.service.notifications.telegram_alert_service.requests.get",
-                   side_effect=ConnectionError("url: /botsecret-token/getUpdates")):
-            assert service.get_updates(offset=None, timeout_seconds=1) is None
+        malformed = MagicMock(ok=True)
+        malformed.json.side_effect = ValueError("not JSON")
+        malformed.text = "<html>"
+        not_ok = MagicMock(ok=True)
+        not_ok.json.return_value = {"ok": False}
+        factory = _SessionFactory([
+            requests.ConnectTimeout("url: /botsecret-token/getUpdates"),
+            requests.ReadTimeout("url: /botsecret-token/getUpdates read timed out"),
+            requests.ConnectionError("url: /botsecret-token/getUpdates refused"),
+            MagicMock(ok=False, status_code=409, text="Conflict"),
+            malformed, not_ok,
+        ])
+        with caplog.at_level("INFO"), patch(SESSION_PATH, factory):
+            for _ in range(6):
+                assert service.get_updates(offset=None, timeout_seconds=5) is None
+        levels = [(record.levelname, record.getMessage()) for record in caplog.records]
+        assert levels[0] == ("INFO", "TelegramAlertService: getUpdates timed out, will retry")
+        assert levels[1] == ("INFO", "TelegramAlertService: getUpdates timed out, will retry")
+        assert levels[2][0] == "INFO" and "getUpdates failed, will retry" in levels[2][1]
+        assert levels[3] == ("WARNING", "TelegramAlertService: getUpdates returned 409: Conflict")
+        assert levels[4] == ("WARNING", "TelegramAlertService: unexpected getUpdates body: <html>")
+        assert levels[5] == ("WARNING", "TelegramAlertService: unexpected getUpdates body: {'ok': False}")
         assert "secret-token" not in caplog.text
-        conflict = MagicMock(ok=False, status_code=409, text="Conflict")
-        with patch("coding.service.notifications.telegram_alert_service.requests.get", return_value=conflict):
-            assert service.get_updates(offset=None, timeout_seconds=1) is None
+        assert "/bot<bot token>/getUpdates refused" in caplog.text
+
+    def test_the_10th_consecutive_failure_warns_then_every_50th_and_a_success_resets(self, caplog):
+        service = TelegramAlertService(token="abc123", chat_id="999")
+        timeouts = [requests.ReadTimeout("read timed out")] * 110
+        factory = _SessionFactory(timeouts[:9] + [_updates_response([])] + timeouts)
+        with caplog.at_level("INFO"), patch(SESSION_PATH, factory):
+            for _ in range(9):
+                service.get_updates(offset=None, timeout_seconds=5)
+            assert service.get_updates(offset=None, timeout_seconds=5) == []     # resets the count
+            for _ in range(110):
+                service.get_updates(offset=None, timeout_seconds=5)
+        warnings = [record.getMessage() for record in caplog.records if record.levelname == "WARNING"]
+        # 9 failures, a success, then 110 failures: warnings at the 10th, 60th and 110th of the new run.
+        assert warnings == [
+            f"TelegramAlertService: getUpdates timed out, will retry ({count} consecutive getUpdates failures)"
+            for count in (10, 60, 110)]
+        assert sum(record.levelname == "INFO" for record in caplog.records) == 9 + 107
+
+    def test_missing_token_asks_nothing(self):
+        service = TelegramAlertService(token="explicit-token", chat_id="999")
+        service._token = ""
+        with patch(SESSION_PATH) as session_class:
+            assert service.get_updates(offset=None, timeout_seconds=5) is None
+        session_class.assert_not_called()
 
 
 class TestSetMyCommands:

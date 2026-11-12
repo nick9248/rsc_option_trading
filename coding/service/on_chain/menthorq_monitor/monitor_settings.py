@@ -21,8 +21,9 @@ these switches.
   MENTHORQ_LIVE_RUN_MINUTE        0-59, minute past each hour of the live run
   MENTHORQ_WEEKLY_BRIEF_DAY       mon | tue | wed | thu | fri | sat | sun
   MENTHORQ_WEEKLY_BRIEF_TIME_UTC  HH:MM (UTC; a value with an offset is refused)
-  MENTHORQ_COMMAND_POLL_SECONDS   seconds between getUpdates calls (>= the listener's
-                                  long-poll wait + 2 = 12)
+  MENTHORQ_COMMAND_POLL_SECONDS   seconds between getUpdates calls, default 15; strictly
+                                  above one poll's worst case (connect timeout 4 + long-poll
+                                  wait 5 + read margin 3 = 12), so at least 13
   MENTHORQ_STALE_SNAPSHOT_MINUTES minutes (>= 10, default 120): a snapshot or spot
                                   trade older than this before the data time, or a
                                   stored record's snapshot older than this before
@@ -63,12 +64,14 @@ from coding.core.analytics.menthorq_replication_calculator import (
     EXPIRY_UNIVERSES,
     GAMMA_UNDERLYING_INDEX,
 )
+from coding.service.notifications.telegram_alert_service import get_updates_worst_case_seconds
 from coding.service.on_chain.menthorq_monitor.telegram_command_listener import LONG_POLL_SECONDS
 
 WEEKDAY_NAMES = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
-# Each poll blocks for the long-poll wait; a shorter interval only makes
-# APScheduler skip runs (max_instances=1). 2 s margin for the request itself.
-MINIMUM_COMMAND_POLL_SECONDS = LONG_POLL_SECONDS + 2
+# One poll blocks at most the getUpdates connect timeout plus its read timeout
+# (4 + 5 + 3 = 12 s); the interval must be strictly longer, or APScheduler
+# skips runs (max_instances=1): minimum 13 s.
+MINIMUM_COMMAND_POLL_SECONDS = get_updates_worst_case_seconds(LONG_POLL_SECONDS) + 1
 MINIMUM_STALE_SNAPSHOT_MINUTES = 10
 RULE_OFF = "off"
 
@@ -99,7 +102,7 @@ class MenthorqMonitorSettings:
     live_run_minute: int = 10
     weekly_brief_weekday: int = 4          # Monday = 0 ... Friday = 4
     weekly_brief_time_utc: time = time(9, 0)
-    command_poll_seconds: int = 20
+    command_poll_seconds: int = 15
     stale_snapshot_minutes: int = 120
     alert_thresholds: AlertThresholds = AlertThresholds()
     owner_user_id: Optional[int] = None    # MENTHORQ_OWNER_USER_ID; needed for a group chat only

@@ -207,7 +207,7 @@ positive total net GEX.
 | `MENTHORQ_LIVE_RUN_MINUTE` | 10 | minute past each hour of the live run |
 | `MENTHORQ_WEEKLY_BRIEF_DAY` | fri | mon to sun |
 | `MENTHORQ_WEEKLY_BRIEF_TIME_UTC` | 09:00 | HH:MM, UTC (a value with an offset is refused) |
-| `MENTHORQ_COMMAND_POLL_SECONDS` | 20 | at least 12 (the 10 s long-poll wait + 2 s) |
+| `MENTHORQ_COMMAND_POLL_SECONDS` | 15 | at least 13: strictly above one poll's worst case of 12 s (see Command polling) |
 | `MENTHORQ_STALE_SNAPSHOT_MINUTES` | 120 | at least 10; stale-data limit, see below |
 | `MENTHORQ_OWNER_USER_ID` | unset | owner's Telegram user id (positive integer); required only when `OSF_TELEGRAM_CHAT_ID` is a group chat (negative id) |
 | `MENTHORQ_ALERT_*` | see the rules table | alert rules |
@@ -271,6 +271,25 @@ The bot token and the owner chat are `OSF_TELEGRAM_BOT_TOKEN` and `OSF_TELEGRAM_
 Only one process can poll a bot token. If another process polls the same token, Telegram answers 409,
 and that is logged.
 
+### Command polling
+
+Each poll is one `getUpdates` call with a 5 s long-poll wait (`LONG_POLL_SECONDS` in
+`telegram_command_listener.py`). `TelegramAlertService.get_updates` keeps one `requests.Session`
+open between polls (keep-alive; it is closed and reopened after a network error) and passes the
+timeouts as a (connect, read) pair: connect 4 s, read = long-poll wait + 3 s = 8 s. requests applies
+the two separately, so one poll blocks at most 4 + 8 = 12 s (`get_updates_worst_case_seconds`).
+`MENTHORQ_COMMAND_POLL_SECONDS` (default 15) must be strictly longer, so the minimum is 13; the
+APScheduler job runs one instance at a time and coalesces missed runs. Before this, a single
+`timeout=20` applied to the connect and the read separately and a new connection was opened for each
+poll, so one poll could last longer than the 20 s interval; the VPS log then showed about 400
+`maximum number of running instances reached` warnings and about 40 read timeouts a day.
+
+Logging: a timeout or network error is expected now and then on a long poll and is logged at INFO
+(`getUpdates timed out, will retry`). An HTTP error status (for example 409) or a malformed body is
+a WARNING. The 10th consecutive failure is a WARNING too (`... (10 consecutive getUpdates
+failures)`), then every 50th after it (60, 110, ...); a successful poll resets the count. The bot
+token is scrubbed from every logged text.
+
 ## Deployment of the bot commands (migration 032)
 
 Migration 032 depends on 031 being applied first. Both are idempotent (`IF NOT EXISTS`).
@@ -290,7 +309,7 @@ an enabled monitor whose tables are missing is not started (see above).
    command. Set any `MENTHORQ_ALERT_*` overrides there too. Without them the defaults above apply.
 4. Restart the collector: `sudo systemctl restart option-trading`. The log should show
    `MenthorQ monitor scheduled: hourly at :10 UTC, weekly brief fri 09:00 UTC`,
-   `MenthorQ bot command polling every 20 s` and, at the first poll,
+   `MenthorQ bot command polling every 15 s` and, at the first poll,
    `command menu registered (6 commands)`. It must NOT show `MenthorQ monitor OFF` or
    `Telegram OFF`.
 5. In Telegram, send `/help` and then `/status`.
