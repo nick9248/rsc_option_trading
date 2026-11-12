@@ -56,10 +56,17 @@ class FakeRepository:
     only SOME of its rows lack it (a real warning).
     """
 
-    def __init__(self, partial_open_interest: bool = False):
+    def __init__(self, partial_open_interest: bool = False, no_open_interest_anywhere: bool = False):
         self.partial_open_interest = partial_open_interest
+        self.no_open_interest_anywhere = no_open_interest_anywhere
 
     def get_option_chain_snapshot_at_or_before(self, currency, as_of):
+        captured, rows = self._snapshot(as_of)
+        if self.no_open_interest_anywhere:
+            rows = [{**row, "open_interest": None} for row in rows]
+        return captured, rows
+
+    def _snapshot(self, as_of):
         extra_rows = ([{"instrument_name": "BTC-4DEC26-90-P", "expiration": "4DEC26", "strike": 90.0,
                         "option_type": "P", "open_interest": 3.0, "mark_iv": 50.0,
                         "underlying_price": 100.0, "mark_price": None}]
@@ -200,6 +207,19 @@ class TestTabDisplay:
         assert tab.warning_label.text() == ("Warning: 1 rows have no open interest in the open-interest "
                                             "snapshot and are left out (4DEC26 1)")
         assert "not validated" not in tab.warning_label.text()   # BTC only
+        assert tab.note_label.isHidden()
+        tab.close()
+
+    def test_no_open_interest_in_any_expiry_stays_orange_warnings(self, qapp, tmp_path):
+        output = MenthorqReplicationService(cast(Any, FakeRepository(no_open_interest_anywhere=True))
+                                            ).run_menthorq_daily_close(
+            "BTC", MENTHORQ_DATE, tmp_path, chart_layout="nested",
+            now=datetime(2026, 11, 7, 12, 0, tzinfo=timezone.utc))
+        tab = MenthorqChartsTab()
+        tab._on_generation_succeeded(_success(tmp_path / "2026-11-06", output))
+        assert not tab.warning_label.isHidden()
+        assert "Warning: GEX not computed for 2 expiries (27NOV26, 4DEC26)" in tab.warning_label.text()
+        assert "rows have no open interest" in tab.warning_label.text()
         assert tab.note_label.isHidden()
         tab.close()
 

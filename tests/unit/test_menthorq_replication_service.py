@@ -11,6 +11,7 @@ from typing import Any, cast
 import pytest
 from matplotlib.figure import Figure
 
+from coding.core.analytics.menthorq_replication_calculator import expiries_without_any_open_interest
 from coding.service.on_chain.menthorq_replication_service import (
     MenthorqReplicationService,
     last_complete_utc_day,
@@ -450,6 +451,34 @@ def test_an_expiry_where_only_some_rows_lack_open_interest_is_still_a_warning(tm
     assert output["expiries_not_in_open_interest_snapshot"] == []
     assert not any("is not in the open-interest snapshot" in message
                    for message in _service_messages(caplog, "INFO"))
+
+
+def test_no_expiry_with_open_interest_at_all_is_a_real_fault_and_stays_warnings(tmp_path, caplog):
+    class NoOpenInterestAnywhere(RepositoryWithAWeekly):
+        def get_option_chain_snapshot_at_or_before(self, currency, as_of):
+            captured, rows = super().get_option_chain_snapshot_at_or_before(currency, as_of)
+            for row in rows:
+                row["open_interest"] = None
+            return captured, rows
+
+    with caplog.at_level("INFO"):
+        output = _service(NoOpenInterestAnywhere((None, None))).run("BTC", AS_OF, tmp_path)
+    assert output["expiries_not_in_open_interest_snapshot"] == []
+    warnings = _service_messages(caplog, "WARNING")
+    assert "13NOV26: 2 rows have no open interest; left out of IV*OI and GEX" in warnings
+    assert "27NOV26: 2 rows have no open interest; left out of IV*OI and GEX" in warnings
+    assert any(warning.startswith("all / gamma at index: GEX not computed") for warning in warnings)
+    assert not any("is not in the open-interest snapshot" in message
+                   for message in _service_messages(caplog, "INFO"))
+
+
+def test_expiries_without_any_open_interest_needs_another_expiry_with_open_interest():
+    rows = [{"expiration": "13NOV26", "open_interest": None},
+            {"expiration": "27NOV26", "open_interest": 5.0},
+            {"expiration": "4DEC26", "open_interest": None}, {"expiration": "4DEC26", "open_interest": 1.0}]
+    assert expiries_without_any_open_interest(rows, ["13NOV26", "27NOV26", "4DEC26", "1JAN27"]) == ["13NOV26"]
+    nothing = [{"expiration": "13NOV26", "open_interest": None}, {"expiration": "27NOV26", "open_interest": None}]
+    assert expiries_without_any_open_interest(nothing, ["13NOV26", "27NOV26"]) == []
 
 
 def test_gex_not_computed_for_another_reason_is_still_a_warning(tmp_path, caplog):

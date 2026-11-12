@@ -782,8 +782,11 @@ def expiries_without_any_open_interest(
     The expiries of ``expirations`` (order kept) that have chain rows but
     not one row with open interest: listed AFTER the open-interest snapshot
     was taken (e.g. a new weekly), so their GEX cannot be computed. This is
-    expected, not a data fault. An expiry where only SOME rows lack open
-    interest is not returned.
+    expected, not a data fault, but only when at least one OTHER expiry of
+    the chain has open interest: when no row of the chain has any, the
+    open-interest data itself is missing (a real fault) and nothing is
+    returned. An expiry where only SOME rows lack open interest is not
+    returned either.
     """
     has_rows: Set[Optional[str]] = set()
     has_open_interest: Set[Optional[str]] = set()
@@ -792,6 +795,8 @@ def expiries_without_any_open_interest(
         has_rows.add(expiration)
         if row.get("open_interest") is not None:
             has_open_interest.add(expiration)
+    if not has_open_interest:
+        return []
     return [expiration for expiration in expirations
             if expiration in has_rows and expiration not in has_open_interest]
 
