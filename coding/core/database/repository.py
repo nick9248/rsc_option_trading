@@ -1097,7 +1097,8 @@ class DatabaseRepository:
         """
         with self._db_cursor() as cursor:
             cursor.execute("SELECT MIN(captured_at) FROM snapshots WHERE currency = %s", (currency,))
-            captured_at = cursor.fetchone()[0]
+            row = cursor.fetchone()
+        captured_at = row[0] if row is not None else None
         return captured_at.replace(tzinfo=timezone.utc) if captured_at is not None else None
 
     def get_option_chain_snapshot_at_or_before(
