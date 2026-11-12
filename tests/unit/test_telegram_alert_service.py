@@ -105,7 +105,7 @@ class TestGetUpdates:
             assert service.get_updates(offset=None, timeout_seconds=5) == []
         assert len(factory.sessions) == 1
 
-    def test_a_timeout_is_info_an_http_status_or_malformed_body_is_a_warning(self, caplog):
+    def test_a_timeout_is_info_a_first_http_status_or_malformed_body_is_a_warning(self, caplog):
         service = TelegramAlertService(token="secret-token", chat_id="999")
         malformed = MagicMock(ok=True)
         malformed.json.side_effect = ValueError("not JSON")
@@ -114,40 +114,61 @@ class TestGetUpdates:
         not_ok.json.return_value = {"ok": False}
         factory = _SessionFactory([
             requests.ConnectTimeout("url: /botsecret-token/getUpdates"),
-            requests.ReadTimeout("url: /botsecret-token/getUpdates read timed out"),
             requests.ConnectionError("url: /botsecret-token/getUpdates refused"),
+            _updates_response([]),                       # resets: the next two are first occurrences
             MagicMock(ok=False, status_code=409, text="Conflict"),
             malformed, not_ok,
         ])
         with caplog.at_level("INFO"), patch(SESSION_PATH, factory):
             for _ in range(6):
-                assert service.get_updates(offset=None, timeout_seconds=5) is None
+                service.get_updates(offset=None, timeout_seconds=5)
         levels = [(record.levelname, record.getMessage()) for record in caplog.records]
         assert levels[0] == ("INFO", "TelegramAlertService: getUpdates timed out, will retry")
-        assert levels[1] == ("INFO", "TelegramAlertService: getUpdates timed out, will retry")
-        assert levels[2][0] == "INFO" and "getUpdates failed, will retry" in levels[2][1]
-        assert levels[3] == ("WARNING", "TelegramAlertService: getUpdates returned 409: Conflict")
-        assert levels[4] == ("WARNING", "TelegramAlertService: unexpected getUpdates body: <html>")
-        assert levels[5] == ("WARNING", "TelegramAlertService: unexpected getUpdates body: {'ok': False}")
+        assert levels[1][0] == "INFO" and "getUpdates failed, will retry" in levels[1][1]
+        assert levels[2] == ("WARNING", "TelegramAlertService: getUpdates returned 409: Conflict")
+        assert levels[3] == ("WARNING", "TelegramAlertService: unexpected getUpdates body: <html>")
+        # A second malformed body is a repeat of the same kind: INFO.
+        assert levels[4] == ("INFO", "TelegramAlertService: unexpected getUpdates body: {'ok': False} "
+                                     "(occurrence 2 since the last successful poll)")
         assert "secret-token" not in caplog.text
         assert "/bot<bot token>/getUpdates refused" in caplog.text
 
-    def test_the_10th_consecutive_failure_warns_then_every_50th_and_a_success_resets(self, caplog):
+    def test_the_3rd_consecutive_timeout_warns_then_every_20th_and_a_success_resets(self, caplog):
         service = TelegramAlertService(token="abc123", chat_id="999")
-        timeouts = [requests.ReadTimeout("read timed out")] * 110
-        factory = _SessionFactory(timeouts[:9] + [_updates_response([])] + timeouts)
+        timeouts = [requests.ReadTimeout("read timed out")] * 43
+        factory = _SessionFactory(timeouts[:2] + [_updates_response([])] + timeouts)
         with caplog.at_level("INFO"), patch(SESSION_PATH, factory):
-            for _ in range(9):
+            for _ in range(2):
                 service.get_updates(offset=None, timeout_seconds=5)
             assert service.get_updates(offset=None, timeout_seconds=5) == []     # resets the count
-            for _ in range(110):
+            for _ in range(43):
                 service.get_updates(offset=None, timeout_seconds=5)
         warnings = [record.getMessage() for record in caplog.records if record.levelname == "WARNING"]
-        # 9 failures, a success, then 110 failures: warnings at the 10th, 60th and 110th of the new run.
+        # 2 failures, a success, then 43 failures: warnings at the 3rd, 23rd and 43rd of the new run.
         assert warnings == [
             f"TelegramAlertService: getUpdates timed out, will retry ({count} consecutive getUpdates failures)"
-            for count in (10, 60, 110)]
-        assert sum(record.levelname == "INFO" for record in caplog.records) == 9 + 107
+            for count in (3, 23, 43)]
+        assert sum(record.levelname == "INFO" for record in caplog.records) == 2 + 40
+
+    def test_a_repeated_http_status_warns_first_then_every_20th_per_status(self, caplog):
+        service = TelegramAlertService(token="abc123", chat_id="999")
+        conflicts = [MagicMock(ok=False, status_code=409, text="Conflict")] * 41
+        unauthorized = MagicMock(ok=False, status_code=401, text="Unauthorized")
+        factory = _SessionFactory(conflicts[:5] + [unauthorized] + conflicts[5:]
+                                  + [_updates_response([]), conflicts[0]])
+        with caplog.at_level("INFO"), patch(SESSION_PATH, factory):
+            for _ in range(44):     # 41 conflicts with one 401 among them, a success, one conflict
+                service.get_updates(offset=None, timeout_seconds=5)
+        warnings = [record.getMessage() for record in caplog.records if record.levelname == "WARNING"]
+        assert warnings == [
+            "TelegramAlertService: getUpdates returned 409: Conflict",
+            "TelegramAlertService: getUpdates returned 401: Unauthorized",   # another status: its own first
+            "TelegramAlertService: getUpdates returned 409: Conflict (occurrence 21 since the last "
+            "successful poll)",
+            "TelegramAlertService: getUpdates returned 409: Conflict (occurrence 41 since the last "
+            "successful poll)",
+            "TelegramAlertService: getUpdates returned 409: Conflict",       # after a success: first again
+        ]
 
     def test_missing_token_asks_nothing(self):
         service = TelegramAlertService(token="explicit-token", chat_id="999")

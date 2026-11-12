@@ -22,8 +22,8 @@ these switches.
   MENTHORQ_WEEKLY_BRIEF_DAY       mon | tue | wed | thu | fri | sat | sun
   MENTHORQ_WEEKLY_BRIEF_TIME_UTC  HH:MM (UTC; a value with an offset is refused)
   MENTHORQ_COMMAND_POLL_SECONDS   seconds between getUpdates calls, default 15; strictly
-                                  above one poll's worst case (connect timeout 4 + long-poll
-                                  wait 5 + read margin 3 = 12), so at least 13
+                                  above one poll's intended bound (connect timeout 4 +
+                                  long-poll wait 5 + read margin 3 = 12), so at least 13
   MENTHORQ_STALE_SNAPSHOT_MINUTES minutes (>= 10, default 120): a snapshot or spot
                                   trade older than this before the data time, or a
                                   stored record's snapshot older than this before
@@ -68,9 +68,11 @@ from coding.service.notifications.telegram_alert_service import get_updates_wors
 from coding.service.on_chain.menthorq_monitor.telegram_command_listener import LONG_POLL_SECONDS
 
 WEEKDAY_NAMES = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
-# One poll blocks at most the getUpdates connect timeout plus its read timeout
-# (4 + 5 + 3 = 12 s); the interval must be strictly longer, or APScheduler
-# skips runs (max_instances=1): minimum 13 s.
+# The intended bound of one poll is the getUpdates connect timeout plus its read
+# timeout (4 + 5 + 3 = 12 s; not a hard guarantee: requests applies the read
+# timeout per socket read and DNS is not covered by the connect timeout). The
+# interval must be strictly longer, or APScheduler skips runs (max_instances=1):
+# minimum 13 s.
 MINIMUM_COMMAND_POLL_SECONDS = get_updates_worst_case_seconds(LONG_POLL_SECONDS) + 1
 MINIMUM_STALE_SNAPSHOT_MINUTES = 10
 RULE_OFF = "off"
