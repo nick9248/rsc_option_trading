@@ -248,6 +248,11 @@ def test_repository_query_returns_the_window_the_expiry_and_the_block_flag(repo)
     assert len(only_november) == 2 and all(t.expiration == "27NOV26" for t in only_november)
     assert repository.get_first_block_trade_time("BTC") == datetime.fromtimestamp(2.0, tz=timezone.utc)
     assert repository.get_first_block_trade_time("ETH") is None
+    with psycopg2.connect(**connection_settings) as connection:
+        with connection.cursor() as cursor:                                       # rows the trades query would skip
+            cursor.execute("INSERT INTO historical_trades (trade_id, trade_timestamp, currency, expiration, strike, option_type, "
+                           "direction, amount) VALUES ('n1', 1500, 'BTC', NULL, 70000, 'C', 'buy', 1), "
+                           "('n2', 1500, 'BTC', '1JAN27', 70000, 'C', NULL, 1)")
     assert sorted(repository.get_traded_expirations("BTC", 0, 5_000)) == ["25DEC26", "27NOV26"]
     assert repository.get_latest_trade_time("BTC") == datetime.fromtimestamp(9.0, tz=timezone.utc)
     assert repository.get_latest_trade_time("SOL") is None

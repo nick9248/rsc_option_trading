@@ -13,7 +13,7 @@ class StrikeLevelRow:
     dealer_net_calls: float          # minus the cumulative taker flow of the calls (negative = dealers are short)
     dealer_net_puts: float
     flow_gex: float                  # flow-based (inferred) GEX
-    oi_gex: Optional[float]          # standard OI-based GEX (dealers long calls, short puts); None when not computed
+    open_interest_gex: Optional[float]          # standard OI-based GEX (dealers long calls, short puts); None when not computed
     call_open_interest: Optional[float]
     put_open_interest: Optional[float]
 
@@ -32,11 +32,11 @@ class DealerFlowLevels:
     flow_call_wall: Optional[float]
     flow_put_wall: Optional[float]
     flow_gamma_flip: Optional[float]
-    oi_call_wall: Optional[float]
-    oi_put_wall: Optional[float]
-    oi_gamma_flip: Optional[float]
+    open_interest_call_wall: Optional[float]
+    open_interest_put_wall: Optional[float]
+    open_interest_gamma_flip: Optional[float]
     total_flow_gex: float
-    total_oi_gex: Optional[float]
+    total_open_interest_gex: Optional[float]
     coverage: float                  # share of hours since T0 with at least one stored trade (currency-wide)
     violation_rate: float            # share of options whose |dealer position| exceeds their open interest
     violations: int

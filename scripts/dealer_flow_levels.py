@@ -34,8 +34,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 levels.chain_captured_at.isoformat(), levels.flow_start.isoformat(), levels.trades_used)
     logger.info("flow-based: call wall %s, put wall %s, gamma flip %s, total GEX %.2fM", levels.flow_call_wall,
                 levels.flow_put_wall, levels.flow_gamma_flip, levels.total_flow_gex / 1e6)
-    logger.info("OI-based:   call wall %s, put wall %s, gamma flip %s, total GEX %s", levels.oi_call_wall, levels.oi_put_wall,
-                levels.oi_gamma_flip, "not computed" if levels.total_oi_gex is None else f"{levels.total_oi_gex / 1e6:.2f}M")
+    logger.info("OI-based:   call wall %s, put wall %s, gamma flip %s, total GEX %s", levels.open_interest_call_wall, levels.open_interest_put_wall,
+                levels.open_interest_gamma_flip, "not computed" if levels.total_open_interest_gex is None else f"{levels.total_open_interest_gex / 1e6:.2f}M")
     logger.info("plausibility check %s (%s): %d of %d options exceed their open interest, trade coverage %.1f%%",
                 "PASSED" if levels.gate_passed else "NOT PASSED", levels.gate_reason, levels.violations, levels.options_checked,
                 levels.coverage * 100)

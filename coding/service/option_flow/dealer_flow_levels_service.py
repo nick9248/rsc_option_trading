@@ -20,8 +20,11 @@ import logging
 from datetime import datetime, timezone
 from typing import Callable, Dict, List, Optional, Tuple, cast
 
+import plotly.graph_objects as go
+
 from coding.core.analytics.dealer_inventory_calculator import DealerInventoryCalculator
 from coding.core.analytics.option_flow.dealer_levels import DealerFlowLevels, StrikeLevelRow
+from coding.core.analytics.option_flow.dealer_levels_figure import build_dealer_levels_figure
 from coding.core.analytics.menthorq_replication_calculator import (
     GAMMA_UNDERLYING_INDEX, build_priced_instruments, compute_exposure, parse_expiry_settlement)
 from coding.core.database.repository import DatabaseRepository
@@ -48,6 +51,11 @@ class DealerFlowLevelsService:
         self.repository = repository or DatabaseRepository()
         self.loader = MenthorqInputLoader(self.repository)
         self.clock = clock
+
+    @staticmethod
+    def build_figure(levels: DealerFlowLevels) -> go.Figure:
+        """The interactive Plotly figure of a result."""
+        return build_dealer_levels_figure(levels)
 
     def expirations(self, currency: str = "BTC") -> List[str]:
         """The not-yet-expired expirations of the newest stored chain snapshot, soonest first."""
@@ -95,16 +103,16 @@ class DealerFlowLevelsService:
         flow = calculator.calculate()
         check = calculator.coverage_report(open_interest)
         exposure = compute_exposure(instruments, index_price, chain_captured_at, currency)
-        oi_by_strike = {row["strike"]: row for row in exposure["strikes"]}
+        open_interest_by_strike = {row["strike"]: row for row in exposure["strikes"]}
 
         rows = [StrikeLevelRow(
             strike=strike, dealer_net_calls=data["dealer_net_c"], dealer_net_puts=data["dealer_net_p"],
-            flow_gex=data["inferred_gex"], oi_gex=oi_by_strike.get(strike, {}).get("net_gex"),
-            call_open_interest=oi_by_strike.get(strike, {}).get("call_open_interest"),
-            put_open_interest=oi_by_strike.get(strike, {}).get("put_open_interest"))
+            flow_gex=data["inferred_gex"], open_interest_gex=open_interest_by_strike.get(strike, {}).get("net_gex"),
+            call_open_interest=open_interest_by_strike.get(strike, {}).get("call_open_interest"),
+            put_open_interest=open_interest_by_strike.get(strike, {}).get("put_open_interest"))
             for strike, data in sorted(flow["strike_data"].items())]
         key_levels = flow["key_levels"]
-        oi_levels = exposure["levels"]
+        open_interest_levels = exposure["levels"]
         excluded = check["legs_excluded_no_oi"]
         seen = check["n_strikes"] + excluded
         exclusion_rate = excluded / seen if seen else 0.0
@@ -121,6 +129,9 @@ class DealerFlowLevelsService:
         if (check["n_strikes"] == 0 and excluded > 0) or exclusion_rate > MAX_EXCLUSION_RATE:
             reasons.append(f"{excluded} of {seen} traded options have no open interest to check against")
         notes = []
+        if first_trade_ms is not None and first_trade_ms < stable_ms:
+            notes.append(f"trade history is only complete from {COVERAGE_STABLE_DATE:%Y-%m-%d}, so the flow starts there, "
+                         "not at the listing of the expiry; earlier trades are missing from the dealer position")
         if flow["stale_strikes"]:
             notes.append(f"{len(flow['stale_strikes'])} traded options are no longer in the chain and were left out")
         if flow["instruments_missing_gamma"]:
@@ -133,10 +144,10 @@ class DealerFlowLevelsService:
             flow_call_wall=key_levels["call_resistance"]["strike"] if key_levels["call_resistance"] else None,
             flow_put_wall=key_levels["put_support"]["strike"] if key_levels["put_support"] else None,
             flow_gamma_flip=key_levels["hvl"],
-            oi_call_wall=oi_levels["call_resistance"]["net_gex_argmax_positive"],
-            oi_put_wall=oi_levels["put_support"]["net_gex_argmin_negative"],
-            oi_gamma_flip=oi_levels["hvl"]["cumulative_sign_change_existing"],
-            total_flow_gex=flow["total_inferred_gex"], total_oi_gex=exposure["total_net_gex"],
+            open_interest_call_wall=open_interest_levels["call_resistance"]["net_gex_argmax_positive"],
+            open_interest_put_wall=open_interest_levels["put_support"]["net_gex_argmin_negative"],
+            open_interest_gamma_flip=open_interest_levels["hvl"]["cumulative_sign_change_existing"],
+            total_flow_gex=flow["total_inferred_gex"], total_open_interest_gex=exposure["total_net_gex"],
             coverage=coverage, violation_rate=check["violation_rate"], violations=check["n_violations"],
             options_checked=check["n_strikes"], options_without_open_interest=excluded,
             gate_passed=not reasons, gate_reason="; ".join(reasons) or None, notes=notes)

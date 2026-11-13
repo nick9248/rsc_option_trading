@@ -21,10 +21,9 @@ from typing import Callable, List, Optional
 
 from PySide6.QtCore import Qt, QThread, QUrl, Signal
 from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QComboBox, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget
 
 from coding.core.analytics.option_flow.dealer_levels import DealerFlowLevels
-from coding.core.analytics.option_flow.dealer_levels_figure import build_dealer_levels_figure
 from coding.gui.components.menthorq_widgets import panel_frame
 from coding.gui.theme.colors import Colors
 from coding.service.option_flow.dealer_flow_levels_service import DealerFlowLevelsService
@@ -84,19 +83,30 @@ class DealerLevelsWorker(QThread):
         """Emit ``succeeded`` with a ``DealerLevelsResult`` or ``failed`` (class: message)."""
         try:
             service = self.service_factory()
-            expirations = service.expirations(self.request.currency)
             if self.request.expiry is None:
-                self.succeeded.emit(DealerLevelsResult(expirations))
+                self.succeeded.emit(DealerLevelsResult(service.expirations(self.request.currency)))
                 return
             levels = service.levels(self.request.currency, self.request.expiry)
-            figure = build_dealer_levels_figure(levels)
+            figure = service.build_figure(levels)
             self.html_directory.mkdir(parents=True, exist_ok=True)
+            delete_old_pages(self.html_directory)
             html_path = self.html_directory / f"{levels.currency}_{levels.expiry}_{time.time_ns()}.html"
             figure.write_html(html_path, include_plotlyjs=True, config={"displaylogo": False})
-            self.succeeded.emit(DealerLevelsResult(expirations, levels, html_path))
+            self.succeeded.emit(DealerLevelsResult([], levels, html_path))
         except Exception as error:
             logger.exception("Dealer levels failed")
             self.failed.emit(f"{type(error).__name__}: {error}")
+
+
+def delete_old_pages(directory: Path, max_age_hours: int = 24) -> None:
+    """Delete chart pages older than ``max_age_hours`` (each page embeds Plotly, about 4.5 MB); never raises."""
+    cutoff = time.time() - max_age_hours * 3600
+    for page in directory.glob("*.html"):
+        try:
+            if page.stat().st_mtime < cutoff:
+                page.unlink()
+        except OSError:
+            logger.warning("Could not delete the old chart page %s", page)
 
 
 def _level_text(strike: Optional[float]) -> str:
@@ -111,15 +121,15 @@ def _millions(value: float) -> str:
 
 def summary_html(levels: DealerFlowLevels) -> str:
     """The small comparison table shown above the chart (levels of both views and the plausibility check)."""
-    total_oi = "not computed" if levels.total_oi_gex is None else _millions(levels.total_oi_gex)
+    total_oi = "not computed" if levels.total_open_interest_gex is None else _millions(levels.total_open_interest_gex)
     verdict = ("<span style='color: %s;'>passed</span>" % Colors.SUCCESS if levels.gate_passed else
                "<span style='color: %s;'>NOT passed: %s</span>" % (Colors.WARNING, html.escape(levels.gate_reason or "")))
     return (
         f"<table cellspacing='6'><tr><th></th><th>Call wall</th><th>Put wall</th><th>Gamma flip</th><th>Total GEX per 1%</th></tr>"
         f"<tr><td>Flow-based</td><td>{_level_text(levels.flow_call_wall)}</td><td>{_level_text(levels.flow_put_wall)}</td>"
         f"<td>{_level_text(levels.flow_gamma_flip)}</td><td>{_millions(levels.total_flow_gex)}</td></tr>"
-        f"<tr><td>OI-based</td><td>{_level_text(levels.oi_call_wall)}</td><td>{_level_text(levels.oi_put_wall)}</td>"
-        f"<td>{_level_text(levels.oi_gamma_flip)}</td><td>{total_oi}</td></tr></table>"
+        f"<tr><td>OI-based</td><td>{_level_text(levels.open_interest_call_wall)}</td><td>{_level_text(levels.open_interest_put_wall)}</td>"
+        f"<td>{_level_text(levels.open_interest_gamma_flip)}</td><td>{total_oi}</td></tr></table>"
         f"Spot {levels.index_price:,.0f}. Plausibility check of the flow-based view: {verdict} "
         f"({levels.violations} of {levels.options_checked} options exceed their open interest, "
         f"trade coverage {levels.coverage:.1%}).")
@@ -141,9 +151,13 @@ class DealerFlowLevelsTab(QWidget):
         self.service_factory = service_factory
         self.clock = clock
         self.worker: Optional[DealerLevelsWorker] = None
+        self._pending: Optional[DealerLevelsRequest] = None     # the newest request made while a worker was running
         self._expirations_loaded = False
         self._setup_ui()
         self.generate_button.clicked.connect(self._generate)
+        application = QApplication.instance()
+        if application is not None:
+            application.aboutToQuit.connect(self._wait_for_worker)
         self.currency_combo.currentIndexChanged.connect(self._list_expirations)
 
     def _setup_ui(self) -> None:
@@ -217,13 +231,15 @@ class DealerFlowLevelsTab(QWidget):
         return DealerLevelsRequest(self.currency_combo.currentText(), self.expiry_combo.currentData())
 
     def _start(self, request: DealerLevelsRequest) -> None:
-        """Run a request in the worker thread (ignored while another is running)."""
+        """Run a request in the worker thread; one made while another runs waits and runs next."""
         if self.worker is not None and self.worker.isRunning():
+            self._pending = request
             return
         self.generate_button.setEnabled(False)
         self.worker = DealerLevelsWorker(request, self.service_factory, parent=self)
         self.worker.succeeded.connect(self._on_succeeded)
         self.worker.failed.connect(self._on_failed)
+        self.worker.finished.connect(self._run_pending)
         self.worker.start()
 
     def _list_expirations(self) -> None:
@@ -240,10 +256,19 @@ class DealerFlowLevelsTab(QWidget):
         self._set_status("Computing the levels and drawing the chart...", Colors.WARNING)
         self._start(request)
 
+    def _run_pending(self) -> None:
+        """Start the request that was made while the last worker ran, if any."""
+        pending, self._pending = self._pending, None
+        if pending is not None:
+            self._start(pending)
+
     def _on_succeeded(self, result: DealerLevelsResult) -> None:
         """Fill the list; when a chart came back show it, the level table and the warnings."""
-        self._fill_expirations(result.expirations)
+        if self._pending is not None:                       # the controls changed meanwhile: this answer is outdated
+            return
         levels = result.levels
+        if levels is None:
+            self._fill_expirations(result.expirations)
         if levels is None or result.html_path is None:
             self._set_status("Pick an expiry and press Generate." if result.expirations else
                              "No option-chain snapshot stored for this currency; sync the database first.", Colors.TEXT_SECONDARY)
@@ -272,10 +297,14 @@ class DealerFlowLevelsTab(QWidget):
         self.expiry_combo.blockSignals(False)
         self.generate_button.setEnabled(bool(expirations))
 
-    def closeEvent(self, event) -> None:
+    def _wait_for_worker(self) -> None:
         """Wait for a running worker so the thread is never destroyed while it runs."""
         if self.worker is not None and self.worker.isRunning():
             self.worker.wait(10000)
+
+    def closeEvent(self, event) -> None:
+        """Also wait when the tab itself is closed."""
+        self._wait_for_worker()
         super().closeEvent(event)
 
     def _on_failed(self, message: str) -> None:

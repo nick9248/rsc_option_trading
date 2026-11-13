@@ -490,7 +490,8 @@ class DatabaseRepository:
         with self._db_cursor() as cursor:
             cursor.execute(
                 "SELECT DISTINCT expiration FROM historical_trades "
-                "WHERE currency = %s AND trade_timestamp >= %s AND trade_timestamp < %s",
+                "WHERE currency = %s AND trade_timestamp >= %s AND trade_timestamp < %s "
+                "AND expiration IS NOT NULL AND strike IS NOT NULL AND direction IS NOT NULL AND option_type IS NOT NULL",
                 (currency, start_ts, end_ts))
             return [row[0] for row in cursor.fetchall()]
 

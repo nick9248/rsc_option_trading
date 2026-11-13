@@ -12,6 +12,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication
 
 from coding.core.analytics.option_flow.dealer_levels import DealerFlowLevels, StrikeLevelRow
+from coding.core.analytics.option_flow.dealer_levels_figure import build_dealer_levels_figure
 from coding.gui.tabs.dealer_flow_levels_tab import (
     DealerFlowLevelsTab, DealerLevelsRequest, DealerLevelsResult, DealerLevelsWorker, summary_html)
 
@@ -28,13 +29,15 @@ def make_levels(gate_passed=True, captured_at=NOW - timedelta(minutes=10), notes
         currency="BTC", expiry="27NOV26", index_price=68_000.0, chain_captured_at=captured_at,
         flow_start=datetime(2026, 8, 27, tzinfo=timezone.utc), trades_used=100,
         rows=[StrikeLevelRow(68_000.0, -10.0, 5.0, -2_000_000.0, -5_000_000.0, 30.0, 400.0)],
-        flow_call_wall=73_000.0, flow_put_wall=68_000.0, flow_gamma_flip=None, oi_call_wall=None, oi_put_wall=68_000.0,
-        oi_gamma_flip=None, total_flow_gex=-3_400_000.0, total_oi_gex=None, coverage=1.0, violation_rate=0.098, violations=9,
+        flow_call_wall=73_000.0, flow_put_wall=68_000.0, flow_gamma_flip=None, open_interest_call_wall=None, open_interest_put_wall=68_000.0,
+        open_interest_gamma_flip=None, total_flow_gex=-3_400_000.0, total_open_interest_gex=None, coverage=1.0, violation_rate=0.098, violations=9,
         options_checked=92, options_without_open_interest=0, gate_passed=gate_passed,
         gate_reason=None if gate_passed else "9.8% of options exceed their open interest (limit 5%)", notes=list(notes))
 
 
 class FakeService:
+    build_figure = staticmethod(build_dealer_levels_figure)
+
     def __init__(self):
         self.calls = []
 
@@ -106,4 +109,16 @@ def test_empty_chain_asks_for_a_sync_and_failure_keeps_the_button_state(qapp):
     assert "sync the database" in tab.status_label.text() and not tab.generate_button.isEnabled()
     tab._on_failed("ValueError: x")
     assert tab.status_label.text() == "Failed: ValueError: x" and not tab.generate_button.isEnabled()
+    tab.close()
+
+
+def test_a_request_made_while_one_runs_waits_and_an_outdated_answer_is_ignored(qapp):
+    tab = DealerFlowLevelsTab(service_factory=FakeService, clock=lambda: NOW)
+    running = MagicMock()
+    running.isRunning.return_value = True
+    tab.worker = running
+    tab._start(DealerLevelsRequest("ETH", None))
+    assert tab._pending == DealerLevelsRequest("ETH", None)
+    tab._on_succeeded(DealerLevelsResult(["14NOV26"]))                       # the BTC answer arrives after the switch
+    assert tab.expiry_combo.count() == 0                                      # not shown: it belongs to the old currency
     tab.close()

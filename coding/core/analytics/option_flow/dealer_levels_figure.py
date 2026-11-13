@@ -43,11 +43,11 @@ def visible_range(levels: DealerFlowLevels, share: float = 0.02) -> Optional[Lis
     if not rows:
         return None
     largest_flow = max(abs(row.flow_gex) for row in rows) or 1.0
-    largest_oi = max((abs(row.oi_gex) for row in rows if row.oi_gex is not None), default=0.0) or 1.0
+    largest_oi = max((abs(row.open_interest_gex) for row in rows if row.open_interest_gex is not None), default=0.0) or 1.0
     significant = [row.strike for row in rows
-                   if abs(row.flow_gex) >= share * largest_flow or (row.oi_gex is not None and abs(row.oi_gex) >= share * largest_oi)]
+                   if abs(row.flow_gex) >= share * largest_flow or (row.open_interest_gex is not None and abs(row.open_interest_gex) >= share * largest_oi)]
     anchors = [levels.index_price] + [value for value in (levels.flow_call_wall, levels.flow_put_wall, levels.flow_gamma_flip,
-                                                          levels.oi_call_wall, levels.oi_put_wall, levels.oi_gamma_flip)
+                                                          levels.open_interest_call_wall, levels.open_interest_put_wall, levels.open_interest_gamma_flip)
                                       if value is not None]
     values = significant + anchors
     padding = 0.5 * min(bar_widths([row.strike for row in rows]) or [1000.0]) / 0.8 + 500.0
@@ -82,12 +82,12 @@ def build_dealer_levels_figure(levels: DealerFlowLevels) -> go.Figure:
                        "Dealer position calls: %{customdata[0]:,.1f} contracts (open interest %{customdata[2]:,.0f})<br>"
                        "Dealer position puts: %{customdata[1]:,.1f} contracts (open interest %{customdata[3]:,.0f})<extra></extra>"),
         row=1, col=1)
-    oi_rows = [row for row in rows if row.oi_gex is not None]
-    oi_values = [(row.oi_gex or 0.0) / 1e6 for row in oi_rows]
+    open_interest_rows = [row for row in rows if row.open_interest_gex is not None]
+    open_interest_values = [(row.open_interest_gex or 0.0) / 1e6 for row in open_interest_rows]
     figure.add_bar(
-        y=[row.strike for row in oi_rows], x=oi_values, orientation="h", width=[widths[row.strike] for row in oi_rows],
-        name="OI-based GEX", marker=dict(color=[POSITIVE_COLOR if value >= 0 else NEGATIVE_COLOR for value in oi_values]),
-        customdata=[[row.call_open_interest or 0.0, row.put_open_interest or 0.0] for row in oi_rows],
+        y=[row.strike for row in open_interest_rows], x=open_interest_values, orientation="h", width=[widths[row.strike] for row in open_interest_rows],
+        name="OI-based GEX", marker=dict(color=[POSITIVE_COLOR if value >= 0 else NEGATIVE_COLOR for value in open_interest_values]),
+        customdata=[[row.call_open_interest or 0.0, row.put_open_interest or 0.0] for row in open_interest_rows],
         hovertemplate=("Strike %{y:,.0f}<br>OI-based GEX: $%{x:,.2f}M per 1%<br>"
                        "Open interest calls %{customdata[0]:,.0f}, puts %{customdata[1]:,.0f}<extra></extra>"),
         row=1, col=2)
@@ -100,9 +100,9 @@ def build_dealer_levels_figure(levels: DealerFlowLevels) -> go.Figure:
     _level_line(figure, 1, levels.flow_call_wall, "call wall", POSITIVE_COLOR, "dash")
     _level_line(figure, 1, levels.flow_put_wall, "put wall", NEGATIVE_COLOR, "dash")
     _level_line(figure, 1, levels.flow_gamma_flip, "gamma flip", FLIP_COLOR, "dot")
-    _level_line(figure, 2, levels.oi_call_wall, "call wall", POSITIVE_COLOR, "dash")
-    _level_line(figure, 2, levels.oi_put_wall, "put wall", NEGATIVE_COLOR, "dash")
-    _level_line(figure, 2, levels.oi_gamma_flip, "gamma flip", FLIP_COLOR, "dot")
+    _level_line(figure, 2, levels.open_interest_call_wall, "call wall", POSITIVE_COLOR, "dash")
+    _level_line(figure, 2, levels.open_interest_put_wall, "put wall", NEGATIVE_COLOR, "dash")
+    _level_line(figure, 2, levels.open_interest_gamma_flip, "gamma flip", FLIP_COLOR, "dot")
 
     verdict = "PASSED" if levels.gate_passed else f"NOT PASSED ({levels.gate_reason})"
     footer = "<br>".join(textwrap.wrap(f"{levels.currency} {levels.expiry}. Flow since {levels.flow_start:%Y-%m-%d} UTC, {levels.trades_used} trades; chain "

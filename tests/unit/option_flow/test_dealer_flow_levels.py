@@ -70,7 +70,7 @@ def test_dealer_position_is_minus_the_taker_flow_and_gex_follows_by_hand():
 def test_oi_based_view_is_computed_next_to_it_by_hand():
     levels = service(FakeRepository(flow(10.0, -4.0))).levels("BTC", EXPIRY)
     # standard view: call OI 100 and put OI 50 at the same gamma, dealers long calls and short puts -> (100 - 50) x gamma x S^2 x 1 %
-    assert levels.rows[0].oi_gex == pytest.approx(50 * GEX_PER_CONTRACT, rel=1e-3)
+    assert levels.rows[0].open_interest_gex == pytest.approx(50 * GEX_PER_CONTRACT, rel=1e-3)
     assert (levels.rows[0].call_open_interest, levels.rows[0].put_open_interest) == (100.0, 50.0)
 
 
@@ -106,6 +106,7 @@ def test_the_flow_starts_at_the_first_trade_but_not_before_the_stable_coverage_d
     repository.get_first_trade_timestamp = lambda currency, expiration: 1_000                  # 1970: older than the stable date
     levels = service(repository).levels("BTC", EXPIRY)
     assert levels.flow_start == datetime(2026, 4, 25, tzinfo=timezone.utc)
+    assert any("only complete from 2026-04-25" in note for note in levels.notes)
 
 
 def test_unknown_expiry_is_an_error_and_expirations_exclude_expired_ones_soonest_first():
@@ -129,7 +130,7 @@ def test_figure_has_a_bar_panel_per_view_and_leaves_missing_oi_out():
     figure = build_dealer_levels_figure(levels)
     assert [bar.name for bar in figure.data] == ["Flow-based GEX", "OI-based GEX"]
     assert list(figure.data[0].x) == [pytest.approx(levels.rows[0].flow_gex / 1e6)]
-    levels.rows[0].oi_gex = None
+    levels.rows[0].open_interest_gex = None
     assert len(build_dealer_levels_figure(levels).data[1].x) == 0                                # not drawn as zero
     assert "dealer position <= open interest" in figure.layout.annotations[-1].text
 
