@@ -8,7 +8,7 @@ import psycopg2
 import pytest
 
 from coding.core.analytics.option_flow.strike_flow import SERIES, OptionTrade, aggregate_by_strike, series_key
-from coding.core.analytics.option_flow.strike_flow_chart_renderer import render_strike_flow_chart
+from coding.core.analytics.option_flow.strike_flow_figure import UNITS, build_strike_flow_figure, cell_value, nice_ticks
 from coding.core.database.config import ConnectionPool, DatabaseConfig
 from coding.core.database.repository import DatabaseRepository
 from coding.service.option_flow.option_flow_service import OptionFlowService
@@ -67,11 +67,50 @@ def test_option_type_and_direction_are_read_case_insensitively():
     assert flow.cell(70_000.0, "call_sell").trades == 1
 
 
-def test_the_chart_is_written(tmp_path):
-    flow = aggregate_by_strike([trade(strike=70_000.0 + 1_000 * i, kind="C" if i % 2 else "P", direction="buy" if i % 3 else "sell",
-                                      amount=1.0 + i, block=bool(i % 4 == 0)) for i in range(40)])
-    path = render_strike_flow_chart(flow, "BTC test", "footer text " * 30, tmp_path / "chart.png")
-    assert path.exists() and path.stat().st_size > 5_000
+def figure_bars(figure):
+    """name -> (x values, strikes as text) of every bar trace."""
+    return {bar.name: (list(bar.x), list(bar.y)) for bar in figure.data}
+
+
+def test_figure_draws_calls_left_puts_right_in_millions_with_blocked_next_to_the_axis():
+    flow = aggregate_by_strike([trade(strike=70_000.0, kind="C", direction="buy", amount=10.0),
+                                trade(strike=70_000.0, kind="C", direction="buy", amount=5.0, block=True),
+                                trade(strike=72_000.0, kind="P", direction="sell", amount=2.0)])
+    figure = build_strike_flow_figure(flow, "title")
+    bars = figure_bars(figure)
+    assert bars["Calls Buy"] == ([-0.7, 0.0], ["70,000", "72,000"])                  # 10 x 70,000 = $0.7M, to the left
+    assert bars["Call Buy Blocked"][0] == [-0.35, 0.0]                              # 5 x 70,000 = $0.35M
+    assert bars["Puts Sell"][0] == [0.0, 0.144]                                      # 2 x 72,000 = $0.144M, to the right
+    names = [bar.name for bar in figure.data]
+    assert names.index("Call Buy Blocked") < names.index("Calls Buy")                # blocked first = next to the axis
+    assert len(names) == 8 and figure.layout.barmode == "relative" and figure.layout.hovermode == "y unified"
+    assert list(figure.layout.yaxis.categoryarray) == ["70,000", "72,000"]
+
+
+def test_figure_hover_values_are_positive_and_follow_the_unit():
+    flow = aggregate_by_strike([trade(strike=70_000.0, kind="C", direction="sell", amount=3.0)])
+    hover = {bar.name: list(bar.customdata) for bar in build_strike_flow_figure(flow, "t").data}
+    assert hover["Calls Sell"] == [pytest.approx(0.21)]                           # 3 x 70,000 = $0.21M, positive though drawn left
+    contracts = build_strike_flow_figure(flow, "t", unit="contracts")
+    assert dict((bar.name, list(bar.x)) for bar in contracts.data)["Calls Sell"] == [-3.0]
+    trades = build_strike_flow_figure(flow, "t", unit="trades")
+    assert dict((bar.name, list(bar.x)) for bar in trades.data)["Calls Sell"] == [-1.0]
+
+
+def test_figure_rejects_an_unknown_unit_and_handles_no_trades():
+    with pytest.raises(ValueError):
+        build_strike_flow_figure(aggregate_by_strike([]), "t", unit="dollars")
+    empty = build_strike_flow_figure(aggregate_by_strike([]), "t")
+    assert len(empty.data) == 8 and all(len(bar.x) == 0 for bar in empty.data)
+    assert set(UNITS) == {"notional", "contracts", "trades"}
+    assert cell_value(aggregate_by_strike([trade()]).cell(70_000.0, "call_buy"), "trades") == 1.0
+
+
+def test_nice_ticks_reach_the_limit_with_round_steps():
+    assert nice_ticks(0.0) == [0.0]
+    ticks = nice_ticks(83.0)
+    assert ticks[0] == 0.0 and ticks[-1] >= 83.0 and len(ticks) <= 8
+    assert len({round(b - a, 9) for a, b in zip(ticks, ticks[1:])}) == 1
 
 
 class FakeRepository:
@@ -84,6 +123,9 @@ class FakeRepository:
 
     def get_latest_trade_time(self, currency):
         return datetime(2026, 11, 13, 21, 21, tzinfo=timezone.utc)
+
+    def get_traded_expirations(self, currency, start_ts, end_ts):
+        return ["25DEC26", "13NOV26", "bad", "27NOV26"]
 
 
 NOW = datetime(2026, 11, 13, 21, 25, tzinfo=timezone.utc)
@@ -99,6 +141,15 @@ def test_the_service_reads_the_window_before_now_and_writes_png_and_json(tmp_pat
     numbers = json.loads((tmp_path / "BTC_strike_flow_24h_all.json").read_text(encoding="utf-8"))
     assert numbers["strikes"]["70000"]["call_sell"] == {"contracts": 2.0, "notional_usd": 140000.0, "trades": 1}   # 2 x 70,000
     assert numbers["trades_used"] == 1 and numbers["window_end_utc"] == NOW.isoformat()
+
+
+def test_the_service_lists_traded_expirations_soonest_first_and_builds_a_titled_figure():
+    service = OptionFlowService(FakeRepository([trade()]), clock=lambda: NOW)
+    assert service.traded_expirations() == ["13NOV26", "27NOV26", "25DEC26", "bad"]      # unparseable labels go last
+    report = service.strike_flow(expiry="27NOV26")
+    figure = service.build_figure(report)
+    assert "Last 24H 27NOV26" in figure.layout.title.text
+    assert "Newest stored trade: 2026-11-13 21:21 UTC" in figure.layout.annotations[-1].text
 
 
 def test_the_service_can_end_the_window_at_a_chosen_time_and_needs_a_timezone(tmp_path):
@@ -165,6 +216,7 @@ def test_repository_query_returns_the_window_the_expiry_and_the_block_flag(repo)
         (70_000.0, "C", "buy", 1.0, False), (70_000.0, "C", "sell", 2.5, False), (80_000.0, "P", "buy", 10.0, True)]
     only_november = repository.get_option_trades_between("BTC", 0, 5_000, "27NOV26")
     assert len(only_november) == 2 and all(t.expiration == "27NOV26" for t in only_november)
+    assert sorted(repository.get_traded_expirations("BTC", 0, 5_000)) == ["25DEC26", "27NOV26"]
     assert repository.get_latest_trade_time("BTC") == datetime.fromtimestamp(9.0, tz=timezone.utc)
     assert repository.get_latest_trade_time("SOL") is None
     flow = aggregate_by_strike(everything)

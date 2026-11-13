@@ -38,6 +38,21 @@ A "sell" is sell-side volume, not "they are now short".
 
 Writes a PNG and a JSON (contracts, notional and trades per strike and series) into `outputs/option_flow/`.
 
+## GUI tab "Option Flow" (module 9)
+
+Currency, window (6 to 72 h), expiry (all, or any expiry that traded in the window, expired ones included) and unit
+(notional, contracts, trades); Generate draws the interactive chart. Hovering a strike lists all eight series. The tab warns
+when the newest stored trade is older than 3 hours (sync first). Code: figure `coding/core/analytics/option_flow/strike_flow_figure.py`
+(Plotly, also used for the PNG through kaleido), service `coding/service/option_flow/option_flow_service.py`, tab
+`coding/gui/tabs/option_flow_tab.py`.
+
+Data: the collector on the VPS already stores every Deribit option trade (table `historical_trades`, every 60 s, since
+2026-03-15), including direction and block flag; nothing new is captured. The PC reads its local mirror.
+
+Relation to the older Flow Charts window (`BuySellFlowAnalyzer`, untouched): that one uses notional = amount x index price,
+calls a trade "block" when its notional is at least $100k (not Deribit's flag), shows one filter at a time, and its
+"All Expirations" sums only expirations that are still active. The new tab does none of these; the two give different numbers.
+
 ## Data checks
 
 - The stored trades match Deribit's own history server (`history.deribit.com`, full history since 2020; the main API only
@@ -67,6 +82,6 @@ sizes, one window).
 
 ## Next
 
-A GUI tab with the same controls; then the flow-based dealer-positioning levels on top of these trades, reusing
+The flow-based dealer-positioning levels on top of these trades, reusing
 `DealerInventoryCalculator` (taker-flow, Glassnode method), and reconciling it with the older per-expiry
 `BuySellFlowAnalyzer` (which defines a block as notional of at least $100k instead of the real block flag).

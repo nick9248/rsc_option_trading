@@ -477,6 +477,15 @@ class DatabaseRepository:
             row = cursor.fetchone()
         return datetime.fromtimestamp(row[0] / 1000, tz=timezone.utc) if row and row[0] is not None else None
 
+    def get_traded_expirations(self, currency: str, start_ts: int, end_ts: int) -> List[str]:
+        """The expiration labels with at least one stored option trade in ``[start_ts, end_ts)`` (ms), unsorted."""
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                "SELECT DISTINCT expiration FROM historical_trades "
+                "WHERE currency = %s AND trade_timestamp >= %s AND trade_timestamp < %s",
+                (currency, start_ts, end_ts))
+            return [row[0] for row in cursor.fetchall()]
+
     def get_signed_taker_flow_by_strike(
         self,
         currency: str,

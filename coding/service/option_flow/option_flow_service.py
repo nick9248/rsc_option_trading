@@ -12,8 +12,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, List, Optional
 
+import plotly.graph_objects as go
+
 from coding.core.analytics.option_flow.strike_flow import SERIES, StrikeFlow, aggregate_by_strike
-from coding.core.analytics.option_flow.strike_flow_chart_renderer import render_strike_flow_chart
+from coding.core.analytics.menthorq_replication_calculator import parse_expiry_settlement
+from coding.core.analytics.option_flow.strike_flow_figure import build_strike_flow_figure
 from coding.core.database.repository import DatabaseRepository
 
 logger = logging.getLogger(__name__)
@@ -63,6 +66,27 @@ class OptionFlowService:
         newest = self.repository.get_latest_trade_time(currency)
         return StrikeFlowReport(currency, start, end, expiry, aggregate_by_strike(trades, expiry), newest)
 
+    def traded_expirations(self, currency: str = "BTC", hours: int = 24, end: Optional[datetime] = None) -> List[str]:
+        """The expirations with trades in the window (expired ones included), soonest first."""
+        end = end or self.clock()
+        start_ms, end_ms = int((end - timedelta(hours=hours)).timestamp() * 1000), int(end.timestamp() * 1000)
+        labels = self.repository.get_traded_expirations(currency, start_ms, end_ms)
+        return sorted(labels, key=lambda label: (parse_expiry_settlement(label) or datetime.max.replace(tzinfo=timezone.utc), label))
+
+    @staticmethod
+    def build_figure(report: StrikeFlowReport, unit: str = "notional") -> go.Figure:
+        """The interactive Plotly figure of a report (``unit``: notional, contracts or trades)."""
+        scope = "All Expirations" if report.expiry is None else report.expiry
+        hours = round((report.window_end - report.window_start).total_seconds() / 3600)
+        title = f"{report.currency} DERIBIT Buy/Sell Volume Last {hours}H {scope}"
+        footer = (f"Window {report.window_start:%Y-%m-%d %H:%M} to {report.window_end:%Y-%m-%d %H:%M} UTC. "
+                  f"{report.flow.trades_used} trades ({report.flow.trades_skipped} skipped: unknown side or size). "
+                  "Buy/sell = the taker's side (aggressor); notional = contracts x strike (Laevitas's definition); "
+                  "blocked = Deribit block trades.")
+        if report.newest_trade is not None:
+            footer += f" Newest stored trade: {report.newest_trade:%Y-%m-%d %H:%M} UTC."
+        return build_strike_flow_figure(report.flow, title, unit, footer)
+
     def generate_chart(self, output_directory: Path, currency: str = "BTC", hours: int = 24,
                        expiry: Optional[str] = None, end: Optional[datetime] = None) -> StrikeFlowReport:
         """
@@ -71,15 +95,11 @@ class OptionFlowService:
         """
         report = self.strike_flow(currency, hours, expiry, end)
         scope = expiry or "all"
-        title = f"{currency} DERIBIT Buy/Sell Volume Last {hours}H {'All Expirations' if expiry is None else expiry}"
-        footer = (f"Window {report.window_start:%Y-%m-%d %H:%M} to {report.window_end:%Y-%m-%d %H:%M} UTC. "
-                  f"{report.flow.trades_used} trades ({report.flow.trades_skipped} skipped: unknown side or size). "
-                  "Buy/sell = the taker's side (aggressor); notional = contracts x strike (Laevitas's definition); blocked = block trades. "
-                  f"Newest stored trade: {report.newest_trade:%Y-%m-%d %H:%M} UTC." if report.newest_trade else
-                  f"Window {report.window_start:%Y-%m-%d %H:%M} to {report.window_end:%Y-%m-%d %H:%M} UTC.")
         output_directory.mkdir(parents=True, exist_ok=True)
         stem = f"{currency}_strike_flow_{hours}h_{scope}" + (f"_to_{end:%Y%m%dT%H%M}" if end is not None else "")
-        png = render_strike_flow_chart(report.flow, title, footer, output_directory / f"{stem}.png")
+        png = output_directory / f"{stem}.png"
+        figure = self.build_figure(report)
+        figure.write_image(png, width=1500, height=figure.layout.height)
         data_path = output_directory / f"{stem}.json"
         data_path.write_text(json.dumps({
             "currency": currency, "expiry": expiry, "window_start_utc": report.window_start.isoformat(),
