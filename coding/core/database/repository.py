@@ -14,6 +14,7 @@ from psycopg2.extras import Json, execute_values
 
 from coding.core.analytics.futures_flow.taker_flow import TakerFlowHour
 from coding.core.analytics.liquidation_heatmap.level_snapshot import LevelSnapshot, RecordedLiquidation
+from coding.core.analytics.option_flow.strike_flow import OptionTrade
 from coding.core.analytics.market_wide_calculator import DERIBIT_SETTLEMENT_HOUR_UTC
 from coding.core.analytics.menthorq_monitor.alert_mute import MenthorqMonitorState
 from coding.core.analytics.menthorq_monitor.level_record import (
@@ -444,6 +445,37 @@ class DatabaseRepository:
         with self._db_cursor() as cursor:
             cursor.execute(query, params)
             return cursor.fetchall()
+
+    def get_option_trades_between(self, currency: str, start_ts: int, end_ts: int,
+                                  expiration: Optional[str] = None) -> List[OptionTrade]:
+        """
+        The option trades with ``start_ts <= trade_timestamp < end_ts`` (epoch milliseconds), optionally of one
+        expiration, with what the buy/sell volume per strike needs: expiration, strike, option type, the taker's side
+        (``direction``), size, index price and whether it was a block trade (``block_trade_id`` is set).
+        """
+        query = """
+            SELECT expiration, strike, option_type, direction, amount, index_price, (block_trade_id IS NOT NULL)
+            FROM historical_trades
+            WHERE currency = %s AND trade_timestamp >= %s AND trade_timestamp < %s
+              AND strike IS NOT NULL AND direction IS NOT NULL AND option_type IS NOT NULL
+        """
+        parameters: List[Any] = [currency, start_ts, end_ts]
+        if expiration is not None:
+            query += " AND expiration = %s"
+            parameters.append(expiration)
+        with self._db_cursor() as cursor:
+            cursor.execute(query, parameters)
+            rows = cursor.fetchall()
+        return [OptionTrade(expiration=row[0], strike=float(row[1]), option_type=row[2], direction=row[3],
+                            amount=float(row[4]), index_price=_float_or_none(row[5]), is_block=bool(row[6]))
+                for row in rows]
+
+    def get_latest_trade_time(self, currency: str) -> Optional[datetime]:
+        """The time of the newest stored option trade of the currency (UTC), or None when there is none."""
+        with self._db_cursor() as cursor:
+            cursor.execute("SELECT MAX(trade_timestamp) FROM historical_trades WHERE currency = %s", (currency,))
+            row = cursor.fetchone()
+        return datetime.fromtimestamp(row[0] / 1000, tz=timezone.utc) if row and row[0] is not None else None
 
     def get_signed_taker_flow_by_strike(
         self,
