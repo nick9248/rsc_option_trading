@@ -95,3 +95,4 @@ scratch_backups/
 # only the hand-transcribed reference numbers are tracked.
 outputs/menthorq_replicate/*
 !outputs/menthorq_replicate/menthorq_reference_*.json
+outputs/liquidation_heatmap/
