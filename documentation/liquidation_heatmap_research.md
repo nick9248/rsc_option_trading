@@ -140,12 +140,55 @@ the volume explain. For SHORT liquidations it adds nothing (the naive predictor 
 probably over-creates shorts in a falling market (taker sell volume opens "shorts" even when they are covering).
 Not yet shown: that it holds in other market regimes, for ETH, or out of sample in time.
 
+## The recorder and the 7-day forward test (from 2026-11-13)
+
+Why: with 30 days of CryptoQuant data the level accuracy cannot be measured (no real liquidations with a time and a
+price). The recorder on the VPS collects exactly what is needed, so that the levels can be judged on data that did not
+exist when they were published.
+
+What the collector records (opt-in, `LIQUIDATION_RECORDER_ENABLED=1`, tables from migration 034, synced as optional tables):
+
+1. `liquidation_events`: real liquidations of OKX BTC-USDT-SWAP (public endpoint, no key, works from the VPS), polled
+   every 2 minutes: time, liquidated side, price (OKX's bankruptcy price), size (contracts x 0.01 BTC). Binance's own
+   feed is not reachable from the USA VPS, so this is a cross-venue check (liquidations happen at the same prices on every
+   venue). Side mapping checked on 1000 real events: long liquidations come in falling minutes (mean -0.11 %, rising in
+   18 %), short liquidations in rising minutes (+0.14 %, rising in 94 %). About 300 events per hour.
+2. `liquidation_heatmap_snapshots`: every hour at :12 UTC the model (the volume configuration 25-100x/5, bin 100,
+   half-life 48 h) is computed ON THE VPS from 12 days of Binance 5-minute candles read through the relay, and the levels
+   within 10 % of the price are stored with the time they were computed (point in time, never rewritten). A missing or
+   too-thin data hour gives no snapshot (a gap, not an estimate).
+
+How it is judged (`scripts/evaluate_liquidation_levels.py`, after `scripts/sync_from_vps.py`): each real liquidation is
+scored against the latest snapshot computed BEFORE it. Score = percentile of the snapshot's intensity at the event's
+price among the prices within 5 % of the reference price (0.5 = a random price, 1.0 = the strongest level), plus the
+share of events in the top 10 % of intensity (random = 10 %). The same events are scored against a snapshot that was
+already 24 hours old (control). A level that is accurate must beat both chance and the stale control.
+
+Pass criteria, fixed BEFORE any data (a judgement, adjustable): after 7 days, with at least 500 scored events per side,
+a side passes when the mean percentile is at least 0.60 and the top-decile share at least 0.20 (twice chance), and
+both are clearly above the stale control (mean percentile at least 0.05 higher). Sides are judged separately (the
+earlier backtest suggested long is better than short). A pass means "the levels carry real information"; it does not
+mean "exact": the percentile does not tell how far an event is from the level.
+
+Deployment (only on request): deploy the code, apply migration 034 on the VPS, add `LIQUIDATION_RECORDER_ENABLED=1` to the
+VPS `.env` (`BINANCE_FUTURES_BASE_URL` is already set for the taker flow), restart the collector. Rollback: remove the
+line and restart; the tables can stay.
+
+Known limits: OKX, not Binance, liquidations; OKX publishes filled liquidation orders, which may be a sample; a page of
+the feed is cut at a millisecond boundary (events with the same millisecond as the cursor can be missed, rare);
+if more than 3000 events arrive between two runs a gap is possible and is logged.
+
 ## Next steps
 
-1. More real liquidation history, the main limit now. Options: (a) CryptoQuant Professional (1 year) or Premium
-   (full history) for the daily liquidations; (b) record real liquidations ourselves from now on (CryptoQuant
-   daily pulled and stored every day, which grows the 30-day window by one day per day; or OKX's free public
-   liquidation orders, which return the last hours with full detail, whose depth is not yet known).
+1. Read the 7-day forward test of the recorder (above). The key for CryptoQuant is not on the VPS; the daily Binance
+   liquidations can still be pulled from the PC for the same 7 days as a second check (30-day window).
 2. Fix the short side (opening versus closing volume, for example by using the open-interest change as a filter).
 3. Repeat on other regimes and out of sample in time once there is more history; then ETH.
 4. Only after that: a collector job, a brief section and a GUI tab (like the taker flow).
+
+## Where this goes (three sources of levels)
+
+The plan is to compare level sources and look for overlap: (1) these estimated liquidation levels, (2) the options levels
+(GEX/DEX call resistance, put support, HVL; later call/put buy-sell levels and block trades). A snapshot is therefore
+stored as plain `[price, long_usd, short_usd]` rows with a time, so that a common "levels" view can be built later without
+changing the recorder. Only a level source that passed its own accuracy check should enter the comparison.

@@ -62,6 +62,10 @@ TABLE_SPECS: Tuple[TableSpec, ...] = (
     # hours old; the warning limit is 3.
     _hourly("taker_flow_hourly", "hour_utc", optional=True, required=("taker_buy_usd", "taker_sell_usd"),
             warn_hours=3.0),
+    # Liquidation recorder (migration 034), optional: written only with LIQUIDATION_RECORDER_ENABLED=1 (VPS).
+    # The snapshot runs at :12 every hour. The events have no regular cadence (a quiet hour can have none).
+    _hourly("liquidation_heatmap_snapshots", "computed_at", optional=True),
+    _event("liquidation_events", "event_time"),
     _hourly("funding_rate_history", "timestamp", "ms_epoch"),
     TableSpec("dvol_history", "timestamp", "datetime", 3.0, 6.0, ("dvol_value",)),
     TableSpec("ohlcv_history", "date", "datetime", 48.0, 120.0, ("close",)),
