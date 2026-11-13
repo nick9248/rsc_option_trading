@@ -30,6 +30,7 @@ from coding.service.data_collection.prospective_collector import ProspectiveColl
 from coding.service.data_collection.trade_collector import TradeCollector
 from coding.core.database.repository import DatabaseRepository
 from coding.service.futures_flow.taker_flow_job import start_taker_flow_job
+from coding.service.liquidation_heatmap.liquidation_recorder_job import start_liquidation_recorder_job
 from coding.service.on_chain.menthorq_monitor.menthorq_monitor_job import start_menthorq_monitor_job
 
 logger = logging.getLogger(__name__)
@@ -100,6 +101,10 @@ class UnifiedScheduler:
         # Binance perpetual taker buy/sell flow (futures market, not options); off unless
         # TAKER_FLOW_ENABLED=1. A failure to start disables only this job.
         self.taker_flow_job = start_taker_flow_job(repository=repository)
+
+        # Real liquidation events (OKX) and hourly liquidation-level snapshots (research recorder); off unless
+        # LIQUIDATION_RECORDER_ENABLED=1. A failure to start disables only this job.
+        self.liquidation_recorder_job = start_liquidation_recorder_job(repository=repository)
 
         # Scheduler
         self.scheduler = BackgroundScheduler()
@@ -191,6 +196,10 @@ class UnifiedScheduler:
         # Taker flow (hourly cron; the first run is immediate)
         if self.taker_flow_job is not None:
             self.taker_flow_job.register(self.scheduler)
+
+        # Liquidation recorder (events every 2 min, snapshot hourly; both run once at start)
+        if self.liquidation_recorder_job is not None:
+            self.liquidation_recorder_job.register(self.scheduler)
 
         # Start scheduler
         self.scheduler.start()

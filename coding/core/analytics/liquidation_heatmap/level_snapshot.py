@@ -1,0 +1,133 @@
+"""
+The levels of a heatmap state, as stored in an hourly snapshot, and the score of a real liquidation against them.
+
+A snapshot keeps the bins within +-10 % of the reference price as ``[price, long_usd, short_usd]`` rows (USD at the
+level's price). A real liquidation event is scored by the percentile of the snapshot's intensity at the event's
+price among the prices of its OWN side of the reference price (a long is liquidated below the market, a short above):
+if the event's price were uniformly random in that range the mean percentile would be 0.5 and the share in the top
+decile 0.1; close to 1 means the event happened at one of the strongest levels. Liquidations are not uniform (they
+cluster near the price), so the real comparison is the stale-snapshot control of ``level_evaluation``. Only snapshots computed BEFORE the event are
+used (see the evaluation script), so there is no hindsight.
+"""
+
+from dataclasses import dataclass
+from datetime import datetime
+from typing import List, Optional, Sequence
+
+import numpy as np
+
+from coding.core.analytics.liquidation_heatmap.liquidation_heatmap_model import HeatmapResult
+
+SNAPSHOT_WINDOW = 0.10          # share of the reference price kept in a snapshot
+SCORE_WINDOW_PERCENT = 5.0      # prices within this percent of the reference are the "random price" pool
+SMOOTHING_USD = 100.0           # an event counts the levels within this distance
+
+
+@dataclass(frozen=True)
+class RecordedLiquidation:
+    """A real liquidation of a perpetual: the side that was liquidated, the price and the size."""
+
+    venue: str
+    instrument: str
+    event_time: datetime
+    liquidated_side: str        # "long" (a forced sell) or "short" (a forced buy)
+    price: float
+    size_btc: float
+    raw_size: float             # the venue's own size unit (contracts)
+
+    @property
+    def usd(self) -> float:
+        """Size times price."""
+        return self.size_btc * self.price
+
+
+@dataclass(frozen=True)
+class LevelSnapshot:
+    """One stored hourly snapshot of the estimated levels (point in time)."""
+
+    symbol: str
+    as_of_utc: datetime
+    computed_at: datetime
+    reference_price: float
+    bin_size_usd: float
+    levels: List[List[float]]
+
+
+def extract_levels(result: HeatmapResult, row: int, reference_price: float,
+                   window: float = SNAPSHOT_WINDOW) -> List[List[float]]:
+    """
+    The non-empty bins of a recorded step within ``window`` of ``reference_price`` as
+    ``[price, long_usd, short_usd]`` rows, lowest price first. An empty list when the row has no data.
+    """
+    long_btc, short_btc = result.long_btc[row], result.short_btc[row]
+    if not np.isfinite(long_btc).any():
+        return []
+    centers = result.bin_centers
+    long_usd, short_usd = long_btc * centers, short_btc * centers
+    keep = (np.abs(centers - reference_price) <= window * reference_price) & ((long_usd > 0) | (short_usd > 0))
+    return [[round(float(centers[i]), 1), round(float(long_usd[i]), 2), round(float(short_usd[i]), 2)]
+            for i in np.where(keep)[0]]
+
+
+def _intensity_at(prices: np.ndarray, values: np.ndarray, at: float, smoothing: float) -> float:
+    return float(values[np.abs(prices - at) <= smoothing].sum())
+
+
+@dataclass(frozen=True)
+class PoolIntensity:
+    """
+    The smoothed level intensity of one side of one snapshot at every price of the pool (computed once and reused for
+    every event that is scored against the snapshot).
+    """
+
+    low: float
+    high: float
+    prices: np.ndarray          # the level prices of the snapshot
+    values: np.ndarray          # the side's level intensities (USD)
+    pool_intensity: np.ndarray  # the smoothed intensity at each pool point
+    smoothing_usd: float
+
+
+def build_pool(
+    levels: Sequence[Sequence[float]], side: str, reference_price: float, bin_size_usd: float,
+    window_percent: float = SCORE_WINDOW_PERCENT, smoothing_usd: float = SMOOTHING_USD,
+) -> Optional[PoolIntensity]:
+    """
+    The pool of a side: a grid of ``bin_size_usd`` steps from the reference price down to ``window_percent`` below it
+    for a long, up to ``window_percent`` above it for a short, with the smoothed intensity at each point. None when
+    there are no levels or the side is unknown.
+    """
+    if side not in ("long", "short") or not levels:
+        return None
+    reach = window_percent / 100 * reference_price
+    low, high = ((reference_price - reach, reference_price) if side == "long"
+                 else (reference_price, reference_price + reach))
+    array = np.asarray(levels, dtype=float)
+    prices, values = array[:, 0], array[:, 1 if side == "long" else 2]
+    points = np.arange(low, high + 1e-9, bin_size_usd)
+    pool_intensity = np.array([_intensity_at(prices, values, float(point), smoothing_usd) for point in points])
+    return PoolIntensity(low, high, prices, values, pool_intensity, smoothing_usd)
+
+
+def percentile_in_pool(pool: Optional[PoolIntensity], price: float) -> Optional[float]:
+    """
+    Percentile (0 to 1) of the smoothed intensity at ``price`` among the pool points; ties count half. None when there is
+    no pool or the price is outside it.
+    """
+    if pool is None or not pool.low <= price <= pool.high:
+        return None
+    event_intensity = _intensity_at(pool.prices, pool.values, price, pool.smoothing_usd)
+    pool_intensity = pool.pool_intensity
+    return float(((pool_intensity < event_intensity).sum() + 0.5 * (pool_intensity == event_intensity).sum())
+                 / len(pool_intensity))
+
+
+def level_percentile(
+    levels: Sequence[Sequence[float]], side: str, price: float, reference_price: float,
+    bin_size_usd: float, window_percent: float = SCORE_WINDOW_PERCENT, smoothing_usd: float = SMOOTHING_USD,
+) -> Optional[float]:
+    """
+    Percentile (0 to 1) of the side's smoothed level intensity at ``price`` among the prices of the pool (see
+    ``build_pool``); None when the price is outside the pool, there are no levels or the side is unknown.
+    """
+    return percentile_in_pool(build_pool(levels, side, reference_price, bin_size_usd, window_percent, smoothing_usd), price)

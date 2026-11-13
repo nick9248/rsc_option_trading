@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from psycopg2.extras import Json, execute_values
 
 from coding.core.analytics.futures_flow.taker_flow import TakerFlowHour
+from coding.core.analytics.liquidation_heatmap.level_snapshot import LevelSnapshot, RecordedLiquidation
 from coding.core.analytics.market_wide_calculator import DERIBIT_SETTLEMENT_HOUR_UTC
 from coding.core.analytics.menthorq_monitor.alert_mute import MenthorqMonitorState
 from coding.core.analytics.menthorq_monitor.level_record import (
@@ -1374,6 +1375,89 @@ class DatabaseRepository:
         return [TakerFlowHour(symbol=symbol, hour_utc=row[0].astimezone(timezone.utc),
                               taker_buy_usd=float(row[1]), taker_sell_usd=float(row[2]),
                               trade_count=row[3]) for row in rows]
+
+    def save_liquidation_events(self, events: Sequence[RecordedLiquidation], collected_at: datetime) -> int:
+        """
+        Store real liquidation events in ``liquidation_events``. An event that is already stored (same venue,
+        instrument, time, side, price and size) is kept unchanged.
+
+        Returns:
+            The number of rows inserted.
+        """
+        if not events:
+            return 0
+        rows = [(event.venue, event.instrument, event.event_time, event.liquidated_side, event.price,
+                 event.size_btc, event.raw_size, collected_at) for event in events]
+        with self._db_cursor() as cursor:
+            inserted = execute_values(
+                cursor,
+                """
+                INSERT INTO liquidation_events
+                    (venue, instrument, event_time, liquidated_side, price, size_btc, raw_size, collected_at)
+                VALUES %s
+                ON CONFLICT ON CONSTRAINT unique_liquidation_event DO NOTHING
+                RETURNING id
+                """,
+                rows, page_size=1000, fetch=True,
+            )
+        return len(inserted)
+
+    def get_latest_liquidation_event_time(self, venue: str, instrument: str) -> Optional[datetime]:
+        """The time of the newest stored event of the instrument, or None when there is none."""
+        with self._db_cursor() as cursor:
+            cursor.execute("SELECT MAX(event_time) FROM liquidation_events WHERE venue = %s AND instrument = %s",
+                           (venue, instrument))
+            row = cursor.fetchone()
+        return _utc_or_none(row[0]) if row else None
+
+    def get_liquidation_events_between(self, venue: str, instrument: str, start: datetime,
+                                       end: datetime) -> List[RecordedLiquidation]:
+        """The stored events with ``start <= event_time < end``, oldest first."""
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                "SELECT event_time, liquidated_side, price, size_btc, raw_size FROM liquidation_events "
+                "WHERE venue = %s AND instrument = %s AND event_time >= %s AND event_time < %s ORDER BY event_time, id",
+                (venue, instrument, start, end))
+            rows = cursor.fetchall()
+        return [RecordedLiquidation(venue=venue, instrument=instrument, event_time=row[0].astimezone(timezone.utc),
+                                    liquidated_side=row[1], price=float(row[2]), size_btc=float(row[3]),
+                                    raw_size=float(row[4])) for row in rows]
+
+    def save_liquidation_heatmap_snapshot(
+        self, symbol: str, as_of_utc: datetime, computed_at: datetime, reference_price: float,
+        bin_size_usd: float, settings: Dict[str, Any], levels: List[List[float]],
+    ) -> bool:
+        """
+        Store one hourly snapshot of the estimated levels. A snapshot already stored for the same symbol and
+        ``as_of_utc`` is kept unchanged (point in time: it is never rewritten).
+
+        Returns:
+            True when a row was inserted.
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO liquidation_heatmap_snapshots
+                    (symbol, as_of_utc, computed_at, reference_price, bin_size_usd, settings, levels)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT ON CONSTRAINT unique_liquidation_heatmap_snapshot DO NOTHING
+                RETURNING id
+                """,
+                (symbol, as_of_utc, computed_at, reference_price, bin_size_usd, Json(settings), Json(levels)))
+            return cursor.fetchone() is not None
+
+    def get_liquidation_heatmap_snapshots_between(self, symbol: str, start: datetime,
+                                                  end: datetime) -> List[LevelSnapshot]:
+        """The stored snapshots with ``start <= computed_at < end``, oldest first."""
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                "SELECT as_of_utc, computed_at, reference_price, bin_size_usd, levels FROM liquidation_heatmap_snapshots "
+                "WHERE symbol = %s AND computed_at >= %s AND computed_at < %s ORDER BY computed_at",
+                (symbol, start, end))
+            rows = cursor.fetchall()
+        return [LevelSnapshot(symbol=symbol, as_of_utc=row[0].astimezone(timezone.utc),
+                              computed_at=row[1].astimezone(timezone.utc), reference_price=float(row[2]),
+                              bin_size_usd=float(row[3]), levels=[list(level) for level in row[4]]) for row in rows]
 
     def save_menthorq_alert_deliveries(
         self, currency: str, alert_keys: List[str], delivered_at: datetime, message: str,

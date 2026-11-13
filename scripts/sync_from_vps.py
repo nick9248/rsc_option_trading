@@ -228,6 +228,22 @@ SYNC_TABLES = [
         "conflict_target": "(symbol, hour_utc) DO NOTHING",
     },
     {
+        # Real liquidation events (migration 034): never changed after they are stored.
+        "name": "liquidation_events",
+        "optional": True,   # migration 034 is applied on the VPS only when the recorder is deployed
+        "watermark_col": "collected_at",
+        "watermark_type": "timestamp",
+        "conflict_target": "(venue, instrument, event_time, liquidated_side, price, raw_size) DO NOTHING",
+    },
+    {
+        # Hourly snapshots of the estimated liquidation levels (migration 034): point in time, never rewritten.
+        "name": "liquidation_heatmap_snapshots",
+        "optional": True,
+        "watermark_col": "computed_at",
+        "watermark_type": "timestamp",
+        "conflict_target": "(symbol, as_of_utc) DO NOTHING",
+    },
+    {
         # Hourly DVOL candle closes. The daemon re-checks the last 48 hours every
         # cycle and corrects values that were captured while a candle was forming,
         # so only the last 72 hours are re-read (older history never changes, and

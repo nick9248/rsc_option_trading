@@ -38,6 +38,26 @@ class TakerFlowSettingsError(ValueError):
     """An invalid TAKER_FLOW_* / BINANCE_FUTURES_* setting; the message names only the variable and value."""
 
 
+def read_binance_futures_base_url(environment: Optional[Mapping[str, str]] = None) -> str:
+    """
+    ``BINANCE_FUTURES_BASE_URL`` (default: Binance itself), validated; also used by the liquidation recorder so that an
+    unrelated setting of the taker flow cannot switch it off.
+
+    Raises:
+        TakerFlowSettingsError: when the value is not ``http(s)://host[:port]``.
+    """
+    if environment is None:
+        load_dotenv(dotenv_path=Path(__file__).parents[3] / ".env")
+        environment = os.environ
+    base_url = (environment.get("BINANCE_FUTURES_BASE_URL") or "").strip() or DEFAULT_BINANCE_FUTURES_BASE_URL
+    parsed = urlparse(base_url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc or parsed.path not in ("", "/") \
+            or parsed.query or parsed.params:
+        raise TakerFlowSettingsError(
+            f"BINANCE_FUTURES_BASE_URL={base_url!r} must look like http://host[:port] (no path)")
+    return base_url.rstrip("/")
+
+
 @dataclass(frozen=True)
 class TakerFlowSettings:
     """Taker flow configuration."""
@@ -66,10 +86,4 @@ class TakerFlowSettings:
         else:
             raise TakerFlowSettingsError(f"TAKER_FLOW_ENABLED={enabled_text!r} is not a boolean (use 1 or 0)")
 
-        base_url = (environment.get("BINANCE_FUTURES_BASE_URL") or "").strip() or DEFAULT_BINANCE_FUTURES_BASE_URL
-        parsed = urlparse(base_url)
-        if parsed.scheme not in ("http", "https") or not parsed.netloc or parsed.path not in ("", "/") \
-                or parsed.query or parsed.params:
-            raise TakerFlowSettingsError(
-                f"BINANCE_FUTURES_BASE_URL={base_url!r} must look like http://host[:port] (no path)")
-        return cls(enabled=enabled, base_url=base_url.rstrip("/"))
+        return cls(enabled=enabled, base_url=read_binance_futures_base_url(environment))
