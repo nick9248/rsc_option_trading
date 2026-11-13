@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 REST_BASE_URL = "https://fapi.binance.com"
 ARCHIVE_URL = ("https://data.binance.vision/data/futures/um/daily/metrics/{symbol}/"
                "{symbol}-metrics-{day}.zip")
+KLINES_ARCHIVE_URL = ("https://data.binance.vision/data/futures/um/monthly/klines/{symbol}/5m/"
+                      "{symbol}-5m-{month}.zip")
 KLINES_PER_REQUEST = 1500
 OPEN_INTEREST_PER_REQUEST = 500
 REQUEST_TIMEOUT_SECONDS = 30
@@ -73,6 +75,8 @@ class BinanceHistoryLoader:
                 break
             for row in rows:
                 open_time = datetime.fromtimestamp(int(row[0]) / 1000, tz=timezone.utc)
+                if open_time < cursor:           # a row before the requested start (overlap): never twice
+                    continue
                 candles.append(PriceCandle(open_time, high=float(row[2]), low=float(row[3]), close=float(row[4]),
                                            volume_btc=float(row[5]), taker_buy_btc=float(row[9])))
             next_cursor = candles[-1].open_time + STEP
@@ -80,6 +84,58 @@ class BinanceHistoryLoader:
                 break
             cursor = next_cursor
         return [candle for candle in candles if start <= candle.open_time < end]
+
+    def load_candles_long(self, symbol: str, start: datetime, end: datetime) -> List[PriceCandle]:
+        """
+        Closed 5-minute candles in ``[start, end)`` for a long period: every complete month inside the
+        period comes from the public monthly archive (cached), the rest (a partial month, or a month the
+        archive does not have yet) by REST. Gives the same candles as ``load_candles``.
+        """
+        candles: List[PriceCandle] = []
+        cursor = start
+        while cursor < end:
+            month_start = datetime(cursor.year, cursor.month, 1, tzinfo=timezone.utc)
+            next_month = datetime(cursor.year + (cursor.month == 12), cursor.month % 12 + 1, 1, tzinfo=timezone.utc)
+            if cursor == month_start and next_month <= end:
+                monthly = self._archive_month(symbol, month_start)
+                if monthly is not None:
+                    candles.extend(monthly)
+                    cursor = next_month
+                    continue
+            stop = min(next_month, end)
+            candles.extend(self.load_candles(symbol, cursor, stop))
+            cursor = stop
+        return [candle for candle in candles if start <= candle.open_time < end]
+
+    def _archive_month(self, symbol: str, month_start: datetime) -> Optional[List[PriceCandle]]:
+        """One complete month of 5-minute klines from the archive (cached), or None when it has none."""
+        month = f"{month_start.year}-{month_start.month:02d}"
+        cache_file = self.cache_directory / "klines_5m" / f"{symbol}-5m-{month}.zip"
+        if cache_file.exists():
+            content = cache_file.read_bytes()
+        else:
+            response = self.session.get(KLINES_ARCHIVE_URL.format(symbol=symbol, month=month),
+                                        timeout=REQUEST_TIMEOUT_SECONDS)
+            if response.status_code == 404:
+                return None
+            if response.status_code != 200:
+                raise BinanceHistoryError(f"{symbol} kline archive {month}: HTTP {response.status_code}")
+            content = response.content
+            cache_file.parent.mkdir(parents=True, exist_ok=True)
+            cache_file.write_bytes(content)
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            text = archive.read(archive.namelist()[0]).decode("utf-8")
+        candles = []
+        for row in csv.reader(io.StringIO(text)):
+            if not row or not row[0].strip().isdigit():       # the header line
+                continue
+            stamp = int(row[0])
+            if stamp > 10 ** 14:                                # microseconds (newer files)
+                stamp //= 1000
+            candles.append(PriceCandle(datetime.fromtimestamp(stamp / 1000, tz=timezone.utc),
+                                       high=float(row[2]), low=float(row[3]), close=float(row[4]),
+                                       volume_btc=float(row[5]), taker_buy_btc=float(row[9])))
+        return candles
 
     def load_open_interest(self, symbol: str, start: datetime, end: datetime,
                            today: Optional[date] = None) -> Tuple[Dict[datetime, float], List[str]]:

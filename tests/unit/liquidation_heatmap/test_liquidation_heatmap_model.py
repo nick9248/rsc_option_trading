@@ -1,6 +1,6 @@
 """Liquidation heatmap model: hand-calculated cases (tiny synthetic data, no network)."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
 import numpy as np
@@ -173,3 +173,11 @@ def test_volume_creation_settings_are_validated():
     for bad in (dict(creation_source="trades"), dict(volume_open_share=0), dict(volume_open_share=1.5)):
         with pytest.raises(ValueError):
             HeatmapSettings(**cast(Any, bad))
+
+
+def test_record_at_keeps_only_the_wanted_steps():
+    candles = [candle(0, 9_990, 10_010, 10_000), candle(1, 9_990, 10_010, 10_000), candle(2, 9_990, 10_010, 10_000)]
+    result = simulate_heatmap(candles, open_interest(100.0, 110.0, 110.0), SIMPLE, T0,
+                              record_at=[T0 + STEP * 2, T0 + STEP * 1, T0 + STEP * 7, T0 + timedelta(minutes=3)])
+    assert result.times == [T0 + STEP, T0 + STEP * 2]                       # in order; off-grid and outside times dropped
+    assert level_btc(result, "long", 0, 9_000) == pytest.approx(10.0) and level_btc(result, "long", 1, 9_000) == pytest.approx(10.0)

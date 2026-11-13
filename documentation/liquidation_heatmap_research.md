@@ -102,10 +102,50 @@ held out, 0.2 on the 2-week screenshot, which is chance), and by eye our picture
 Coinglass is thin and distinct. So: the right direction, not a match. Three configurations were run on the held-out
 set after being chosen on the tuned one, so treat the numbers as indicative, not as a final score.
 
+## Backtest against real liquidations (2026-11-13, 30 days only)
+
+`scripts/backtest_liquidation_heatmap.py`. For each UTC day the volume-model state known at the start of the day is
+swept by the day's real low (long levels) and high (short levels); the resulting USD is compared, by rank
+correlation, with CryptoQuant's real Binance BTC/USDT daily long and short liquidations. This is a conditional
+test (given where the price went, are the levels right?), not a price prediction. A naive predictor (size of the
+move times the day's volume) is the control: a heatmap only counts if it adds information beyond it (partial
+rank correlation). The three configurations were fixed before the run.
+
+**Data limit: the CryptoQuant key is on the Basic plan: daily window, 30 days of history only** (older dates are
+refused with "Out of allowed request range"; Advanced adds hourly and 1 year, Premium full history). So the
+sample is 30 days (2026-10-14 to 2026-11-12), one regime (a falling market), and consecutive days are not
+independent, so the p-values are optimistic. Treat everything below as a first indication, not a result.
+Binance's own liquidation archive no longer exists (404 for every date), and the daily amounts CryptoQuant
+records are a sample of the real totals (Binance publishes at most one liquidation per second), so only ranks
+are used.
+
+| Config 1 (volume, tiers 25-100x/5, bin 100, half-life 48 h) | Heatmap | Naive, same-day volume | Naive, previous-day volume | Heatmap after removing naive (p) |
+|---|---|---|---|---|
+| Long liquidations | +0.93 | +0.88 | +0.72 | +0.65 (p < 0.001) |
+| Short liquidations | +0.55 | +0.81 | +0.65 | +0.04 (p = 0.84) |
+
+The other two configurations give the same picture (long +0.93/+0.94, partial +0.67/+0.69; short +0.55/+0.56, partial +0.04/+0.05).
+
+Robustness checks (config 1):
+
+- Placebo, heatmap state taken N days earlier than the start of the day (long side, correlation / partial):
+  0 days +0.93 / +0.65; 1 day +0.74 / +0.25; 3 days +0.64 / +0.18; 7 days +0.32 / +0.09; 14 days +0.25 / -0.06.
+  The fit falls steadily with a staler state, so the current structure of the levels matters.
+- Leaving out the single largest day changes nothing (long +0.93, partial +0.64; short +0.50, partial +0.02).
+- Level amounts are about 5 to 10 times the recorded liquidations on the big long days (untuned scale share 0.1
+  and CryptoQuant undercounting) but not proportional on short days.
+
+Reading: for LONG liquidations the heatmap's levels agree with real liquidations beyond what the size of the move and
+the volume explain. For SHORT liquidations it adds nothing (the naive predictor is better), and the model
+probably over-creates shorts in a falling market (taker sell volume opens "shorts" even when they are covering).
+Not yet shown: that it holds in other market regimes, for ETH, or out of sample in time.
+
 ## Next steps
 
-1. Validate against real liquidations (CryptoQuant daily long/short liquidations, and a recording of Binance's
-   live liquidation feed): the aim is a metric that is right, not a copy of Coinglass.
-2. Finer bins (25 to 50 USD) and a split of taker volume into opening and closing trades (open interest change
-   as a filter) to get thinner, more distinct bands.
-3. Collect more screenshots on other days as fresh hold-out cases.
+1. More real liquidation history, the main limit now. Options: (a) CryptoQuant Professional (1 year) or Premium
+   (full history) for the daily liquidations; (b) record real liquidations ourselves from now on (CryptoQuant
+   daily pulled and stored every day, which grows the 30-day window by one day per day; or OKX's free public
+   liquidation orders, which return the last hours with full detail, whose depth is not yet known).
+2. Fix the short side (opening versus closing volume, for example by using the open-interest change as a filter).
+3. Repeat on other regimes and out of sample in time once there is more history; then ETH.
+4. Only after that: a collector job, a brief section and a GUI tab (like the taker flow).

@@ -112,3 +112,37 @@ def test_strongest_levels_ranks_by_usd_and_skips_empty_bins():
     levels = strongest_levels(result)
     assert [(level["price"], level["side"]) for level in levels] == [(300.0, "long"), (400.0, "short"), (100.0, "long")]
     assert levels[0]["usd"] == pytest.approx(1500.0)
+
+
+def kline_csv(month_start, count, header=True, microseconds=False):
+    lines = ["open_time,open,high,low,close,volume,close_time,quote_volume,count,taker_buy_volume,taker_buy_quote_volume,ignore"] if header else []
+    for index in range(count):
+        opened = int((month_start + timedelta(minutes=5 * index)).timestamp() * 1000)
+        lines.append(f"{opened * 1000 if microseconds else opened},1,12,9,10,5,0,50,7,2,20,0")
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("klines.csv", "\n".join(lines))
+    return buffer.getvalue()
+
+
+def test_long_candles_use_the_monthly_archive_for_full_months_and_rest_for_the_rest(tmp_path):
+    month = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    october = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    rest_row = [int(october.timestamp() * 1000), "1", "12", "9", "10", "5", 0, "50", 7, "2", "20", "0"]
+    session = FakeSession({"2026-09.zip": Response(content=kline_csv(month, 3, microseconds=True)),
+                           "klines?": Response(payload=[rest_row])})
+    session.routes["fapi/v1/klines"] = session.routes.pop("klines?")
+    loader = BinanceHistoryLoader(tmp_path, cast(Any, session))
+    candles = loader.load_candles_long("BTCUSDT", month, october + timedelta(minutes=5))
+    assert [candle.open_time for candle in candles] == [month + timedelta(minutes=5 * i) for i in range(3)] + [october]
+    assert candles[0].volume_btc == 5.0 and candles[0].taker_buy_btc == 2.0
+    assert sum("zip" in call[0] for call in session.calls) == 1             # one archive month, the rest by REST
+
+
+def test_a_month_missing_from_the_archive_falls_back_to_rest(tmp_path):
+    month = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    rest_row = [int(month.timestamp() * 1000), "1", "12", "9", "10", "5", 0, "50", 7, "2", "20", "0"]
+    session = FakeSession({"fapi/v1/klines": Response(payload=[rest_row])})
+    candles = BinanceHistoryLoader(tmp_path, cast(Any, session)).load_candles_long(
+        "BTCUSDT", month, datetime(2026, 10, 1, tzinfo=timezone.utc))
+    assert [candle.open_time for candle in candles] == [month]

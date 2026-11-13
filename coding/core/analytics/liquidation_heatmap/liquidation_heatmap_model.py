@@ -46,7 +46,7 @@ import logging
 import math
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import List, Mapping, Optional, Sequence, Tuple
+from typing import Collection, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -149,6 +149,7 @@ def simulate_heatmap(
     open_interest_btc: Mapping[datetime, float],
     settings: HeatmapSettings,
     record_from: datetime,
+    record_at: Optional[Collection[datetime]] = None,
 ) -> HeatmapResult:
     """
     Run the model over ``candles`` (5-minute, any gaps allowed) and record the
@@ -162,6 +163,9 @@ def simulate_heatmap(
             that opened at ``t - 5 min`` (an assumption about the source's stamp).
         settings: Model settings.
         record_from: First recorded step (candle open time).
+        record_at: When given, only these steps (candle open times) are recorded, in time
+            order, and ``record_from`` is ignored: a long backtest then keeps a few rows
+            instead of every step. A time that is not a step of the candle grid is skipped.
 
     Returns:
         The recorded window as a ``HeatmapResult``.
@@ -182,8 +186,14 @@ def simulate_heatmap(
 
     grid_start, grid_end = candles[0].open_time, candles[-1].open_time
     steps = int((grid_end - grid_start) / STEP) + 1
-    first_recorded = max(0, int(math.ceil((record_from - grid_start) / STEP)))
-    recorded_times = [grid_start + STEP * index for index in range(first_recorded, steps)]
+    if record_at is None:
+        first_recorded = max(0, int(math.ceil((record_from - grid_start) / STEP)))
+        record_indices: Dict[int, int] = {index: index - first_recorded for index in range(first_recorded, steps)}
+    else:
+        wanted = sorted(moment for moment in set(record_at)
+                        if grid_start <= moment <= grid_end and (moment - grid_start) % STEP == timedelta(0))
+        record_indices = {int((moment - grid_start) / STEP): row for row, moment in enumerate(wanted)}
+    recorded_times = [grid_start + STEP * index for index in sorted(record_indices)]
     long_rows = np.full((len(recorded_times), len(centers)), np.nan, dtype=np.float32)
     short_rows = np.full((len(recorded_times), len(centers)), np.nan, dtype=np.float32)
 
@@ -219,9 +229,9 @@ def simulate_heatmap(
                     short_bin = int((settings.short_liquidation_price(candle.close, tier) - origin) // bin_size)
                     long_state[long_bin] += bought * weight
                     short_state[short_bin] += sold * weight
-            if index >= first_recorded:
-                long_rows[index - first_recorded] = long_state
-                short_rows[index - first_recorded] = short_state
+            if index in record_indices:
+                long_rows[record_indices[index]] = long_state
+                short_rows[record_indices[index]] = short_state
             continue
 
         remaining_short = short_state.sum()
@@ -260,10 +270,9 @@ def simulate_heatmap(
                 short_state *= factor
             baseline_oi = oi_now
 
-        if index >= first_recorded:
-            row = index - first_recorded
-            long_rows[row] = long_state
-            short_rows[row] = short_state
+        if index in record_indices:
+            long_rows[record_indices[index]] = long_state
+            short_rows[record_indices[index]] = short_state
 
     notes = []
     if steps_without_volume:
