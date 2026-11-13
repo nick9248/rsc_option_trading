@@ -10,7 +10,13 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, List, Optional
 
 from coding.core.analytics.liquidation_heatmap.level_snapshot import extract_levels
-from coding.core.analytics.liquidation_heatmap.liquidation_heatmap_model import STEP, HeatmapSettings, simulate_heatmap
+from coding.core.analytics.liquidation_heatmap.liquidation_heatmap_model import (
+    STEP,
+    HeatmapSettings,
+    equal_weights,
+    floor_to_step,
+    simulate_heatmap,
+)
 from coding.core.database.repository import DatabaseRepository
 from coding.service.liquidation_heatmap.binance_history_loader import BinanceHistoryLoader
 
@@ -25,8 +31,7 @@ MAXIMUM_LAST_CANDLE_AGE = timedelta(minutes=20)
 def recorded_settings() -> HeatmapSettings:
     """The configuration that is recorded: volume creation, tiers 25x to 100x in steps of 5, bin 100 USD, 48 h half-life."""
     tiers = tuple(range(25, 101, 5))
-    return HeatmapSettings(bin_size_usd=100.0, leverage_tiers=tiers,
-                           leverage_weights=tuple(1 / len(tiers) for _ in tiers),
+    return HeatmapSettings(bin_size_usd=100.0, leverage_tiers=tiers, leverage_weights=equal_weights(tiers),
                            position_half_life_hours=48.0, creation_source="volume")
 
 
@@ -64,7 +69,7 @@ class HeatmapSnapshotService:
             is stored, so a gap in the snapshots is a gap and never an estimate) or the snapshot already exists.
         """
         now = self.clock()
-        end = now.replace(minute=now.minute - now.minute % 5, second=0, microsecond=0)
+        end = floor_to_step(now)
         start = end - timedelta(days=self.warmup_days)
         candles = self.loader.load_candles(SYMBOL, start, end)
         expected = int((end - start) / STEP)
@@ -82,7 +87,9 @@ class HeatmapSnapshotService:
             logger.warning("Liquidation snapshot: the model produced no levels, no snapshot stored")
             return False
         return self.repository.save_liquidation_heatmap_snapshot(
-            symbol=SYMBOL, as_of_utc=last.open_time + STEP, computed_at=now, reference_price=last.close,
+            symbol=SYMBOL, as_of_utc=last.open_time + STEP,
+            computed_at=self.clock(),          # taken AFTER the download and the simulation: the snapshot did not exist before
+            reference_price=last.close,
             bin_size_usd=self.settings.bin_size_usd,
             settings={"creation_source": self.settings.creation_source,
                       "leverage_tiers": list(self.settings.leverage_tiers),

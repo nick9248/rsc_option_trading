@@ -13,12 +13,14 @@ information about where liquidations happen. The two are compared only on events
 from bisect import bisect_right
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from coding.core.analytics.liquidation_heatmap.level_snapshot import (
     LevelSnapshot,
+    PoolIntensity,
     RecordedLiquidation,
-    level_percentile,
+    build_pool,
+    percentile_in_pool,
 )
 
 MAXIMUM_SNAPSHOT_AGE = timedelta(hours=2)
@@ -45,9 +47,13 @@ class ScoredEvent:
 
 
 def snapshot_before(snapshots: Sequence[LevelSnapshot], moment: datetime,
-                    maximum_age: timedelta = MAXIMUM_SNAPSHOT_AGE) -> Optional[LevelSnapshot]:
-    """The latest snapshot computed at or before ``moment`` and not older than ``maximum_age`` (snapshots in time order)."""
-    index = bisect_right([snapshot.computed_at for snapshot in snapshots], moment) - 1
+                    maximum_age: timedelta = MAXIMUM_SNAPSHOT_AGE,
+                    times: Optional[Sequence[datetime]] = None) -> Optional[LevelSnapshot]:
+    """
+    The latest snapshot computed at or before ``moment`` and not older than ``maximum_age`` (snapshots in time order).
+    ``times`` is the list of their ``computed_at`` when the caller has it already (it is rebuilt otherwise).
+    """
+    index = bisect_right(times if times is not None else [snapshot.computed_at for snapshot in snapshots], moment) - 1
     if index < 0 or moment - snapshots[index].computed_at > maximum_age:
         return None
     return snapshots[index]
@@ -72,22 +78,29 @@ def score_events(events: Sequence[RecordedLiquidation], snapshots: Sequence[Leve
         price_shift: Share by which the event price is moved toward the trigger price (see the module docstring).
     """
     ordered = sorted(snapshots, key=lambda snapshot: snapshot.computed_at)
+    times = [snapshot.computed_at for snapshot in ordered]
+    pools: Dict[Tuple[datetime, str], Optional[PoolIntensity]] = {}      # one pool per snapshot and side, reused by every event
+
+    def pool_of(snapshot: LevelSnapshot, side: str) -> Optional[PoolIntensity]:
+        key = (snapshot.computed_at, side)
+        if key not in pools:
+            pools[key] = build_pool(snapshot.levels, side, snapshot.reference_price, snapshot.bin_size_usd)
+        return pools[key]
+
     scored: List[ScoredEvent] = []
     without_snapshot = outside_pool = 0
     for event in events:
-        current = snapshot_before(ordered, event.event_time)
+        current = snapshot_before(ordered, event.event_time, times=times)
         if current is None:
             without_snapshot += 1
             continue
         price = trigger_price(event, price_shift)
-        value = level_percentile(current.levels, event.liquidated_side, price, current.reference_price,
-                                 current.bin_size_usd)
+        value = percentile_in_pool(pool_of(current, event.liquidated_side), price)
         if value is None:
             outside_pool += 1
             continue
-        stale = snapshot_before(ordered, event.event_time - placebo)
-        stale_value = (level_percentile(stale.levels, event.liquidated_side, price, stale.reference_price,
-                                        stale.bin_size_usd) if stale is not None else None)
+        stale = snapshot_before(ordered, event.event_time - placebo, times=times)
+        stale_value = percentile_in_pool(pool_of(stale, event.liquidated_side), price) if stale is not None else None
         scored.append(ScoredEvent(event, value, stale_value))
     return ScoringResult(scored, without_snapshot, outside_pool)
 
@@ -102,23 +115,25 @@ def summarise_scores(scored: Sequence[ScoredEvent]) -> Dict[str, Dict[str, Optio
     summary: Dict[str, Dict[str, Optional[float]]] = {}
     for label, sides in (("long", ("long",)), ("short", ("short",)), ("all", ("long", "short"))):
         rows = [item for item in scored if item.event.liquidated_side in sides]
-        if not rows:
-            summary[label] = {"events": 0, "mean_percentile": None, "top_decile_share": None, "usd_weighted_mean": None,
-                              "paired_events": 0, "paired_mean_percentile": None, "paired_top_decile_share": None,
-                              "control_mean_percentile": None, "control_top_decile_share": None}
-            continue
         paired = [item for item in rows if item.placebo_percentile is not None]
-        controls = [item.placebo_percentile for item in paired if item.placebo_percentile is not None]
+        controls = [item.placebo_percentile for item in paired]
         total_usd = sum(item.event.usd for item in rows)
+
+        def mean(values: Sequence[float]) -> Optional[float]:
+            return sum(values) / len(values) if values else None
+
+        def top_share(values: Sequence[float]) -> Optional[float]:
+            return sum(value >= TOP_DECILE for value in values) / len(values) if values else None
+
         summary[label] = {
             "events": len(rows),
-            "mean_percentile": sum(item.percentile for item in rows) / len(rows),
-            "top_decile_share": sum(item.percentile >= TOP_DECILE for item in rows) / len(rows),
+            "mean_percentile": mean([item.percentile for item in rows]),
+            "top_decile_share": top_share([item.percentile for item in rows]),
             "usd_weighted_mean": (sum(item.percentile * item.event.usd for item in rows) / total_usd) if total_usd else None,
             "paired_events": len(paired),
-            "paired_mean_percentile": (sum(item.percentile for item in paired) / len(paired)) if paired else None,
-            "paired_top_decile_share": (sum(item.percentile >= TOP_DECILE for item in paired) / len(paired)) if paired else None,
-            "control_mean_percentile": (sum(controls) / len(controls)) if controls else None,
-            "control_top_decile_share": (sum(value >= TOP_DECILE for value in controls) / len(controls)) if controls else None,
+            "paired_mean_percentile": mean([item.percentile for item in paired]),
+            "paired_top_decile_share": top_share([item.percentile for item in paired]),
+            "control_mean_percentile": mean([value for value in controls if value is not None]),
+            "control_top_decile_share": top_share([value for value in controls if value is not None]),
         }
     return summary

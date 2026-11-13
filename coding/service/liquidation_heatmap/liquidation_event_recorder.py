@@ -8,18 +8,19 @@ reached before the stored events, a gap is possible and is logged as a WARNING (
 
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable, List, Optional
 
 from coding.core.analytics.liquidation_heatmap.level_snapshot import RecordedLiquidation
 from coding.core.database.repository import DatabaseRepository
-from coding.service.liquidation_heatmap.okx_liquidation_client import VENUE, OkxLiquidationClient
+from coding.service.liquidation_heatmap.okx_liquidation_client import PAGE_SIZE, VENUE, OkxLiquidationClient
 
 logger = logging.getLogger(__name__)
 
 INSTRUMENT = "BTC-USDT-SWAP"
 MAXIMUM_PAGES = 30           # 3000 orders per run; a quiet hour has a few hundred
 PAUSE_SECONDS = 0.2          # between two pages, to stay far below OKX's public rate limit
+SAFETY_OVERLAP = timedelta(seconds=30)      # re-read this far before the newest stored event (late-appearing orders)
 
 
 class LiquidationEventRecorder:
@@ -34,6 +35,8 @@ class LiquidationEventRecorder:
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
         pause_seconds: float = PAUSE_SECONDS,
         sleep: Callable[[float], None] = time.sleep,
+        safety_overlap: timedelta = SAFETY_OVERLAP,
+        page_size: int = PAGE_SIZE,
     ):
         """
         Args:
@@ -44,7 +47,12 @@ class LiquidationEventRecorder:
             clock: Wall clock (UTC-aware).
             pause_seconds: Pause between two pages of one run.
             sleep: Sleep function (tests pass a no-op).
+            page_size: The size of a full page of the source (a shorter page is the end of what it has).
+            safety_overlap: A run reads back to this long before the newest stored event, so an order that became
+                visible late (with a time before the newest stored one) is still picked up; the table ignores duplicates.
         """
+        self.safety_overlap = safety_overlap
+        self.page_size = page_size
         self.pause_seconds = pause_seconds
         self.sleep = sleep
         self.client = client
@@ -72,7 +80,7 @@ class LiquidationEventRecorder:
                 break
             collected.extend(event for event in raw_page if event.instrument == self.instrument)
             oldest = min(event.event_time for event in raw_page)     # the cursor follows the RAW page, not the filtered one
-            if newest_stored is not None and oldest <= newest_stored:
+            if newest_stored is not None and oldest <= newest_stored - self.safety_overlap:
                 reached_stored = True
                 break
             oldest_ms = int(oldest.timestamp() * 1000)
@@ -80,7 +88,15 @@ class LiquidationEventRecorder:
             # (the table ignores duplicates). If that makes no progress (a page that is one single millisecond),
             # step strictly past it.
             next_cursor = oldest_ms + 1
-            cursor = oldest_ms if cursor is not None and next_cursor >= cursor else next_cursor
+            if cursor is not None and next_cursor >= cursor:
+                if len(raw_page) < self.page_size:
+                    reached_stored = True          # a short page that repeats: the source has nothing older
+                    break
+                logger.warning("OKX liquidations: a full page of orders shares the millisecond %s; the orders of that "
+                               "millisecond beyond the page may be missing", oldest.isoformat())
+                cursor = oldest_ms
+            else:
+                cursor = next_cursor
             if page_number + 1 < self.maximum_pages:
                 self.sleep(self.pause_seconds)
         stored = self.repository.save_liquidation_events(sorted(collected, key=lambda event: event.event_time), now)

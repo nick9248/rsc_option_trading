@@ -35,7 +35,12 @@ from coding.core.analytics.liquidation_heatmap.liquidation_backtest import (
     spearman,
     swept_levels_usd,
 )
-from coding.core.analytics.liquidation_heatmap.liquidation_heatmap_model import STEP, HeatmapSettings, simulate_heatmap
+from coding.core.analytics.liquidation_heatmap.liquidation_heatmap_model import (
+    STEP,
+    HeatmapSettings,
+    equal_weights,
+    simulate_heatmap,
+)
 from coding.core.logging.logging_setup import init_logging
 from coding.service.liquidation_heatmap.binance_history_loader import BinanceHistoryLoader
 from coding.service.liquidation_heatmap.cryptoquant_liquidation_client import load_daily_liquidations, read_token
@@ -49,14 +54,9 @@ DEFAULT_OUTPUT_DIRECTORY = REPOSITORY_ROOT / "outputs" / "liquidation_heatmap"
 WARMUP_DAYS = 30
 
 
-def _tiers(low: int, high: int, step: int):
-    tiers = tuple(range(low, high + 1, step))
-    return tiers, tuple(1 / len(tiers) for _ in tiers)
-
-
 def _volume_settings(low: int, high: int, step: int, half_life: Optional[float]) -> HeatmapSettings:
-    tiers, weights = _tiers(low, high, step)
-    return HeatmapSettings(bin_size_usd=100.0, leverage_tiers=tiers, leverage_weights=weights,
+    tiers = tuple(range(low, high + 1, step))
+    return HeatmapSettings(bin_size_usd=100.0, leverage_tiers=tiers, leverage_weights=equal_weights(tiers),
                            position_half_life_hours=half_life, creation_source="volume")
 
 

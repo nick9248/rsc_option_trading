@@ -73,26 +73,61 @@ def _intensity_at(prices: np.ndarray, values: np.ndarray, at: float, smoothing: 
     return float(values[np.abs(prices - at) <= smoothing].sum())
 
 
-def level_percentile(
-    levels: Sequence[Sequence[float]], side: str, price: float, reference_price: float,
-    bin_size_usd: float, window_percent: float = SCORE_WINDOW_PERCENT, smoothing_usd: float = SMOOTHING_USD,
-) -> Optional[float]:
+@dataclass(frozen=True)
+class PoolIntensity:
     """
-    Percentile (0 to 1) of the side's smoothed level intensity at ``price`` among the prices of the pool: a grid of
-    ``bin_size_usd`` steps from the reference price down to ``window_percent`` below it for a long, up to
-    ``window_percent`` above it for a short; ties count half. None when the price is outside the pool, there are no
-    levels or the side is unknown.
+    The smoothed level intensity of one side of one snapshot at every price of the pool (computed once and reused for
+    every event that is scored against the snapshot).
+    """
+
+    low: float
+    high: float
+    prices: np.ndarray          # the level prices of the snapshot
+    values: np.ndarray          # the side's level intensities (USD)
+    pool_intensity: np.ndarray  # the smoothed intensity at each pool point
+    smoothing_usd: float
+
+
+def build_pool(
+    levels: Sequence[Sequence[float]], side: str, reference_price: float, bin_size_usd: float,
+    window_percent: float = SCORE_WINDOW_PERCENT, smoothing_usd: float = SMOOTHING_USD,
+) -> Optional[PoolIntensity]:
+    """
+    The pool of a side: a grid of ``bin_size_usd`` steps from the reference price down to ``window_percent`` below it
+    for a long, up to ``window_percent`` above it for a short, with the smoothed intensity at each point. None when
+    there are no levels or the side is unknown.
     """
     if side not in ("long", "short") or not levels:
         return None
     reach = window_percent / 100 * reference_price
     low, high = ((reference_price - reach, reference_price) if side == "long"
                  else (reference_price, reference_price + reach))
-    if not low <= price <= high:
-        return None
     array = np.asarray(levels, dtype=float)
     prices, values = array[:, 0], array[:, 1 if side == "long" else 2]
-    pool = np.arange(low, high + 1e-9, bin_size_usd)
-    pool_intensity = np.array([_intensity_at(prices, values, float(point), smoothing_usd) for point in pool])
-    event_intensity = _intensity_at(prices, values, price, smoothing_usd)
-    return float(((pool_intensity < event_intensity).sum() + 0.5 * (pool_intensity == event_intensity).sum()) / len(pool))
+    points = np.arange(low, high + 1e-9, bin_size_usd)
+    pool_intensity = np.array([_intensity_at(prices, values, float(point), smoothing_usd) for point in points])
+    return PoolIntensity(low, high, prices, values, pool_intensity, smoothing_usd)
+
+
+def percentile_in_pool(pool: Optional[PoolIntensity], price: float) -> Optional[float]:
+    """
+    Percentile (0 to 1) of the smoothed intensity at ``price`` among the pool points; ties count half. None when there is
+    no pool or the price is outside it.
+    """
+    if pool is None or not pool.low <= price <= pool.high:
+        return None
+    event_intensity = _intensity_at(pool.prices, pool.values, price, pool.smoothing_usd)
+    pool_intensity = pool.pool_intensity
+    return float(((pool_intensity < event_intensity).sum() + 0.5 * (pool_intensity == event_intensity).sum())
+                 / len(pool_intensity))
+
+
+def level_percentile(
+    levels: Sequence[Sequence[float]], side: str, price: float, reference_price: float,
+    bin_size_usd: float, window_percent: float = SCORE_WINDOW_PERCENT, smoothing_usd: float = SMOOTHING_USD,
+) -> Optional[float]:
+    """
+    Percentile (0 to 1) of the side's smoothed level intensity at ``price`` among the prices of the pool (see
+    ``build_pool``); None when the price is outside the pool, there are no levels or the side is unknown.
+    """
+    return percentile_in_pool(build_pool(levels, side, reference_price, bin_size_usd, window_percent, smoothing_usd), price)

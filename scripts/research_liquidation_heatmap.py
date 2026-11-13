@@ -27,6 +27,7 @@ from coding.core.analytics.liquidation_heatmap.liquidation_heatmap_model import 
     STEP,
     HeatmapResult,
     HeatmapSettings,
+    floor_to_step,
     simulate_heatmap,
 )
 from coding.core.analytics.liquidation_heatmap.liquidation_heatmap_renderer import render_heatmap
@@ -47,11 +48,6 @@ def parse_utc(text: str) -> datetime:
     if parsed.tzinfo is None:
         raise argparse.ArgumentTypeError(f"{text!r} has no time zone (use ...Z or +00:00)")
     return parsed.astimezone(timezone.utc)
-
-
-def floor_to_step(instant: datetime) -> datetime:
-    """``instant`` rounded down to the 5-minute grid."""
-    return instant.replace(minute=instant.minute - instant.minute % 5, second=0, microsecond=0)
 
 
 def parse_numbers(text: str, kind) -> list:

@@ -55,6 +55,16 @@ logger = logging.getLogger(__name__)
 STEP = timedelta(minutes=5)
 
 
+def floor_to_step(instant: datetime) -> datetime:
+    """``instant`` rounded down to the 5-minute grid (UTC-aware in, UTC-aware out)."""
+    return instant.replace(minute=instant.minute - instant.minute % 5, second=0, microsecond=0)
+
+
+def equal_weights(tiers: Sequence[int]) -> Tuple[float, ...]:
+    """The same weight for every leverage tier (they sum to 1)."""
+    return tuple(1 / len(tiers) for _ in tiers)
+
+
 @dataclass(frozen=True)
 class PriceCandle:
     """One 5-minute candle (open time, UTC-aware), prices in USDT."""

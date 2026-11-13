@@ -96,13 +96,13 @@ def make_event(second, instrument="BTC-USDT-SWAP"):
 class PagedClient:
     """Serves the events newest first, three per page, older than the cursor."""
 
-    def __init__(self, events: List[RecordedLiquidation]):
-        self.events, self.calls = sorted(events, key=lambda e: e.event_time, reverse=True), []
+    def __init__(self, events: List[RecordedLiquidation], size: int = 3):
+        self.events, self.calls, self.size = sorted(events, key=lambda e: e.event_time, reverse=True), [], size
 
     def fetch_page(self, earlier_than_ms=None):
         self.calls.append(earlier_than_ms)
         older = [e for e in self.events if earlier_than_ms is None or e.event_time.timestamp() * 1000 < earlier_than_ms]
-        return older[:3]
+        return older[:self.size]
 
 
 class EventRepository:
@@ -122,9 +122,10 @@ class EventRepository:
         return len(new)
 
 
-def recorder(client, repository, pages=30):
+def recorder(client, repository, pages=30, overlap=timedelta(0), page_size=3):
     return LiquidationEventRecorder(cast(Any, client), cast(Any, repository), maximum_pages=pages, clock=lambda: NOW,
-                                    pause_seconds=0.0, sleep=lambda seconds: None)
+                                    pause_seconds=0.0, sleep=lambda seconds: None, safety_overlap=overlap,
+                                    page_size=page_size)
 
 
 def test_first_run_reads_every_page_until_the_source_has_nothing_older():
@@ -336,7 +337,7 @@ def test_the_cursor_is_inclusive_so_events_of_the_same_millisecond_are_read_agai
 def test_a_page_made_of_one_single_millisecond_still_makes_progress():
     same_ms = [make_event(5), make_event(5)]
     client = RawPageClient([same_ms, same_ms, [make_event(4)], []])
-    recorder(client, EventRepository()).record()
+    recorder(client, EventRepository(), page_size=2).record()
     first_ms = int(make_event(5).event_time.timestamp() * 1000)
     assert client.cursors[1] == first_ms + 1 and client.cursors[2] == first_ms    # second page repeated: step strictly past it
 
@@ -414,3 +415,41 @@ def test_the_liquidation_recorder_does_not_depend_on_the_taker_flow_switch(monke
     assert start_liquidation_recorder_job(cast(Any, Repo())) is not None
     monkeypatch.setenv("BINANCE_FUTURES_BASE_URL", "http://65.20.101.75:8082/fapi")     # its own URL must still be valid
     assert start_liquidation_recorder_job(cast(Any, Repo())) is None
+
+
+def test_the_safety_overlap_picks_up_an_order_that_appeared_late():
+    repository = EventRepository()
+    recorder(PagedClient([make_event(second) for second in range(0, 40, 10)], size=2), repository, page_size=2).record()
+    late = make_event(25)                                       # appears later, with a time BEFORE the newest stored (30 s)
+    served = [make_event(second) for second in range(0, 40, 10)] + [late, make_event(40)]
+    # Pages of 2, newest first: [40, 30], [25, 20], [10, 0]. Without overlap the run stops at the first page (it reaches the
+    # stored 30 s event) and the late order is never read.
+    assert recorder(PagedClient(served, size=2), repository, overlap=timedelta(0), page_size=2).record() == 1
+    assert late not in repository.stored
+    # With a 30 s overlap it reads on to the page that reaches 0 s and finds the late order.
+    assert recorder(PagedClient(served, size=2), repository, overlap=timedelta(seconds=30), page_size=2).record() == 1
+    assert late in repository.stored
+
+
+def test_a_short_page_that_repeats_ends_the_run_without_a_warning(caplog):
+    client = RawPageClient([[make_event(5), make_event(4), make_event(3)], [make_event(3), make_event(2)],
+                            [make_event(2)], [make_event(2)]])
+    recorder(client, EventRepository()).record()
+    assert "shares the millisecond" not in caplog.text
+
+
+def test_a_full_page_of_one_millisecond_is_warned(caplog):
+    same_ms = [make_event(5), make_event(5), make_event(5)]                      # a full page (page_size 3), all one millisecond
+    client = RawPageClient([same_ms, same_ms, [make_event(4)], []])
+    recorder(client, EventRepository()).record()
+    assert "shares the millisecond" in caplog.text
+
+
+def test_the_snapshot_is_stamped_after_it_was_computed():
+    end = datetime(2026, 11, 13, 18, 25, tzinfo=timezone.utc)
+    readings = iter([NOW, NOW + timedelta(seconds=7)])                           # before / after the computation
+    repository = SnapshotRepository()
+    service = HeatmapSnapshotService(cast(Any, CandleLoader(candle_series(end))), cast(Any, repository),
+                                     clock=lambda: next(readings))
+    assert service.snapshot() is True
+    assert repository.saved[0]["computed_at"] == NOW + timedelta(seconds=7)

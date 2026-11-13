@@ -63,9 +63,10 @@ TABLE_SPECS: Tuple[TableSpec, ...] = (
     _hourly("taker_flow_hourly", "hour_utc", optional=True, required=("taker_buy_usd", "taker_sell_usd"),
             warn_hours=3.0),
     # Liquidation recorder (migration 034), optional: written only with LIQUIDATION_RECORDER_ENABLED=1 (VPS).
-    # The snapshot runs at :12 every hour. The events have no regular cadence (a quiet hour can have none).
+    # The snapshot runs at :12 every hour. OKX BTC-USDT-SWAP has about 300 liquidations an hour, so no event for 3 hours
+    # means the recorder is not working (warning at 3 h, failure at 6 h).
     _hourly("liquidation_heatmap_snapshots", "computed_at", optional=True),
-    _event("liquidation_events", "event_time"),
+    _hourly("liquidation_events", "event_time", optional=True, warn_hours=3.0),
     _hourly("funding_rate_history", "timestamp", "ms_epoch"),
     TableSpec("dvol_history", "timestamp", "datetime", 3.0, 6.0, ("dvol_value",)),
     TableSpec("ohlcv_history", "date", "datetime", 48.0, 120.0, ("close",)),
