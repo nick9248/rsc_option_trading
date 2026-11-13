@@ -55,6 +55,19 @@ def nice_ticks(limit: float) -> List[float]:
     return [step * index for index in range(int(math.ceil(limit / step)) + 1)]
 
 
+def tick_decimals(step: float) -> int:
+    """Decimals the tick labels need so that neighbouring ticks never look equal (0 for whole steps)."""
+    for decimals in range(7):
+        if abs(step - round(step, decimals)) < 1e-9:
+            return decimals
+    return 6
+
+
+def strike_label(strike: float) -> str:
+    """Category label of a strike: whole strikes without decimals, others with the decimals they need."""
+    return f"{strike:,.0f}" if float(strike).is_integer() else f"{strike:,.4f}".rstrip("0")
+
+
 def build_strike_flow_figure(flow: StrikeFlow, title: str, unit: str = "notional", footer: str = "") -> go.Figure:
     """
     Build the figure.
@@ -72,7 +85,7 @@ def build_strike_flow_figure(flow: StrikeFlow, title: str, unit: str = "notional
         raise ValueError(f"unknown unit {unit!r}; use one of {sorted(UNITS)}")
     axis_title, divisor, number_format, suffix = UNITS[unit]
     strikes = flow.strikes
-    categories = [f"{strike:,.0f}" for strike in strikes]
+    categories = [strike_label(strike) for strike in strikes]
     figure = go.Figure()
 
     # The blocked part is added before the screen part of the same bar, so it sits next to the axis.
@@ -96,7 +109,9 @@ def build_strike_flow_figure(flow: StrikeFlow, title: str, unit: str = "notional
     longest = max((max(values, default=0.0) for values in totals.values()), default=0.0)
     ticks = nice_ticks(longest * 1.05)
     tick_values = [-tick for tick in reversed(ticks[1:])] + ticks
-    tick_text = [f"{abs(value):,.0f}{suffix}" if suffix != "M" else f"${abs(value):,.0f}M" for value in tick_values]
+    decimals = tick_decimals(ticks[1] - ticks[0]) if len(ticks) > 1 else 0
+    prefix = "$" if suffix == "M" else ""
+    tick_text = [f"{prefix}{abs(value):,.{decimals}f}{suffix}" for value in tick_values]
     height = max(MINIMUM_HEIGHT, PIXELS_PER_STRIKE * len(strikes) + LEGEND_AND_FOOTER_SPACE)
     wrapped_footer = "<br>".join(textwrap.wrap(footer, 170)) if footer else ""
     figure.update_layout(

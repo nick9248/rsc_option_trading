@@ -8,7 +8,8 @@ import psycopg2
 import pytest
 
 from coding.core.analytics.option_flow.strike_flow import SERIES, OptionTrade, aggregate_by_strike, series_key
-from coding.core.analytics.option_flow.strike_flow_figure import UNITS, build_strike_flow_figure, cell_value, nice_ticks
+from coding.core.analytics.option_flow.strike_flow_figure import (
+    UNITS, build_strike_flow_figure, cell_value, nice_ticks, strike_label, tick_decimals)
 from coding.core.database.config import ConnectionPool, DatabaseConfig
 from coding.core.database.repository import DatabaseRepository
 from coding.service.option_flow.option_flow_service import OptionFlowService
@@ -106,6 +107,20 @@ def test_figure_rejects_an_unknown_unit_and_handles_no_trades():
     assert cell_value(aggregate_by_strike([trade()]).cell(70_000.0, "call_buy"), "trades") == 1.0
 
 
+def test_small_values_get_decimals_so_tick_labels_stay_distinct():
+    assert [tick_decimals(step) for step in (10.0, 0.5, 0.1, 0.25, 0.02)] == [0, 1, 1, 2, 2]
+    flow = aggregate_by_strike([trade(strike=1_000.0, kind="P", direction="buy", amount=0.3)])         # $0.0003M largest bar
+    labels = list(build_strike_flow_figure(flow, "t").layout.xaxis.ticktext)
+    right_side = labels[len(labels) // 2:]                                       # 0 and the positive ticks
+    assert len(set(right_side)) == len(right_side) and right_side[-1] != "$0M"
+
+
+def test_strikes_that_differ_by_less_than_one_keep_separate_labels():
+    assert strike_label(70_000.0) == "70,000" and strike_label(0.5) == "0.5" and strike_label(0.25) == "0.25"
+    flow = aggregate_by_strike([trade(strike=0.5), trade(strike=0.75)])
+    assert list(build_strike_flow_figure(flow, "t").data[0].y) == ["0.5", "0.75"]
+
+
 def test_nice_ticks_reach_the_limit_with_round_steps():
     assert nice_ticks(0.0) == [0.0]
     ticks = nice_ticks(83.0)
@@ -123,6 +138,9 @@ class FakeRepository:
 
     def get_latest_trade_time(self, currency):
         return datetime(2026, 11, 13, 21, 21, tzinfo=timezone.utc)
+
+    def get_first_block_trade_time(self, currency):
+        return datetime(2026, 8, 25, tzinfo=timezone.utc)
 
     def get_traded_expirations(self, currency, start_ts, end_ts):
         return ["25DEC26", "13NOV26", "bad", "27NOV26"]
@@ -150,6 +168,18 @@ def test_the_service_lists_traded_expirations_soonest_first_and_builds_a_titled_
     figure = service.build_figure(report)
     assert "Last 24H 27NOV26" in figure.layout.title.text
     assert "Newest stored trade: 2026-11-13 21:21 UTC" in figure.layout.annotations[-1].text
+
+
+def test_expiry_is_case_insensitive_end_is_converted_to_utc_and_old_blocks_are_flagged(tmp_path):
+    repository = FakeRepository([trade()])
+    service = OptionFlowService(repository, clock=lambda: NOW)
+    plus_two = timezone(timedelta(hours=2))
+    report = service.strike_flow(expiry="27nov26", end=datetime(2026, 8, 20, 16, 0, tzinfo=plus_two))
+    assert report.expiry == "27NOV26" and repository.calls[-1][3] == "27NOV26"
+    assert report.window_end == datetime(2026, 8, 20, 14, 0, tzinfo=timezone.utc) and report.window_end.utcoffset() == timedelta(0)
+    assert "block trades were only stored from 2026-08-25" in service.build_figure(report).layout.annotations[-1].text
+    recent = service.build_figure(service.strike_flow())
+    assert "block trades were only stored" not in recent.layout.annotations[-1].text
 
 
 def test_the_service_can_end_the_window_at_a_chosen_time_and_needs_a_timezone(tmp_path):
@@ -216,6 +246,8 @@ def test_repository_query_returns_the_window_the_expiry_and_the_block_flag(repo)
         (70_000.0, "C", "buy", 1.0, False), (70_000.0, "C", "sell", 2.5, False), (80_000.0, "P", "buy", 10.0, True)]
     only_november = repository.get_option_trades_between("BTC", 0, 5_000, "27NOV26")
     assert len(only_november) == 2 and all(t.expiration == "27NOV26" for t in only_november)
+    assert repository.get_first_block_trade_time("BTC") == datetime.fromtimestamp(2.0, tz=timezone.utc)
+    assert repository.get_first_block_trade_time("ETH") is None
     assert sorted(repository.get_traded_expirations("BTC", 0, 5_000)) == ["25DEC26", "27NOV26"]
     assert repository.get_latest_trade_time("BTC") == datetime.fromtimestamp(9.0, tz=timezone.utc)
     assert repository.get_latest_trade_time("SOL") is None

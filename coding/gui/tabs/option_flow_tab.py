@@ -12,6 +12,7 @@ never freezes; this module only shows what the service returns. The data is the 
 
 import logging
 import tempfile
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -89,7 +90,7 @@ class OptionFlowWorker(QThread):
             expirations = service.traded_expirations(request.currency, request.hours, report.window_end)
             figure = service.build_figure(report, request.unit)
             self.html_directory.mkdir(parents=True, exist_ok=True)
-            html_path = self.html_directory / f"{request.currency}_{request.hours}h_{request.expiry or 'all'}_{request.unit}.html"
+            html_path = self.html_directory / f"{request.currency}_{request.hours}h_{request.expiry or 'all'}_{request.unit}_{time.time_ns()}.html"
             figure.write_html(html_path, include_plotlyjs=True, config={"displaylogo": False})
             self.succeeded.emit(OptionFlowResult(report, expirations, html_path))
         except Exception as error:
@@ -192,7 +193,7 @@ class OptionFlowTab(QWidget):
         self.generate_button.setEnabled(False)
         self.warning_label.setVisible(False)
         self._set_status("Reading the trades and drawing the chart...", Colors.WARNING)
-        self.worker = OptionFlowWorker(self.current_request(), self.service_factory)
+        self.worker = OptionFlowWorker(self.current_request(), self.service_factory, parent=self)
         self.worker.succeeded.connect(self._on_succeeded)
         self.worker.failed.connect(self._on_failed)
         self.worker.start()
@@ -212,6 +213,8 @@ class OptionFlowTab(QWidget):
         elif self.clock() - report.newest_trade > timedelta(hours=STALE_DATA_HOURS):
             warnings.append(f"the newest stored trade is from {report.newest_trade:%Y-%m-%d %H:%M} UTC; the end of the "
                             "window is later, so sync the database for the latest trades")
+        if report.first_block_trade is None or report.window_start < report.first_block_trade:
+            warnings.append("block trades were not stored for the whole window, so some blocks appear as screen volume")
         if flow.trades_skipped:
             warnings.append(f"{flow.trades_skipped} trades were skipped (unknown side or size)")
         self.warning_label.setText("\n".join(f"Warning: {warning}" for warning in warnings))
@@ -230,6 +233,12 @@ class OptionFlowTab(QWidget):
             self.expiry_combo.addItem(label, label)
         self.expiry_combo.setCurrentIndex(0 if selected is None else self.expiry_combo.findData(selected))
         self.expiry_combo.blockSignals(False)
+
+    def closeEvent(self, event) -> None:
+        """Wait for a running worker so the thread is never destroyed while it runs."""
+        if self.worker is not None and self.worker.isRunning():
+            self.worker.wait(10000)
+        super().closeEvent(event)
 
     def _on_failed(self, message: str) -> None:
         """Show a failed run as one error line."""

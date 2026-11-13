@@ -477,6 +477,14 @@ class DatabaseRepository:
             row = cursor.fetchone()
         return datetime.fromtimestamp(row[0] / 1000, tz=timezone.utc) if row and row[0] is not None else None
 
+    def get_first_block_trade_time(self, currency: str) -> Optional[datetime]:
+        """Time of the oldest stored trade that carries a block id (UTC); earlier trades never had the id captured."""
+        with self._db_cursor() as cursor:
+            cursor.execute("SELECT MIN(trade_timestamp) FROM historical_trades WHERE currency = %s "
+                           "AND block_trade_id IS NOT NULL", (currency,))
+            row = cursor.fetchone()
+        return datetime.fromtimestamp(row[0] / 1000, tz=timezone.utc) if row and row[0] is not None else None
+
     def get_traded_expirations(self, currency: str, start_ts: int, end_ts: int) -> List[str]:
         """The expiration labels with at least one stored option trade in ``[start_ts, end_ts)`` (ms), unsorted."""
         with self._db_cursor() as cursor:

@@ -31,6 +31,9 @@ class FakeRepository:
     def get_latest_trade_time(self, currency):
         return NOW - timedelta(hours=5)
 
+    def get_first_block_trade_time(self, currency):
+        return NOW - timedelta(days=60)
+
     def get_traded_expirations(self, currency, start_ts, end_ts):
         return ["27NOV26", "13NOV26"]
 
@@ -62,7 +65,7 @@ def test_worker_reports_a_failure_as_one_line(qapp, tmp_path):
 def result_for(report_expiry, newest, skipped=0):
     flow = aggregate_by_strike([OptionTrade("27NOV26", 70_000.0, "P", "buy", 2.0, False)])
     flow.trades_skipped = skipped
-    report = StrikeFlowReport("BTC", NOW - timedelta(hours=24), NOW, report_expiry, flow, newest)
+    report = StrikeFlowReport("BTC", NOW - timedelta(hours=24), NOW, report_expiry, flow, newest, NOW - timedelta(days=60))
     return OptionFlowResult(report, ["13NOV26", "27NOV26"], Path("chart.html"))
 
 

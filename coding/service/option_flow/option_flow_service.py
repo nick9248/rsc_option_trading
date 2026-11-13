@@ -32,6 +32,7 @@ class StrikeFlowReport:
     expiry: Optional[str]
     flow: StrikeFlow
     newest_trade: Optional[datetime]
+    first_block_trade: Optional[datetime] = None   # blocks were not stored before this instant
     files: List[Path] = field(default_factory=list)
 
 
@@ -59,16 +60,18 @@ class OptionFlowService:
         """
         if end is not None and end.tzinfo is None:
             raise ValueError("end must be timezone-aware (UTC)")
-        end = end or self.clock()
+        end = (end or self.clock()).astimezone(timezone.utc)
+        expiry = expiry.upper() if expiry else expiry
         start = end - timedelta(hours=hours)
         start_ms, end_ms = int(start.timestamp() * 1000), int(end.timestamp() * 1000)
         trades = self.repository.get_option_trades_between(currency, start_ms, end_ms, expiry)
         newest = self.repository.get_latest_trade_time(currency)
-        return StrikeFlowReport(currency, start, end, expiry, aggregate_by_strike(trades, expiry), newest)
+        first_block = self.repository.get_first_block_trade_time(currency)
+        return StrikeFlowReport(currency, start, end, expiry, aggregate_by_strike(trades, expiry), newest, first_block)
 
     def traded_expirations(self, currency: str = "BTC", hours: int = 24, end: Optional[datetime] = None) -> List[str]:
         """The expirations with trades in the window (expired ones included), soonest first."""
-        end = end or self.clock()
+        end = (end or self.clock()).astimezone(timezone.utc)
         start_ms, end_ms = int((end - timedelta(hours=hours)).timestamp() * 1000), int(end.timestamp() * 1000)
         labels = self.repository.get_traded_expirations(currency, start_ms, end_ms)
         return sorted(labels, key=lambda label: (parse_expiry_settlement(label) or datetime.max.replace(tzinfo=timezone.utc), label))
@@ -85,6 +88,10 @@ class OptionFlowService:
                   "blocked = Deribit block trades.")
         if report.newest_trade is not None:
             footer += f" Newest stored trade: {report.newest_trade:%Y-%m-%d %H:%M} UTC."
+        if report.first_block_trade is None or report.window_start < report.first_block_trade:
+            footer += (" WARNING: block trades were only stored from "
+                       f"{report.first_block_trade:%Y-%m-%d} UTC, so earlier blocks appear as screen volume."
+                       if report.first_block_trade is not None else " WARNING: no block trades stored at all.")
         return build_strike_flow_figure(report.flow, title, unit, footer)
 
     def generate_chart(self, output_directory: Path, currency: str = "BTC", hours: int = 24,
@@ -94,9 +101,9 @@ class OptionFlowService:
         the numbers (contracts, notional and trades per strike and series).
         """
         report = self.strike_flow(currency, hours, expiry, end)
-        scope = expiry or "all"
+        scope = report.expiry or "all"
         output_directory.mkdir(parents=True, exist_ok=True)
-        stem = f"{currency}_strike_flow_{hours}h_{scope}" + (f"_to_{end:%Y%m%dT%H%M}" if end is not None else "")
+        stem = f"{currency}_strike_flow_{hours}h_{scope}" + (f"_to_{report.window_end:%Y%m%dT%H%M}" if end is not None else "")
         png = output_directory / f"{stem}.png"
         figure = self.build_figure(report)
         figure.write_image(png, width=1500, height=figure.layout.height)
