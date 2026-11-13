@@ -490,7 +490,8 @@ class DatabaseRepository:
         with self._db_cursor() as cursor:
             cursor.execute(
                 "SELECT DISTINCT expiration FROM historical_trades "
-                "WHERE currency = %s AND trade_timestamp >= %s AND trade_timestamp < %s",
+                "WHERE currency = %s AND trade_timestamp >= %s AND trade_timestamp < %s "
+                "AND expiration IS NOT NULL AND strike IS NOT NULL AND direction IS NOT NULL AND option_type IS NOT NULL",
                 (currency, start_ts, end_ts))
             return [row[0] for row in cursor.fetchall()]
 
@@ -1018,52 +1019,6 @@ class DatabaseRepository:
                 rows_inserted += cursor.rowcount
 
             return rows_inserted
-
-    def get_active_expirations_with_recent_trades(
-        self,
-        currency: str,
-        since_ms: int,
-    ) -> List[Dict[str, Any]]:
-        """
-        Expirations that have not expired yet and traded since ``since_ms``.
-
-        The Flow Charts views are computed from historical_trades; this lists the
-        expirations they can show. Ordered by open interest (latest call + put OI
-        from onchain_analysis_snapshots, 0 when unknown), highest first.
-
-        Args:
-            currency: Currency symbol (BTC, ETH).
-            since_ms: Only trades at or after this epoch-millisecond timestamp count.
-
-        Returns:
-            [{"expiration": str, "total_oi": float}, ...]
-        """
-        with self._db_cursor() as cursor:
-            cursor.execute("""
-                SELECT t.expiration, COALESCE(oi.total_oi, 0) AS total_oi
-                FROM (
-                    SELECT DISTINCT expiration
-                    FROM historical_trades
-                    WHERE currency = %s
-                      AND trade_timestamp >= %s
-                      AND expiration IS NOT NULL
-                      AND strike IS NOT NULL
-                      AND direction IS NOT NULL
-                ) t
-                LEFT JOIN LATERAL (
-                    SELECT COALESCE(total_call_oi, 0) + COALESCE(total_put_oi, 0) AS total_oi
-                    FROM onchain_analysis_snapshots
-                    WHERE currency = %s AND expiration = t.expiration
-                    ORDER BY snapshot_hour DESC
-                    LIMIT 1
-                ) oi ON true
-                WHERE TO_DATE(t.expiration, 'DDMONYY') >= CURRENT_DATE
-                ORDER BY total_oi DESC, t.expiration
-            """, (currency, since_ms, currency))
-            results = [{"expiration": row[0], "total_oi": float(row[1])} for row in cursor.fetchall()]
-
-        logger.info(f"Found {len(results)} active expirations with recent trades for {currency}")
-        return results
 
     def get_latest_index_price(self, currency: str) -> Optional[float]:
         """

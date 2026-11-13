@@ -44,9 +44,7 @@ from coding.core.analytics.reporting.historical_context_formatter import (
 )
 from coding.core.analytics.results.levels_table_results import LevelsTable, LevelsTableRow
 from coding.gui.components.log_viewer import LogViewer, GuiLogHandler
-from coding.gui.dialogs.flow_charts_window import FlowChartsWindow
 from coding.gui.theme.colors import Colors
-from coding.service.on_chain.on_chain_analysis_service import OnChainAnalysisService
 from coding.service.on_chain.on_chain_workflow_service import OnChainWorkflowService
 
 
@@ -513,26 +511,6 @@ class OnChainAnalysisTab(QWidget):
         self.clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         controls_layout.addWidget(self.clear_btn)
 
-        # View Flow Charts button
-        self.view_charts_btn = QPushButton("View Flow Charts")
-        self.view_charts_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {Colors.BUTTON_SECONDARY};
-                color: {Colors.TEXT_PRIMARY};
-                border: 1px solid {Colors.BORDER};
-            }}
-            QPushButton:hover {{
-                background-color: {Colors.BUTTON_SECONDARY_HOVER};
-            }}
-            QPushButton:disabled {{
-                background-color: {Colors.SURFACE};
-                color: {Colors.TEXT_DISABLED};
-            }}
-        """)
-        self.view_charts_btn.setEnabled(False)
-        self.view_charts_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        controls_layout.addWidget(self.view_charts_btn)
-
         # Status label
         self.status_label = QLabel("")
         self.status_label.setStyleSheet(f"color: {Colors.TEXT_MUTED};")
@@ -570,7 +548,6 @@ class OnChainAnalysisTab(QWidget):
         """Connect widget signals to slots."""
         self.load_btn.clicked.connect(self._load_analysis)
         self.clear_btn.clicked.connect(self._clear)
-        self.view_charts_btn.clicked.connect(self._open_flow_charts)
         self.expiry_combo.currentIndexChanged.connect(self._on_expiry_selection_changed)
         self.sign_convention_group.buttonToggled.connect(self._on_sign_convention_toggled)
 
@@ -616,7 +593,6 @@ class OnChainAnalysisTab(QWidget):
         self.report_display.clear()
         self.report_text = ""
         self.load_btn.setEnabled(False)
-        self.view_charts_btn.setEnabled(False)
 
         self._start_next_in_queue()
 
@@ -625,7 +601,6 @@ class OnChainAnalysisTab(QWidget):
         if not self._queue:
             # All done
             self.load_btn.setEnabled(True)
-            self.view_charts_btn.setEnabled(True)
             self.status_label.setText("Ready")
             self.status_label.setStyleSheet(f"color: {Colors.SUCCESS};")
             return
@@ -1026,21 +1001,3 @@ class OnChainAnalysisTab(QWidget):
 
         # Still attempt remaining currencies in the queue
         self._start_next_in_queue()
-
-    def _open_flow_charts(self) -> None:
-        """
-        Open fullscreen flow charts window for the last analyzed currency.
-
-        H3 (refactor_design_spec.md section T9): hands ``FlowChartsWindow`` a
-        service, not a raw ``DatabaseRepository`` -- the dialog's own read
-        calls go through the service (see ``FlowChartsWindow``). This module
-        does not construct ``DatabaseRepository`` itself (review fix):
-        ``OnChainAnalysisService.create_default()`` is the service-layer
-        factory that does, mirroring ``OnChainWorkflowService.run``'s own
-        lazy dependency construction.
-        """
-        currency = self._last_analyzed_currency or ("BTC" if self.btc_checkbox.isChecked() else "ETH")
-        service = OnChainAnalysisService.create_default()
-
-        dialog = FlowChartsWindow(currency, service, parent=self)
-        dialog.exec()

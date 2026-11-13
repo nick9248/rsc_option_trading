@@ -102,3 +102,12 @@ def test_failure_shows_an_error_and_reenables_the_button(qapp):
     tab._on_failed("ValueError: x")
     assert tab.status_label.text() == "Failed: ValueError: x" and tab.generate_button.isEnabled()
     tab.close()
+
+
+def test_changing_the_currency_resets_the_expiry_to_all(qapp):
+    tab = OptionFlowTab(service_factory=fake_service, clock=lambda: NOW)
+    tab._on_succeeded(result_for("27NOV26", NOW - timedelta(minutes=5)))
+    assert tab.current_request().expiry == "27NOV26"
+    tab.currency_combo.setCurrentIndex(1)
+    assert tab.current_request().expiry is None and tab.expiry_combo.count() == 1
+    tab.close()
