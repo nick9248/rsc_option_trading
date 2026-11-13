@@ -11,7 +11,7 @@ from typing import Callable, Dict, Optional, Sequence
 
 from coding.core.analytics.futures_flow.taker_flow import missing_hours, start_of_utc_hour
 from coding.core.database.repository import DatabaseRepository
-from coding.service.futures_flow.binance_taker_flow_client import BinanceTakerFlowClient
+from coding.service.futures_flow.binance_taker_flow_client import BinanceTakerFlowClient, TakerFlowDataError
 from coding.service.futures_flow.taker_flow_settings import BACKFILL_DAYS, SYMBOLS
 
 logger = logging.getLogger(__name__)
@@ -69,6 +69,8 @@ class TakerFlowCollectionService:
             return 0
 
         fetched = self.client.fetch_closed_hours(symbol, missing[0], now)
+        if not fetched:
+            raise TakerFlowDataError(f"{symbol}: the source returned no hours although {len(missing)} are missing")
         wanted = set(missing)
         to_store = [hour for hour in fetched if hour.hour_utc in wanted]
         inserted = self.repository.save_taker_flow_hours(to_store, now)

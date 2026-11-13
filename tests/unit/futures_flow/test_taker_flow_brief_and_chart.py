@@ -155,3 +155,15 @@ def test_brief_drops_the_extra_section_not_the_whole_brief_when_nothing_else_fit
     huge = "x" * 5000
     message = format_brief(record, [], title="Weekly brief", extra_sections=[huge])
     assert huge not in message and "extra sections omitted" in message and "Too long to send" not in message
+
+
+def test_yesterday_is_not_expected_complete_before_its_last_hour_has_closed():
+    from datetime import date
+    from coding.core.analytics.futures_flow.taker_flow import TakerFlowDay
+    check = TakerFlowChartService._days_with_missing_hours
+    first = datetime(2026, 11, 1, tzinfo=timezone.utc)
+    days = [TakerFlowDay(date(2026, 11, day), 1.0, 1.0) for day in range(1, 12)]     # 11-01 .. 11-11
+    # 11-13 00:02: hour 23 of 11-12 closed at 00:00 but is not collected yet, 11-12 is expected -> reported
+    assert check(first, datetime(2026, 11, 13, 0, 2, tzinfo=timezone.utc), days) == ["2026-11-12"]
+    # 11-12 14:00: 11-11 is the last expected day, and it is complete -> nothing to report
+    assert check(first, datetime(2026, 11, 12, 14, 0, tzinfo=timezone.utc), days) == []

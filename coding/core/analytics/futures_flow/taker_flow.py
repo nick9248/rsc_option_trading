@@ -173,6 +173,8 @@ def summarise(symbol: str, hours: Sequence[TakerFlowHour]) -> TakerFlowSummary:
     last_24_hours_ratio, missing_count = window_ratio(by_hour, latest)
     if missing_count:
         reasons.append(f"{symbol}: last 24 hours ratio not computed, {missing_count} of 24 hours missing")
+    elif last_24_hours_ratio is None:
+        reasons.append(f"{symbol}: last 24 hours ratio not computed, no sell volume")
 
     days = complete_days(by_hour.values())
     if not days:

@@ -99,3 +99,9 @@ def test_summary_reports_missing_hours_and_short_weeks():
     # A short week is never shown as a 7-day number.
     assert summary.seven_day_ratio is None and summary.highest_day is None and summary.lowest_day is None
     assert summary.last_complete_day is not None
+
+
+def test_zero_sell_volume_is_reported_not_silent():
+    summary = summarise("BTCUSDT", make_hours(DAY_START, 24, 5.0, 0.0))
+    assert summary.last_24_hours_ratio is None
+    assert "last 24 hours ratio not computed, no sell volume" in " ".join(summary.not_computed)

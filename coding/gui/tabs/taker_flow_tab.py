@@ -10,6 +10,7 @@ VPS table ``taker_flow_hourly`` (scripts/sync_from_vps.py); this module only
 formats what the service returns.
 """
 
+import html
 import logging
 from datetime import timedelta
 from pathlib import Path
@@ -164,7 +165,7 @@ class TakerFlowTab(QWidget):
         self.generated_folder = folder
         self.open_folder_button.setEnabled(True)
         url = QUrl.fromLocalFile(str(folder)).toString()
-        self.folder_link_label.setText(f'<a href="{url}" style="color: {Colors.ACCENT};">{folder}</a>')
+        self.folder_link_label.setText(f'<a href="{url}" style="color: {Colors.ACCENT};">{html.escape(str(folder))}</a>')
 
     def open_generated_folder(self) -> None:
         """Open the generated folder in the system file browser."""

@@ -71,7 +71,9 @@ class TakerFlowChartService:
         before the oldest stored hour are simply not stored yet.
         """
         first_full_day = first_hour.date() if first_hour.hour == 0 else first_hour.date() + timedelta(days=1)
-        last_full_day = now.date() - timedelta(days=1)
+        last_closed_hour = start_of_utc_hour(now) - timedelta(hours=1)
+        # A day is expected complete once its hour 23 has closed.
+        last_full_day = last_closed_hour.date() if last_closed_hour.hour == 23 else last_closed_hour.date() - timedelta(days=1)
         complete = {day.day for day in days}
         expected = [first_full_day + timedelta(days=offset)
                     for offset in range((last_full_day - first_full_day).days + 1)]

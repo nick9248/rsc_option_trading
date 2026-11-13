@@ -175,3 +175,10 @@ def test_client_skips_non_finite_volumes(bad_value, caplog):
     hours = BinanceTakerFlowClient("http://x", cast(Any, FakeSession(FakeResponse([row])))).fetch_closed_hours(
         "BTCUSDT", hour, NOW)
     assert hours == [] and "implausible kline" in caplog.text
+
+
+def test_an_empty_answer_while_hours_are_missing_is_a_failure(caplog):
+    service = TakerFlowCollectionService(FakeClient({}), FakeRepository(), symbols=["BTCUSDT"],
+                                         backfill_days=30, clock=lambda: NOW)
+    assert service.collect() == {"BTCUSDT": None}
+    assert "returned no hours" in caplog.text
