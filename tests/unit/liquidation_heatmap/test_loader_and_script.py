@@ -79,11 +79,13 @@ def test_today_comes_from_rest(tmp_path):
 def test_candles_are_parsed_and_limited_to_the_window(tmp_path):
     def row(minutes):
         opened = DAY + timedelta(minutes=minutes)
-        return [int(opened.timestamp() * 1000), "1", "12", "9", "10", "5"]
+        # open time, open, high, low, close, volume, close time, quote volume, trades, taker buy base, taker buy quote, ignore
+        return [int(opened.timestamp() * 1000), "1", "12", "9", "10", "5", 0, "50", 7, "2", "20", "0"]
     session = FakeSession({"klines": Response(payload=[row(0), row(5), row(10)])})
     candles = BinanceHistoryLoader(tmp_path, cast(Any, session)).load_candles("BTCUSDT", DAY, DAY + timedelta(minutes=10))
     assert [candle.open_time for candle in candles] == [DAY, DAY + timedelta(minutes=5)]
     assert (candles[0].high, candles[0].low, candles[0].close) == (12.0, 9.0, 10.0)
+    assert (candles[0].volume_btc, candles[0].taker_buy_btc) == (5.0, 2.0)
 
 
 def test_a_binance_error_raises(tmp_path):

@@ -140,3 +140,36 @@ def test_aged_out_contracts_are_replaced_at_the_current_price():
 def test_half_life_must_be_positive():
     with pytest.raises(ValueError):
         HeatmapSettings(position_half_life_hours=0)
+
+
+VOLUME = HeatmapSettings(bin_size_usd=100.0, leverage_tiers=(10,), leverage_weights=(1.0,),
+                         maintenance_margin_rate=0.0, creation_source="volume", volume_open_share=0.5)
+
+
+def volume_candle(step, low, high, close, volume, taker_buy):
+    return PriceCandle(T0 + STEP * step, high=high, low=low, close=close, volume_btc=volume, taker_buy_btc=taker_buy)
+
+
+def test_volume_creation_opens_longs_from_taker_buys_and_shorts_from_taker_sells():
+    # 100 BTC traded, 60 bought by takers: longs 60 * 0.5 = 30 BTC at 9,000; shorts 40 * 0.5 = 20 BTC at 11,000.
+    result = simulate_heatmap([volume_candle(0, 9_990, 10_010, 10_000, 100.0, 60.0)], {}, VOLUME, T0)
+    assert level_btc(result, "long", 0, 9_000) == pytest.approx(30.0)
+    assert level_btc(result, "short", 0, 11_000) == pytest.approx(20.0)
+
+
+def test_volume_creation_removes_only_the_touched_side():
+    candles = [volume_candle(0, 9_990, 10_010, 10_000, 100.0, 60.0), volume_candle(1, 8_990, 10_000, 9_000, 0.0, 0.0)]
+    result = simulate_heatmap(candles, {}, VOLUME, T0)
+    assert level_btc(result, "long", 1, 9_000) == 0.0                       # touched and gone
+    assert level_btc(result, "short", 1, 11_000) == pytest.approx(20.0)     # its counterpart is not removed
+
+
+def test_volume_creation_without_volume_data_creates_nothing_and_says_so():
+    result = simulate_heatmap([candle(0, 9_990, 10_010, 10_000)], {}, VOLUME, T0)
+    assert result.long_btc[0].sum() == 0.0 and any("no volume data" in note for note in result.notes)
+
+
+def test_volume_creation_settings_are_validated():
+    for bad in (dict(creation_source="trades"), dict(volume_open_share=0), dict(volume_open_share=1.5)):
+        with pytest.raises(ValueError):
+            HeatmapSettings(**cast(Any, bad))

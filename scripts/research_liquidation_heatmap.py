@@ -72,6 +72,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--maintenance-margin", type=float, default=HeatmapSettings.maintenance_margin_rate)
     parser.add_argument("--half-life-hours", type=float, default=None,
                         help="positions age out with this half-life (default: they live until touched)")
+    parser.add_argument("--creation", choices=("open_interest", "volume"), default="open_interest",
+                        help="create positions from open-interest rises or from taker volume (default: open_interest)")
+    parser.add_argument("--volume-share", type=float, default=HeatmapSettings.volume_open_share,
+                        help="share of traded volume that opens positions (volume creation only; a scale factor)")
     parser.add_argument("--out", type=Path, default=DEFAULT_OUTPUT_DIRECTORY, help="output folder")
     return parser
 
@@ -101,7 +105,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     weights = parse_numbers(arguments.weights, float) if arguments.weights else [1 / len(tiers)] * len(tiers)
     settings = HeatmapSettings(bin_size_usd=arguments.bin_size, leverage_tiers=tuple(tiers),
                                leverage_weights=tuple(weights), maintenance_margin_rate=arguments.maintenance_margin,
-                               position_half_life_hours=arguments.half_life_hours)
+                               position_half_life_hours=arguments.half_life_hours,
+                               creation_source=arguments.creation, volume_open_share=arguments.volume_share)
 
     end = floor_to_step(arguments.end or datetime.now(timezone.utc))
     window_start = end - timedelta(hours=arguments.hours)
@@ -122,8 +127,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     arguments.out.mkdir(parents=True, exist_ok=True)
     stem = f"heatmap_{end.strftime('%Y%m%dT%H%MZ')}_{arguments.hours}h"
-    footer = (f"Model v0 (estimate, not Coinglass): tiers {list(settings.leverage_tiers)} weights "
-              f"{[round(weight, 3) for weight in settings.leverage_weights]}, bin {settings.bin_size_usd:g} USD, "
+    footer = (f"Research model (estimate, not Coinglass), creation from {settings.creation_source}: "
+              f"{len(settings.leverage_tiers)} leverage tiers {min(settings.leverage_tiers)}x-{max(settings.leverage_tiers)}x, "
+              f"bin {settings.bin_size_usd:g} USD, half-life {settings.position_half_life_hours} h, "
               f"warm-up {arguments.warmup_days} d. Window {window_start:%Y-%m-%d %H:%M} to {end:%Y-%m-%d %H:%M} UTC.")
     png = render_heatmap(result, window_candles, arguments.out / f"{stem}.png",
                          f"Estimated Binance {SYMBOL} liquidation heatmap ({arguments.hours} h, UTC)", footer)
@@ -133,7 +139,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "settings": {"bin_size_usd": settings.bin_size_usd, "leverage_tiers": list(settings.leverage_tiers),
                      "leverage_weights": list(settings.leverage_weights),
                      "maintenance_margin_rate": settings.maintenance_margin_rate,
-                     "position_half_life_hours": settings.position_half_life_hours},
+                     "position_half_life_hours": settings.position_half_life_hours,
+                     "creation_source": settings.creation_source, "volume_open_share": settings.volume_open_share},
         "data_notes": notes + result.notes,
         "strongest_levels_at_window_end": strongest_levels(result),
     }

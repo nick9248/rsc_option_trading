@@ -27,6 +27,14 @@ assumption to be checked against Coinglass screenshots and real liquidations
    there is "new" and is placed at the current price (step 1). Without it every
    position since the warm-up lives until its level is touched.
 
+Alternative creation (``creation_source="volume"``, experiment): positions are
+created from traded volume instead of open-interest changes. Taker buy volume
+opens longs and taker sell volume opens shorts (aggressive buyers open longs,
+aggressive sellers open shorts), times ``volume_open_share`` (the share of volume
+that opens positions; a scale factor). Open interest is not used, and a touched
+level removes only its own side. The same tiers, touch rule and optional turnover
+apply.
+
 Positions that existed before the first step (warm-up) are unknown, so the
 state starts empty: the first ``warmup`` steps only build it, and only later
 steps are recorded. Missing data is never filled: a step without a candle is an
@@ -55,6 +63,8 @@ class PriceCandle:
     high: float
     low: float
     close: float
+    volume_btc: Optional[float] = None        # traded volume of the candle (BTC)
+    taker_buy_btc: Optional[float] = None     # part of it bought by takers (BTC)
 
 
 @dataclass(frozen=True)
@@ -70,6 +80,8 @@ class HeatmapSettings:
     leverage_weights: Tuple[float, ...] = (1 / 3, 1 / 3, 1 / 3)
     maintenance_margin_rate: float = 0.004
     position_half_life_hours: Optional[float] = None
+    creation_source: str = "open_interest"      # or "volume"
+    volume_open_share: float = 0.1
 
     def __post_init__(self) -> None:
         if self.bin_size_usd <= 0:
@@ -85,6 +97,10 @@ class HeatmapSettings:
             raise ValueError("maintenance_margin_rate must be below 1 / the highest leverage tier")
         if self.position_half_life_hours is not None and self.position_half_life_hours <= 0:
             raise ValueError("position_half_life_hours must be positive")
+        if self.creation_source not in ("open_interest", "volume"):
+            raise ValueError("creation_source must be 'open_interest' or 'volume'")
+        if not 0 < self.volume_open_share <= 1:
+            raise ValueError("volume_open_share must be in (0, 1]")
 
     def long_liquidation_price(self, entry: float, leverage: int) -> float:
         """Liquidation price of a long opened at ``entry`` with ``leverage`` (isolated, simplified)."""
@@ -175,6 +191,8 @@ def simulate_heatmap(
     decay_per_step = (0.5 ** (STEP.total_seconds() / 3600 / settings.position_half_life_hours)
                       if settings.position_half_life_hours else 1.0)
     steps_without_oi = 0
+    steps_without_volume = 0
+    from_volume = settings.creation_source == "volume"
     for index in range(steps):
         step_time = grid_start + STEP * index
         candle = candle_by_time.get(step_time)
@@ -186,6 +204,26 @@ def simulate_heatmap(
         touched_short = short_state[centers <= candle.high].sum()
         long_state[centers >= candle.low] = 0.0
         short_state[centers <= candle.high] = 0.0
+        if from_volume:
+            # Volume creation: a touched level removes only its own side; no open-interest accounting.
+            if decay_per_step < 1.0:
+                long_state *= decay_per_step
+                short_state *= decay_per_step
+            if candle.volume_btc is None or candle.taker_buy_btc is None:
+                steps_without_volume += 1
+            else:
+                bought = candle.taker_buy_btc * settings.volume_open_share
+                sold = max(0.0, candle.volume_btc - candle.taker_buy_btc) * settings.volume_open_share
+                for tier, weight in zip(settings.leverage_tiers, settings.leverage_weights):
+                    long_bin = int((settings.long_liquidation_price(candle.close, tier) - origin) // bin_size)
+                    short_bin = int((settings.short_liquidation_price(candle.close, tier) - origin) // bin_size)
+                    long_state[long_bin] += bought * weight
+                    short_state[short_bin] += sold * weight
+            if index >= first_recorded:
+                long_rows[index - first_recorded] = long_state
+                short_rows[index - first_recorded] = short_state
+            continue
+
         remaining_short = short_state.sum()
         if touched_long > 0 and remaining_short > 0:
             short_state *= max(0.0, 1 - touched_long / remaining_short)
@@ -228,6 +266,8 @@ def simulate_heatmap(
             short_rows[row] = short_state
 
     notes = []
+    if steps_without_volume:
+        notes.append(f"{steps_without_volume} step(s) had no volume data and created nothing")
     if steps_without_oi:
         notes.append(f"{steps_without_oi} step(s) had no open-interest sample (their change was applied at the next sample)")
     missing_candles = steps - len(candle_by_time)

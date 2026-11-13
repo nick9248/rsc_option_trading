@@ -74,10 +74,38 @@ Result of v0 (open-interest rise creates contracts, leverage ladder, level remov
   volume (as the open-source `py-liquidation-map` does with large trades) instead of from open-interest changes.
 - Added setting `position_half_life_hours` (turnover of old positions): it did not help on the hold-out.
 
-## Next experiments
+## Experiment 1 (2026-11-13): positions created from traded volume
 
-1. Creation from traded volume (taker buy volume to longs, taker sell volume to shorts, only the part that
-   opens positions) instead of open-interest changes; judge on the hold-out screenshots without further tuning.
-2. Whatever the result, validate against real liquidations (CryptoQuant daily long/short liquidations, and a
-   recording of Binance's live liquidation feed): the aim is a metric that is right, not a copy of Coinglass.
-3. Add a trivial benchmark (profile that only peaks near the current price) to every comparison.
+Setting `creation_source="volume"`: taker buy volume opens longs, taker sell volume opens shorts (times a scale
+`volume_open_share`, default 0.1), same leverage tiers and touch rule, a touched level removes only its own side,
+open interest is not used. Rules fixed before running: choose settings on the 24h and 12h screenshots (72
+combinations of tier spread, bin size and half-life), run the four other screenshots once, and add a benchmark
+that only peaks near the current price. Same metrics as above (rank correlation on the relevant bins, top-10
+overlap with chance about 0.45 to 0.6 on 24h/12h and about 0.2 to 0.3 on the wider windows, scale = our maximum
+over theirs).
+
+| Held-out screenshot | Near-price benchmark | Open-interest model (best) | Volume, tiers 25-100/5, bin 100, half-life 48 h | Volume, tiers 10-100/10, bin 100, half-life 48 h |
+|---|---|---|---|---|
+| 48h | rho -0.40, overlap 0.1 | -0.18, 0.3 | +0.32, 0.5 | +0.25, 0.5 |
+| 3d | -0.42, 0.1 | -0.21, 0.4 | +0.41, 0.4 | +0.35, 0.4 |
+| 1w | -0.50, 0.0 | -0.31, 0.0 | +0.50, 0.4 | +0.50, 0.4 |
+| 2w | -0.41, 0.0 | -0.31, 0.0 | +0.28, 0.2 | +0.40, 0.2 |
+
+(The third configuration of the top 3, tiers 5-100/5 with half-life 12 h, did worse: +0.21, +0.12, -0.10, -0.18.)
+
+Reading: creating positions from volume is clearly better than from open-interest changes. The held-out rank
+correlation is positive for two of the three configurations on all four screenshots, where the open-interest
+model was negative on all four and the near-price benchmark was negative too. The scale is within the right order
+of magnitude (our maximum is 0.2x to 0.8x of Coinglass with the untuned share of 0.1, lower for longer windows, as
+Coinglass's own maximum grows with the window). But the top-10 overlap is only modestly above chance (0.4 to 0.5
+held out, 0.2 on the 2-week screenshot, which is chance), and by eye our picture is smooth with thick bands where
+Coinglass is thin and distinct. So: the right direction, not a match. Three configurations were run on the held-out
+set after being chosen on the tuned one, so treat the numbers as indicative, not as a final score.
+
+## Next steps
+
+1. Validate against real liquidations (CryptoQuant daily long/short liquidations, and a recording of Binance's
+   live liquidation feed): the aim is a metric that is right, not a copy of Coinglass.
+2. Finer bins (25 to 50 USD) and a split of taker volume into opening and closing trades (open interest change
+   as a filter) to get thinner, more distinct bands.
+3. Collect more screenshots on other days as fresh hold-out cases.

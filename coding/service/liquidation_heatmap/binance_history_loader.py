@@ -73,7 +73,8 @@ class BinanceHistoryLoader:
                 break
             for row in rows:
                 open_time = datetime.fromtimestamp(int(row[0]) / 1000, tz=timezone.utc)
-                candles.append(PriceCandle(open_time, high=float(row[2]), low=float(row[3]), close=float(row[4])))
+                candles.append(PriceCandle(open_time, high=float(row[2]), low=float(row[3]), close=float(row[4]),
+                                           volume_btc=float(row[5]), taker_buy_btc=float(row[9])))
             next_cursor = candles[-1].open_time + STEP
             if next_cursor <= cursor:
                 break
