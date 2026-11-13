@@ -165,3 +165,13 @@ def test_client_skips_rows_that_are_dicts_instead_of_crashing(caplog):
     hours = BinanceTakerFlowClient("http://x", cast(Any, FakeSession(FakeResponse(rows)))).fetch_closed_hours(
         "BTCUSDT", datetime(2026, 11, 13, 12, tzinfo=timezone.utc), NOW)
     assert len(hours) == 1 and "skipped a malformed kline" in caplog.text
+
+
+@pytest.mark.parametrize("bad_value", ["NaN", "Infinity", "-Infinity"])
+def test_client_skips_non_finite_volumes(bad_value, caplog):
+    hour = datetime(2026, 11, 13, 12, tzinfo=timezone.utc)
+    row = kline(hour, 100.0, 60.0)
+    row[7] = bad_value
+    hours = BinanceTakerFlowClient("http://x", cast(Any, FakeSession(FakeResponse([row])))).fetch_closed_hours(
+        "BTCUSDT", hour, NOW)
+    assert hours == [] and "implausible kline" in caplog.text

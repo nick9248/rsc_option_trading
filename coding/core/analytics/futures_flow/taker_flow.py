@@ -13,7 +13,7 @@ and a day counts only when all 24 of its hours are present.
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple, cast
 
 HOURS_PER_DAY = 24
 SUMMARY_DAYS = 7
@@ -125,6 +125,22 @@ def missing_hours(present: Iterable[datetime], first_hour: datetime, last_hour: 
     return missing
 
 
+def window_ratio(by_hour: Dict[datetime, TakerFlowHour], last_hour: datetime,
+                 window_hours: int = HOURS_PER_DAY) -> Tuple[Optional[float], int]:
+    """
+    The volume-weighted ratio over the ``window_hours`` hours ending with ``last_hour``
+    (start of the last hour), and the number of those hours that are missing. The ratio
+    is None when any hour is missing or there was no sell volume.
+    """
+    window = [by_hour.get(last_hour - timedelta(hours=offset)) for offset in range(window_hours)]
+    present = [hour for hour in window if hour is not None]
+    missing = window_hours - len(present)
+    if missing:
+        return None, missing
+    return taker_buy_sell_ratio(sum(hour.taker_buy_usd for hour in present),
+                                sum(hour.taker_sell_usd for hour in present)), 0
+
+
 def rolling_ratio(hours: Iterable[TakerFlowHour], window_hours: int = HOURS_PER_DAY) -> List[Tuple[datetime, float]]:
     """
     The volume-weighted taker buy/sell ratio over the ``window_hours`` hours
@@ -134,11 +150,7 @@ def rolling_ratio(hours: Iterable[TakerFlowHour], window_hours: int = HOURS_PER_
     by_hour = {start_of_utc_hour(hour.hour_utc): hour for hour in hours}
     points = []
     for end in sorted(by_hour):
-        window = [by_hour.get(end - timedelta(hours=offset)) for offset in range(window_hours)]
-        if any(hour is None for hour in window):
-            continue
-        ratio = taker_buy_sell_ratio(sum(hour.taker_buy_usd for hour in window if hour is not None),
-                                     sum(hour.taker_sell_usd for hour in window if hour is not None))
+        ratio, _ = window_ratio(by_hour, end, window_hours)
         if ratio is not None:
             points.append((end, ratio))
     return points
@@ -158,16 +170,9 @@ def summarise(symbol: str, hours: Sequence[TakerFlowHour]) -> TakerFlowSummary:
     by_hour = {start_of_utc_hour(hour.hour_utc): hour for hour in hours}
     latest = max(by_hour)
 
-    window = [by_hour.get(latest - timedelta(hours=offset)) for offset in range(HOURS_PER_DAY)]
-    last_24_hours_ratio = None
-    if all(hour is not None for hour in window):
-        last_24_hours_ratio = taker_buy_sell_ratio(
-            sum(hour.taker_buy_usd for hour in window if hour is not None),
-            sum(hour.taker_sell_usd for hour in window if hour is not None),
-        )
-    else:
-        reasons.append(f"{symbol}: last 24 hours ratio not computed, "
-                       f"{sum(hour is None for hour in window)} of 24 hours missing")
+    last_24_hours_ratio, missing_count = window_ratio(by_hour, latest)
+    if missing_count:
+        reasons.append(f"{symbol}: last 24 hours ratio not computed, {missing_count} of 24 hours missing")
 
     days = complete_days(by_hour.values())
     if not days:
@@ -177,18 +182,20 @@ def summarise(symbol: str, hours: Sequence[TakerFlowHour]) -> TakerFlowSummary:
     last_day = days[-1]
     first_wanted = last_day.day - timedelta(days=SUMMARY_DAYS - 1)
     week = [day for day in days if day.day >= first_wanted]
-    if len(week) < SUMMARY_DAYS:
-        reasons.append(f"{symbol}: only {len(week)} of {SUMMARY_DAYS} days are complete")
-    rated = [day for day in week if day.ratio is not None]
+    full_week = len(week) == SUMMARY_DAYS
+    if not full_week:
+        # A shorter week is not shown as a 7-day number (missing data is "not computed").
+        reasons.append(f"{symbol}: 7d, Low and High not computed, only {len(week)} of {SUMMARY_DAYS} days are complete")
+    rated = [day for day in week if day.ratio is not None] if full_week else []
     return TakerFlowSummary(
         symbol=symbol,
         latest_hour_utc=latest,
         last_24_hours_ratio=last_24_hours_ratio,
         last_complete_day=last_day,
-        seven_day_ratio=taker_buy_sell_ratio(sum(day.taker_buy_usd for day in week),
-                                             sum(day.taker_sell_usd for day in week)),
+        seven_day_ratio=(taker_buy_sell_ratio(sum(day.taker_buy_usd for day in week),
+                                              sum(day.taker_sell_usd for day in week)) if full_week else None),
         seven_day_days_used=len(week),
-        highest_day=max(rated, key=lambda day: day.ratio or 0.0) if rated else None,
-        lowest_day=min(rated, key=lambda day: day.ratio if day.ratio is not None else float("inf")) if rated else None,
+        highest_day=max(rated, key=lambda day: cast(float, day.ratio)) if rated else None,
+        lowest_day=min(rated, key=lambda day: cast(float, day.ratio)) if rated else None,
         not_computed=reasons,
     )

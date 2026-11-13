@@ -96,3 +96,6 @@ def test_summary_reports_missing_hours_and_short_weeks():
     assert summary.seven_day_days_used == 2             # the third day lost an hour
     assert any("last 24 hours ratio not computed, 1 of 24 hours missing" in reason for reason in summary.not_computed)
     assert any("only 2 of 7 days are complete" in reason for reason in summary.not_computed)
+    # A short week is never shown as a 7-day number.
+    assert summary.seven_day_ratio is None and summary.highest_day is None and summary.lowest_day is None
+    assert summary.last_complete_day is not None

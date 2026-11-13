@@ -8,6 +8,7 @@ hours are returned: the hour in progress changes and must not be stored.
 """
 
 import logging
+import math
 from datetime import datetime, timezone
 from typing import Any, List, Optional
 
@@ -90,7 +91,8 @@ class BinanceTakerFlowClient:
         except (TypeError, ValueError, IndexError, KeyError) as error:
             logger.warning("Taker flow %s: skipped a malformed kline (%s)", symbol, error)
             return None
-        if hour_utc != start_of_utc_hour(hour_utc) or total < 0 or buy < 0 or buy > total:
+        if (hour_utc != start_of_utc_hour(hour_utc) or not math.isfinite(total) or not math.isfinite(buy)
+                or total < 0 or buy < 0 or buy > total):
             logger.warning("Taker flow %s: skipped an implausible kline at %s (total %s, taker buy %s)",
                            symbol, hour_utc.isoformat(), total, buy)
             return None

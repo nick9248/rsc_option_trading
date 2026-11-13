@@ -10,7 +10,7 @@ Variables (all optional):
   BINANCE_FUTURES_BASE_URL URL  where the Binance futures klines are read, default
                                 https://fapi.binance.com. Binance blocks US addresses, so the
                                 VPS .env sets the relay on the Spanish server
-                                (http://65.20.101.75:8082, documentation/futures_taker_flow.md).
+                                (see documentation/futures_taker_flow.md).
 """
 
 import os
