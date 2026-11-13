@@ -10,7 +10,6 @@ for the snapshot come from BINANCE_FUTURES_BASE_URL (the relay on the VPS).
 
 import logging
 import os
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -20,7 +19,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from dotenv import load_dotenv
 
 from coding.core.database.repository import DatabaseRepository
-from coding.service.futures_flow.taker_flow_settings import TakerFlowSettings
+from coding.service.futures_flow.taker_flow_settings import read_binance_futures_base_url
 from coding.service.liquidation_heatmap.binance_history_loader import BinanceHistoryLoader
 from coding.service.liquidation_heatmap.heatmap_snapshot_service import HeatmapSnapshotService
 from coding.service.liquidation_heatmap.liquidation_event_recorder import LiquidationEventRecorder
@@ -102,8 +101,8 @@ def start_liquidation_recorder_job(repository: Optional[DatabaseRepository] = No
             logger.error("Liquidation recorder NOT started: table(s) %s missing (apply migration 034, then restart "
                          "the collector); the collector keeps running", ", ".join(missing))
             return None
-        base_url = TakerFlowSettings.from_environment().base_url
-        loader = BinanceHistoryLoader(Path(tempfile.gettempdir()) / "liquidation_recorder", rest_base_url=base_url)
+        base_url = read_binance_futures_base_url()
+        loader = BinanceHistoryLoader(None, rest_base_url=base_url)          # candles by REST only: no file cache
         logger.info("Liquidation recorder ON: candles from %s", base_url)
         return LiquidationRecorderJob(LiquidationEventRecorder(OkxLiquidationClient(), repository),
                                       HeatmapSnapshotService(loader, repository))

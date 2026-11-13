@@ -160,8 +160,10 @@ What the collector records (opt-in, `LIQUIDATION_RECORDER_ENABLED=1`, tables fro
 
 How it is judged (`scripts/evaluate_liquidation_levels.py`, after `scripts/sync_from_vps.py`): each real liquidation is
 scored against the latest snapshot computed BEFORE it. Score = percentile of the snapshot's intensity at the event's
-price among the prices within 5 % of the reference price (0.5 = a random price, 1.0 = the strongest level), plus the
-share of events in the top 10 % of intensity (random = 10 %). The same events are scored against a snapshot that was
+price among the prices on the event's OWN side of the reference price, within 5 % of it (a long is liquidated below the
+market, a short above; if the event's price were uniformly random in that range the mean would be 0.5 and the top-10 %
+share 0.1; 1.0 = the strongest level). Real liquidations cluster near the price, so 0.5 / 0.1 is not the bar to beat:
+the stale-snapshot control, compared on the same events, is. The same events are scored against a snapshot that was
 already 24 hours old (control), and the two are compared only on the events that have BOTH scores. A level that is
 accurate must beat both chance and the stale control.
 
@@ -181,7 +183,13 @@ Deployment (only on request): deploy the code, apply migration 034 on the VPS, a
 VPS `.env` (`BINANCE_FUTURES_BASE_URL` is already set for the taker flow), restart the collector. Rollback: remove the
 line and restart; the tables can stay.
 
-Known limits: OKX, not Binance, liquidations; OKX publishes filled liquidation orders, which may be a sample; a page of
+Run semantics: a run reads pages until it reaches events that are already stored and then saves everything in ONE
+transaction, oldest first. If a page request fails nothing of that run is stored, so the next run starts from the same
+newest stored event and no gap appears between runs; a sync never sees half a run.
+
+Known limits: two genuinely separate liquidations with the same millisecond, side, price and size collapse into one row
+(OKX gives no order id, and the cursor re-reads the boundary millisecond on purpose, so a re-read cannot be told apart from
+a twin); OKX, not Binance, liquidations; OKX publishes filled liquidation orders, which may be a sample; a page of
 the feed is cut at a millisecond boundary (events with the same millisecond as the cursor can be missed, rare);
 if more than 3000 events arrive between two runs a gap is possible and is logged.
 

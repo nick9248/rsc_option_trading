@@ -113,7 +113,11 @@ class EventRepository:
         return max((e.event_time for e in self.stored), default=None)
 
     def save_liquidation_events(self, events, collected_at):
-        new = [e for e in events if e not in self.stored]
+        self.save_calls = getattr(self, "save_calls", []) + [list(events)]
+        new = []
+        for e in events:
+            if e not in self.stored and e not in new:          # like the table: a duplicate is ignored
+                new.append(e)
         self.stored.extend(new)
         return len(new)
 
@@ -272,21 +276,30 @@ def test_snapshot_before_uses_only_snapshots_computed_before_the_moment_and_rece
 
 def test_scoring_by_hand_with_a_stale_control():
     t0 = datetime(2026, 11, 13, 12, 12, tzinfo=timezone.utc)
-    # Current snapshot: long levels 10/50/10 at 9,700/9,800/9,900 -> pool intensities 60, 70, 60 and eight zeros.
-    # An event at 9,800 has intensity 70: 10 pool points below, 1 tie: (10 + 0.5) / 11 = 0.9545.
-    # Stale snapshot (24 h earlier): the strong levels were elsewhere (10,300), so the same event has intensity 0:
-    # 0 below, 8 ties: 0.5 * 8 / 11 = 0.3636.
-    stale_levels = [[10_300.0, 50.0, 0.0]]
+    # Long pool (9,500 .. 10,000, 6 points). Current snapshot, long levels 10/50/10 at 9,700/9,800/9,900: pool intensities
+    # 0, 10, 60, 70, 60, 10. An event at 9,800 has 70: 5 points below, 1 tie: (5 + 0.5) / 6 = 0.9167.
+    # Stale snapshot (24 h earlier) with its long level at 9,550: pool intensities 50, 50, 0, 0, 0, 0; the same event has 0:
+    # none below, 4 ties: 0.5 * 4 / 6 = 0.3333.
+    stale_levels = [[9_550.0, 50.0, 0.0]]
     snapshots = [snapshot(t0 - timedelta(hours=24), stale_levels), snapshot(t0, STRONG)]
     events = [long_event(t0 + timedelta(minutes=30)), long_event(t0 - timedelta(hours=30))]      # the second has no snapshot
-    scored = score_events(events, snapshots, price_shift=0.0)
-    assert len(scored) == 1
-    assert scored[0].percentile == pytest.approx(10.5 / 11) and scored[0].placebo_percentile == pytest.approx(4 / 11)
-    summary = summarise_scores(scored)
+    result = score_events(events, snapshots, price_shift=0.0)
+    assert len(result.scored) == 1 and result.without_snapshot == 1 and result.outside_pool == 0
+    assert result.scored[0].percentile == pytest.approx(5.5 / 6)
+    assert result.scored[0].placebo_percentile == pytest.approx(2 / 6)
+    summary = summarise_scores(result.scored)
     assert summary["long"]["events"] == 1 and summary["long"]["top_decile_share"] == 1.0
     assert summary["long"]["control_top_decile_share"] == 0.0 and summary["short"]["events"] == 0
-    assert summary["long"]["paired_events"] == 1 and summary["long"]["paired_mean_percentile"] == pytest.approx(10.5 / 11)
-    assert summary["all"]["mean_percentile"] == pytest.approx(10.5 / 11)
+    assert summary["long"]["paired_events"] == 1 and summary["long"]["paired_mean_percentile"] == pytest.approx(5.5 / 6)
+    assert summary["long"]["control_mean_percentile"] == pytest.approx(2 / 6)
+
+
+def test_events_outside_the_pool_are_counted_separately_from_missing_snapshots():
+    t0 = datetime(2026, 11, 13, 12, 12, tzinfo=timezone.utc)
+    result = score_events([long_event(t0 + timedelta(minutes=5), price=10_400.0),      # a long above the reference
+                           long_event(t0 + timedelta(hours=5))],                       # no recent snapshot
+                          [snapshot(t0, STRONG)], price_shift=0.0)
+    assert result.scored == [] and result.outside_pool == 1 and result.without_snapshot == 1
 
 
 # ---- review fixes ------------------------------------------------------------------------------------------------
@@ -338,21 +351,20 @@ def test_the_recorder_pauses_between_pages_but_not_after_the_last():
 
 def test_the_price_of_an_event_is_moved_toward_the_trigger_price_before_scoring():
     # Realistic scale: reference 70,000, so the 0.4 % shift is 280 USD, more than the 100 USD matching window.
-    # Pool = every 100 USD from 66,500 to 73,500 (71 points).
+    # A long's pool is 66,500 .. 70,000 (36 points), a short's 70,000 .. 73,500 (36 points).
     t0 = datetime(2026, 11, 13, 12, 12, tzinfo=timezone.utc)
     when = t0 + timedelta(minutes=5)
     # A long with its trigger at the strong level 68,000 is reported at its bankruptcy price 67,730 (68,000 / 1.004).
-    # Shifted: 67,730 * 1.004 = 68,000.9, intensity 50 at 3 pool points: (68 below + 0.5 * 3 ties) / 71 = 0.979.
-    # Not shifted: 67,730 is 270 USD from the level, intensity 0, tied with 68 pool points: 0.5 * 68 / 71 = 0.479.
-    long_levels = [[68_000.0, 50.0, 0.0]]
+    # Shifted: 67,730 * 1.004 = 68,000.9, intensity 50 (3 pool points have it): (33 below + 0.5 * 3 ties) / 36 = 0.9583.
+    # Not shifted: 67,730 is 270 USD from the level, intensity 0, tied with 33 pool points: 0.5 * 33 / 36 = 0.4583.
     long_event_at_bankruptcy = RecordedLiquidation("okx", "BTC-USDT-SWAP", when, "long", 67_730.0, 1.0, 100.0)
-    long_snapshot = snapshot(t0, long_levels, reference=70_000.0)
-    assert score_events([long_event_at_bankruptcy], [long_snapshot])[0].percentile == pytest.approx(69.5 / 71)
-    assert score_events([long_event_at_bankruptcy], [long_snapshot], price_shift=0.0)[0].percentile == pytest.approx(34 / 71)
+    long_snapshot = snapshot(t0, [[68_000.0, 50.0, 0.0]], reference=70_000.0)
+    assert score_events([long_event_at_bankruptcy], [long_snapshot]).scored[0].percentile == pytest.approx(34.5 / 36)
+    assert score_events([long_event_at_bankruptcy], [long_snapshot], price_shift=0.0).scored[0].percentile == pytest.approx(16.5 / 36)
     # A short is moved the other way: bankruptcy 72,300 * 0.996 = 72,010.8, near the strong short level 72,000.
     short_event = RecordedLiquidation("okx", "BTC-USDT-SWAP", when, "short", 72_300.0, 1.0, 100.0)
     short_snapshot = snapshot(t0, [[72_000.0, 0.0, 50.0]], reference=70_000.0)
-    assert score_events([short_event], [short_snapshot])[0].percentile == pytest.approx(69.5 / 71)
+    assert score_events([short_event], [short_snapshot]).scored[0].percentile == pytest.approx(34.5 / 36)
 
 
 def test_the_control_is_compared_on_the_same_events_only():
@@ -361,6 +373,44 @@ def test_the_control_is_compared_on_the_same_events_only():
     # score for them. The paired numbers must then cover only events that have both scores.
     snapshots = [snapshot(t0 - timedelta(hours=24), STRONG, reference=14_000.0), snapshot(t0, STRONG)]
     events = [long_event(t0 + timedelta(minutes=10)), long_event(t0 + timedelta(minutes=20))]
-    summary = summarise_scores(score_events(events, snapshots, price_shift=0.0))
+    summary = summarise_scores(score_events(events, snapshots, price_shift=0.0).scored)
     assert summary["long"]["events"] == 2 and summary["long"]["paired_events"] == 0
     assert summary["long"]["paired_mean_percentile"] is None and summary["long"]["control_mean_percentile"] is None
+
+
+def test_a_failed_page_stores_nothing_and_the_next_run_starts_from_the_same_place():
+    class FailsOnSecondPage(PagedClient):
+        def fetch_page(self, earlier_than_ms=None):
+            if len(self.calls) == 1:
+                self.calls.append(earlier_than_ms)
+                raise OkxDataError("HTTP 429")
+            return super().fetch_page(earlier_than_ms)
+
+    repository = EventRepository()
+    events = [make_event(second) for second in range(7)]
+    with pytest.raises(OkxDataError):
+        recorder(FailsOnSecondPage(events), repository).record()
+    assert repository.stored == []                                             # not even the first page was kept
+    assert recorder(PagedClient(events), repository).record() == 7             # nothing is lost: the next run reads it all
+
+
+def test_a_run_saves_once_oldest_first():
+    repository = EventRepository()
+    recorder(PagedClient([make_event(second) for second in range(7)]), repository).record()
+    assert len(repository.save_calls) == 1
+    times = [event.event_time for event in repository.save_calls[0]]
+    assert times == sorted(times)
+
+
+def test_the_liquidation_recorder_does_not_depend_on_the_taker_flow_switch(monkeypatch):
+    class Repo:
+        def missing_tables(self, names):
+            return []
+
+    monkeypatch.setattr(job_module, "load_dotenv", lambda **_: None)
+    monkeypatch.setenv("LIQUIDATION_RECORDER_ENABLED", "1")
+    monkeypatch.setenv("TAKER_FLOW_ENABLED", "garbage")                        # an unrelated bad setting
+    monkeypatch.setenv("BINANCE_FUTURES_BASE_URL", "http://65.20.101.75:8082")
+    assert start_liquidation_recorder_job(cast(Any, Repo())) is not None
+    monkeypatch.setenv("BINANCE_FUTURES_BASE_URL", "http://65.20.101.75:8082/fapi")     # its own URL must still be valid
+    assert start_liquidation_recorder_job(cast(Any, Repo())) is None

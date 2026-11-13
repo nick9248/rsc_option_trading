@@ -161,3 +161,11 @@ def test_cache_files_are_written_through_a_temporary_name(tmp_path):
     BinanceHistoryLoader(tmp_path, cast(Any, session)).load_candles_long("BTCUSDT", month, datetime(2026, 10, 1, tzinfo=timezone.utc))
     cached = sorted(path.name for path in (tmp_path / "klines_5m").iterdir())
     assert cached == ["BTCUSDT-5m-2026-09.zip"]                                   # no leftover .part file
+
+
+def test_a_loader_without_a_cache_directory_downloads_and_writes_no_file():
+    month = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    session = FakeSession({"2026-09.zip": Response(content=kline_csv(month, 2))})
+    candles = BinanceHistoryLoader(None, cast(Any, session)).load_candles_long(
+        "BTCUSDT", month, datetime(2026, 10, 1, tzinfo=timezone.utc))
+    assert [candle.open_time for candle in candles] == [month, month + timedelta(minutes=5)]

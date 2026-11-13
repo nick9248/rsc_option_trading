@@ -52,11 +52,12 @@ def _milliseconds(instant: datetime) -> int:
 class BinanceHistoryLoader:
     """Loads 5-minute candles and open interest of a USD-M perpetual."""
 
-    def __init__(self, cache_directory: Path, session: Optional[requests.Session] = None,
+    def __init__(self, cache_directory: Optional[Path], session: Optional[requests.Session] = None,
                  rest_base_url: str = REST_BASE_URL):
         """
         Args:
-            cache_directory: Where downloaded archive days are kept (a complete day never changes).
+            cache_directory: Where downloaded archive files are kept (a complete day never changes); None for
+                no file cache (the REST candle path never uses one).
             session: HTTP session (a new one by default; tests pass a fake).
             rest_base_url: Binance futures REST host.
         """
@@ -120,8 +121,9 @@ class BinanceHistoryLoader:
     def _archive_month(self, symbol: str, month_start: datetime) -> Optional[List[PriceCandle]]:
         """One complete month of 5-minute klines from the archive (cached), or None when it has none."""
         month = f"{month_start.year}-{month_start.month:02d}"
-        cache_file = self.cache_directory / "klines_5m" / f"{symbol}-5m-{month}.zip"
-        if cache_file.exists():
+        cache_file = (self.cache_directory / "klines_5m" / f"{symbol}-5m-{month}.zip"
+                      if self.cache_directory is not None else None)
+        if cache_file is not None and cache_file.exists():
             content = cache_file.read_bytes()
         else:
             response = self.session.get(KLINES_ARCHIVE_URL.format(symbol=symbol, month=month),
@@ -131,7 +133,8 @@ class BinanceHistoryLoader:
             if response.status_code != 200:
                 raise BinanceHistoryError(f"{symbol} kline archive {month}: HTTP {response.status_code}")
             content = response.content
-            _write_atomically(cache_file, content)
+            if cache_file is not None:
+                _write_atomically(cache_file, content)
         with zipfile.ZipFile(io.BytesIO(content)) as archive:
             text = archive.read(archive.namelist()[0]).decode("utf-8")
         candles = []
@@ -185,8 +188,9 @@ class BinanceHistoryLoader:
 
     def _archive_day(self, symbol: str, day: date) -> Optional[Dict[datetime, float]]:
         """One complete day from the archive (cached), or None when the archive does not have it."""
-        cache_file = self.cache_directory / "open_interest" / f"{symbol}-metrics-{day.isoformat()}.zip"
-        if cache_file.exists():
+        cache_file = (self.cache_directory / "open_interest" / f"{symbol}-metrics-{day.isoformat()}.zip"
+                      if self.cache_directory is not None else None)
+        if cache_file is not None and cache_file.exists():
             content = cache_file.read_bytes()
         else:
             response = self.session.get(ARCHIVE_URL.format(symbol=symbol, day=day.isoformat()),
@@ -196,7 +200,8 @@ class BinanceHistoryLoader:
             if response.status_code != 200:
                 raise BinanceHistoryError(f"{symbol} archive {day}: HTTP {response.status_code}")
             content = response.content
-            _write_atomically(cache_file, content)
+            if cache_file is not None:
+                _write_atomically(cache_file, content)
         with zipfile.ZipFile(io.BytesIO(content)) as archive:
             text = archive.read(archive.namelist()[0]).decode("utf-8")
         samples: Dict[datetime, float] = {}

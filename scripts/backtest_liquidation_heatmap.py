@@ -39,6 +39,7 @@ from coding.core.analytics.liquidation_heatmap.liquidation_heatmap_model import 
 from coding.core.logging.logging_setup import init_logging
 from coding.service.liquidation_heatmap.binance_history_loader import BinanceHistoryLoader
 from coding.service.liquidation_heatmap.cryptoquant_liquidation_client import load_daily_liquidations, read_token
+from coding.service.liquidation_heatmap.heatmap_snapshot_service import recorded_settings
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +63,7 @@ def _volume_settings(low: int, high: int, step: int, half_life: Optional[float])
 # Fixed before the run: the two best volume configurations of the screenshot comparison, and the first one
 # without turnover. Not tuned on the liquidation data.
 CONFIGURATIONS = {
-    "volume 25-100x/5, half-life 48h": _volume_settings(25, 100, 5, 48.0),
+    "volume 25-100x/5, half-life 48h (the recorded configuration)": recorded_settings(),
     "volume 10-100x/10, half-life 48h": _volume_settings(10, 100, 10, 48.0),
     "volume 25-100x/5, no turnover": _volume_settings(25, 100, 5, None),
 }
@@ -156,6 +157,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                           tzinfo=timezone.utc) - timedelta(days=WARMUP_DAYS)
     load_end = datetime(arguments.end.year, arguments.end.month, arguments.end.day, tzinfo=timezone.utc) + timedelta(days=1)
     candles = BinanceHistoryLoader(arguments.out / "cache").load_candles_long(SYMBOL, load_start, load_end)
+    if not candles:
+        raise SystemExit(f"No candles loaded for {load_start:%Y-%m-%d} .. {load_end:%Y-%m-%d}")
     logger.info("Candles: %d (%s .. %s)", len(candles), candles[0].open_time, candles[-1].open_time)
     prices = daily_price_stats(candles)
 

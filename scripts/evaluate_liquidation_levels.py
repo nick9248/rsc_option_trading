@@ -65,11 +65,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         logger.error("Nothing to evaluate: sync the VPS tables first and check that the recorder runs")
         return 1
 
-    scored = score_events(events, snapshots, price_shift=arguments.price_shift_percent / 100)
-    summary = summarise_scores(scored)
-    report_line(f"\nReal liquidations {start:%Y-%m-%d %H:%M} .. {end:%Y-%m-%d %H:%M} UTC: {len(events)} events, "
-          f"{len(scored)} scored ({len(events) - len(scored)} without a recent snapshot or outside +-5 % of price)")
-    report_line("Chance level: mean percentile 0.50, top-decile share 0.10.\n")
+    result = score_events(events, snapshots, price_shift=arguments.price_shift_percent / 100)
+    summary = summarise_scores(result.scored)
+    report_line(f"Real liquidations {start:%Y-%m-%d %H:%M} .. {end:%Y-%m-%d %H:%M} UTC: {len(events)} events, "
+                f"{len(result.scored)} scored; left out: {result.without_snapshot} without a recent snapshot "
+                f"(a recorder outage looks like this), {result.outside_pool} outside the snapshot's price range")
+    report_line("If an event's price were uniformly random on its side of the price: mean percentile 0.50, top 10% share 0.10. "
+                "Real liquidations cluster near the price, so judge the current snapshot against the stale control "
+                "(same events), not against 0.50 / 0.10.")
     report_line(f"{'side':>6} {'events':>7} | {'mean pct':>8} {'USD-wtd':>8} {'top 10%':>8} | "
                 f"{'paired n':>8} {'now mean':>8} {'now top10':>9} {'stale mean':>10} {'stale top10':>11}")
     for side, values in summary.items():
@@ -80,7 +83,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     f"{format_number(values['control_top_decile_share']):>11}")
     arguments.out.mkdir(parents=True, exist_ok=True)
     (arguments.out / "level_evaluation_summary.json").write_text(
-        json.dumps({"start": start.isoformat(), "end": end.isoformat(), "events": len(events), "scored": len(scored),
+        json.dumps({"start": start.isoformat(), "end": end.isoformat(), "events": len(events), "scored": len(result.scored),
+                    "without_snapshot": result.without_snapshot, "outside_pool": result.outside_pool,
                     "summary": summary}, indent=2), encoding="utf-8")
     return 0
 

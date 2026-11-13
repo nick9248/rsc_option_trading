@@ -1,14 +1,17 @@
 """
-Records real liquidation events: every run reads pages of OKX liquidation orders, newest first, and stores them
-until a page reaches events that are already stored, so a burst of liquidations does not leave a gap. When the page
-limit is reached before that, a gap is possible and is logged as a WARNING (nothing is filled in).
+Records real liquidation events: every run reads pages of OKX liquidation orders, newest first, until a page reaches
+events that are already stored, so a burst of liquidations does not leave a gap, and then stores everything it read in ONE
+transaction, oldest first. If a page request fails nothing of that run is stored, so the next run starts again from the
+same newest stored event and no gap can appear between runs (and a sync never sees half a run). When the page limit is
+reached before the stored events, a gap is possible and is logged as a WARNING (nothing is filled in).
 """
 
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Callable, Optional
+from typing import Callable, List, Optional
 
+from coding.core.analytics.liquidation_heatmap.level_snapshot import RecordedLiquidation
 from coding.core.database.repository import DatabaseRepository
 from coding.service.liquidation_heatmap.okx_liquidation_client import VENUE, OkxLiquidationClient
 
@@ -59,7 +62,7 @@ class LiquidationEventRecorder:
         """
         newest_stored: Optional[datetime] = self.repository.get_latest_liquidation_event_time(VENUE, self.instrument)
         now = self.clock()
-        stored = 0
+        collected: List[RecordedLiquidation] = []
         cursor: Optional[int] = None
         reached_stored = False
         for page_number in range(self.maximum_pages):
@@ -67,9 +70,7 @@ class LiquidationEventRecorder:
             if not raw_page:
                 reached_stored = True              # the source has nothing older
                 break
-            page = [event for event in raw_page if event.instrument == self.instrument]
-            if page:
-                stored += self.repository.save_liquidation_events(page, now)
+            collected.extend(event for event in raw_page if event.instrument == self.instrument)
             oldest = min(event.event_time for event in raw_page)     # the cursor follows the RAW page, not the filtered one
             if newest_stored is not None and oldest <= newest_stored:
                 reached_stored = True
@@ -82,6 +83,7 @@ class LiquidationEventRecorder:
             cursor = oldest_ms if cursor is not None and next_cursor >= cursor else next_cursor
             if page_number + 1 < self.maximum_pages:
                 self.sleep(self.pause_seconds)
+        stored = self.repository.save_liquidation_events(sorted(collected, key=lambda event: event.event_time), now)
         if not reached_stored and newest_stored is not None:
             logger.warning("OKX liquidations: %d pages did not reach the newest stored event (%s); events between "
                            "may be missing", self.maximum_pages, newest_stored.isoformat())

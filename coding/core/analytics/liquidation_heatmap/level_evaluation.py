@@ -27,6 +27,15 @@ TRIGGER_PRICE_SHIFT = 0.004      # bankruptcy price -> trigger price: the model'
 
 
 @dataclass(frozen=True)
+class ScoringResult:
+    """The scored events and how many were left out, by reason."""
+
+    scored: List["ScoredEvent"]
+    without_snapshot: int       # no snapshot computed in the 2 hours before the event (a recorder outage looks like this)
+    outside_pool: int           # the event's price is not on its side of the snapshot's reference price within 5 %
+
+
+@dataclass(frozen=True)
 class ScoredEvent:
     """A real liquidation with its percentile against the current snapshot and against a stale one."""
 
@@ -51,10 +60,10 @@ def trigger_price(event: RecordedLiquidation, price_shift: float) -> float:
 
 def score_events(events: Sequence[RecordedLiquidation], snapshots: Sequence[LevelSnapshot],
                  placebo: timedelta = timedelta(hours=24),
-                 price_shift: float = TRIGGER_PRICE_SHIFT) -> List[ScoredEvent]:
+                 price_shift: float = TRIGGER_PRICE_SHIFT) -> ScoringResult:
     """
-    Score each event that has a recent snapshot before it and a price inside that snapshot's pool; events without one
-    are left out (the caller counts them from the difference of lengths).
+    Score each event that has a recent snapshot before it and a price inside that snapshot's pool; the others are
+    counted by reason in the result.
 
     Args:
         events: Real liquidations (their prices are bankruptcy prices).
@@ -64,20 +73,23 @@ def score_events(events: Sequence[RecordedLiquidation], snapshots: Sequence[Leve
     """
     ordered = sorted(snapshots, key=lambda snapshot: snapshot.computed_at)
     scored: List[ScoredEvent] = []
+    without_snapshot = outside_pool = 0
     for event in events:
         current = snapshot_before(ordered, event.event_time)
         if current is None:
+            without_snapshot += 1
             continue
         price = trigger_price(event, price_shift)
         value = level_percentile(current.levels, event.liquidated_side, price, current.reference_price,
                                  current.bin_size_usd)
         if value is None:
+            outside_pool += 1
             continue
         stale = snapshot_before(ordered, event.event_time - placebo)
         stale_value = (level_percentile(stale.levels, event.liquidated_side, price, stale.reference_price,
                                         stale.bin_size_usd) if stale is not None else None)
         scored.append(ScoredEvent(event, value, stale_value))
-    return scored
+    return ScoringResult(scored, without_snapshot, outside_pool)
 
 
 def summarise_scores(scored: Sequence[ScoredEvent]) -> Dict[str, Dict[str, Optional[float]]]:
