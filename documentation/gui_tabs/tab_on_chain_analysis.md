@@ -9,7 +9,6 @@ Runs the full on-chain analysis for BTC and/or ETH from live Deribit data, shows
 - **Currency**: BTC and ETH checkboxes. If both are ticked the analyses run one after the other.
 - **Load Analysis**: runs the analysis (in a background thread) for the ticked currencies.
 - **Clear**: clears the results.
-- **View Flow Charts**: opens the Flow Charts window (`features/buy_sell_flow_charts.md`).
 - **Levels expiry** selector and **Sign convention** radio buttons (Holder, Assumed dealer, Inferred) for the Levels table. "Assumed dealer" is the default; "Inferred" is enabled only when the loaded expiry has an inferred view.
 
 ## What it shows
