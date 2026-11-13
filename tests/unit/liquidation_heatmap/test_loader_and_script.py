@@ -146,3 +146,18 @@ def test_a_month_missing_from_the_archive_falls_back_to_rest(tmp_path):
     candles = BinanceHistoryLoader(tmp_path, cast(Any, session)).load_candles_long(
         "BTCUSDT", month, datetime(2026, 10, 1, tzinfo=timezone.utc))
     assert [candle.open_time for candle in candles] == [month]
+
+
+def test_a_page_that_only_holds_rows_before_the_start_gives_no_candles_and_no_error(tmp_path):
+    old_row = [int(DAY.timestamp() * 1000), "1", "12", "9", "10", "5", 0, "50", 7, "2", "20", "0"]
+    session = FakeSession({"fapi/v1/klines": Response(payload=[old_row])})
+    loader = BinanceHistoryLoader(tmp_path, cast(Any, session))
+    assert loader.load_candles("BTCUSDT", DAY + timedelta(hours=1), DAY + timedelta(hours=2)) == []
+
+
+def test_cache_files_are_written_through_a_temporary_name(tmp_path):
+    month = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    session = FakeSession({"2026-09.zip": Response(content=kline_csv(month, 2))})
+    BinanceHistoryLoader(tmp_path, cast(Any, session)).load_candles_long("BTCUSDT", month, datetime(2026, 10, 1, tzinfo=timezone.utc))
+    cached = sorted(path.name for path in (tmp_path / "klines_5m").iterdir())
+    assert cached == ["BTCUSDT-5m-2026-09.zip"]                                   # no leftover .part file

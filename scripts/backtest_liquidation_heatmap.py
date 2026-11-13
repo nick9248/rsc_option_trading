@@ -68,6 +68,11 @@ CONFIGURATIONS = {
 }
 
 
+def report_line(text: str) -> None:
+    """One line of the result table (logged, so it goes to the configured log handlers)."""
+    logger.info("%s", text)
+
+
 def parse_day(text: str) -> date:
     """``2023-01-01`` as a date."""
     return date.fromisoformat(text)
@@ -163,12 +168,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         for year in sorted({row.day.year for row in rows}):
             by_period[str(year)] = [row for row in rows if row.day.year == year]
         report["configurations"][name] = {period: summarise(period_rows) for period, period_rows in by_period.items()}
-        print(f"\n== {name}: {len(rows)} days")
-        print(f"{'period':>7} {'side':>5} {'days':>5} | {'heatmap':>8} {'naive day':>10} {'naive prev':>11} | "
+        report_line(f"\n== {name}: {len(rows)} days")
+        report_line(f"{'period':>7} {'side':>5} {'days':>5} | {'heatmap':>8} {'naive day':>10} {'naive prev':>11} | "
               f"{'heatmap | naive':>16} {'p':>7}")
         for period, summary in report["configurations"][name].items():
             for side, values in summary.items():
-                print(f"{period:>7} {side:>5} {values['days']:>5} | {format_value(values['heatmap_rho']):>8} "
+                report_line(f"{period:>7} {side:>5} {values['days']:>5} | {format_value(values['heatmap_rho']):>8} "
                       f"{format_value(values['naive_same_day_rho']):>10} {format_value(values['naive_previous_day_rho']):>11} | "
                       f"{format_value(values['heatmap_partial_rho_given_naive_same_day']):>16} "
                       f"{'n/a' if values['partial_p'] is None else format(values['partial_p'], '.3f'):>7}")

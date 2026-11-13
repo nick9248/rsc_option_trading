@@ -10,6 +10,7 @@ Nothing is invented: a day that neither source has is reported in ``notes`` and 
 import csv
 import io
 import logging
+import os
 import zipfile
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -34,6 +35,14 @@ REST_OPEN_INTEREST_DAYS = 30        # Binance serves about this much 5-minute OI
 
 class BinanceHistoryError(RuntimeError):
     """Binance answered, but not with usable data."""
+
+
+def _write_atomically(path: Path, content: bytes) -> None:
+    """Write ``content`` to ``path`` through a temporary file, so an interrupted write never leaves a truncated cache file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".part")
+    temporary.write_bytes(content)
+    os.replace(temporary, path)
 
 
 def _milliseconds(instant: datetime) -> int:
@@ -73,16 +82,17 @@ class BinanceHistoryLoader:
             rows = self._rows(response, f"{symbol} klines")
             if not rows:
                 break
+            added = 0
             for row in rows:
                 open_time = datetime.fromtimestamp(int(row[0]) / 1000, tz=timezone.utc)
                 if open_time < cursor:           # a row before the requested start (overlap): never twice
                     continue
                 candles.append(PriceCandle(open_time, high=float(row[2]), low=float(row[3]), close=float(row[4]),
                                            volume_btc=float(row[5]), taker_buy_btc=float(row[9])))
-            next_cursor = candles[-1].open_time + STEP
-            if next_cursor <= cursor:
+                added += 1
+            if added == 0:                       # the source did not move forward: stop instead of looping
                 break
-            cursor = next_cursor
+            cursor = candles[-1].open_time + STEP
         return [candle for candle in candles if start <= candle.open_time < end]
 
     def load_candles_long(self, symbol: str, start: datetime, end: datetime) -> List[PriceCandle]:
@@ -121,8 +131,7 @@ class BinanceHistoryLoader:
             if response.status_code != 200:
                 raise BinanceHistoryError(f"{symbol} kline archive {month}: HTTP {response.status_code}")
             content = response.content
-            cache_file.parent.mkdir(parents=True, exist_ok=True)
-            cache_file.write_bytes(content)
+            _write_atomically(cache_file, content)
         with zipfile.ZipFile(io.BytesIO(content)) as archive:
             text = archive.read(archive.namelist()[0]).decode("utf-8")
         candles = []
@@ -187,8 +196,7 @@ class BinanceHistoryLoader:
             if response.status_code != 200:
                 raise BinanceHistoryError(f"{symbol} archive {day}: HTTP {response.status_code}")
             content = response.content
-            cache_file.parent.mkdir(parents=True, exist_ok=True)
-            cache_file.write_bytes(content)
+            _write_atomically(cache_file, content)
         with zipfile.ZipFile(io.BytesIO(content)) as archive:
             text = archive.read(archive.namelist()[0]).decode("utf-8")
         samples: Dict[datetime, float] = {}

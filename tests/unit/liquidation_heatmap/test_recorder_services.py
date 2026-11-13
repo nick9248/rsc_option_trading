@@ -119,7 +119,8 @@ class EventRepository:
 
 
 def recorder(client, repository, pages=30):
-    return LiquidationEventRecorder(cast(Any, client), cast(Any, repository), maximum_pages=pages, clock=lambda: NOW)
+    return LiquidationEventRecorder(cast(Any, client), cast(Any, repository), maximum_pages=pages, clock=lambda: NOW,
+                                    pause_seconds=0.0, sleep=lambda seconds: None)
 
 
 def test_first_run_reads_every_page_until_the_source_has_nothing_older():
@@ -134,14 +135,14 @@ def test_a_later_run_stops_when_a_page_reaches_stored_events_and_stores_only_the
     client = PagedClient([make_event(second) for second in range(9)])          # 5 new events (4..8) on top of the 4 stored
     assert recorder(client, repository).record() == 5
     assert len(repository.stored) == 9
-    assert len(client.calls) == 2                                                # one page of 3 and one of 3 reaches 3 (stored)
+    assert len(client.calls) == 3                                                # the page reaching event 3 (stored) ends it
 
 
 def test_a_gap_is_warned_when_the_page_limit_is_reached_before_the_stored_events(caplog):
     repository = EventRepository()
     repository.stored.append(make_event(0))
     client = PagedClient([make_event(second) for second in range(1, 40)])
-    assert recorder(client, repository, pages=2).record() == 6
+    assert recorder(client, repository, pages=2).record() == 5
     assert "may be missing" in caplog.text
 
 
@@ -278,10 +279,88 @@ def test_scoring_by_hand_with_a_stale_control():
     stale_levels = [[10_300.0, 50.0, 0.0]]
     snapshots = [snapshot(t0 - timedelta(hours=24), stale_levels), snapshot(t0, STRONG)]
     events = [long_event(t0 + timedelta(minutes=30)), long_event(t0 - timedelta(hours=30))]      # the second has no snapshot
-    scored = score_events(events, snapshots)
+    scored = score_events(events, snapshots, price_shift=0.0)
     assert len(scored) == 1
     assert scored[0].percentile == pytest.approx(10.5 / 11) and scored[0].placebo_percentile == pytest.approx(4 / 11)
     summary = summarise_scores(scored)
     assert summary["long"]["events"] == 1 and summary["long"]["top_decile_share"] == 1.0
     assert summary["long"]["control_top_decile_share"] == 0.0 and summary["short"]["events"] == 0
+    assert summary["long"]["paired_events"] == 1 and summary["long"]["paired_mean_percentile"] == pytest.approx(10.5 / 11)
     assert summary["all"]["mean_percentile"] == pytest.approx(10.5 / 11)
+
+
+# ---- review fixes ------------------------------------------------------------------------------------------------
+
+class RawPageClient:
+    """Pages of a fixed list; each page is a list of events of any instrument, newest first."""
+
+    def __init__(self, pages):
+        self.pages, self.cursors = list(pages), []
+
+    def fetch_page(self, earlier_than_ms=None):
+        self.cursors.append(earlier_than_ms)
+        return self.pages.pop(0) if self.pages else []
+
+
+def test_a_page_without_the_wanted_instrument_does_not_end_the_run_or_hide_older_events():
+    other = [make_event(second, instrument="ETH-USDT-SWAP") for second in (9, 8, 7)]
+    wanted = [make_event(second) for second in (3, 2, 1)]
+    repository = EventRepository()
+    assert recorder(RawPageClient([other, wanted]), repository).record() == 3
+    assert len(repository.stored) == 3
+
+
+def test_the_cursor_is_inclusive_so_events_of_the_same_millisecond_are_read_again():
+    first = [make_event(5), make_event(4)]
+    client = RawPageClient([first, [make_event(4), make_event(3)], []])
+    repository = EventRepository()
+    recorder(client, repository).record()
+    oldest_ms = int(make_event(4).event_time.timestamp() * 1000)
+    assert client.cursors[1] == oldest_ms + 1                                  # +1 ms: the same-millisecond orders come again
+    assert len(repository.stored) == 3                                         # the repeated event is stored once
+
+
+def test_a_page_made_of_one_single_millisecond_still_makes_progress():
+    same_ms = [make_event(5), make_event(5)]
+    client = RawPageClient([same_ms, same_ms, [make_event(4)], []])
+    recorder(client, EventRepository()).record()
+    first_ms = int(make_event(5).event_time.timestamp() * 1000)
+    assert client.cursors[1] == first_ms + 1 and client.cursors[2] == first_ms    # second page repeated: step strictly past it
+
+
+def test_the_recorder_pauses_between_pages_but_not_after_the_last():
+    sleeps = []
+    client = PagedClient([make_event(second) for second in range(7)])
+    LiquidationEventRecorder(cast(Any, client), cast(Any, EventRepository()), clock=lambda: NOW,
+                             pause_seconds=0.5, sleep=sleeps.append).record()
+    assert sleeps and all(value == 0.5 for value in sleeps) and len(sleeps) == len(client.calls) - 1
+
+
+def test_the_price_of_an_event_is_moved_toward_the_trigger_price_before_scoring():
+    # Realistic scale: reference 70,000, so the 0.4 % shift is 280 USD, more than the 100 USD matching window.
+    # Pool = every 100 USD from 66,500 to 73,500 (71 points).
+    t0 = datetime(2026, 11, 13, 12, 12, tzinfo=timezone.utc)
+    when = t0 + timedelta(minutes=5)
+    # A long with its trigger at the strong level 68,000 is reported at its bankruptcy price 67,730 (68,000 / 1.004).
+    # Shifted: 67,730 * 1.004 = 68,000.9, intensity 50 at 3 pool points: (68 below + 0.5 * 3 ties) / 71 = 0.979.
+    # Not shifted: 67,730 is 270 USD from the level, intensity 0, tied with 68 pool points: 0.5 * 68 / 71 = 0.479.
+    long_levels = [[68_000.0, 50.0, 0.0]]
+    long_event_at_bankruptcy = RecordedLiquidation("okx", "BTC-USDT-SWAP", when, "long", 67_730.0, 1.0, 100.0)
+    long_snapshot = snapshot(t0, long_levels, reference=70_000.0)
+    assert score_events([long_event_at_bankruptcy], [long_snapshot])[0].percentile == pytest.approx(69.5 / 71)
+    assert score_events([long_event_at_bankruptcy], [long_snapshot], price_shift=0.0)[0].percentile == pytest.approx(34 / 71)
+    # A short is moved the other way: bankruptcy 72,300 * 0.996 = 72,010.8, near the strong short level 72,000.
+    short_event = RecordedLiquidation("okx", "BTC-USDT-SWAP", when, "short", 72_300.0, 1.0, 100.0)
+    short_snapshot = snapshot(t0, [[72_000.0, 0.0, 50.0]], reference=70_000.0)
+    assert score_events([short_event], [short_snapshot])[0].percentile == pytest.approx(69.5 / 71)
+
+
+def test_the_control_is_compared_on_the_same_events_only():
+    t0 = datetime(2026, 11, 13, 12, 12, tzinfo=timezone.utc)
+    # Reference of the stale snapshot is far away, so events near the current price fall outside its pool: no control
+    # score for them. The paired numbers must then cover only events that have both scores.
+    snapshots = [snapshot(t0 - timedelta(hours=24), STRONG, reference=14_000.0), snapshot(t0, STRONG)]
+    events = [long_event(t0 + timedelta(minutes=10)), long_event(t0 + timedelta(minutes=20))]
+    summary = summarise_scores(score_events(events, snapshots, price_shift=0.0))
+    assert summary["long"]["events"] == 2 and summary["long"]["paired_events"] == 0
+    assert summary["long"]["paired_mean_percentile"] is None and summary["long"]["control_mean_percentile"] is None

@@ -5,6 +5,7 @@ limit is reached before that, a gap is possible and is logged as a WARNING (noth
 """
 
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
@@ -15,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 INSTRUMENT = "BTC-USDT-SWAP"
 MAXIMUM_PAGES = 30           # 3000 orders per run; a quiet hour has a few hundred
+PAUSE_SECONDS = 0.2          # between two pages, to stay far below OKX's public rate limit
 
 
 class LiquidationEventRecorder:
@@ -27,6 +29,8 @@ class LiquidationEventRecorder:
         instrument: str = INSTRUMENT,
         maximum_pages: int = MAXIMUM_PAGES,
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+        pause_seconds: float = PAUSE_SECONDS,
+        sleep: Callable[[float], None] = time.sleep,
     ):
         """
         Args:
@@ -35,7 +39,11 @@ class LiquidationEventRecorder:
             instrument: The instrument whose events are kept (others in the answer are ignored).
             maximum_pages: Page limit of one run.
             clock: Wall clock (UTC-aware).
+            pause_seconds: Pause between two pages of one run.
+            sleep: Sleep function (tests pass a no-op).
         """
+        self.pause_seconds = pause_seconds
+        self.sleep = sleep
         self.client = client
         self.repository = repository
         self.instrument = instrument
@@ -54,18 +62,26 @@ class LiquidationEventRecorder:
         stored = 0
         cursor: Optional[int] = None
         reached_stored = False
-        for _ in range(self.maximum_pages):
-            page = [event for event in self.client.fetch_page(cursor) if event.instrument == self.instrument]
-            raw_page_is_empty = not page
-            if raw_page_is_empty:
+        for page_number in range(self.maximum_pages):
+            raw_page = self.client.fetch_page(cursor)
+            if not raw_page:
                 reached_stored = True              # the source has nothing older
                 break
-            stored += self.repository.save_liquidation_events(page, now)
-            oldest = min(event.event_time for event in page)
+            page = [event for event in raw_page if event.instrument == self.instrument]
+            if page:
+                stored += self.repository.save_liquidation_events(page, now)
+            oldest = min(event.event_time for event in raw_page)     # the cursor follows the RAW page, not the filtered one
             if newest_stored is not None and oldest <= newest_stored:
                 reached_stored = True
                 break
-            cursor = int(oldest.timestamp() * 1000)
+            oldest_ms = int(oldest.timestamp() * 1000)
+            # The cursor is inclusive (+1 ms): orders of the same millisecond that a full page cut off are read again
+            # (the table ignores duplicates). If that makes no progress (a page that is one single millisecond),
+            # step strictly past it.
+            next_cursor = oldest_ms + 1
+            cursor = oldest_ms if cursor is not None and next_cursor >= cursor else next_cursor
+            if page_number + 1 < self.maximum_pages:
+                self.sleep(self.pause_seconds)
         if not reached_stored and newest_stored is not None:
             logger.warning("OKX liquidations: %d pages did not reach the newest stored event (%s); events between "
                            "may be missing", self.maximum_pages, newest_stored.isoformat())

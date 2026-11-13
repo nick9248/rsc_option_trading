@@ -210,10 +210,13 @@ def simulate_heatmap(
             continue
 
         # 3. liquidations: a level the price range reached is gone, and so is its other side.
-        touched_long = long_state[centers >= candle.low].sum()
-        touched_short = short_state[centers <= candle.high].sum()
-        long_state[centers >= candle.low] = 0.0
-        short_state[centers <= candle.high] = 0.0
+        reached_by_low, reached_by_high = centers >= candle.low, centers <= candle.high
+        touched_long = touched_short = 0.0
+        if not from_volume:                     # only the open-interest accounting needs the amounts
+            touched_long = long_state[reached_by_low].sum()
+            touched_short = short_state[reached_by_high].sum()
+        long_state[reached_by_low] = 0.0
+        short_state[reached_by_high] = 0.0
         if from_volume:
             # Volume creation: a touched level removes only its own side; no open-interest accounting.
             if decay_per_step < 1.0:

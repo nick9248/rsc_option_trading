@@ -162,7 +162,14 @@ How it is judged (`scripts/evaluate_liquidation_levels.py`, after `scripts/sync_
 scored against the latest snapshot computed BEFORE it. Score = percentile of the snapshot's intensity at the event's
 price among the prices within 5 % of the reference price (0.5 = a random price, 1.0 = the strongest level), plus the
 share of events in the top 10 % of intensity (random = 10 %). The same events are scored against a snapshot that was
-already 24 hours old (control). A level that is accurate must beat both chance and the stale control.
+already 24 hours old (control), and the two are compared only on the events that have BOTH scores. A level that is
+accurate must beat both chance and the stale control.
+
+Price convention: OKX reports the BANKRUPTCY price of a liquidated position, while the model's levels are TRIGGER prices
+(they include the maintenance margin). At 70,000 that is about 280 USD, more than the 100 USD matching window, so the
+event price is moved 0.4 % toward the trigger (up for a long, down for a short) before scoring
+(`--price-shift-percent`, default 0.4, the model's maintenance margin rate). The OKX maintenance margin rate is not
+verified; run the evaluation also with 0 and with 0.8 to see how sensitive the verdict is.
 
 Pass criteria, fixed BEFORE any data (a judgement, adjustable): after 7 days, with at least 500 scored events per side,
 a side passes when the mean percentile is at least 0.60 and the top-decile share at least 0.20 (twice chance), and
