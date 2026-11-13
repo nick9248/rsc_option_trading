@@ -29,6 +29,7 @@ from coding.core.logging.logging_setup import init_logging
 from coding.service.data_collection.prospective_collector import ProspectiveCollector
 from coding.service.data_collection.trade_collector import TradeCollector
 from coding.core.database.repository import DatabaseRepository
+from coding.service.futures_flow.taker_flow_job import start_taker_flow_job
 from coding.service.on_chain.menthorq_monitor.menthorq_monitor_job import start_menthorq_monitor_job
 
 logger = logging.getLogger(__name__)
@@ -95,6 +96,10 @@ class UnifiedScheduler:
         # a construction error disables only the monitor, never the collectors
         # (logged at ERROR, one Telegram notice to the owner when configured).
         self.menthorq_monitor_job = start_menthorq_monitor_job(repository=repository)
+
+        # Binance perpetual taker buy/sell flow (futures market, not options); off unless
+        # TAKER_FLOW_ENABLED=1. A failure to start disables only this job.
+        self.taker_flow_job = start_taker_flow_job(repository=repository)
 
         # Scheduler
         self.scheduler = BackgroundScheduler()
@@ -182,6 +187,10 @@ class UnifiedScheduler:
         # MenthorQ-style monitor (cron jobs in UTC; no run at startup)
         if self.menthorq_monitor_job is not None:
             self.menthorq_monitor_job.register(self.scheduler)
+
+        # Taker flow (hourly cron; the first run is immediate)
+        if self.taker_flow_job is not None:
+            self.taker_flow_job.register(self.scheduler)
 
         # Start scheduler
         self.scheduler.start()

@@ -97,9 +97,10 @@ class TestLiveTablesAreSynced:
 
 
 class TestOptionalTables:
-    def test_only_the_menthorq_tables_are_optional(self):
+    def test_only_the_opt_in_feature_tables_are_optional(self):
+        # Tables of features the VPS runs only when enabled (MenthorQ monitor, taker flow).
         optional = {entry["name"] for entry in SYNC_TABLES if entry.get("optional")}
-        assert optional == {"menthorq_level_snapshots"}
+        assert optional == {"menthorq_level_snapshots", "taker_flow_hourly"}
 
     def test_optional_is_a_boolean_when_present(self):
         for entry in SYNC_TABLES:

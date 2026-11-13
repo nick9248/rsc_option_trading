@@ -17,7 +17,7 @@ Core (models, calculators)  ->  Service (orchestration)  ->  GUI / CLI
 | Layer | Folder | Contains |
 |-------|--------|----------|
 | Core | `coding/core/` | `analytics/` (calculators, synthesis, charts), `api/`, `database/` (repository), `health/` (result models), `schemas/`, `config.py` |
-| Service | `coding/service/` | `data_collection/`, `on_chain/`, `notifications/` (Telegram Bot API client used by the MenthorQ monitor), `health/`, `deribit/`, `morning_note/`, `snapshot/`, `analytics/`, `api_testing/`, `database/` (VPS sync) |
+| Service | `coding/service/` | `data_collection/`, `on_chain/`, `futures_flow/` (Binance taker buy/sell flow: collector, brief section, chart), `notifications/` (Telegram Bot API client used by the MenthorQ monitor), `health/`, `deribit/`, `morning_note/`, `snapshot/`, `analytics/`, `api_testing/`, `database/` (VPS sync) |
 | GUI | `coding/gui/` | PySide6 app (`app.py`, `main_window.py`, `tabs/`, `dialogs/`). No business logic: it calls services. |
 
 Other folders: `scripts/` (backfills, sync, health check), `migrations/` (numbered, forward-only SQL), `tests/`, `strategies/` (sample strategies running on the VPS, left alone).
@@ -47,18 +47,19 @@ Buy/sell flow is not stored per capture. It is computed on demand from `historic
 
 ## Live tables
 
-24 tables, created by `migrations/000` to `032` (tables dropped along the way: see migrations `026` to `028`):
+25 tables, created by `migrations/000` to `033` (tables dropped along the way: see migrations `026` to `028`):
 
 | Group | Tables |
 |-------|--------|
 | Market data | `historical_trades`, `snapshots`, `hourly_snapshots`, `funding_rate_history`, `ohlcv_history`, `dvol_history`, `futures_basis`, `daily_oi_snapshots` |
 | On-chain analysis | `onchain_analysis_snapshots`, `onchain_volatility_snapshots`, `volatility_skew_history`, `flow_delta_hourly` |
 | MenthorQ monitor | `menthorq_level_snapshots`, `menthorq_alert_deliveries`, `menthorq_monitor_state` |
+| Futures taker flow | `taker_flow_hourly` (see `documentation/futures_taker_flow.md`) |
 | No longer written from the deploy of the 2026-11-08 removal on (strategy finder) | `straddle_scan_history`, `defined_risk_scan_history`, `forward_test_predictions` |
 | Owner's Deribit account | `account_snapshots`, `position_snapshots`, `user_trades`, `orders`, `settlements` |
 | Operations | `health_check_runs` (stored on the VPS only) |
 
-`scripts/sync_from_vps.py` (`SYNC_TABLES`, 18 tables) copies the market data, on-chain analysis, account tables and `menthorq_level_snapshots` into the local database (not `health_check_runs`, the other two MenthorQ tables, or the three tables that are no longer written). `coding/service/health/table_registry.py` lists the same 18 tables with their freshness limits; a test fails when a synced table is missing there.
+`scripts/sync_from_vps.py` (`SYNC_TABLES`, 19 tables) copies the market data, on-chain analysis, account tables, `menthorq_level_snapshots` and `taker_flow_hourly` into the local database (not `health_check_runs`, the other two MenthorQ tables, or the three tables that are no longer written). `coding/service/health/table_registry.py` lists the same 19 tables with their freshness limits; a test fails when a synced table is missing there.
 
 ## Health checks
 
