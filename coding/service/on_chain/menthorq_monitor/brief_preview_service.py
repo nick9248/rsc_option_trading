@@ -319,7 +319,7 @@ class MenthorqBriefPreviewService:
         extra_sections = []
         for builder in self.extra_section_builders:
             try:
-                extra_sections.append(builder(self.clock()))
+                extra_sections.append(builder(latest.as_of_utc))
             except Exception:
                 logger.exception("A brief section could not be built; the preview is shown without it")
         brief = format_brief(latest, comparisons, daily_close, title=PREVIEW_TITLE,

@@ -18,7 +18,7 @@ from coding.core.analytics.futures_flow.taker_flow import (
     summarise,
 )
 from coding.core.database.repository import DatabaseRepository
-from coding.service.futures_flow.taker_flow_settings import SYMBOLS, TakerFlowSettings
+from coding.service.futures_flow.taker_flow_settings import STALE_AFTER, SYMBOLS, TakerFlowSettings, symbol_label
 from coding.service.on_chain.menthorq_monitor.brief_formatter import (
     NOT_AVAILABLE,
     bullet_lines,
@@ -33,18 +33,12 @@ logger = logging.getLogger(__name__)
 SECTION_TITLE = "<b>Futures flow (not options)</b>"
 EXPLANATION = ("<i>Binance perpetuals, taker buy/sell ratio: above 1 = buyers were the more "
                "aggressive side, below 1 = sellers.</i>")
-STALE_AFTER = timedelta(hours=3)
 LOAD_DAYS = SUMMARY_DAYS + 2          # enough hours for the 7 complete days plus the partial ones
-MAXIMUM_REASONS = 3
+MAXIMUM_NOTES = 8
 
 
 def _ratio_text(ratio) -> str:
     return NOT_AVAILABLE if ratio is None else f"{ratio:.2f}"
-
-
-def symbol_label(symbol: str) -> str:
-    """``BTCUSDT`` -> ``BTC``."""
-    return symbol[:-4] if symbol.endswith("USDT") else symbol
 
 
 def format_taker_flow_section(summaries: Sequence[TakerFlowSummary], now: datetime) -> str:
@@ -68,10 +62,15 @@ def format_taker_flow_section(summaries: Sequence[TakerFlowSummary], now: dateti
     lines = [SECTION_TITLE, EXPLANATION, code_block("\n".join(rows))]
 
     notes: List[str] = []
-    days = [summary.last_complete_day.day for summary in summaries if summary.last_complete_day]
-    if days:
-        notes.append(f"Day = {max(days).isoformat()} (UTC). 7d, Low and High cover the last "
-                     f"{SUMMARY_DAYS} complete days.")
+    day_by_label = {symbol_label(summary.symbol): summary.last_complete_day.day.isoformat()
+                    for summary in summaries if summary.last_complete_day}
+    if day_by_label:
+        if len(set(day_by_label.values())) == 1:
+            day_text = f"{next(iter(day_by_label.values()))} (UTC)"
+        else:
+            day_text = ", ".join(f"{label} {day}" for label, day in day_by_label.items()) + " (UTC)"
+        notes.append(f"Day = {day_text}. 7d, Low and High cover the last {SUMMARY_DAYS} complete days "
+                     "up to that day.")
     latest_hours = [summary.latest_hour_utc for summary in summaries if summary.latest_hour_utc]
     if latest_hours:
         newest = min(latest_hours) + timedelta(hours=1)        # the end of the newest complete hour
@@ -81,7 +80,7 @@ def format_taker_flow_section(summaries: Sequence[TakerFlowSummary], now: dateti
             notes.append(f"DATA STALE: the newest hour ended {format_duration(age)} ago.")
     for summary in summaries:
         notes.extend(summary.not_computed)
-    lines.append(bullet_lines(notes, MAXIMUM_REASONS + 2))
+    lines.append(bullet_lines(notes, MAXIMUM_NOTES))
     return "\n".join(lines)
 
 

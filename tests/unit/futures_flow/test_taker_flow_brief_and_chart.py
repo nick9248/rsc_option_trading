@@ -131,3 +131,27 @@ def test_gui_tab_shows_a_generation_result(tmp_path):
     assert tab.open_folder_button.isEnabled() and str(folder) in tab.folder_link_label.text()
     tab._on_generation_failed("RuntimeError: boom")
     assert "Generation failed: RuntimeError: boom" in tab.status_label.text() and tab.generate_button.isEnabled()
+
+
+def test_day_note_names_each_symbol_when_their_last_complete_days_differ():
+    btc = hours_for("BTCUSDT", 9, 90.0, 100.0)
+    eth = [h for h in hours_for("ETHUSDT", 9, 110.0, 100.0) if h.hour_utc != datetime(2026, 11, 12, 20, tzinfo=timezone.utc)]
+    text = TakerFlowBriefSectionBuilder(cast(Any, FakeRepository(btc + eth))).build(NOW)
+    assert "Day = BTC 2026-11-12, ETH 2026-11-11 (UTC)." in text
+
+
+def test_rolling_line_breaks_at_a_gap_and_is_drawn_at_window_end():
+    from coding.core.analytics.futures_flow.taker_flow_chart_renderer import _line_with_gaps
+    start = datetime(2026, 11, 1, tzinfo=timezone.utc)
+    points = [(start, 1.0), (start + timedelta(hours=1), 1.1), (start + timedelta(hours=5), 0.9)]
+    moments, values = _line_with_gaps(points)
+    assert moments[0] == start + timedelta(hours=1)               # plotted at the end of the window
+    assert len(values) == 4 and values[2] != values[2]            # NaN between hour 1 and hour 5
+    assert values[3] == 0.9
+
+
+def test_brief_drops_the_extra_section_not_the_whole_brief_when_nothing_else_fits():
+    record = make_record()
+    huge = "x" * 5000
+    message = format_brief(record, [], title="Weekly brief", extra_sections=[huge])
+    assert huge not in message and "extra sections omitted" in message and "Too long to send" not in message

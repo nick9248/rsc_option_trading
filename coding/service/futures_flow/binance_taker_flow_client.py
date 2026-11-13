@@ -87,7 +87,7 @@ class BinanceTakerFlowClient:
             total = float(row[KLINE_QUOTE_VOLUME])
             buy = float(row[KLINE_TAKER_BUY_QUOTE])
             trades = int(row[KLINE_TRADE_COUNT])
-        except (TypeError, ValueError, IndexError) as error:
+        except (TypeError, ValueError, IndexError, KeyError) as error:
             logger.warning("Taker flow %s: skipped a malformed kline (%s)", symbol, error)
             return None
         if hour_utc != start_of_utc_hour(hour_utc) or total < 0 or buy < 0 or buy > total:

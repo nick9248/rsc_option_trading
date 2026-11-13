@@ -5,9 +5,9 @@ net taker flow in USD, rolling 24-hour ratio. Pure presentation: every number
 drawn comes from the arguments; a gap in the data is a gap in the chart.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Sequence, Tuple
+from typing import List, Sequence, Tuple
 
 from matplotlib.dates import DateFormatter
 from matplotlib.figure import Figure
@@ -33,6 +33,25 @@ def _style_axes(axes, title: str) -> None:
         spine.set_color(GRID_COLOR)
 
 
+def _line_with_gaps(rolling: Sequence[Tuple[datetime, float]]) -> Tuple[List[datetime], List[float]]:
+    """
+    The rolling points as x and y lists, plotted at the END of each window (the hour
+    start plus one hour), with a NaN between two points that are not consecutive hours
+    so the line breaks there instead of bridging missing data.
+    """
+    moments: List[datetime] = []
+    values: List[float] = []
+    previous = None
+    for hour_start, ratio in rolling:
+        if previous is not None and hour_start - previous > timedelta(hours=1):
+            moments.append(previous + timedelta(hours=1, minutes=30))
+            values.append(float("nan"))
+        moments.append(hour_start + timedelta(hours=1))
+        values.append(ratio)
+        previous = hour_start
+    return moments, values
+
+
 def render_taker_flow_chart(
     label: str,
     days: Sequence[TakerFlowDay],
@@ -46,7 +65,7 @@ def render_taker_flow_chart(
     Args:
         label: Asset label, e.g. "BTC".
         days: Complete UTC days, oldest first (days with a missing hour are not in it).
-        rolling: ``rolling_ratio`` points (hour end, ratio).
+        rolling: ``rolling_ratio`` points (start of the last hour of each window, ratio).
         output_path: PNG file to write.
         source_note: Footer text (source and newest data time).
 
@@ -72,9 +91,9 @@ def render_taker_flow_chart(
     net_axes.yaxis.set_major_formatter(FuncFormatter(lambda value, _: "0" if value == 0 else f"{value / 1e9:+.1f}B"))
 
     _style_axes(rolling_axes, "Rolling 24-hour taker buy/sell ratio (hourly resolution)")
-    if rolling:
-        rolling_axes.plot([moment for moment, _ in rolling], [ratio for _, ratio in rolling],
-                          color=LINE_COLOR, linewidth=1.2)
+    moments, values = _line_with_gaps(rolling)
+    if moments:
+        rolling_axes.plot(moments, values, color=LINE_COLOR, linewidth=1.2)
     rolling_axes.axhline(NEUTRAL_RATIO, color=FOREGROUND_COLOR, linewidth=0.8, linestyle="--")
     rolling_axes.xaxis.set_major_formatter(DateFormatter("%m-%d"))
 

@@ -1,7 +1,7 @@
 """Binance client parsing, collection service (backfill and gaps) and settings. No network, no database."""
 
 from datetime import datetime, timedelta, timezone
-from typing import List
+from typing import Any, List, cast
 
 import pytest
 
@@ -158,3 +158,10 @@ def test_settings_defaults_and_validation():
                 {"BINANCE_FUTURES_BASE_URL": "http://x/fapi"}, {"BINANCE_FUTURES_BASE_URL": "nonsense"}):
         with pytest.raises(TakerFlowSettingsError):
             TakerFlowSettings.from_environment(bad)
+
+
+def test_client_skips_rows_that_are_dicts_instead_of_crashing(caplog):
+    rows = [{"openTime": 1}, kline(datetime(2026, 11, 13, 12, tzinfo=timezone.utc), 100.0, 60.0)]
+    hours = BinanceTakerFlowClient("http://x", cast(Any, FakeSession(FakeResponse(rows)))).fetch_closed_hours(
+        "BTCUSDT", datetime(2026, 11, 13, 12, tzinfo=timezone.utc), NOW)
+    assert len(hours) == 1 and "skipped a malformed kline" in caplog.text

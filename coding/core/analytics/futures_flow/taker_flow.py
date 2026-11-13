@@ -128,7 +128,7 @@ def missing_hours(present: Iterable[datetime], first_hour: datetime, last_hour: 
 def rolling_ratio(hours: Iterable[TakerFlowHour], window_hours: int = HOURS_PER_DAY) -> List[Tuple[datetime, float]]:
     """
     The volume-weighted taker buy/sell ratio over the ``window_hours`` hours
-    ending at each hour, oldest first. A window with a missing hour, or without
+    ending with each hour (the point's time is the START of that last hour), oldest first. A window with a missing hour, or without
     sell volume, gives no point (the line has a gap there, never an estimate).
     """
     by_hour = {start_of_utc_hour(hour.hour_utc): hour for hour in hours}

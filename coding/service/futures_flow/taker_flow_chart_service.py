@@ -22,8 +22,7 @@ from coding.core.analytics.futures_flow.taker_flow import (
 )
 from coding.core.analytics.futures_flow.taker_flow_chart_renderer import render_taker_flow_chart
 from coding.core.database.repository import DatabaseRepository
-from coding.service.futures_flow.taker_flow_brief_section import STALE_AFTER, symbol_label
-from coding.service.futures_flow.taker_flow_settings import BACKFILL_DAYS, SYMBOLS
+from coding.service.futures_flow.taker_flow_settings import BACKFILL_DAYS, STALE_AFTER, SYMBOLS, symbol_label
 
 logger = logging.getLogger(__name__)
 

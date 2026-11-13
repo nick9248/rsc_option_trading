@@ -561,6 +561,12 @@ def format_brief(
                          extra_sections)
     if telegram_length(text) <= limit:
         return text
+    if extra_sections:
+        # The extra sections are never shortened; drop them (and say so) rather than the whole brief.
+        omitted.append("extra sections omitted")
+        text = _render_brief(record, comparisons, daily_close, title, options, omitted, stale_limit, now)
+        if telegram_length(text) <= limit:
+            return text
     # Not reachable with the item caps above; kept so an oversize text is never sent.
     return (f"<b>{escape(record.currency)} MenthorQ-style brief</b>\n"
             f"Too long to send ({telegram_length(text)} characters); see stored record "

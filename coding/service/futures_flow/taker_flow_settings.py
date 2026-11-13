@@ -15,6 +15,7 @@ Variables (all optional):
 
 import os
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
 from typing import Mapping, Optional
 from urllib.parse import urlparse
@@ -25,6 +26,12 @@ DEFAULT_BINANCE_FUTURES_BASE_URL = "https://fapi.binance.com"
 SYMBOLS = ("BTCUSDT", "ETHUSDT")      # Binance USD-M perpetuals; the brief shows BTC and ETH
 BACKFILL_DAYS = 30
 RUN_MINUTE = 5                        # minute past each hour of the collection (UTC)
+STALE_AFTER = timedelta(hours=3)      # data older than this is reported as stale
+
+
+def symbol_label(symbol: str) -> str:
+    """``BTCUSDT`` -> ``BTC``."""
+    return symbol[:-4] if symbol.endswith("USDT") else symbol
 
 
 class TakerFlowSettingsError(ValueError):
