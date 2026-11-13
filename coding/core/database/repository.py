@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from psycopg2.extras import Json, execute_values
 
+from coding.core.analytics.futures_flow.taker_flow import TakerFlowHour
 from coding.core.analytics.market_wide_calculator import DERIBIT_SETTLEMENT_HOUR_UTC
 from coding.core.analytics.menthorq_monitor.alert_mute import MenthorqMonitorState
 from coding.core.analytics.menthorq_monitor.level_record import (
@@ -1330,6 +1331,49 @@ class DatabaseRepository:
             )
             rows = cursor.fetchall()
         return [row[0].astimezone(timezone.utc) for row in rows]
+
+    def save_taker_flow_hours(self, hours: Sequence[TakerFlowHour], collected_at: datetime) -> int:
+        """
+        Store hourly taker volumes in ``taker_flow_hourly``. An hour already
+        stored for the symbol is kept unchanged (a closed hour never changes).
+
+        Args:
+            hours: Closed hours (``TakerFlowHour``).
+            collected_at: Storage time (UTC-aware); the VPS sync watermark.
+
+        Returns:
+            The number of rows inserted.
+        """
+        if not hours:
+            return 0
+        rows = [(hour.symbol, hour.hour_utc, hour.taker_buy_usd, hour.taker_sell_usd,
+                 hour.trade_count, collected_at) for hour in hours]
+        with self._db_cursor() as cursor:
+            inserted = execute_values(
+                cursor,
+                """
+                INSERT INTO taker_flow_hourly
+                    (symbol, hour_utc, taker_buy_usd, taker_sell_usd, trade_count, collected_at)
+                VALUES %s
+                ON CONFLICT (symbol, hour_utc) DO NOTHING
+                RETURNING id
+                """,
+                rows, page_size=1000, fetch=True,
+            )
+        return len(inserted)
+
+    def get_taker_flow_hours(self, symbol: str, first_hour: datetime, last_hour: datetime) -> List[TakerFlowHour]:
+        """The stored hours of ``symbol`` from ``first_hour`` to ``last_hour`` (both inclusive), oldest first."""
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                "SELECT hour_utc, taker_buy_usd, taker_sell_usd, trade_count FROM taker_flow_hourly "
+                "WHERE symbol = %s AND hour_utc >= %s AND hour_utc <= %s ORDER BY hour_utc",
+                (symbol, first_hour, last_hour),
+            )
+            rows = cursor.fetchall()
+        return [TakerFlowHour(symbol=symbol, hour_utc=row[0].astimezone(timezone.utc),
+                              taker_buy_usd=float(row[1]), taker_sell_usd=float(row[2]),
+                              trade_count=row[3]) for row in rows]
 
     def save_menthorq_alert_deliveries(
         self, currency: str, alert_keys: List[str], delivered_at: datetime, message: str,

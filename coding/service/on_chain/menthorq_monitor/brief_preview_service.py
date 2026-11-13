@@ -16,6 +16,7 @@ run, not the last reported state the collector compares with.
 """
 
 import html
+import logging
 import re
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
@@ -60,6 +61,9 @@ from coding.service.on_chain.menthorq_monitor.menthorq_monitor_service import (
     daily_close_as_of,
 )
 from coding.service.on_chain.menthorq_monitor.monitor_settings import MenthorqMonitorSettings
+from coding.service.futures_flow.taker_flow_brief_section import TakerFlowBriefSectionBuilder
+
+logger = logging.getLogger(__name__)
 
 NOT_COMPUTED = "not computed"
 PREVIEW_TITLE = "Preview (references replayed, not stored)"
@@ -274,11 +278,14 @@ class MenthorqBriefPreviewService:
         monitor_service: MenthorqMonitorService,
         thresholds: Optional[AlertThresholds] = None,
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+        extra_section_builders: Sequence[Callable[[datetime], str]] = (),
     ):
         """
         Args:
             monitor_service: Computes records (only its compute methods are
                 used, never ``store``).
+            extra_section_builders: Functions ``now -> Telegram HTML`` appended to the
+                previewed brief (the futures flow section, read from the stored hours).
             thresholds: Urgent-alert thresholds; the settings' ``alert_thresholds``
                 (what the collector applies) when omitted.
             clock: Wall clock (UTC-aware) for the data age.
@@ -287,6 +294,7 @@ class MenthorqBriefPreviewService:
         self.settings = monitor_service.settings
         self.thresholds = thresholds if thresholds is not None else self.settings.alert_thresholds
         self.clock = clock
+        self.extra_section_builders = tuple(extra_section_builders)
 
     def build_preview(self, as_of: datetime) -> BriefPreview:
         """
@@ -308,8 +316,14 @@ class MenthorqBriefPreviewService:
             (latest.as_of_utc - timedelta(days=1)).date())
         daily_close = daily_close_record if daily_close_record.has_levels else None
         stale_limit = self.settings.stale_snapshot_limit
+        extra_sections = []
+        for builder in self.extra_section_builders:
+            try:
+                extra_sections.append(builder(self.clock()))
+            except Exception:
+                logger.exception("A brief section could not be built; the preview is shown without it")
         brief = format_brief(latest, comparisons, daily_close, title=PREVIEW_TITLE,
-                             stale_limit=stale_limit)
+                             stale_limit=stale_limit, extra_sections=extra_sections)
         stale_warning = stale_data_warning(latest, stale_limit)
         warnings = ([] if stale_warning is None else [f"DATA STALE: {stale_warning}"]) \
             + data_caveats(latest, stale_limit)
@@ -358,5 +372,7 @@ def build_brief_preview_service(
     """
     settings = replace(MenthorqMonitorSettings.from_environment(), currency=currency,
                        expiry_universe=expiry_universe, gamma_underlying=gamma_underlying)
-    return MenthorqBriefPreviewService(MenthorqMonitorService(repository=repository,
-                                                              settings=settings))
+    monitor_service = MenthorqMonitorService(repository=repository, settings=settings)
+    return MenthorqBriefPreviewService(
+        monitor_service,
+        extra_section_builders=[TakerFlowBriefSectionBuilder(monitor_service.repository).build])

@@ -212,6 +212,7 @@ class MenthorqBriefDeliveryService:
         telegram: TelegramAlertService,
         thresholds: Optional[AlertThresholds] = None,
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+        extra_section_builders: Sequence[Callable[[datetime], str]] = (),
     ):
         """
         Args:
@@ -221,6 +222,10 @@ class MenthorqBriefDeliveryService:
             thresholds: Urgent-alert rules and cooldown; the settings'
                 ``alert_thresholds`` when omitted.
             clock: Wall clock (UTC-aware) for the delivery time.
+            extra_section_builders: Functions ``now -> Telegram HTML`` whose text
+                is appended to every brief (the futures flow section). A builder
+                that raises is logged and its section left out; the brief is
+                still sent.
         """
         self.monitor_service = monitor_service
         self.repository = monitor_service.repository
@@ -228,6 +233,7 @@ class MenthorqBriefDeliveryService:
         self.telegram = telegram
         self.thresholds = thresholds if thresholds is not None else self.settings.alert_thresholds
         self.clock = clock
+        self.extra_section_builders = tuple(extra_section_builders)
         # Key -> delivery time of messages Telegram accepted but whose delivery row
         # could not be saved; honoured like a stored row for the life of the process.
         self._unsaved_deliveries: Dict[str, datetime] = {}
@@ -262,7 +268,18 @@ class MenthorqBriefDeliveryService:
             title,
             stale_limit=self.settings.stale_snapshot_limit,
             now=now,
+            extra_sections=self._extra_sections(now),
         )
+
+    def _extra_sections(self, now: datetime) -> List[str]:
+        """The extra sections for a brief at ``now``; a failing builder is logged and skipped."""
+        sections = []
+        for builder in self.extra_section_builders:
+            try:
+                sections.append(builder(now))
+            except Exception:
+                logger.exception("A brief section could not be built; the brief is sent without it")
+        return sections
 
     def last_delivery(self, key: str, tolerate_repository_errors: bool = False) -> Optional[datetime]:
         """

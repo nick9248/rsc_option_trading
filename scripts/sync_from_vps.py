@@ -219,6 +219,15 @@ SYNC_TABLES = [
         ),
     },
     {
+        # Hourly taker buy/sell volume of the Binance perpetuals (migration 033). A closed
+        # hour is never changed, so rows are only added.
+        "name": "taker_flow_hourly",
+        "optional": True,   # migration 033 is applied on the VPS only when taker flow is deployed
+        "watermark_col": "collected_at",
+        "watermark_type": "timestamp",
+        "conflict_target": "(symbol, hour_utc) DO NOTHING",
+    },
+    {
         # Hourly DVOL candle closes. The daemon re-checks the last 48 hours every
         # cycle and corrects values that were captured while a candle was forming,
         # so only the last 72 hours are re-read (older history never changes, and

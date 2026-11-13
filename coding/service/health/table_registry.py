@@ -57,6 +57,11 @@ TABLE_SPECS: Tuple[TableSpec, ...] = (
     # could not be computed has NULLs, which the completeness check reports.
     _hourly("menthorq_level_snapshots", "computed_at", optional=True,
             required=("spot", "call_resistance", "put_support", "hvl", "total_net_gex")),
+    # Hourly taker buy/sell volume of the Binance perpetuals (migration 033). Optional: written only with
+    # TAKER_FLOW_ENABLED=1 (VPS). hour_utc is the START of the newest closed hour, so it is normally 1 to 2
+    # hours old; the warning limit is 3.
+    _hourly("taker_flow_hourly", "hour_utc", optional=True, required=("taker_buy_usd", "taker_sell_usd"),
+            warn_hours=3.0),
     _hourly("funding_rate_history", "timestamp", "ms_epoch"),
     TableSpec("dvol_history", "timestamp", "datetime", 3.0, 6.0, ("dvol_value",)),
     TableSpec("ohlcv_history", "date", "datetime", 48.0, 120.0, ("close",)),

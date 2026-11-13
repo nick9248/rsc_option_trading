@@ -480,6 +480,7 @@ def _render_brief(
     omitted: Sequence[str],
     stale_limit: timedelta,
     now: Optional[datetime],
+    extra_sections: Sequence[str] = (),
 ) -> str:
     sections = [
         _header(record, title, stale_limit, now),
@@ -494,6 +495,7 @@ def _render_brief(
                                                   if events else "- none"))
     sections.append("<b>Data caveats</b>\n" + bullet_lines(data_caveats(record, stale_limit),
                                                        options.maximum_caveats))
+    sections.extend(extra_sections)
     if omitted:
         sections.append(f"<i>Shortened to fit Telegram: {escape(', '.join(omitted))}.</i>")
     return "\n\n".join(sections)
@@ -519,6 +521,7 @@ def format_brief(
     limit: int = TELEGRAM_MESSAGE_LIMIT,
     stale_limit: timedelta = DEFAULT_STALE_SNAPSHOT_LIMIT,
     now: Optional[datetime] = None,
+    extra_sections: Sequence[str] = (),
 ) -> str:
     """
     The brief: header (with the "DATA STALE" line when it applies), key
@@ -538,19 +541,24 @@ def format_brief(
             snapshot is then also judged against it (see
             ``stale_data_warning``). None for a record computed at a chosen
             instant.
+        extra_sections: Ready Telegram HTML sections appended after the data
+            caveats and counted in ``limit`` (e.g. the futures flow section).
+            They are never shortened; the option sections shrink first.
 
     Returns:
         Telegram HTML no longer than ``limit``.
     """
     options = _RenderOptions()
     omitted: List[str] = []
-    text = _render_brief(record, comparisons, daily_close, title, options, omitted, stale_limit, now)
+    text = _render_brief(record, comparisons, daily_close, title, options, omitted, stale_limit, now,
+                         extra_sections)
     for description, step in _SHORTENING_STEPS:
         if telegram_length(text) <= limit:
             return text
         options = step(options)
         omitted.append(description)
-        text = _render_brief(record, comparisons, daily_close, title, options, omitted, stale_limit, now)
+        text = _render_brief(record, comparisons, daily_close, title, options, omitted, stale_limit, now,
+                         extra_sections)
     if telegram_length(text) <= limit:
         return text
     # Not reachable with the item caps above; kept so an oversize text is never sent.

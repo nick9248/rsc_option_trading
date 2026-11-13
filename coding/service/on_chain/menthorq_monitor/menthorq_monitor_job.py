@@ -31,6 +31,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from coding.core.analytics.menthorq_monitor.level_record import MenthorqLevelRecord
 from coding.core.database.repository import DatabaseRepository
+from coding.service.futures_flow.taker_flow_brief_section import brief_section_provider
 from coding.service.on_chain.menthorq_monitor.bot_command_service import MenthorqBotCommandService
 from coding.service.on_chain.menthorq_monitor.brief_delivery_service import (
     TELEGRAM_PARSE_MODE,
@@ -239,7 +240,9 @@ def build_menthorq_monitor_job(
         return None
     telegram = telegram or TelegramAlertService()
     monitor_service = MenthorqMonitorService(repository=repository, settings=settings)
-    delivery_service = MenthorqBriefDeliveryService(monitor_service, telegram)
+    flow_section = brief_section_provider(monitor_service.repository)
+    delivery_service = MenthorqBriefDeliveryService(
+        monitor_service, telegram, extra_section_builders=[flow_section] if flow_section else [])
     listener = None
     if settings.commands_enabled and not telegram.chat_id.strip():
         logger.warning("MenthorQ monitor: MENTHORQ_COMMANDS_ENABLED=1 but no owner chat id "
