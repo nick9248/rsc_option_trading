@@ -70,6 +70,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="leverage tiers, comma separated")
     parser.add_argument("--weights", default=None, help="tier weights summing to 1 (default: equal)")
     parser.add_argument("--maintenance-margin", type=float, default=HeatmapSettings.maintenance_margin_rate)
+    parser.add_argument("--half-life-hours", type=float, default=None,
+                        help="positions age out with this half-life (default: they live until touched)")
     parser.add_argument("--out", type=Path, default=DEFAULT_OUTPUT_DIRECTORY, help="output folder")
     return parser
 
@@ -98,7 +100,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     tiers = parse_numbers(arguments.tiers, int)
     weights = parse_numbers(arguments.weights, float) if arguments.weights else [1 / len(tiers)] * len(tiers)
     settings = HeatmapSettings(bin_size_usd=arguments.bin_size, leverage_tiers=tuple(tiers),
-                               leverage_weights=tuple(weights), maintenance_margin_rate=arguments.maintenance_margin)
+                               leverage_weights=tuple(weights), maintenance_margin_rate=arguments.maintenance_margin,
+                               position_half_life_hours=arguments.half_life_hours)
 
     end = floor_to_step(arguments.end or datetime.now(timezone.utc))
     window_start = end - timedelta(hours=arguments.hours)
@@ -129,7 +132,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "warmup_days": arguments.warmup_days,
         "settings": {"bin_size_usd": settings.bin_size_usd, "leverage_tiers": list(settings.leverage_tiers),
                      "leverage_weights": list(settings.leverage_weights),
-                     "maintenance_margin_rate": settings.maintenance_margin_rate},
+                     "maintenance_margin_rate": settings.maintenance_margin_rate,
+                     "position_half_life_hours": settings.position_half_life_hours},
         "data_notes": notes + result.notes,
         "strongest_levels_at_window_end": strongest_levels(result),
     }

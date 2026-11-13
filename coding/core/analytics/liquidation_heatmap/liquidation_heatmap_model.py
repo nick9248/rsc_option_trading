@@ -22,6 +22,10 @@ assumption to be checked against Coinglass screenshots and real liquidations
 4. What is left of an OI change after those liquidations is a voluntary change:
    a rise opens new contracts (step 1), a fall closes contracts proportionally
    on both sides.
+5. Optional turnover (``position_half_life_hours``): contracts age out, halving
+   every half-life. The aged-out contracts count as closed, so the OI that is still
+   there is "new" and is placed at the current price (step 1). Without it every
+   position since the warm-up lives until its level is touched.
 
 Positions that existed before the first step (warm-up) are unknown, so the
 state starts empty: the first ``warmup`` steps only build it, and only later
@@ -65,6 +69,7 @@ class HeatmapSettings:
     leverage_tiers: Tuple[int, ...] = (25, 50, 100)
     leverage_weights: Tuple[float, ...] = (1 / 3, 1 / 3, 1 / 3)
     maintenance_margin_rate: float = 0.004
+    position_half_life_hours: Optional[float] = None
 
     def __post_init__(self) -> None:
         if self.bin_size_usd <= 0:
@@ -78,6 +83,8 @@ class HeatmapSettings:
             raise ValueError("leverage_weights must be non-negative and sum to 1")
         if not 0 <= self.maintenance_margin_rate < 1 / max(self.leverage_tiers):
             raise ValueError("maintenance_margin_rate must be below 1 / the highest leverage tier")
+        if self.position_half_life_hours is not None and self.position_half_life_hours <= 0:
+            raise ValueError("position_half_life_hours must be positive")
 
     def long_liquidation_price(self, entry: float, leverage: int) -> float:
         """Liquidation price of a long opened at ``entry`` with ``leverage`` (isolated, simplified)."""
@@ -165,6 +172,8 @@ def simulate_heatmap(
     short_rows = np.full((len(recorded_times), len(centers)), np.nan, dtype=np.float32)
 
     baseline_oi: Optional[float] = None       # OI tracked so far (BTC), after liquidations
+    decay_per_step = (0.5 ** (STEP.total_seconds() / 3600 / settings.position_half_life_hours)
+                      if settings.position_half_life_hours else 1.0)
     steps_without_oi = 0
     for index in range(steps):
         step_time = grid_start + STEP * index
@@ -185,6 +194,12 @@ def simulate_heatmap(
             long_state *= max(0.0, 1 - touched_short / remaining_long)
         if baseline_oi is not None:
             baseline_oi -= touched_long + touched_short
+
+        if decay_per_step < 1.0 and baseline_oi is not None:
+            aged = 0.5 * ((1 - decay_per_step) * long_state.sum() + (1 - decay_per_step) * short_state.sum())
+            long_state *= decay_per_step
+            short_state *= decay_per_step
+            baseline_oi -= aged
 
         # 1. and 4.: what is left of the OI change.
         sample_time = step_time + STEP

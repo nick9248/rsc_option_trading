@@ -119,3 +119,24 @@ def test_candles_must_be_in_order_and_not_empty():
         simulate_heatmap([], {}, SIMPLE, T0)
     with pytest.raises(ValueError):
         simulate_heatmap([candle(1, 1, 2, 1), candle(0, 1, 2, 1)], {}, SIMPLE, T0)
+
+
+def test_aged_out_contracts_are_replaced_at_the_current_price():
+    # Half-life = one step. Step 1 creates 10 BTC per side (nothing to age yet). Step 2 (price 10,500, no level
+    # touched): the 10 halve to 5, so 5 contracts count as closed (tracked OI 110 - 5 = 105); the OI is still 110,
+    # so 5 BTC are "new" and are placed at 10,500 (long level 9,450, short level 11,550). Total stays 10 BTC.
+    settings = HeatmapSettings(bin_size_usd=100.0, leverage_tiers=(10,), leverage_weights=(1.0,),
+                               maintenance_margin_rate=0.0, position_half_life_hours=5 / 60)
+    candles = [candle(0, 9_990, 10_010, 10_000), candle(1, 9_990, 10_010, 10_000), candle(2, 10_490, 10_510, 10_500)]
+    result = simulate_heatmap(candles, open_interest(100.0, 110.0, 110.0), settings, T0)
+    assert level_btc(result, "long", 1, 9_000) == pytest.approx(10.0)
+    assert level_btc(result, "long", 2, 9_000) == pytest.approx(5.0)
+    assert level_btc(result, "long", 2, 9_450) == pytest.approx(5.0)
+    assert level_btc(result, "short", 2, 11_000) == pytest.approx(5.0)
+    assert level_btc(result, "short", 2, 11_550) == pytest.approx(5.0)
+    assert result.long_btc[2].sum() == pytest.approx(10.0) and result.short_btc[2].sum() == pytest.approx(10.0)
+
+
+def test_half_life_must_be_positive():
+    with pytest.raises(ValueError):
+        HeatmapSettings(position_half_life_hours=0)

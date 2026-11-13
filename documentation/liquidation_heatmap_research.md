@@ -52,19 +52,32 @@ Writes a PNG and a JSON into `outputs/liquidation_heatmap/` (git-ignored).
   relative, and probably a few preset datasets.
 - The price axis spans about 3 % under the lowest and 4 % over the highest price of the window.
 
-## First result (24h window ending 2026-11-13 14:20 UTC, tiers 25/50/100 equal weights)
+## Comparison with the Coinglass screenshots (2026-11-13, six Model 1 screenshots)
 
-- The timing of band ends follows the price path and matches Coinglass (for example the bands near 70,900 end when
-  price drops through them, and the 68,000 band ends at the 05:55 UTC low).
-- The intensity is far more concentrated than Coinglass (strongest bin about 800M USD against 77M): three tiers
-  put every step's change into three bins per side. More tiers or a spread of leverage is the first thing to try.
-- Which levels are strongest does not match yet (the big Coinglass band near 72,100 is missing in ours).
+Method: the right-edge column of each screenshot is read as a price profile (price axis calibrated from the
+top and bottom price labels, colour scale from the colour bar, value in USD per bin; candle pixels ignored).
+The same levels appear at the same prices in the 24h, 12h, 48h and 3d screenshots (for example 67,500, 70,240,
+72,170 and 72,400, each 40 to 75M USD), so the reading is consistent. Our model is run to the same end time
+and its last column is compared. Tuned on 24h and 12h only; 48h, 3d, 1w and 2w kept as hold-out.
 
-## Open
+Result of v0 (open-interest rise creates contracts, leverage ladder, level removed when touched):
 
-- Calibrate the leverage distribution and the bin size on the 12h and 24h screenshots, then check the 48h, 3d, 1w
-  and 2w screenshots without tuning (hold-out).
-- Check against real liquidations: CryptoQuant daily long/short liquidations (works on the current plan) and a
-  recording of Binance's live liquidation feed.
-- Use the archive's long/short ratios to see whether they improve the model.
-- Known simplifications: isolated margin, no maintenance tiers or fees, one symbol, open interest only.
+- The timing of band ends follows the price path and looks like Coinglass.
+- Which levels are strongest does **not** match. Tuned screenshots: rank correlation +0.1 to +0.4 and a top-10
+  overlap of 0.7 to 1.0, but pure chance gives about 0.45 to 0.6 for this overlap, so the gain is small and
+  comes mostly from coarser bins. Hold-out screenshots: correlation -0.2 to -0.33, overlap 0.0 to 0.4 (chance
+  level or worse). The tuned settings do not generalise.
+- Our profile is too flat (many levels of 120 to 170M USD) while Coinglass is peaky (a few levels of 20 to 70M).
+- The 1w and 2w screenshots show a very strong block near 75,700 to 77,300 (about 10 % above price) that the
+  model does not produce. It looks like short positions opened around 74,500 to 75,000 at 25x to 100x, which a
+  rise-of-open-interest rule misses when open interest fell at that time. That points to creation from traded
+  volume (as the open-source `py-liquidation-map` does with large trades) instead of from open-interest changes.
+- Added setting `position_half_life_hours` (turnover of old positions): it did not help on the hold-out.
+
+## Next experiments
+
+1. Creation from traded volume (taker buy volume to longs, taker sell volume to shorts, only the part that
+   opens positions) instead of open-interest changes; judge on the hold-out screenshots without further tuning.
+2. Whatever the result, validate against real liquidations (CryptoQuant daily long/short liquidations, and a
+   recording of Binance's live liquidation feed): the aim is a metric that is right, not a copy of Coinglass.
+3. Add a trivial benchmark (profile that only peaks near the current price) to every comparison.
