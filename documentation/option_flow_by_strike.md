@@ -18,8 +18,11 @@ expirations or one.
   single leg is not necessarily a directional view.
 - **Notional = contracts x strike.** This is Laevitas's definition (see the validation below). Contracts x index price,
   the usual spot notional, would give about 4 % less at 77,000 and 35 % less at 108,000.
-- One contract = 1 BTC. Chart: calls to the left, puts to the right, the four series of a side as thin bars side by side
-  (not stacked), strikes that traded only.
+- One contract = 1 BTC. Chart: calls to the left, puts to the right, strikes that traded only. Each side has TWO thin bars
+  per strike, Buy and Sell, and each bar is the blocked part next to the axis followed by the screen part, so a bar's
+  length is blocked plus screen volume of that type and side. (Found from the picture: at 70,000 Laevitas's longest put bar
+  of about $83M is puts sold on screen $31.66M plus puts sold in blocks $50.90M = $82.56M; at 80,000 the call-sell bar of
+  about $71M is $60.5M in blocks plus about $10.7M on screen.)
 
 What it can NOT say: whether a trade opens or closes a position, and whether the taker was a customer or a market maker.
 A "sell" is sell-side volume, not "they are now short".
@@ -41,6 +44,8 @@ Writes a PNG and a JSON (contracts, notional and trades per strike and series) i
   serves about the last day): 12 one-hour windows over 200 days, 4,921 trades, 0 missing, 0 extra, 0 differences in
   direction or size.
 - Deribit public trade history can be backfilled from the history server for any contract since its listing.
+- The whole validation window (24 h to 2026-11-12 14:49:30 UTC) was checked against the history server: 6,367 trades on both
+  sides, 0 missing, 0 extra, and all 263 strike/series cells equal to within $1.
 
 ## Validation against Laevitas (2026-11-13)
 

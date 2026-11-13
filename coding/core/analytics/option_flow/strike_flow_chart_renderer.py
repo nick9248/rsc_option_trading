@@ -1,8 +1,10 @@
 """
 Matplotlib chart of the buy/sell volume per strike, in the style of the Laevitas chart: strikes on the vertical axis
-(only the strikes that traded, ascending), calls to the left and puts to the right, one colour per series, the four series of a
-side drawn as thin bars side by side at each strike (not stacked: the longest line at a strike is its biggest single series,
-as on Laevitas), notional in USD millions. Pure presentation: every number drawn comes from the ``StrikeFlow``.
+(only the strikes that traded, ascending), calls to the left and puts to the right, one colour per series. Each side has
+two thin bars per strike, Buy and Sell, and each bar is the BLOCKED part next to the axis followed by the screen part (so the
+length of a bar is the blocked plus the screen volume of that type and side), as on Laevitas: at 70,000 their longest put bar
+of about $83M is puts sold on screen ($31.7M) plus puts sold in blocks ($50.9M). Notional in USD millions. Pure
+presentation: every number drawn comes from the ``StrikeFlow``.
 """
 
 import textwrap
@@ -14,7 +16,7 @@ from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.ticker import FuncFormatter
 
-from coding.core.analytics.option_flow.strike_flow import SERIES, StrikeFlow
+from coding.core.analytics.option_flow.strike_flow import SERIES, StrikeFlow, series_key
 
 BACKGROUND_COLOR = "#1b2540"
 FOREGROUND_COLOR = "#e6e9f2"
@@ -44,13 +46,17 @@ def render_strike_flow_chart(flow: StrikeFlow, title: str, footer: str, output_p
     axes = figure.subplots()
     axes.set_facecolor(BACKGROUND_COLOR)
     positions = np.arange(len(strikes))
-    bar_height = 0.2
+    bar_height = 0.34
     for sign, option_type in ((-1.0, "C"), (1.0, "P")):                      # calls to the left, puts to the right
-        side_series = [item for item in SERIES if item.option_type == option_type]
-        for index, series in enumerate(side_series):
-            offset = (index - (len(side_series) - 1) / 2) * bar_height        # side by side around the strike's row
-            values = np.array([flow.cell(strike, series.key).notional_usd / 1e6 for strike in strikes])
-            axes.barh(positions + offset, sign * values, height=bar_height, color=SERIES_COLORS[series.key], linewidth=0)
+        for index, direction in enumerate(("buy", "sell")):                  # two bars per strike and side
+            offset = (index - 0.5) * bar_height
+            base = np.zeros(len(strikes))
+            for blocked in (True, False):                                    # the blocked part first, then the screen part
+                key = series_key(option_type, direction, blocked)
+                values = np.array([flow.cell(strike, key).notional_usd / 1e6 for strike in strikes])
+                axes.barh(positions + offset, sign * values, left=sign * base, height=bar_height,
+                          color=SERIES_COLORS[key], linewidth=0)
+                base = base + values
 
     step = max(1, int(np.ceil(len(strikes) / MAXIMUM_STRIKE_LABELS)))
     axes.set_yticks(positions[::step])

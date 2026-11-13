@@ -45,6 +45,11 @@ SERIES: Tuple[FlowSeries, ...] = (
 _SERIES_BY_KIND = {(series.option_type, series.direction, series.blocked): series.key for series in SERIES}
 
 
+def series_key(option_type: str, direction: str, blocked: bool) -> str:
+    """The key of the series of an option type ("C"/"P"), taker side ("buy"/"sell") and block flag."""
+    return _SERIES_BY_KIND[(option_type, direction, blocked)]
+
+
 @dataclass(frozen=True)
 class OptionTrade:
     """The fields of one option trade that the flow needs."""

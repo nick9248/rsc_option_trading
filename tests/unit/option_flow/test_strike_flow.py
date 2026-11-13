@@ -7,7 +7,7 @@ from typing import Any, Dict, List, cast
 import psycopg2
 import pytest
 
-from coding.core.analytics.option_flow.strike_flow import SERIES, OptionTrade, aggregate_by_strike
+from coding.core.analytics.option_flow.strike_flow import SERIES, OptionTrade, aggregate_by_strike, series_key
 from coding.core.analytics.option_flow.strike_flow_chart_renderer import render_strike_flow_chart
 from coding.core.database.config import ConnectionPool, DatabaseConfig
 from coding.core.database.repository import DatabaseRepository
@@ -169,3 +169,20 @@ def test_repository_query_returns_the_window_the_expiry_and_the_block_flag(repo)
     assert repository.get_latest_trade_time("SOL") is None
     flow = aggregate_by_strike(everything)
     assert flow.cell(80_000.0, "put_buy_block").notional_usd == 10.0 * 80_000.0
+
+
+def test_series_key_finds_the_series_of_a_kind():
+    assert series_key("C", "sell", True) == "call_sell_block"
+    assert series_key("P", "buy", False) == "put_buy"
+    assert all(series_key(series.option_type, series.direction, series.blocked) == series.key for series in SERIES)
+
+
+def test_the_laevitas_bar_length_is_the_screen_plus_the_blocked_volume():
+    # Strike 70,000 puts sold, 24 h to 12 Nov 14:49 UTC (Deribit's history server): $31.66M on screen and $50.90M in blocks;
+    # Laevitas draws one bar of about $83M (82.56). The same by hand: 452 BTC on screen and 727 BTC in a block at 70,000.
+    flow = aggregate_by_strike([trade(kind="P", direction="sell", amount=400.0), trade(kind="P", direction="sell", amount=52.0),
+                                trade(kind="P", direction="sell", amount=727.0, block=True)])
+    screen = flow.cell(70_000.0, "put_sell").notional_usd
+    blocked = flow.cell(70_000.0, "put_sell_block").notional_usd
+    assert (screen, blocked) == (452.0 * 70_000, 727.0 * 70_000)
+    assert (screen + blocked) / 1e6 == pytest.approx(82.53)
