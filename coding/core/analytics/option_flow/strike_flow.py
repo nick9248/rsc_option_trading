@@ -3,14 +3,17 @@ Buy/sell volume per strike of Deribit option trades (the "Buy/Sell Volume by str
 
 Every trade is put in one of eight series by option type (call/put), the taker's side (buy/sell: Deribit's ``direction``
 is the side of the aggressor, i.e. who crossed the spread) and whether it was a block trade (``block_trade_id`` set), and
-added up per strike: contracts (1 contract = 1 BTC of underlying), notional in USD (contracts times the index price at the
-time of the trade) and the number of trades.
+added up per strike: contracts (1 contract = 1 BTC of underlying), notional in USD and the number of trades.
+
+Notional is contracts TIMES THE STRIKE (the strike value of the contracts). This is Laevitas's definition, found by fitting
+their tooltips: at the 108,000 strike their $140.4K of calls bought is exactly 1.3 BTC x 108,000 and their $10.8K of calls
+sold exactly 0.1 BTC x 108,000, and at 77,000 and for the 13NOV26 expiry all 24 numbers fit within rounding. (Contracts times
+the index price, the usual spot notional, gives about 4 % less at 77,000 and 35 % less at 108,000.)
 
 A "buy" or "sell" here is what the taker did. It does not say whether the position was opened or closed, nor whether the
 taker was a customer or a market maker; blocks are negotiated and often several legs of one structure.
 
-A trade without a usable index price (missing, zero or negative) or with an unknown type or side is skipped and counted,
-never counted as zero.
+A trade with an unknown type or side, or a non-positive size or strike, is skipped and counted, never counted as zero.
 """
 
 from dataclasses import dataclass, field
@@ -51,7 +54,6 @@ class OptionTrade:
     option_type: str                # "C" or "P"
     direction: str                  # "buy" or "sell": the taker's side
     amount: float                   # contracts (BTC)
-    index_price: Optional[float]    # USD, at the time of the trade
     is_block: bool
 
 
@@ -95,12 +97,12 @@ def aggregate_by_strike(trades: Iterable[OptionTrade], expiry: Optional[str] = N
         if expiry is not None and trade.expiration != expiry:
             continue
         key = _SERIES_BY_KIND.get((trade.option_type.upper(), trade.direction.lower(), trade.is_block))
-        if key is None or trade.index_price is None or trade.index_price <= 0 or trade.amount <= 0:
+        if key is None or trade.strike <= 0 or trade.amount <= 0:
             flow.trades_skipped += 1
             continue
         cell = flow.cells.setdefault(trade.strike, {}).setdefault(key, FlowCell())
         cell.contracts += trade.amount
-        cell.notional_usd += trade.amount * trade.index_price
+        cell.notional_usd += trade.amount * trade.strike
         cell.trades += 1
         flow.trades_used += 1
     return flow

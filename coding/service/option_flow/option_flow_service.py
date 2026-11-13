@@ -73,8 +73,8 @@ class OptionFlowService:
         scope = expiry or "all"
         title = f"{currency} DERIBIT Buy/Sell Volume Last {hours}H {'All Expirations' if expiry is None else expiry}"
         footer = (f"Window {report.window_start:%Y-%m-%d %H:%M} to {report.window_end:%Y-%m-%d %H:%M} UTC. "
-                  f"{report.flow.trades_used} trades ({report.flow.trades_skipped} skipped: no usable index price or side). "
-                  "Buy/sell = the taker's side (aggressor); notional = contracts x index price; blocked = block trades. "
+                  f"{report.flow.trades_used} trades ({report.flow.trades_skipped} skipped: unknown side or size). "
+                  "Buy/sell = the taker's side (aggressor); notional = contracts x strike (Laevitas's definition); blocked = block trades. "
                   f"Newest stored trade: {report.newest_trade:%Y-%m-%d %H:%M} UTC." if report.newest_trade else
                   f"Window {report.window_start:%Y-%m-%d %H:%M} to {report.window_end:%Y-%m-%d %H:%M} UTC.")
         output_directory.mkdir(parents=True, exist_ok=True)

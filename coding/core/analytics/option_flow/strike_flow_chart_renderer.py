@@ -1,8 +1,8 @@
 """
 Matplotlib chart of the buy/sell volume per strike, in the style of the Laevitas chart: strikes on the vertical axis
-(only the strikes that traded, ascending), calls to the left and puts to the right, one colour per series, stacked from the
-axis outward in the order of the legend, notional in USD millions. Pure presentation: every number drawn comes from the
-``StrikeFlow``.
+(only the strikes that traded, ascending), calls to the left and puts to the right, one colour per series, the four series of a
+side drawn as thin bars side by side at each strike (not stacked: the longest line at a strike is its biggest single series,
+as on Laevitas), notional in USD millions. Pure presentation: every number drawn comes from the ``StrikeFlow``.
 """
 
 import textwrap
@@ -44,20 +44,20 @@ def render_strike_flow_chart(flow: StrikeFlow, title: str, footer: str, output_p
     axes = figure.subplots()
     axes.set_facecolor(BACKGROUND_COLOR)
     positions = np.arange(len(strikes))
+    bar_height = 0.2
     for sign, option_type in ((-1.0, "C"), (1.0, "P")):                      # calls to the left, puts to the right
-        base = np.zeros(len(strikes))
-        for series in (item for item in SERIES if item.option_type == option_type):
+        side_series = [item for item in SERIES if item.option_type == option_type]
+        for index, series in enumerate(side_series):
+            offset = (index - (len(side_series) - 1) / 2) * bar_height        # side by side around the strike's row
             values = np.array([flow.cell(strike, series.key).notional_usd / 1e6 for strike in strikes])
-            axes.barh(positions, sign * values, left=sign * base, height=0.78, color=SERIES_COLORS[series.key],
-                      linewidth=0)
-            base = base + values
+            axes.barh(positions + offset, sign * values, height=bar_height, color=SERIES_COLORS[series.key], linewidth=0)
 
     step = max(1, int(np.ceil(len(strikes) / MAXIMUM_STRIKE_LABELS)))
     axes.set_yticks(positions[::step])
     axes.set_yticklabels([f"{strikes[index]:,.0f}" for index in range(0, len(strikes), step)])
     axes.axvline(0, color=FOREGROUND_COLOR, linewidth=0.8)
     axes.xaxis.set_major_formatter(FuncFormatter(lambda value, _: f"${abs(value):,.0f}M"))
-    axes.set_xlabel("Volume (notional, USD)", color=FOREGROUND_COLOR)
+    axes.set_xlabel("Volume (notional = contracts x strike, USD)", color=FOREGROUND_COLOR)
     axes.set_ylabel("Strike", color=FOREGROUND_COLOR)
     axes.tick_params(colors=FOREGROUND_COLOR)
     axes.grid(True, axis="x", color=GRID_COLOR, linewidth=0.5, alpha=0.6)

@@ -451,10 +451,10 @@ class DatabaseRepository:
         """
         The option trades with ``start_ts <= trade_timestamp < end_ts`` (epoch milliseconds), optionally of one
         expiration, with what the buy/sell volume per strike needs: expiration, strike, option type, the taker's side
-        (``direction``), size, index price and whether it was a block trade (``block_trade_id`` is set).
+        (``direction``), size and whether it was a block trade (``block_trade_id`` is set).
         """
         query = """
-            SELECT expiration, strike, option_type, direction, amount, index_price, (block_trade_id IS NOT NULL)
+            SELECT expiration, strike, option_type, direction, amount, (block_trade_id IS NOT NULL)
             FROM historical_trades
             WHERE currency = %s AND trade_timestamp >= %s AND trade_timestamp < %s
               AND strike IS NOT NULL AND direction IS NOT NULL AND option_type IS NOT NULL
@@ -467,7 +467,7 @@ class DatabaseRepository:
             cursor.execute(query, parameters)
             rows = cursor.fetchall()
         return [OptionTrade(expiration=row[0], strike=float(row[1]), option_type=row[2], direction=row[3],
-                            amount=float(row[4]), index_price=_float_or_none(row[5]), is_block=bool(row[6]))
+                            amount=float(row[4]), is_block=bool(row[5]))
                 for row in rows]
 
     def get_latest_trade_time(self, currency: str) -> Optional[datetime]:
