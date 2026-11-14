@@ -133,7 +133,7 @@ class DecisionMakerService:
         symbol = f"{currency}USDT"
         if symbol not in SYMBOLS:
             raise LookupError(f"no taker flow is collected for {symbol}")
-        data = TakerFlowChartService(self.repository, symbols=(symbol,), clock=clock).figure_data(symbol)
+        data = TakerFlowChartService(self.repository, clock=clock).figure_data(symbol)
         item, reason = extractors.taker_ratio_evidence(symbol, data.rolling_points, now)
         if item is None:
             raise LookupError(reason or "not computed")

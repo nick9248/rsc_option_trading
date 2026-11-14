@@ -76,7 +76,7 @@ class FakeOptionFlowService:
 
 
 class FakeTakerService:
-    def __init__(self, repository, symbols, clock):
+    def __init__(self, repository=None, days=30, clock=None):      # the real signature of TakerFlowChartService
         self.clock = clock
 
     def figure_data(self, symbol):
