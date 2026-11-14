@@ -2,7 +2,7 @@
 
 import base64
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,7 +16,8 @@ from coding.core.analytics.option_flow.dealer_levels_figure import build_dealer_
 from coding.core.analytics.option_flow.level_overview import LevelMark, LevelOverview
 from coding.core.analytics.option_flow.strike_flow import OptionTrade, aggregate_by_strike
 from coding.core.analytics.report.section_fragments import millions_text
-from coding.service.futures_flow.taker_flow_chart_service import DATA_FILE_NAME, TakerFlowChartResult
+from coding.core.analytics.futures_flow.taker_flow import TakerFlowDay
+from coding.service.futures_flow.taker_flow_chart_service import TakerFlowFigureData
 from coding.service.option_flow.option_flow_service import OptionFlowService, StrikeFlowReport
 from coding.service.report import report_sections
 from coding.service.report.report_sections import (
@@ -299,38 +300,47 @@ def test_menthorq_section_has_a_per_expiry_switcher_with_levels_caption(tmp_path
 # ---------------------------------------------------------------- futures flow
 
 class FakeTakerFlowChartService:
-    png_names = ["chart.png"]
-    symbols_data = {"BTCUSDT": {"days": [{"day": "2026-11-13", "taker_buy_usd": 3e6, "taker_sell_usd": 1e6, "ratio": 3.0}]}}
+    """Stands in for the service: ``figure_data`` returns fixed data (the section no longer writes any file)."""
+
+    rolling_points = [(NOW - timedelta(hours=3), 0.95), (NOW - timedelta(hours=2), 1.10), (NOW - timedelta(hours=1), 1.02)]
+    days = [TakerFlowDay(date(2026, 11, 13), 3e6, 1e6)]
     warnings = ["hour missing"]
 
     def __init__(self, repository, symbols, clock):
         self.symbols = symbols
         self.clock = clock
 
-    def generate(self, working_directory):
-        folder = working_directory / "taker"
-        folder.mkdir(parents=True)
-        files = []
-        for name in self.png_names:
-            (folder / name).write_bytes(FAKE_PNG)
-            files.append(folder / name)
-        (folder / DATA_FILE_NAME).write_text(json.dumps({"symbols": self.symbols_data}), encoding="utf-8")
-        return TakerFlowChartResult(folder, files, list(self.warnings), NOW - timedelta(hours=1))
+    def figure_data(self, symbol):
+        return TakerFlowFigureData(symbol, "BTC", [], list(self.rolling_points), list(self.days), list(self.warnings),
+                                   NOW - timedelta(hours=1))
 
 
-def test_futures_section_embeds_the_chart_and_the_day_table(tmp_path, monkeypatch):
+def test_futures_section_embeds_the_interactive_figure_and_the_day_table(tmp_path, monkeypatch):
+    # Changed: was a PNG data URI in the body; now a Plotly figure drawn by a control-free switcher, and the day table stays.
     monkeypatch.setattr(report_sections, "TakerFlowChartService", FakeTakerFlowChartService)
     section = build_futures_flow_section(make_context(tmp_path))
-    assert "data:image/png;base64," + base64.b64encode(FAKE_PNG).decode() in section.body_html
+    assert "data:image/png" not in section.body_html
+    figure = section.figures["futures-flow-rolling-ratio"]
+    ratio = next(trace for trace in figure["data"] if "rolling 24 h ratio" in trace.get("name", ""))
+    assert ratio["y"] == [0.95, 1.10, 1.02]
+    assert section.switchers["futures-flow"]["views"][""] == {"figure": "futures-flow-rolling-ratio"}
+    assert 'data-switcher="futures-flow"' in section.body_html
     assert "2026-11-13" in section.body_html and "2.0M USD" in section.body_html
     assert section.warnings == ["hour missing"]
     assert "10:00 UTC" in section.as_of            # the newest hour 09:00 plus one hour
 
 
-def test_futures_section_fails_when_the_service_wrote_no_picture(tmp_path, monkeypatch):
-    class NoPicture(FakeTakerFlowChartService):
-        png_names = []
-    monkeypatch.setattr(report_sections, "TakerFlowChartService", NoPicture)
+def test_futures_section_says_why_no_trend_line_with_the_real_minimum_and_maximum(tmp_path, monkeypatch):
+    monkeypatch.setattr(report_sections, "TakerFlowChartService", FakeTakerFlowChartService)
+    body = build_futures_flow_section(make_context(tmp_path)).body_html
+    assert "No trend lines are drawn" in body and "about 0.95 to 1.10 over these 30 days" in body
+
+
+def test_futures_section_fails_when_there_is_nothing_to_draw(tmp_path, monkeypatch):
+    # Changed: was "the service wrote no picture"; now "no complete day / no rolling point" with the service's warnings.
+    class NoDays(FakeTakerFlowChartService):
+        days = []
+    monkeypatch.setattr(report_sections, "TakerFlowChartService", NoDays)
     with pytest.raises(LookupError, match="hour missing"):
         build_futures_flow_section(make_context(tmp_path))
 

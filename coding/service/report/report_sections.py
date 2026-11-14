@@ -16,6 +16,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import plotly.graph_objects as go
 import plotly.io as plotly_io
 
+from coding.core.analytics.futures_flow.taker_flow_figure import build_taker_flow_figure
 from coding.core.analytics.menthorq_chart_summary import data_notes, data_warnings
 from coding.core.analytics.menthorq_replication_calculator import (
     EXPIRY_UNIVERSE_MONTHLY, GAMMA_UNDERLYING_INDEX, is_monthly_expiry, parse_expiry_settlement)
@@ -23,12 +24,12 @@ from coding.core.analytics.open_interest.expiry_open_interest import ExpiryOpenI
 from coding.core.analytics.option_flow.level_overview_page import build_level_overview_page
 from coding.core.analytics.report.figure_style import apply_paper_style
 from coding.core.analytics.report.report_page import (
-    ReportSection, SwitcherControl, embeddable_page, format_utc, image_fragment, page_frame_fragment, paragraph_fragment, png_data_uri,
+    ReportSection, SwitcherControl, embeddable_page, format_utc, page_frame_fragment, paragraph_fragment, png_data_uri,
     switcher_configuration, switcher_fragment, view_key)
 from coding.core.analytics.report.section_fragments import (
     dealer_levels_caption, expiry_choice_label, open_interest_table, option_flow_caption, taker_flow_table)
 from coding.core.database.repository import DatabaseRepository
-from coding.service.futures_flow.taker_flow_chart_service import DATA_FILE_NAME, TakerFlowChartService
+from coding.service.futures_flow.taker_flow_chart_service import CHART_DAYS, TakerFlowChartService
 from coding.service.futures_flow.taker_flow_settings import STALE_AFTER
 from coding.service.on_chain.expiry_open_interest_service import ExpiryOpenInterestReport, ExpiryOpenInterestService
 from coding.service.on_chain.menthorq_replication_service import (
@@ -196,26 +197,40 @@ def build_menthorq_section(context: SectionContext) -> ReportSection:
 # ---------------------------------------------------------------- Futures flow
 
 def build_futures_flow_section(context: SectionContext) -> ReportSection:
-    """The Binance perpetual taker buy/sell flow chart of the report currency (last 30 days) and its last days as a table."""
+    """
+    The Binance perpetual rolling 24-hour taker buy/sell ratio of the report currency (last 30 days) as an interactive
+    chart (the daily ratio and daily net flow are in its hover) and the last complete days as a table.
+    """
     symbol = TAKER_FLOW_SYMBOLS.get(context.currency)
     if symbol is None:
         raise LookupError(f"no Binance perpetual is configured for {context.currency}")
-    result = TakerFlowChartService(context.repository, symbols=(symbol,), clock=context.clock).generate(context.working_directory)
-    pictures = [path for path in result.files if path.suffix == ".png"]
-    data = json.loads((result.folder / DATA_FILE_NAME).read_text(encoding="utf-8"))
-    symbol_data = data["symbols"].get(symbol)
-    if not pictures or symbol_data is None:
-        raise LookupError("; ".join(result.warnings) or f"no taker flow stored for {symbol}")
-    end = result.newest_hour_utc + timedelta(hours=1) if result.newest_hour_utc is not None else None
-    body = (taker_flow_table(symbol_data["days"])
-            + image_fragment(pictures[0].read_bytes(), f"{context.currency} perpetual taker buy/sell flow, last 30 days"))
+    data = TakerFlowChartService(context.repository, symbols=(symbol,), clock=context.clock).figure_data(symbol)
+    if not data.days or not data.rolling_points:
+        raise LookupError("; ".join(data.warnings) or f"no taker flow stored for {symbol}")
+    end = data.newest_hour_utc + timedelta(hours=1) if data.newest_hour_utc is not None else None
+    values = [ratio for _, ratio in data.rolling_points]
+    figure_id = "futures-flow-rolling-ratio"
+    figures = {figure_id: figure_json(build_taker_flow_figure(data.label, data.rolling_points, data.days, ""))}
+    controls: List[SwitcherControl] = []          # one view, nothing to pick: the switcher only draws the figure
+    day_rows = [{"day": day.day.isoformat(), "taker_buy_usd": day.taker_buy_usd, "taker_sell_usd": day.taker_sell_usd,
+                 "ratio": day.ratio} for day in data.days]
+    body = (switcher_fragment("futures-flow", controls)
+            + paragraph_fragment(
+                "No trend lines are drawn: the ratio swings around 1.0 inside a band (about "
+                f"{min(values):.2f} to {max(values):.2f} over these {CHART_DAYS} days), so a straight line through it would "
+                "suggest a direction the data does not have; the 7-day average and the band show where it sits instead.", "note")
+            + taker_flow_table(day_rows))
     return ReportSection(
-        key="futures-flow", title="Futures flow", as_of=f"Data up to {format_utc(end)}.", body_html=body,
-        description=(f"Binance {symbol} perpetual: daily taker buy/sell ratio, daily net flow and the rolling 24-hour ratio "
-                     "of the last 30 days. Futures market, not options; the taker is the side that crossed the book."),
-        warnings=list(result.warnings),
+        key="futures-flow", title="Futures flow", as_of=f"Data up to {format_utc(end)}.", body_html=body, figures=figures,
+        switchers={"futures-flow": switcher_configuration(controls, {view_key([]): {"figure": figure_id}})},
+        description=(f"Binance {symbol} perpetual: the rolling 24-hour taker buy/sell ratio of the last {CHART_DAYS} days, hour "
+                     "by hour; zoom to hours or pick dates, and hover for that day's ratio and net flow. Futures market, not "
+                     "options; the taker is the side that crossed the book."),
+        warnings=list(data.warnings),
         notes=[f"Stale when the newest hour is more than {STALE_AFTER.total_seconds() / 3600:.0f} hours old. "
-               "A day with a missing hour is not drawn."])
+               "A day with a missing hour has no daily numbers and the line breaks where an hour is missing.",
+               "The 7-day average is the plain mean of the hourly values of the last 168 hours (fewer at the start of the "
+               "window); the band is the mean plus and minus one standard deviation of all values shown."])
 
 
 # ---------------------------------------------------------------- Option flow

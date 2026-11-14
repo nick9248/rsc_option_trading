@@ -12,10 +12,11 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable, List, Optional, Sequence
+from typing import Callable, List, Optional, Sequence, Tuple
 
 from coding.core.analytics.futures_flow.taker_flow import (
     TakerFlowDay,
+    TakerFlowHour,
     complete_days,
     rolling_ratio,
     start_of_utc_hour,
@@ -36,6 +37,19 @@ class TakerFlowChartResult:
 
     folder: Path
     files: List[Path] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+    newest_hour_utc: Optional[datetime] = None
+
+
+@dataclass
+class TakerFlowFigureData:
+    """The stored taker flow of one symbol for the interactive figure, with its warnings."""
+
+    symbol: str
+    label: str
+    hours: List[TakerFlowHour] = field(default_factory=list)
+    rolling_points: List[Tuple[datetime, float]] = field(default_factory=list)
+    days: List[TakerFlowDay] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     newest_hour_utc: Optional[datetime] = None
 
@@ -79,6 +93,41 @@ class TakerFlowChartService:
                     for offset in range((last_full_day - first_full_day).days + 1)]
         return [day.isoformat() for day in expected if day not in complete]
 
+    def _load(self, symbol: str, now: datetime) -> TakerFlowFigureData:
+        """
+        The stored hours of ``symbol`` in the window, its complete days and rolling ratio, and the warnings (no data, missing
+        hours, stale data). Shared by ``generate`` and ``figure_data`` so both report the same things.
+        """
+        label = symbol_label(symbol)
+        first_hour = start_of_utc_hour(now) - timedelta(days=self.days)
+        hours = self.repository.get_taker_flow_hours(symbol, first_hour, start_of_utc_hour(now))
+        data = TakerFlowFigureData(symbol=symbol, label=label, hours=list(hours))
+        if not hours:
+            data.warnings.append(f"{label}: no hourly data stored in the last {self.days} days "
+                                 "(run scripts/sync_from_vps.py after the collector has run)")
+            return data
+        newest = max(hour.hour_utc for hour in hours)
+        data.newest_hour_utc = newest
+        data.days = complete_days(hours)
+        data.rolling_points = rolling_ratio(hours)
+        gap_days = self._days_with_missing_hours(max(first_hour, min(hour.hour_utc for hour in hours)), now, data.days)
+        if gap_days:
+            data.warnings.append(f"{label}: missing hours on {', '.join(gap_days)}; "
+                                 "those days are not drawn")
+        if now - (newest + timedelta(hours=1)) > STALE_AFTER:
+            data.warnings.append(f"{label}: data ends at {(newest + timedelta(hours=1)).strftime('%Y-%m-%d %H:%M')} UTC "
+                                 "(more than 3 hours old; sync the data)")
+        if not data.days:
+            data.warnings.append(f"{label}: no complete day, chart not drawn")
+        return data
+
+    def figure_data(self, symbol: str) -> TakerFlowFigureData:
+        """
+        Everything the interactive figure needs for one symbol (nothing is written): the hours, rolling ratio, complete
+        days, the warnings ``generate`` would give, and the newest stored hour (None without data).
+        """
+        return self._load(symbol, self.clock())
+
     def generate(self, output_directory: Path) -> TakerFlowChartResult:
         """
         Write ``<output_directory>/<YYYY-MM-DD>/<label>_taker_flow.png`` for each
@@ -92,33 +141,21 @@ class TakerFlowChartService:
         folder = output_directory / now.strftime("%Y-%m-%d")
         folder.mkdir(parents=True, exist_ok=True)
         result = TakerFlowChartResult(folder=folder)
-        first_hour = start_of_utc_hour(now) - timedelta(days=self.days)
         data = {"generated_at_utc": now.isoformat(),
                 "source": "taker_flow_hourly (Binance USD-M perpetual klines)", "symbols": {}}
 
         for symbol in self.symbols:
-            label = symbol_label(symbol)
-            hours = self.repository.get_taker_flow_hours(symbol, first_hour, start_of_utc_hour(now))
-            if not hours:
-                result.warnings.append(f"{label}: no hourly data stored in the last {self.days} days "
-                                       "(run scripts/sync_from_vps.py after the collector has run)")
+            loaded = self._load(symbol, now)
+            result.warnings.extend(loaded.warnings)
+            if not loaded.hours:
                 continue
-            newest = max(hour.hour_utc for hour in hours)
+            label, days, newest = loaded.label, loaded.days, loaded.newest_hour_utc
             result.newest_hour_utc = max(newest, result.newest_hour_utc) if result.newest_hour_utc else newest
-            days = complete_days(hours)
-            gap_days = self._days_with_missing_hours(max(first_hour, min(hour.hour_utc for hour in hours)), now, days)
-            if gap_days:
-                result.warnings.append(f"{label}: missing hours on {', '.join(gap_days)}; "
-                                       "those days are not drawn")
-            if now - (newest + timedelta(hours=1)) > STALE_AFTER:
-                result.warnings.append(f"{label}: data ends at {(newest + timedelta(hours=1)).strftime('%Y-%m-%d %H:%M')} UTC "
-                                       "(more than 3 hours old; sync the data)")
             if not days:
-                result.warnings.append(f"{label}: no complete day, chart not drawn")
                 continue
             note = (f"Source: Binance USD-M {symbol} perpetual hourly klines (taker volume in USD). "
                     f"Data up to {(newest + timedelta(hours=1)).strftime('%Y-%m-%d %H:%M')} UTC.")
-            path = render_taker_flow_chart(label, days, rolling_ratio(hours), folder / f"{label}_taker_flow.png", note)
+            path = render_taker_flow_chart(label, days, loaded.rolling_points, folder / f"{label}_taker_flow.png", note)
             result.files.append(path)
             data["symbols"][symbol] = {
                 "newest_hour_utc": newest.isoformat(),
