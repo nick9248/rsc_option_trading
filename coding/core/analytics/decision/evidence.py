@@ -9,6 +9,7 @@ Items that share an input group are NOT independent (MenthorQ replica levels and
 computed from the same open interest), so the engine counts each group once.
 """
 
+import json
 import math
 from dataclasses import dataclass, field, replace
 from datetime import datetime
@@ -87,6 +88,10 @@ class EvidenceItem:
             raise ValueError(f"{self.id}: a directional item needs a direction in {DIRECTIONS}")
         if self.kind == RANGE_REGIME and self.regime not in REGIMES:
             raise ValueError(f"{self.id}: a range_regime item needs a regime in {REGIMES}")
+        try:
+            json.dumps(self.details, allow_nan=False)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"{self.id}: details must be JSON-serialisable without NaN or infinity ({error})") from error
         if self.horizon_days is not None and (not math.isfinite(self.horizon_days) or self.horizon_days < 0):
             raise ValueError(f"{self.id}: horizon_days must be a non-negative number or None")
 

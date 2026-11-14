@@ -13,6 +13,7 @@ from coding.service.option_flow.option_flow_service import StrikeFlowReport
 from tests.unit.decision.test_evidence_extractors import CHAIN_TIME, NOW, dealer_levels, open_interest_row, trade
 
 SEEN_INSTANTS = []
+SPOT_TIME = [NOW - timedelta(minutes=30)]       # mutable so a test can age the spot
 
 
 class FakeRepository:
@@ -49,7 +50,8 @@ class FakeLoader:
 
     def load_inputs(self, currency, as_of):
         SEEN_INSTANTS.append(("menthorq", as_of))
-        return {"chain_rows": [], "index_price": 65_000.0, "snapshot_captured_at_utc": CHAIN_TIME}
+        return {"chain_rows": [], "index_price": 65_000.0, "snapshot_captured_at_utc": CHAIN_TIME,
+                "index_price_time_utc": SPOT_TIME[0]}
 
 
 class FakeDealerService:
@@ -85,6 +87,7 @@ class FakeTakerService:
 @pytest.fixture
 def service(monkeypatch):
     SEEN_INSTANTS.clear()
+    SPOT_TIME[0] = NOW - timedelta(minutes=30)
     monkeypatch.setattr(module, "ExpiryOpenInterestService", FakeOpenInterestService)
     monkeypatch.setattr(module, "MenthorqInputLoader", FakeLoader)
     monkeypatch.setattr(module, "replicate_menthorq", lambda rows, spot, captured_at, currency: {
@@ -150,3 +153,12 @@ def test_summary_lines_are_readable_and_carry_the_disclaimer(service):
     assert lines[0] == "BTC decision report as of 2026-11-14 12:00 UTC, spot 65,000.00"
     assert lines[1].startswith("Score scale: 0-100, uncalibrated")
     assert lines[-1].startswith("Decision support only")
+
+
+def test_an_old_spot_is_flagged_and_its_time_is_in_the_context(service):
+    report = service.build_report("BTC")
+    assert report.context["spot_time"] == (NOW - timedelta(minutes=30)).isoformat() and report.context["caveats"] == []
+    SPOT_TIME[0] = NOW - timedelta(hours=5)
+    report = service.build_report("BTC")
+    assert report.context["caveats"][0].startswith("the index price is from 2026-11-14 07:00 UTC, 5.0 h old (limit 3 h)")
+    assert any(item.text.startswith("Data caveat: the index price is from") for item in report.decisions)

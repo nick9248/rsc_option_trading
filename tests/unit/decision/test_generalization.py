@@ -54,10 +54,10 @@ def test_removing_a_source_degrades_the_confidence_with_the_reason():
     without_flow = report_of(baseline()[:2])
     # inside: 0.5 + 0.5 = 1.0 -> 50; two groups agree -> medium
     assert without_flow.confidence == "medium"
-    assert without_flow.confidence_reasons[0] == ("0: 2 independent input groups agree (g1, g2); 3 are needed for high")
+    assert without_flow.confidence_reasons[0] == ("0: 2 distinct input groups agree (g1, g2); 3 are needed for high")
     only_support = report_of(baseline()[:1])
     assert only_support.confidence == "low"
-    assert only_support.confidence_reasons[0] == "-1: only 1 independent input group supports it (g1)"
+    assert only_support.confidence_reasons[0] == "-1: only 1 distinct input group supports it (g1)"
     nothing = report_of([])
     assert nothing.scenarios == [] and nothing.confidence == "low" and nothing.top_scenario is None
 

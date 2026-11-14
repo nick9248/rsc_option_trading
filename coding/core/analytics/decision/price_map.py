@@ -8,7 +8,7 @@ closes when the next price is further than ``LEVEL_BAND_SHARE`` x spot from the 
 A band's weight = sum over its input groups of the group's contribution (``independence.group_contribution`` with value =
 strength), so levels of one input group in a band count once. A band is meaningful when its weight reaches
 ``MINIMUM_LEVEL_WEIGHT``. Whether a level is "support" or "resistance" follows only from its side of the spot: a put wall
-above the spot is a level above the spot. A side without a meaningful band within the distance is "unmapped" (None),
+above the spot is a level above the spot. A band whose price range contains the spot is "at the spot", neither. A side without a meaningful band within the distance is "unmapped" (None),
 never filled with an invented level.
 """
 
@@ -67,10 +67,12 @@ class PriceMap:
         maximum_distance: Distance in price units beyond which levels are left out.
         levels: Every band, lowest first.
         support: Nearest meaningful band below the spot, None when the downside is unmapped.
-        resistance: Nearest meaningful band at or above the spot, None when the upside is unmapped.
+        resistance: Nearest meaningful band above the spot, None when the upside is unmapped.
         next_below: The meaningful band after ``support`` going down, None when there is none within the distance.
         next_above: The meaningful band after ``resistance`` going up, None when there is none within the distance.
         left_out: Ids of price_level items beyond the distance.
+        at_spot: Meaningful bands whose price range contains the spot (neither support nor resistance: the price is at
+            them now).
     """
 
     spot: float
@@ -82,6 +84,7 @@ class PriceMap:
     next_below: Optional[MapLevel]
     next_above: Optional[MapLevel]
     left_out: List[str] = field(default_factory=list)
+    at_spot: List[MapLevel] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         """JSON-serialisable form."""
@@ -90,7 +93,8 @@ class PriceMap:
         return {"spot": self.spot, "band_width": self.band_width, "maximum_distance": self.maximum_distance,
                 "levels": [item.to_dict() for item in self.levels], "support": level(self.support),
                 "resistance": level(self.resistance), "next_below": level(self.next_below),
-                "next_above": level(self.next_above), "left_out": list(self.left_out)}
+                "next_above": level(self.next_above), "left_out": list(self.left_out),
+                "at_spot": [item.to_dict() for item in self.at_spot]}
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "PriceMap":
@@ -100,7 +104,7 @@ class PriceMap:
         return cls(data["spot"], data["band_width"], data["maximum_distance"],
                    [MapLevel.from_dict(item) for item in data["levels"]], level(data["support"]),
                    level(data["resistance"]), level(data["next_below"]), level(data["next_above"]),
-                   list(data["left_out"]))
+                   list(data["left_out"]), [MapLevel.from_dict(item) for item in data.get("at_spot", [])])
 
 
 def _band_level(items: List[EvidenceItem]) -> MapLevel:
@@ -141,12 +145,13 @@ def build_price_map(items: List[EvidenceItem], spot: float) -> PriceMap:
             bands.append([item])
     map_levels = [_band_level(band) for band in bands]
 
-    below = [level for level in map_levels if level.meaningful and level.price < spot]
-    above = [level for level in map_levels if level.meaningful and level.price >= spot]
+    at_spot = [level for level in map_levels if level.meaningful and level.low <= spot <= level.high]
+    below = [level for level in map_levels if level.meaningful and level.high < spot]
+    above = [level for level in map_levels if level.meaningful and level.low > spot]
     below.sort(key=lambda level: -level.price)      # nearest first
     above.sort(key=lambda level: level.price)
     return PriceMap(
         spot=spot, band_width=band_width, maximum_distance=maximum_distance, levels=map_levels,
         support=below[0] if below else None, resistance=above[0] if above else None,
         next_below=below[1] if len(below) > 1 else None, next_above=above[1] if len(above) > 1 else None,
-        left_out=left_out)
+        left_out=left_out, at_spot=at_spot)

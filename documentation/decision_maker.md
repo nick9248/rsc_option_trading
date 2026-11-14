@@ -65,14 +65,15 @@ Items of one input group are derived from the same data and are NOT independent;
 | `deribit_trades` | flow-based dealer walls, flip and total-GEX sign; option-flow strikes; net taker flow (screen, single-leg blocks, multi-leg blocks) |
 | `binance_perpetual_candles` | futures taker ratio; liquidation estimate (both computed from the Binance perpetual candles) |
 
-So today there are at most three independent groups. "high" confidence needs all three on one side.
+So today there are at most three distinct groups. "high" confidence needs all three on one side. Distinct is not
+independent: open interest is the accumulated result of the trades, and all three react to the same price moves.
 
 ### Sources and their discounts
 
 | Source | Kind | Quality prior | Discounts |
 |---|---|---|---|
 | MenthorQ replica | price_level (HVL at half strength) | 0.7 | strike-axis points from open interest, not regime boundaries |
-| Dealer GEX, open interest (nearest monthly + largest-OI expiry) | price_level, range_regime | 0.6 / 0.3 | assumption-based (dealers long calls, short puts); strength scaled by the expiry's OI share (full at 25 %) |
+| Dealer GEX, open interest (nearest monthly + largest-OI expiry) | price_level, range_regime | 0.6 / 0.3 | assumption-based (dealers long calls, short puts); strength scaled by the expiry's OI share (full at 25 %; not scaled, with the reason, when the share is not computed) |
 | Dealer GEX, flow-based (same expiries) | price_level, range_regime | 0.6 / 0.3 | x0.2 automatically when `DealerFlowLevelsService`'s plausibility check fails |
 | Option flow strikes (24 h, top 2 per type and side) | price_level | 0.35 | a traded strike is not a barrier |
 | Net option flow, screen and single-leg blocks | directional | 0.5 | intent (open/close/hedge) unknown; measured in contracts |
@@ -83,6 +84,9 @@ So today there are at most three independent groups. "high" confidence needs all
 The open interest per expiry (`ExpiryOpenInterestService`) picks the dealer expiries, sets their horizon (days left)
 and scales their strength; it is also listed in the report's `context`.
 
+The spot is the newest index price at or before the report time; its time is in `context.spot_time` and a spot older
+than 3 h is a data caveat.
+
 Freshness (engine, every item): older than its group's limit (3 h for the three groups, 6 h default) -> quality x0.5;
 older than 4 limits -> x0.1. The reason is added to the item.
 
@@ -91,7 +95,8 @@ older than 4 limits -> x0.1. The reason is added to the item.
 Price levels within 15 % of the spot are grouped into bands of 1 % of the spot (a band closes one width after its first
 price). A band's weight = sum over its input groups of (quality-weighted mean strength x quality-weighted mean quality),
 each group capped at 1. A band weighing at least 0.3 is meaningful. Support = the nearest meaningful band below the spot,
-resistance = the nearest at or above; the next band beyond each is kept. A side without one is "unmapped" and the
+resistance = the nearest above; the next band beyond each is kept. A band whose price range contains the spot is "at the
+spot": it is reported, but bounds neither side. A side without one is "unmapped" and the
 report says so; no level is invented.
 
 ## Scenarios and score
@@ -103,8 +108,9 @@ either side: no scenario.
 Each item gets a signed stance per scenario (times its strength):
 
 - support/resistance band items: inside +1, the break through them -1;
-- bullish: break up +1, break down -1, inside -0.5 (bearish mirrored); neutral: inside +1;
-- range_bound: inside +1, each break -0.5; expansion: inside -1, each break +0.5;
+- bullish: break up +1, break down -1, inside -0.5 (bearish mirrored); neutral: inside +1; on a one-sided map a lean
+  toward the unmapped side does not oppose inside ("stays above support" is open upward);
+- range_bound: inside +1, each break -0.5; expansion: inside -1 (-0.5 on a one-sided map), each break +0.5;
 - magnet beyond a boundary: that break +1; between the boundaries: inside +0.5; times proximity
   (1 - distance / 10 % of the spot).
 
@@ -115,7 +121,7 @@ Net = support - opposition; score = 100 x net / (net + 1). Ties are broken in th
 
 One point (+1, 0 or -1) per criterion, each with its reason in the report:
 
-1. independent input groups agreeing (contribution > 0.05): >= 3 +1, <= 1 -1;
+1. distinct input groups agreeing (contribution > 0.05): >= 3 +1, <= 1 -1;
 2. conflict, per item (quality x |value| of opposing items over all items speaking to it): > 35 % -1, < 10 % +1;
 3. mean quality of the supporting items: >= 0.6 +1, < 0.35 -1;
 4. stale supporting items: any -1;
@@ -139,9 +145,17 @@ The table is local only (not synced, no VPS job). Applying 036 on the VPS is a s
 
 ## Priors worth discussing
 
-- Three independent groups only: two of the three dominant level sources share the open interest.
+- Three distinct groups only: two of the three dominant level sources share the open interest.
 - Level bands support "inside" AND oppose the break through them, so with a mapped range "inside" is favoured unless
   directional evidence is strong.
 - `MINIMUM_LEVEL_WEIGHT` 0.3: on 14 Nov a 65,000 BTC band weighed 0.29 and was not mapped.
 - The taker ratio is read as aggressor pressure in its own direction (above band = bullish), not as a contrarian signal.
 - The liquidation estimate and the taker ratio share one group (both from Binance perpetual candles).
+- The group aggregation is the agreed quality-weighted mean. Consequence (found in review): a weak item that AGREES with a
+  stronger one of the same group lowers the group's contribution, and can drop a band below the 0.3 threshold (HVL
+  strength 0.5 at quality 0.7 = 0.35, plus a strength-0.05 flip at quality 0.6 in the same band = 0.19). A max or
+  noisy-OR per group would not do this; it is a design change for the owner to decide.
+- Balanced (neutral) flow and a taker ratio inside its band support "inside": in a quiet market the absence of a
+  signal counts as agreement and can supply the third group for "high".
+- "Reference range for a strategy" and "Reference level for a hedge" are listed whatever the top scenario is; they
+  describe the map, not a recommendation.

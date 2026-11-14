@@ -12,7 +12,7 @@ Steps:
    values are aggregated per input group (``independence``), and the scenario's
    net = support - CONFLICT_PENALTY x opposition, score = 100 x net / (net + SCORE_HALF_POINT): uncalibrated, never
    normalised across scenarios, not a probability.
-5. Confidence label per scenario from: agreeing independent groups, conflict share, mean quality of the supporting items,
+5. Confidence label per scenario from: agreeing distinct input groups, conflict share, mean quality of the supporting items,
    staleness of the supporting items, and the margin to the next scenario.
 6. "What would change this": every item is flipped (directional, regime) or removed (levels, magnets) one at a time and
    the whole report is recomputed; the items that change the top scenario are listed.
@@ -115,14 +115,20 @@ def stances(item: EvidenceItem, keys: Sequence[str], price_map: PriceMap) -> Dic
             with_it, against_it = (BREAK_UP, BREAK_DOWN) if item.direction == BULLISH else (BREAK_DOWN, BREAK_UP)
             add(with_it, config.DIRECTIONAL_SUPPORTS_BREAK * strength)
             add(against_it, -config.DIRECTIONAL_OPPOSES_OTHER_BREAK * strength)
-            add(INSIDE, -config.DIRECTIONAL_OPPOSES_INSIDE * strength)
+            # On a one-sided map "inside" is open toward the unmapped side, so a lean toward that side does not oppose it.
+            toward_unmapped = ((item.direction == BULLISH and price_map.resistance is None)
+                               or (item.direction == BEARISH and price_map.support is None))
+            if not toward_unmapped:
+                add(INSIDE, -config.DIRECTIONAL_OPPOSES_INSIDE * strength)
     elif item.kind == RANGE_REGIME:
         if item.regime == RANGE_BOUND:
             add(INSIDE, config.RANGE_BOUND_SUPPORTS_INSIDE * strength)
             add(BREAK_UP, -config.RANGE_BOUND_OPPOSES_BREAK * strength)
             add(BREAK_DOWN, -config.RANGE_BOUND_OPPOSES_BREAK * strength)
         elif item.regime == EXPANSION:
-            add(INSIDE, -config.EXPANSION_OPPOSES_INSIDE * strength)
+            both_bounds = price_map.support is not None and price_map.resistance is not None
+            add(INSIDE, -(config.EXPANSION_OPPOSES_INSIDE if both_bounds
+                          else config.ONE_SIDED_EXPANSION_OPPOSES_INSIDE) * strength)
             add(BREAK_UP, config.EXPANSION_SUPPORTS_BREAK * strength)
             add(BREAK_DOWN, config.EXPANSION_SUPPORTS_BREAK * strength)
     elif item.kind == MAGNET and item.price is not None:
@@ -149,16 +155,19 @@ def _title(key: str, price_map: PriceMap) -> Tuple[str, Optional[float], Optiona
         if support is not None:
             return (f"stays above {_price(support.price)} (no mapped level above within {distance}: the upside is "
                     "unmapped)", support.price, None, None, None)
-        assert resistance is not None
+        if resistance is None:
+            raise ValueError("an inside scenario needs a bound")
         return (f"stays below {_price(resistance.price)} (no mapped level below within {distance}: the downside is "
                 "unmapped)", None, resistance.price, None, None)
     if key == BREAK_UP:
-        assert resistance is not None
+        if resistance is None:
+            raise ValueError("a break up needs a resistance")
         beyond = price_map.next_above
         tail = (f", next mapped level above {_price(beyond.price)}" if beyond is not None
                 else f", no further mapped level above within {distance}")
         return f"breaks above {_price(resistance.price)}{tail}", None, None, resistance.price, beyond.price if beyond else None
-    assert support is not None
+    if support is None:
+        raise ValueError("a break down needs a support")
     beyond = price_map.next_below
     tail = (f", next mapped level below {_price(beyond.price)}" if beyond is not None
             else f", no further mapped level below within {distance}")
@@ -207,13 +216,13 @@ def _confidence(entry: Dict[str, Any], ranked: List[Dict[str, Any]], items_by_id
     names = f" ({', '.join(agreeing)})" if agreeing else ""
     if count >= config.HIGH_CONFIDENCE_MINIMUM_GROUPS:
         points += 1
-        reasons.append(f"+1: {count} independent input groups agree{names}")
+        reasons.append(f"+1: {count} distinct input groups agree{names}")
     elif count <= config.LOW_CONFIDENCE_MAXIMUM_GROUPS:
         points -= 1
-        reasons.append(f"-1: only {count} independent input group supports it{names}" if count == 1
-                       else "-1: no independent input group supports it")
+        reasons.append(f"-1: only {count} distinct input group supports it{names}" if count == 1
+                       else "-1: no distinct input group supports it")
     else:
-        reasons.append(f"0: {count} independent input groups agree{names}; "
+        reasons.append(f"0: {count} distinct input groups agree{names}; "
                        f"{config.HIGH_CONFIDENCE_MINIMUM_GROUPS} are needed for high")
 
     weighing = entry["item_support"] + entry["item_opposition"]
@@ -340,7 +349,8 @@ def _sources(ids: Sequence[str], items_by_id: Dict[str, EvidenceItem]) -> str:
 
 
 def _decisions(price_map: PriceMap, scenarios: List[ScenarioAssessment], top: Optional[str], confidence: str,
-               items: List[EvidenceItem], triggers: List[ChangeTrigger], not_computed: Sequence[str]) -> List[DecisionItem]:
+               items: List[EvidenceItem], triggers: List[ChangeTrigger], not_computed: Sequence[str],
+               caveats: Sequence[str] = ()) -> List[DecisionItem]:
     """The plain-language decision-support lines."""
     spot = price_map.spot
     distance = f"{config.MAXIMUM_LEVEL_DISTANCE_SHARE:.0%}"
@@ -353,7 +363,7 @@ def _decisions(price_map: PriceMap, scenarios: List[ScenarioAssessment], top: Op
         lines.append(DecisionItem("summary", "No scenario has net support: no reference decision follows from this evidence."))
     else:
         lines.append(DecisionItem("summary", f"Best-supported scenario: {top_scenario.title} (evidence score "
-                                             f"{top_scenario.evidence_score:.0f} of 100, uncalibrated; confidence {confidence})."))
+                                             f"{top_scenario.evidence_score:.0f} on a 0-100 scale, uncalibrated, not a probability; confidence {confidence})."))
     if support is not None and resistance is not None:
         lines.append(DecisionItem("reference_range", (
             f"Reference range for a strategy: {_price(support.price)} to {_price(resistance.price)} "
@@ -377,6 +387,10 @@ def _decisions(price_map: PriceMap, scenarios: List[ScenarioAssessment], top: Op
             f"Watch: a break {side} {_price(scenario.level or 0.0)}. Supported now by: "
             f"{_sources(scenario.supporting_evidence_ids, items_by_id)}. Opposed by: "
             f"{_sources(scenario.opposing_evidence_ids, items_by_id)}. Beyond it {beyond}.")))
+    for band in price_map.at_spot:
+        lines.append(DecisionItem("watch", (
+            f"The spot is inside a mapped band ({_price(band.low)} to {_price(band.high)}, from "
+            f"{', '.join(band.input_groups)}): the price is at a mapped level now, so it bounds neither side.")))
     if resistance is None:
         lines.append(DecisionItem("unmapped", f"No meaningful level above within {distance} of the spot: the upside is unmapped."))
     if support is None:
@@ -386,11 +400,13 @@ def _decisions(price_map: PriceMap, scenarios: List[ScenarioAssessment], top: Op
             f"{trigger.change} -> {trigger.new_top_scenario or 'no scenario with net support'}" for trigger in triggers) + "."))
     elif top is not None:
         lines.append(DecisionItem("watch", "No single item's flip or removal changes the top scenario."))
-    caveats = []
+    item_caveats = []
     for item in items:
         for reason in item.quality_reasons:
-            caveats.append(f"{item.source}: {reason}")
-    for text in dict.fromkeys(caveats):
+            item_caveats.append(f"{item.source}: {reason}")
+    for text in dict.fromkeys(item_caveats):
+        lines.append(DecisionItem("data_caveat", f"Data caveat: {text}."))
+    for text in caveats:
         lines.append(DecisionItem("data_caveat", f"Data caveat: {text}."))
     for text in not_computed:
         lines.append(DecisionItem("data_caveat", f"Not computed: {text}."))
@@ -398,7 +414,8 @@ def _decisions(price_map: PriceMap, scenarios: List[ScenarioAssessment], top: Op
 
 
 def build_decision_report(currency: str, as_of: datetime, reference_price: float, evidence: Iterable[EvidenceItem],
-                          not_computed: Sequence[str] = (), context: Optional[Dict[str, Any]] = None) -> DecisionReport:
+                          not_computed: Sequence[str] = (), context: Optional[Dict[str, Any]] = None,
+                          caveats: Sequence[str] = ()) -> DecisionReport:
     """
     The report of one set of evidence.
 
@@ -409,6 +426,8 @@ def build_decision_report(currency: str, as_of: datetime, reference_price: float
         evidence: The items, any order (ids must be unique).
         not_computed: Sources that could not be computed, with why (shown as caveats, not used in scores).
         context: Extra numbers for the reader (not used in scores; must be JSON-serialisable).
+        caveats: Warnings about the inputs that are not tied to one item (e.g. an old spot); shown as data caveats and
+            kept in ``context["caveats"]``.
 
     Raises:
         ValueError: naive ``as_of``, lookahead, duplicate ids or a non-positive reference price.
@@ -425,5 +444,5 @@ def build_decision_report(currency: str, as_of: datetime, reference_price: float
         currency=currency, as_of=as_of, reference_price=reference_price, score_scale=config.EVIDENCE_SCORE_SCALE,
         evidence=items, price_map=price_map, scenarios=scenarios, top_scenario=top, confidence=confidence,
         confidence_reasons=reasons, what_would_change=triggers,
-        decisions=_decisions(price_map, scenarios, top, confidence, items, triggers, not_computed),
-        not_computed=list(not_computed), context=dict(context or {}))
+        decisions=_decisions(price_map, scenarios, top, confidence, items, triggers, not_computed, caveats),
+        not_computed=list(not_computed), context={**(context or {}), "caveats": list(caveats)})

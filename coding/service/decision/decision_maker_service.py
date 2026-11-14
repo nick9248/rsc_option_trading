@@ -6,8 +6,8 @@ Each source is read through the service that already computes it (``ExpiryOpenIn
 fixed clock reading, so every source describes the same instant. A source that cannot be computed (``LookupError``: no
 stored data) is listed under "not computed" and the report is built without it; programming errors are not caught.
 
-Point in time: the chain snapshot, index price, option flow window, taker ratio and liquidation snapshot are all read at or
-before the clock. Two inputs are not yet bounded by it (so a replay of a past instant would see later data there):
+Point in time: the chain snapshot, index price, option flow window, taker ratio (only 24 h windows closed by the clock) and
+liquidation snapshot are all read at or before the clock. The spot's own time is in the context and an old spot is flagged. Two inputs are not yet bounded by it (so a replay of a past instant would see later data there):
 ``DealerFlowLevelsService`` sums the trades up to the newest stored one, and ``get_latest_trade_time`` is the newest trade
 overall (the extractor clamps it to the window end). For live use (clock = now) both are point in time.
 """
@@ -75,9 +75,16 @@ class DecisionMakerService:
                 continue
             logger.info("%s %s: %d evidence items", currency, name, len(items))
             evidence.extend(items)
+        spot_time = MenthorqInputLoader(self.repository).load_inputs(currency, now)["index_price_time_utc"]
+        spot_age_hours = (now - spot_time).total_seconds() / 3600
+        caveats = []
+        if spot_age_hours > config.SPOT_FRESHNESS_LIMIT_HOURS:
+            caveats.append(f"the index price is from {spot_time:%Y-%m-%d %H:%M} UTC, {spot_age_hours:.1f} h "
+                                f"old (limit {config.SPOT_FRESHNESS_LIMIT_HOURS:g} h); every distance from the spot is "
+                                "measured from that price")
         context = {"open_interest_by_expiry": extractors.open_interest_context(open_interest.rows),
-                   "chain_snapshot": open_interest.captured_at.isoformat()}
-        return build_decision_report(currency, now, open_interest.index_price, evidence, not_computed, context)
+                   "chain_snapshot": open_interest.captured_at.isoformat(), "spot_time": spot_time.isoformat()}
+        return build_decision_report(currency, now, open_interest.index_price, evidence, not_computed, context, caveats)
 
     def save_snapshot(self, report: DecisionReport) -> bool:
         """Store the report in ``decision_snapshots`` (never rewritten). True when a row was inserted."""

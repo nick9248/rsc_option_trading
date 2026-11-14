@@ -37,7 +37,7 @@ def test_scores_follow_the_hand_calculation():
     # confidence: 2 groups agree (0), item conflict 0.15 / (0.8 + 0.5 + 0.15) = 10.3 % (0), mean quality of the
     # supporting items (0.8 + 0.5) / 2 = 0.65 (+1), fresh (0), margin 53.5 (+1) -> 2 points, but 2 groups < 3 -> medium
     assert inside.confidence == "medium"
-    assert inside.confidence_reasons[0].startswith("0: 2 independent input groups agree")
+    assert inside.confidence_reasons[0].startswith("0: 2 distinct input groups agree")
     assert "10%" in inside.confidence_reasons[1]
     assert inside.confidence_reasons[-1] == "+2 points in total -> medium"
     assert up.confidence == "low" and down.confidence == "low"
@@ -173,10 +173,11 @@ def test_what_would_change_lists_the_items_whose_flip_or_removal_changes_the_top
     assert report.top_scenario == BREAK_UP
     triggers = {trigger.evidence_id: trigger for trigger in report.what_would_change}
     # bull_strong bearish: break up 0.3 - 1.0 - 0.5 < 0 -> inside leads. bull_weak bearish: break up 1.0 - 0.3 - 0.5 = 0.2
-    # (16.7) < inside 0.35 (25.9). Without the resistance there is no break up and nothing has net support.
+    # (16.7) < inside 0.35 (25.9). Without the resistance there is no break up; "stays above 95,000" is open upward, so the
+    # bullish items no longer oppose it: inside = the support's 0.5 -> 33.3 leads.
     assert sorted(triggers) == ["bull_strong", "bull_weak", "resistance"]
     assert triggers["bull_strong"].change == "if bull_strong turned bearish" and triggers["bull_strong"].new_top_scenario == INSIDE
-    assert triggers["resistance"].new_top_scenario is None
+    assert triggers["resistance"].new_top_scenario == INSIDE
     assert any(item.text.startswith("What would change the top scenario: ") for item in report.decisions)
 
 

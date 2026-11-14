@@ -16,6 +16,7 @@ Input groups (items of one group are NOT independent):
 Every function returns items only for what was computed; a missing input gives no item, never a made-up one.
 """
 
+import math
 import statistics
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -82,7 +83,7 @@ def menthorq_evidence(drawn: Dict[str, Optional[float]], expirations: Sequence[s
 def _share_strength(row: Optional[ExpiryOpenInterest]) -> Tuple[float, Optional[str]]:
     """Strength from the expiry's open-interest share, and a quality reason when the share is not computed."""
     if row is None or row.share is None:
-        return config.UNKNOWN_SHARE_STRENGTH, "open-interest share of the expiry not computed: strength set to the stated prior"
+        return 1.0, "open-interest share of the expiry not computed: strength not scaled by it"
     return min(1.0, row.share / config.OPEN_INTEREST_SHARE_FOR_FULL_STRENGTH), None
 
 
@@ -129,7 +130,7 @@ def dealer_evidence(levels: DealerFlowLevels, open_interest_row: Optional[Expiry
                            "It is where the assumed dealer gamma concentrates; it does not say the price will stop there."),
                 as_of=levels.chain_captured_at, strength=base_strength * strength_scale, quality=quality, price=price,
                 horizon_days=horizon, quality_reasons=level_reasons, details={"expiry": expiry, "view": view, **check}))
-        if total is None or total == 0:
+        if total is None or not math.isfinite(total) or total == 0:
             continue
         regime = RANGE_BOUND if total > 0 else EXPANSION
         meaning = ("dealers would be long gamma, which damps moves" if total > 0
@@ -267,7 +268,8 @@ def taker_ratio_evidence(symbol: str, rolling_points: Sequence[Tuple[datetime, f
         The item, or None and the reason it was not computed.
     """
     start = now - timedelta(days=band_days)
-    points = sorted((time, ratio) for time, ratio in rolling_points if start <= time <= now)
+    # a point's 24 h window ends one hour after its time: keep only windows closed by ``now`` (point in time)
+    points = sorted((time, ratio) for time, ratio in rolling_points if start <= time and time + timedelta(hours=1) <= now)
     if len(points) < config.TAKER_BAND_MINIMUM_POINTS:
         return None, (f"{symbol} taker ratio: only {len(points)} rolling points in {band_days} days "
                       f"(at least {config.TAKER_BAND_MINIMUM_POINTS} needed for the band)")

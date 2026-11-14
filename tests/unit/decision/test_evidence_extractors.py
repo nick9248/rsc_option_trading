@@ -64,8 +64,8 @@ def test_dealer_evidence_with_a_passed_check_and_unknown_share():
     items = by_id(extractors.dealer_evidence(dealer_levels(gate_passed=True, total_open_interest_gex=None, trades_used=0),
                                              None, NOW))
     assert items["dealer.27NOV26.flow.put_wall"].quality == pytest.approx(0.6)
-    assert items["dealer.27NOV26.flow.put_wall"].strength == pytest.approx(0.5)     # UNKNOWN_SHARE_STRENGTH
-    assert any("share of the expiry not computed" in reason for reason in items["dealer.27NOV26.flow.put_wall"].quality_reasons)
+    assert items["dealer.27NOV26.flow.put_wall"].strength == pytest.approx(1.0)     # not scaled, never a made-up share
+    assert any("share of the expiry not computed: strength not scaled" in reason for reason in items["dealer.27NOV26.flow.put_wall"].quality_reasons)
     # no total computed (None) and no trades: no regime item at all
     assert not any(key.endswith("total_gex_sign") for key in items)
 
@@ -146,7 +146,7 @@ def test_taker_ratio_against_its_own_band():
 def test_taker_ratio_needs_enough_points_and_a_band():
     few = [(NOW - timedelta(hours=offset), 1.0) for offset in range(10)]
     item, reason = extractors.taker_ratio_evidence("BTCUSDT", few, NOW)
-    assert item is None and "only 10 rolling points" in reason
+    assert item is None and "only 9 rolling points" in reason      # the point at NOW covers an hour not yet closed
     flat = [(NOW - timedelta(hours=offset), 1.0) for offset in range(300)]
     item, reason = extractors.taker_ratio_evidence("BTCUSDT", flat, NOW)
     assert item is None and "no width" in reason

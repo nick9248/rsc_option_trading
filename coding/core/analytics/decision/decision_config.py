@@ -22,7 +22,7 @@ EVIDENCE_SCORE_SCALE = "0-100, uncalibrated: relative support, not a probability
 SCORE_HALF_POINT = 1.0
 """
 Net support that maps to a score of 50 (score = 100 x net / (net + SCORE_HALF_POINT)). 1.0 is the contribution of one
-full-strength, full-quality input group, so a score of 50 means "about one perfect independent source's worth of net
+full-strength, full-quality input group, so a score of 50 means "about one perfect source's worth of net
 support". The curve saturates, so adding groups raises the score with diminishing returns and never reaches 100.
 """
 
@@ -73,7 +73,7 @@ rather than filled with a far level; 15 % is the window the Levels chart draws a
 
 MINIMUM_LEVEL_WEIGHT = 0.3
 """
-A band is a "meaningful" level only when its weight (sum over its independent input groups of mean strength x quality)
+A band is a "meaningful" level only when its weight (sum over its distinct input groups of quality-weighted mean strength x quality-weighted mean quality)
 reaches this. 0.3 = one item of about medium quality; a lone low-quality item (a failed check, a volume strike) stays below.
 """
 
@@ -91,6 +91,9 @@ FRESHNESS_LIMIT_HOURS: Dict[str, float] = {
 Age (hours) after which an item of a group counts as stale. 3 h: all three feeds are hourly, and the existing pages warn at
 3 h (``STALE_AFTER`` of the taker flow, the option-flow sync warning).
 """
+
+SPOT_FRESHNESS_LIMIT_HOURS = 3.0
+"""An index price (the spot of the map) older than this is flagged in the report: the map is measured from it."""
 
 STALE_QUALITY_FACTOR = 0.5
 """Quality is multiplied by this when an item is older than its freshness limit: the signal may still hold, but less surely."""
@@ -130,6 +133,12 @@ RANGE_BOUND_OPPOSES_BREAK = 0.5
 EXPANSION_OPPOSES_INSIDE = 1.0
 """An expansion regime hint (moves amplified) opposes "stays inside" fully."""
 
+ONE_SIDED_EXPANSION_OPPOSES_INSIDE = 0.5
+"""
+On a one-sided map ("stays above support" with the upside unmapped) an expansion hint opposes "inside" only half: a large
+move toward the unmapped side does not contradict it, a move through the mapped bound does.
+"""
+
 EXPANSION_SUPPORTS_BREAK = 0.5
 """An expansion regime hint supports each break only half: it has no direction, so it splits between both sides."""
 
@@ -149,7 +158,7 @@ below 0. 10 % is the window the liquidation snapshots store, so a pool at its ed
 
 HIGH_CONFIDENCE_MINIMUM_GROUPS = 3
 """
-"high" needs at least three independent input groups agreeing. Today only three groups exist (Deribit open interest,
+"high" needs at least three distinct input groups agreeing. Distinct data feeds, not independent evidence: open interest accumulates the trades and all groups react to the same price moves. Today only three groups exist (Deribit open interest,
 Deribit trades, Binance perpetual candles), so "high" needs all of them on one side.
 """
 
@@ -222,8 +231,6 @@ An expiry holding this share (25 %) of all open interest gives its dealer levels
 down linearly. 25 % is about the share of one big monthly expiry.
 """
 
-UNKNOWN_SHARE_STRENGTH = 0.5
-"""Strength of an expiry's dealer levels when its open-interest share is not computed: half, with the reason stated."""
 
 FLOW_STRIKE_LEVEL_QUALITY = 0.35
 """
