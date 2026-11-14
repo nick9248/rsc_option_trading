@@ -82,10 +82,13 @@
   .table-wrap { overflow-x: auto; margin: 6px 0 4px; }
   table { border-collapse: collapse; font-size: 13.5px; }
   caption { text-align: left; color: var(--gray); font-size: 12px; padding-bottom: 4px; }
-  th, td { padding: 4px 18px 4px 0; text-align: left; border-bottom: 1px solid var(--faint); white-space: nowrap; }
+  th, td { padding: 4px 18px 4px 0; vertical-align: top; text-align: left; border-bottom: 1px solid var(--faint); white-space: nowrap; }
   thead th { color: var(--gray); font-weight: 400; font-size: 12px; border-bottom: 1px solid var(--rule); }
   tbody th { font-weight: 600; }
   .num { text-align: right; }
+  td.wrap { white-space: normal; min-width: 22ch; max-width: 60ch; }
+  button.jump { background: none; border: 0; border-bottom: 1px solid var(--ink); padding: 0; font: inherit; color: var(--ink); cursor: pointer; }
+  table.bar-expiries td, table.block-structures td { vertical-align: top; }
   .verdict-failed { font-weight: 600; }
 
   .share-cell { white-space: nowrap; }
@@ -173,6 +176,32 @@
       });
     });
   }
+
+  /* a button elsewhere on the page (data-switcher-target, data-control, data-value) makes a switcher show that choice */
+  function jumpSwitcher(trigger) {
+    const element = document.querySelector(`.switcher[data-switcher="${trigger.dataset.switcherTarget}"]`);
+    const configuration = element && DATA.switchers[trigger.dataset.switcherTarget];
+    if (!configuration) return;
+    const name = trigger.dataset.control, value = trigger.dataset.value;
+    const buttons = Array.from(element.querySelectorAll(`button[data-control="${name}"]`));
+    const select = element.querySelector(`select[data-control="${name}"]`);
+    if (select) {
+      if (!Array.from(select.options).some((option) => option.value === value)) return;
+      select.value = value;
+    } else if (buttons.some((button) => button.dataset.value === value)) {
+      buttons.forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.value === value)));
+    } else {
+      return;
+    }
+    configuration.selected[name] = value;
+    drawSwitcher(element);
+    const reduced = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    element.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
+  }
+  document.addEventListener("click", (event) => {
+    const trigger = event.target.closest && event.target.closest("[data-switcher-target]");
+    if (trigger) jumpSwitcher(trigger);
+  });
 
   /* ---------- embedded pages ---------- */
   const observers = new WeakMap();

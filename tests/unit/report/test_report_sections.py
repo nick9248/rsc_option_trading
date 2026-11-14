@@ -18,7 +18,8 @@ from coding.core.analytics.option_flow.strike_flow import OptionTrade, aggregate
 from coding.core.analytics.report.section_fragments import millions_text
 from coding.core.analytics.futures_flow.taker_flow import TakerFlowDay
 from coding.service.futures_flow.taker_flow_chart_service import TakerFlowFigureData
-from coding.service.option_flow.option_flow_service import OptionFlowService, StrikeFlowReport
+from coding.core.analytics.option_flow.block_structure import BiggestLeg, BlockStructure
+from coding.service.option_flow.option_flow_service import BlockStructureReport, OptionFlowService, StrikeFlowReport
 from coding.service.report import report_sections
 from coding.service.report.report_sections import (
     ALL_EXPIRATIONS, SectionContext, build_dealer_levels_section, build_futures_flow_section, build_levels_section,
@@ -43,11 +44,19 @@ class FakeOptionFlowService:
 
     build_figure = staticmethod(OptionFlowService.build_figure)
 
-    def __init__(self, trades, newest_trade=NOW - timedelta(minutes=5), expiries=None):
+    def __init__(self, trades, newest_trade=NOW - timedelta(minutes=5), expiries=None, blocks=()):
         self.trades = trades
         self.newest_trade = newest_trade
         self.expiries = expiries if expiries is not None else sorted({trade.expiration for trade in trades})
         self.ends = []
+        self.blocks = blocks              # a list of BlockStructure, or an exception to raise
+        self.block_calls = []
+
+    def block_structures(self, currency, hours, end=None, top=10):
+        self.block_calls.append((currency, hours, end, top))
+        if isinstance(self.blocks, Exception):
+            raise self.blocks
+        return BlockStructureReport(end - timedelta(hours=hours), end, list(self.blocks), len(self.blocks))
 
     def strike_flow(self, currency, hours, expiry, end=None):
         self.ends.append(end)
@@ -57,6 +66,11 @@ class FakeOptionFlowService:
     def traded_expirations(self, currency, hours, end=None):
         self.ends.append(end)
         return list(self.expiries)
+
+
+def make_block(block_trade_id):
+    leg = BiggestLeg("25DEC26", 120_000.0, "C", "buy", 10.0, 1_200_000.0)
+    return BlockStructure(block_trade_id, 1, 1, ["25DEC26"], 1, 0, 1, 0, 1_200_000.0, [leg], "single leg", NOW)
 
 
 def fourteen_expiry_service():
@@ -126,6 +140,42 @@ def test_option_flow_warns_when_no_trade_is_stored_at_all(tmp_path):
     service = FakeOptionFlowService([], newest_trade=None, expiries=[])
     section = build_option_flow_section(make_context(tmp_path), service)
     assert any("no stored trades" in warning for warning in section.warnings)
+
+
+def test_option_flow_names_the_expiry_that_carries_the_biggest_bar_and_lists_the_largest_blocks(tmp_path, monkeypatch):
+    # 120,000 call bought: 99 contracts on 25DEC26 and 1 on 26MAR27 -> one expiry carries 99%
+    trades = [OptionTrade("25DEC26", 120_000.0, "C", "buy", 99.0, False), OptionTrade("26MAR27", 120_000.0, "C", "buy", 1.0, False),
+              OptionTrade("25DEC26", 100_000.0, "C", "buy", 5.0, True)]
+    service = FakeOptionFlowService(trades, expiries=["25DEC26", "26MAR27"], blocks=[make_block("BLOCK-306229")])
+    install_open_interest(monkeypatch)
+    section = build_option_flow_section(make_context(tmp_path), service)
+    html_text = section.body_html
+    assert html_text.index("data-switcher=\"option-flow\"") < html_text.index("Which expiry carries the largest bars") \
+        < html_text.index("Largest blocks of the window")
+    assert ">25DEC26</button> 99% (41 days)" in html_text and ">26MAR27</button> 1% (132 days)" in html_text
+    assert 'data-switcher-target="option-flow" data-control="expiry" data-value="25DEC26"' in html_text
+    assert "not explained" not in html_text                  # `single` holds every traded expiry
+    assert "BLOCK-306229" in html_text and "off the order book" in html_text
+    assert service.block_calls == [("BTC", 24, NOW, 10)]
+
+
+def test_option_flow_bars_table_uses_every_traded_expiry_not_only_the_kept_ones(tmp_path, monkeypatch):
+    service, labels = fourteen_expiry_service()          # 12 kept; the strike 68,000 bars are made of all 14
+    section = build_option_flow_section(make_context(tmp_path), service)
+    assert "not explained" not in section.body_html
+
+
+def test_option_flow_section_survives_a_failing_blocks_query_and_says_so(tmp_path):
+    service = FakeOptionFlowService(make_trades("27NOV26", 68_000.0, 1.0), blocks=RuntimeError("blocks query failed"))
+    section = build_option_flow_section(make_context(tmp_path), service)
+    assert not section.failed
+    assert "Not available: blocks query failed" in section.body_html and "Which expiry carries the largest bars" in section.body_html
+    assert section.switchers["option-flow"]["views"]
+
+
+def test_option_flow_without_blocks_says_none_are_stored(tmp_path):
+    section = build_option_flow_section(make_context(tmp_path), FakeOptionFlowService(make_trades("27NOV26", 68_000.0, 1.0)))
+    assert "No block trades are stored in the window." in section.body_html
 
 
 # ---------------------------------------------------------------- dealer levels

@@ -22,12 +22,13 @@ from coding.core.analytics.menthorq_replication_calculator import (
     EXPIRY_UNIVERSE_MONTHLY, GAMMA_UNDERLYING_INDEX, is_monthly_expiry, parse_expiry_settlement)
 from coding.core.analytics.open_interest.expiry_open_interest import ExpiryOpenInterest
 from coding.core.analytics.option_flow.level_overview_page import build_level_overview_page
+from coding.core.analytics.option_flow.block_structure import bar_expiry_shares
 from coding.core.analytics.report.figure_style import apply_paper_style
 from coding.core.analytics.report.report_page import (
     ReportSection, SwitcherControl, embeddable_page, format_utc, page_frame_fragment, paragraph_fragment, png_data_uri,
     switcher_configuration, switcher_fragment, view_key)
 from coding.core.analytics.report.section_fragments import (
-    dealer_levels_caption, expiry_choice_label, open_interest_table, option_flow_caption, taker_flow_table)
+    bar_expiry_table, block_structure_table, dealer_levels_caption, expiry_choice_label, open_interest_table, option_flow_caption, taker_flow_table)
 from coding.core.database.repository import DatabaseRepository
 from coding.service.futures_flow.taker_flow_chart_service import CHART_DAYS, TakerFlowChartService
 from coding.service.futures_flow.taker_flow_settings import STALE_AFTER
@@ -45,7 +46,11 @@ MAXIMUM_OPTION_FLOW_EXPIRIES = 12        # single expirations precomputed (the m
 OPTION_FLOW_UNITS: List[Tuple[str, str]] = [("notional", "Notional (USD)"), ("contracts", "Contracts"), ("trades", "Trades")]
 ALL_EXPIRATIONS = "all"
 TOP_OPEN_INTEREST_EXPIRIES = 4           # expiries with the most open interest that get their own view in option flow and levels
-OPTION_FLOW_TABLE_ROWS = 8               # rows of the open interest table in the option flow tab
+BAR_TABLE_ROWS = 8                       # biggest bars whose expiries are listed
+BLOCK_TABLE_ROWS = 10                    # largest blocks listed
+BLOCK_EXPLANATION = ("A block is negotiated off the order book and often has several legs; the taker side of one leg of a "
+                     "multi-leg block is not a directional view on its own.")
+OPTION_FLOW_TABLE_ROWS = 8              # rows of the open interest table in the option flow tab
 DEALER_NEAREST_EXPIRIES = 5             # nearest expiries precomputed, plus the nearest monthly one
 STALE_TRADE_HOURS = 3
 TAKER_FLOW_SYMBOLS = {"BTC": "BTCUSDT", "ETH": "ETHUSDT"}
@@ -259,6 +264,48 @@ def option_flow_expiries(ranked: List[str], rows: Dict[str, ExpiryOpenInterest],
     return required + [label for label in ranked if label not in required][:max(maximum - len(required), 0)]
 
 
+def _days_left(label: str, rows: Dict[str, ExpiryOpenInterest], now: datetime) -> Optional[float]:
+    """Days to settlement from the open interest row, else from the label; None when neither is known."""
+    if label in rows and rows[label].days_left is not None:
+        return rows[label].days_left
+    settlement = parse_expiry_settlement(label)
+    return (settlement - now).total_seconds() / 86400 if settlement is not None else None
+
+
+def _bar_expiry_fragment(context: SectionContext, single: Dict[str, Any], everything: Any, kept: List[str],
+                         rows: Dict[str, ExpiryOpenInterest]) -> str:
+    """
+    "Which expiry carries the largest bars": ``single`` must hold EVERY traded expiry, else the bars cannot be explained.
+    A failure is logged and shown as a one-line note; it must not fail the section whose charts are fine.
+    """
+    heading = "<h3>Which expiry carries the largest bars</h3>"
+    try:
+        bars = bar_expiry_shares({label: report.flow for label, report in single.items()}, everything.flow, BAR_TABLE_ROWS)
+        if not bars:
+            return heading + paragraph_fragment("No trades in the window, so there are no bars.", "note")
+        days = {item.expiry: _days_left(item.expiry, rows, context.now) for bar in bars for item in bar.expiries}
+        return heading + bar_expiry_table(bars, days, set(kept))
+    except Exception as error:      # optional addition to the section: log it, show one line, keep the section
+        logger.warning("expiry shares of the biggest bars not available: %s", error, exc_info=True)
+        return heading + paragraph_fragment(f"Not available: {str(error) or type(error).__name__}", "note")
+
+
+def _block_structure_fragment(context: SectionContext, service: Any, hours: int) -> str:
+    """The largest blocks of the window with a plain-language sentence; a failure is a one-line note (see above)."""
+    heading = "<h3>Largest blocks of the window</h3>"
+    try:
+        report = service.block_structures(context.currency, hours, end=context.now, top=BLOCK_TABLE_ROWS)
+        if not report.blocks:
+            return heading + paragraph_fragment("No block trades are stored in the window.", "note")
+        return (heading + paragraph_fragment(BLOCK_EXPLANATION)
+                + block_structure_table(report.blocks)
+                + paragraph_fragment(f"{report.legs_in_window:,} block legs in the window; the {len(report.blocks)} "
+                                     "largest blocks are shown.", "note"))
+    except Exception as error:
+        logger.warning("block structures not available: %s", error, exc_info=True)
+        return heading + paragraph_fragment(f"Not available: {str(error) or type(error).__name__}", "note")
+
+
 def build_option_flow_section(context: SectionContext, service: Optional[OptionFlowService] = None) -> ReportSection:
     """
     Buy/sell volume per strike of the last 24 hours: all expirations and up to 12 single expirations (the most traded by
@@ -301,9 +348,12 @@ def build_option_flow_section(context: SectionContext, service: Optional[OptionF
                 if len(traded) > len(kept) else "; each can be picked on its own, ordered by open interest.")
              + " Buy/sell is the taker's side (aggressor); blocked = Deribit block trades, drawn next to the axis.",
              "The window is fixed at 24 hours in the report; other windows: scripts/option_flow_by_strike.py."]
+    below_switcher = (_bar_expiry_fragment(context, single, everything, kept, open_interest_rows)
+                      + _block_structure_fragment(context, service, hours))
     return ReportSection(
         key="option-flow", title="Option flow", as_of=f"Last {hours} hours up to {format_utc(everything.window_end)}.",
-        body_html=open_interest_fragment(context, OPTION_FLOW_TABLE_ROWS) + switcher_fragment("option-flow", controls),
+        body_html=(open_interest_fragment(context, OPTION_FLOW_TABLE_ROWS) + switcher_fragment("option-flow", controls)
+                   + below_switcher),
         figures=figures, switchers={"option-flow": switcher_configuration(controls, views)}, warnings=warnings, notes=notes,
         description=("Buy and sell volume per strike of the Deribit option trades: calls to the left, puts to the right; "
                      "each bar is the blocked part next to the axis plus the screen part. Hover a strike for its eight "
