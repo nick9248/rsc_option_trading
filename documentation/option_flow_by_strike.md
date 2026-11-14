@@ -36,7 +36,7 @@ A "sell" is sell-side volume, not "they are now short".
 .venv\Scripts\python -m scripts.option_flow_by_strike --hours 24 --expiry 13NOV26
 ```
 
-Writes a PNG and a JSON (contracts, notional and trades per strike and series) into `outputs/option_flow/`.
+Writes a PNG and a JSON (contracts, notional and trades per strike and series) into `output/option_flow/`.
 
 ## Report section "Option flow" (module 6)
 

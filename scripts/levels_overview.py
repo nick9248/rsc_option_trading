@@ -6,7 +6,7 @@ Usage (from repo root; sync the local database first: scripts/sync_from_vps.py):
     .venv\\Scripts\\python -m scripts.levels_overview --currency BTC
     .venv\\Scripts\\python -m scripts.levels_overview --currency BTC --expiry 27NOV26 --band-percent 1.0
 
-Writes a PNG and an HTML page into outputs/levels_overview/ (git-ignored). Reads only; places no orders.
+Writes a PNG and an HTML page into output/levels_overview/ (git-ignored). Reads only; places no orders.
 """
 
 import argparse
@@ -19,7 +19,7 @@ from coding.core.logging.logging_setup import init_logging
 from coding.service.option_flow.level_overview_service import LevelOverviewService
 
 logger = logging.getLogger(__name__)
-DEFAULT_OUTPUT = Path(__file__).resolve().parents[1] / "outputs" / "levels_overview"
+DEFAULT_OUTPUT = Path(__file__).resolve().parents[1] / "output" / "levels_overview"
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

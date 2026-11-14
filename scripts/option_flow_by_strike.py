@@ -5,7 +5,7 @@ Usage (from repo root; sync the local database first for the latest trades: scri
     .venv\\Scripts\\python -m scripts.option_flow_by_strike --hours 24
     .venv\\Scripts\\python -m scripts.option_flow_by_strike --hours 24 --expiry 27NOV26 --currency BTC
 
-Reads the stored trades (historical_trades) and writes a PNG and a JSON into outputs/option_flow/ (git-ignored). Reads
+Reads the stored trades (historical_trades) and writes a PNG and a JSON into output/option_flow/ (git-ignored). Reads
 only; places no orders.
 """
 
@@ -23,7 +23,7 @@ from coding.service.option_flow.option_flow_service import OptionFlowService
 logger = logging.getLogger(__name__)
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_OUTPUT_DIRECTORY = REPOSITORY_ROOT / "outputs" / "option_flow"
+DEFAULT_OUTPUT_DIRECTORY = REPOSITORY_ROOT / "output" / "option_flow"
 
 
 def parse_utc(text: str) -> datetime:

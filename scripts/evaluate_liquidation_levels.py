@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 VENUE, INSTRUMENT, SYMBOL = "okx", "BTC-USDT-SWAP", "BTCUSDT"
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_OUTPUT_DIRECTORY = REPOSITORY_ROOT / "outputs" / "liquidation_heatmap"
+DEFAULT_OUTPUT_DIRECTORY = REPOSITORY_ROOT / "output" / "liquidation_heatmap"
 
 
 def report_line(text: str) -> None:

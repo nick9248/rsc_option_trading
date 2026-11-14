@@ -13,7 +13,7 @@ CryptoQuant's real Binance BTC/USDT daily liquidations (rank correlation), next 
 the move times volume) and with the heatmap's contribution beyond that naive predictor (partial rank
 correlation). Configurations are fixed in CONFIGURATIONS before the run and are not tuned on this data.
 Reads Binance public data and CryptoQuant (key from .env, never printed). Writes a JSON and a CSV into
-outputs/liquidation_heatmap/ (git-ignored). Places no orders. Method and caveats:
+output/liquidation_heatmap/ (git-ignored). Places no orders. Method and caveats:
 documentation/liquidation_heatmap_research.md.
 """
 
@@ -50,7 +50,7 @@ logger = logging.getLogger(__name__)
 
 SYMBOL = "BTCUSDT"
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_OUTPUT_DIRECTORY = REPOSITORY_ROOT / "outputs" / "liquidation_heatmap"
+DEFAULT_OUTPUT_DIRECTORY = REPOSITORY_ROOT / "output" / "liquidation_heatmap"
 WARMUP_DAYS = 30
 
 
