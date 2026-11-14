@@ -1,10 +1,15 @@
 """Tests of the report help (``how_to_read.py``): structure, wording rules, and the arithmetic of every example."""
 
+import inspect
+import math
 import re
+import statistics
+from datetime import datetime, timezone
 from typing import Iterator, List, Tuple
 
 import pytest
 
+from coding.core.analytics.futures_flow import taker_flow_figure
 from coding.core.analytics.futures_flow.taker_flow import taker_buy_sell_ratio
 from coding.core.analytics.liquidation_heatmap.liquidation_heatmap_model import HeatmapSettings
 from coding.core.analytics.menthorq_replication_calculator import (
@@ -112,6 +117,55 @@ def test_no_dollar_sign_and_no_angle_brackets():
         assert "<" not in text and ">" not in text, where
 
 
+def test_flip_and_hvl_are_never_read_as_a_gamma_regime():
+    """The flip and the HVL are points on the strike axis: no sentence may pair them with a regime or dampening story."""
+    for where, text in all_text():
+        for sentence in re.split(r"(?<=[.;:])\s+", text):
+            lowered = sentence.lower()
+            if "flip" in lowered or "hvl" in lowered:
+                for word in ("dampen", "amplif", "regime"):
+                    assert word not in lowered, (where, sentence)
+
+
+def test_no_hard_coded_ratio_range_and_no_overclaims():
+    text = " ".join(text for _, text in all_text()).lower()
+    assert "0.8 and 1.15" not in text
+    for phrase in ("act as a magnet", "act like magnets", "tends to dampen", "tends to amplify", "dampening environment",
+                   "which strikes failed", "only prices within 15 %", "dealer assumption matters more"):
+        assert phrase not in text, phrase
+
+
+def test_menthorq_charts_are_not_described_as_all_expiries():
+    text = " ".join(text for where, text in all_text() if where.startswith("menthorq")).lower()
+    assert "over all expiries" not in text and "all-expiry net gex levels" not in text
+    assert "three all-expiry level lines" not in text
+    assert "monthly by default" in text
+
+
+def test_menthorq_open_interest_table_timing_examples():
+    close = datetime(2026, 11, 12, 23, 59, tzinfo=timezone.utc)
+    open_interest_start = datetime(2026, 11, 12, 0, 0, tzinfo=timezone.utc)
+    chain = datetime(2026, 11, 13, 14, 0, tzinfo=timezone.utc)
+    assert round((chain - close).total_seconds() / 3600) == 14
+    assert round((chain - open_interest_start).total_seconds() / 3600) == 38
+    example = case_of("menthorq", "This tab and the Levels tab").example
+    assert "14 hours" in example and "38 hours" in example
+    assert "38 hours" in case_of("menthorq", "The open-interest table and the charts differ").example
+    assert "38 hours" in case_of("report", "Two charts or two tabs").example
+
+
+def test_plausibility_and_level_help_wording_fixes():
+    check = topic_of("dealer-levels", "The plausibility check")
+    terms = {term.term: term.meaning for term in check.terms}
+    assert "any trade of the currency, not only this expiry" in terms["Coverage"]
+    assert "open interest 0 is checked" in terms["Options without an open interest value"]
+    levels = " ".join(topic_of("levels", "The lanes").limits)
+    assert "opens at plus or minus 15 %" in levels and "ledger lists them all" in levels
+    single = next(term.meaning for term in topic_of("option-flow", "Block-structure").terms if term.term == "Label 'single leg'")
+    assert "only 1 of 4 legs in the window" in single
+    assert case_of("levels", "Many levels, fewer than 3 sources")
+
+
 def test_no_all_capital_words_except_known_acronyms():
     for where, text in all_text():
         for word in re.findall(r"\b[A-Z]{4,}\b", text):
@@ -203,7 +257,32 @@ def test_futures_ratio_example():
     even = case_of("futures-flow", "Ratio about 1")
     assert "1.0" in even.example
     band = case_of("futures-flow", "The line leaves the band")
-    assert "0.1" in band.example
+    assert "0.082" in band.example and "0.08" in band.example
+
+
+def test_band_example_uses_the_population_standard_deviation():
+    values = help_module.FUTURES_RATIO_VALUES
+    assert values == (0.9, 1.0, 1.1)
+    # population: sqrt(((0.1)^2 + 0 + (0.1)^2) / 3); the sample version would divide by 2 and give 0.1
+    assert help_module.population_standard_deviation(values) == pytest.approx(math.sqrt(0.02 / 3))
+    assert round(math.sqrt(0.02 / 3), 3) == 0.082
+    assert statistics.pstdev(values) == pytest.approx(help_module.population_standard_deviation(values))
+    assert statistics.stdev(values) != pytest.approx(help_module.population_standard_deviation(values))
+    # the chart's own band uses pstdev (taker_flow_figure.py)
+    assert "pstdev" in inspect.getsource(taker_flow_figure)
+
+
+def test_index_versus_strike_notional_example():
+    assert help_module.index_notional_difference_percent(77_000, 70_000) == pytest.approx(7_000 / 77_000 * 100)
+    assert round(7_000 / 77_000 * 100, 1) == 9.1
+    assert round(38_000 / 108_000 * 100, 1) == 35.2
+    # contracts x index against contracts x strike, recomputed directly
+    assert round((1 - (10 * 70_000) / (10 * 77_000)) * 100) == 9
+    assert round((1 - (10 * 70_000) / (10 * 108_000)) * 100) == 35
+    assert help_module.index_notional_difference_percent(60_000, 70_000) < 0
+    term = next(term.meaning for term in topic_of("option-flow", "Buy and sell bars").terms if term.term == "Notional")
+    assert "9 % less" in term and "35 % less" in term and "17 % more" in term
+    assert "4 %" not in term
 
 
 def test_option_flow_examples():
@@ -322,7 +401,7 @@ def test_plausibility_check_examples():
     thresholds = " ".join(topic_of("dealer-levels", "The plausibility check").limits)
     assert "95 %" in thresholds and "5 %" in thresholds and "20 %" in thresholds
     terms = {term.term: term.meaning for term in topic_of("dealer-levels", "The plausibility check").terms}
-    assert "95 %" in terms["Coverage"] and "5 %" in terms["Violations"] and "20 %" in terms["Options without open interest"]
+    assert "95 %" in terms["Coverage"] and "5 %" in terms["Violations"] and "20 %" in terms["Options without an open interest value"]
     assert "tiny" in case_of("dealer-levels", "Failures are tiny strikes").reading.lower()
     assert "weigh that lane low" in case_of("dealer-levels", "Failures are tiny strikes").reading
 
@@ -342,7 +421,7 @@ def test_confluence_examples_against_the_code():
     assert "700" in agree and "75,000" in agree and "75,200" in agree and "75,400" in agree and "400 from the first" in agree
     far = case_of("levels", "Levels too far apart").example
     assert "1,000 from the first" in far and "700" in far
-    assert "75,600" in case_of("levels", "Many levels, only one source").example
+    assert "75,600" in case_of("levels", "Many levels, fewer than 3 sources").example
 
 
 def test_levels_zoom_and_ruler_examples():
@@ -369,7 +448,7 @@ def test_liquidation_examples():
     assert "72,520" in short_case
     topic = topic_of("levels", "The liquidation estimate")
     text = " ".join(case.reading for case in topic.cases) + " ".join(topic.limits)
-    assert "not a floor" in text and "not a ceiling" in text and "magnet" in text and "no direction" in text
+    assert "not a floor" in text and "not a ceiling" in text and "not shown by this report" in text and "no direction" in text
     assert "forward test" in text
 
 

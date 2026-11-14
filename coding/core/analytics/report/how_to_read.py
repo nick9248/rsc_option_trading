@@ -16,7 +16,7 @@ turn into maths: write USD), no angle brackets.
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import accumulate
-from statistics import mean, stdev
+from statistics import mean, pstdev
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
 
@@ -162,7 +162,7 @@ def net_dex_usd(call_open_interest: float, call_delta: float, put_open_interest:
 
 
 def gex_expiring_percent(net_gex: float, all_net_gex: Sequence[float]) -> float:
-    """The drawn "GEX Expiring" candidate: net GEX of the expiry over the sum of the absolute net GEX of all expiries, in percent."""
+    """The drawn "GEX Expiring" candidate: net GEX of the expiry over the sum of the absolute net GEX of the expiries of the chart, in percent."""
     return 100.0 * net_gex / sum(abs(value) for value in all_net_gex)
 
 
@@ -241,9 +241,17 @@ def simple_average(values: Sequence[float]) -> float:
     return mean(values)
 
 
-def sample_standard_deviation(values: Sequence[float]) -> float:
-    """Standard deviation of a few values (how far they usually stray from their average)."""
-    return stdev(values)
+def population_standard_deviation(values: Sequence[float]) -> float:
+    """Population standard deviation of a few values, as the band of the chart uses (taker_flow_figure.py: pstdev)."""
+    return pstdev(values)
+
+
+def index_notional_difference_percent(strike: float, index_price: float) -> float:
+    """
+    How much less contracts x index price is than contracts x strike, in percent of the strike:
+    (strike - index) / strike. Negative means more (strikes below the index).
+    """
+    return (strike - index_price) / strike * 100.0
 
 
 # --------------------------------------------------------------------------
@@ -294,6 +302,7 @@ EXPIRY_ALL_TOTAL = 4000.0
 FLOW_CONTRACTS = 10.0
 FLOW_STRIKE = 80_000.0
 FLOW_FAR_STRIKE = 140_000.0
+FLOW_INDEX_STRIKES = (77_000.0, 108_000.0, 60_000.0)      # index price: EXAMPLE_SPOT
 FLOW_BLOCKED_USD = 3_000_000.0
 FLOW_SCREEN_USD = 1_000_000.0
 FLOW_EXPIRY_PARTS_USD = (6_000_000.0, 3_000_000.0, 1_000_000.0)
@@ -346,7 +355,8 @@ def _millions(value: float) -> str:
 _RATIO_BELOW = example_ratio(FUTURES_BUY_USD, FUTURES_SELL_USD)
 _RATIO_ABOVE = example_ratio(FUTURES_ABOVE_BUY_USD, FUTURES_ABOVE_SELL_USD)
 _RATIO_EVEN = example_ratio(FUTURES_EVEN_USD, FUTURES_EVEN_USD)
-_RATIO_SPREAD = sample_standard_deviation(FUTURES_RATIO_VALUES)
+_RATIO_SPREAD = population_standard_deviation(FUTURES_RATIO_VALUES)
+_INDEX_LESS = [index_notional_difference_percent(strike, EXAMPLE_SPOT) for strike in FLOW_INDEX_STRIKES]
 _CALL_IV_OI = iv_times_open_interest(IV_OI_CALL_IV_PERCENT, IV_OI_CALL_OPEN_INTEREST)
 _SECOND_IV_OI = iv_times_open_interest(IV_OI_SECOND_IV_PERCENT, IV_OI_SECOND_OPEN_INTEREST)
 _NET_GEX = net_gex_per_one_percent_usd(GEX_CALL_GAMMA_SUM, GEX_PUT_GAMMA_SUM, EXAMPLE_SPOT)
@@ -431,8 +441,11 @@ REPORT_HELP = SectionHelp(
                     "Two charts or two tabs show different levels",
                     "They may use different data instants or different rules. Check the as-of line of each tab before "
                     "you call it a contradiction.",
-                    "The MenthorQ tab uses the close of the last complete UTC day; the Levels tab uses the newest "
-                    "chain. A call resistance of 75,000 on one and 76,000 on the other can simply be 14 hours apart."),
+                    "The MenthorQ charts use the close of the last complete UTC day (open interest from 00:00 UTC of that "
+                    "day, spot and IV at 23:59 UTC); the Levels tab uses the newest chain. With the close of 12 Nov "
+                    "and a chain from 13 Nov 14:00 UTC, the spot and IV are about 14 hours apart and the open "
+                    "interest about 38 hours. A call resistance of 75,000 on one and 76,000 on the other can simply be "
+                    "that time gap."),
                 HelpCase(
                     "Several sources show a level at the same price",
                     "It is a coincidence of methods, not a proof. The sources are not independent: several read the "
@@ -497,7 +510,8 @@ _MENTHORQ_HELP = SectionHelp(
     summary=(
         "Replica of MenthorQ's charts, rebuilt from the stored Deribit option chain: IV x OI, net GEX per expiry and "
         "net DEX, with three drawn levels (call resistance, put support, HVL). It is a fitted replica, not MenthorQ's "
-        "own formula, and it was fitted on BTC only. The data is the daily close of the last complete UTC day."),
+        "own formula, and it was fitted on BTC only. The charts use the daily close of the last complete UTC day; the "
+        "open-interest table uses the newest chain at report time."),
     topics=(
         HelpTopic(
             title="IV x OI chart and its three lines",
@@ -518,7 +532,8 @@ _MENTHORQ_HELP = SectionHelp(
                 HelpTerm("Put support", "The strike with the lowest (most negative) net GEX. Drawn today: "
                                         "net_gex_argmin_negative. Also not taken from the bars."),
                 HelpTerm("HVL", "The strike where the running sum of net GEX, added from the lowest strike up, is lowest "
-                                "(cumulative_net_gex_argmin). It is the turning point of that running sum. In the "
+                                "(cumulative_net_gex_argmin). It is a point on the strike axis, the turning point of that "
+                                "running sum, not a price level re-priced for a change of spot. In the "
                                 "code this is one of several candidates for HVL; see the limits below."),
             ),
             cases=(
@@ -546,15 +561,19 @@ _MENTHORQ_HELP = SectionHelp(
                     f"{_one(percent_from(78_000, EXAMPLE_CALL_RESISTANCE))} % above the line."),
                 HelpCase(
                     "Price is between HVL and call resistance",
-                    "The usual vendor story calls this the calmer zone (positive gamma side). That story is a common "
-                    "reading, not something this report tested. The line is a reference for how far the next level is.",
+                    "Price sits between two levels on the strike axis. Being above HVL says only where price is, not "
+                    "whether the summed exposure is positive or negative: that is the sign of the total net GEX "
+                    "(per 1 % move) of the chart, under the dealer assumption. The vendor story of a calmer zone here "
+                    "is a common reading that this report did not test. Use the lines as distances to the next levels.",
                     f"HVL {_int(EXAMPLE_HVL)}, call resistance {_int(EXAMPLE_CALL_RESISTANCE)}, price 72,000: "
                     f"{_int(EXAMPLE_CALL_RESISTANCE - 72_000)} points below call resistance and "
                     f"{_int(72_000 - EXAMPLE_HVL)} above HVL."),
                 HelpCase(
                     "Price is between put support and HVL",
-                    "The usual vendor story calls this the faster zone (negative gamma side). Again a common reading "
-                    "that depends on the dealer assumption.",
+                    "Price sits between two levels on the strike axis. Being below HVL does not tell whether the summed "
+                    "exposure is positive or negative; the sign of the chart's total net GEX does, under the dealer "
+                    "assumption. The vendor story of a faster zone here is a common reading that this report did not "
+                    "test. Use the lines as distances.",
                     f"Put support {_int(EXAMPLE_PUT_SUPPORT)}, HVL {_int(EXAMPLE_HVL)}, price 65,000: "
                     f"{_int(EXAMPLE_HVL - 65_000)} below HVL and {_int(65_000 - EXAMPLE_PUT_SUPPORT)} above put support."),
                 HelpCase(
@@ -565,8 +584,8 @@ _MENTHORQ_HELP = SectionHelp(
                     f"{_one(abs(percent_from(60_000, EXAMPLE_PUT_SUPPORT)))} % below the line."),
                 HelpCase(
                     "Price is at a level",
-                    "Positioning at that strike is largest around price right now. The report does not say what price "
-                    "does there. Treat it as a reference price.",
+                    "Price equals the level; the distance is 0 %. What the level means depends on its rule (see above). "
+                    "The report does not say what price does there. Treat it as a reference price.",
                     f"Price {_int(EXAMPLE_CALL_RESISTANCE)} equals call resistance {_int(EXAMPLE_CALL_RESISTANCE)}: "
                     "the distance is 0 %."),
                 HelpCase(
@@ -577,10 +596,17 @@ _MENTHORQ_HELP = SectionHelp(
                     "above assume put support, then HVL, then call resistance."),
                 HelpCase(
                     "This tab and the Levels tab show different levels",
-                    "This tab uses the last complete UTC day: spot and IV at 23:59 UTC, open interest from 00:00 UTC. "
+                    "The charts use the last complete UTC day: spot and IV at 23:59 UTC, open interest from 00:00 UTC. "
                     "The Levels tab uses the newest chain. Different instants give different levels.",
-                    "Close of 12 Nov (23:59 UTC) against a chain from 13 Nov 14:00 UTC is about 14 hours apart. "
-                    "A level of 75,000 versus 76,000 is a timing difference, not an error."),
+                    "Close of 12 Nov (23:59 UTC) against a chain from 13 Nov 14:00 UTC: the spot and IV are about 14 "
+                    "hours apart, the open interest (from 00:00 UTC of 12 Nov) about 38 hours. A level of 75,000 versus "
+                    "76,000 is a timing difference, not an error."),
+                HelpCase(
+                    "The open-interest table and the charts differ",
+                    "On this tab the open-interest table uses the newest chain at report time, while the charts use "
+                    "the previous UTC day's close. Totals and shares can therefore differ between them.",
+                    "A table built from the 13 Nov 14:00 UTC chain next to a chart with open interest from 12 Nov "
+                    "00:00 UTC compares data about 38 hours apart."),
             ),
             limits=(
                 "Which rule each line uses today: call resistance = highest positive net GEX; put support = lowest "
@@ -601,7 +627,8 @@ _MENTHORQ_HELP = SectionHelp(
         HelpTopic(
             title="Net GEX panels",
             what_you_see=(
-                "Four panels: the first expiry, the next expiry, the expiry with the highest absolute net GEX and the "
+                "Four panels, within the expiries of the chart (monthly by default; all listed with the switch): the "
+                "first expiry of that set, the next expiry, the expiry with the highest absolute net GEX and the "
                 "one with the second highest (among the rest). Bars are net GEX per strike (green positive, red "
                 "negative), a yellow profile line, the three level lines, the spot, and the share 'GEX Expiring' in the title."),
             terms=(
@@ -613,14 +640,17 @@ _MENTHORQ_HELP = SectionHelp(
                 HelpTerm("Net GEX", "Call gamma exposure minus put gamma exposure. This takes the assumption that "
                                     "dealers are long calls and short puts (the published SqueezeMetrics and SpotGamma "
                                     "convention). It is an assumption: Deribit does not say who holds what."),
-                HelpTerm("Positive gamma, long gamma", "Dealers hedge against the move: they sell into rises and buy "
-                                                       "into falls. That tends to dampen moves."),
-                HelpTerm("Negative gamma, short gamma", "Dealers hedge with the move: they buy into rises and sell into "
-                                                        "falls. That tends to amplify moves."),
+                HelpTerm("Positive gamma, long gamma", "If dealers are long gamma and delta-hedge, their hedges trade "
+                                                       "against the move: they sell into rises and buy into falls. This "
+                                                       "report does not test whether that dampens or amplifies price."),
+                HelpTerm("Negative gamma, short gamma", "If dealers are short gamma and delta-hedge, their hedges trade "
+                                                        "with the move: they buy into rises and sell into falls. This "
+                                                        "report does not test whether that dampens or amplifies price."),
                 HelpTerm("Profile line", "The running sum of net GEX over strikes, rescaled so its largest value spans "
                                          "the largest bar. The rescale is an approximation (within 10 % on 11 of 12 "
                                          "transcribed MenthorQ profiles)."),
-                HelpTerm("GEX Expiring", "Net GEX of the expiry over the sum of the absolute net GEX of all expiries, in "
+                HelpTerm("GEX Expiring", "Net GEX of the expiry over the sum of the absolute net GEX of the expiries of "
+                                         "the chart (monthly by default; all listed with the switch), in "
                                          "percent. Approximate: off by up to about 3 to 5 percentage points against "
                                          "MenthorQ's numbers."),
                 HelpTerm("Bar unit", "The bars are drawn in MenthorQ's unit, gamma x OI x spot (the stored net GEX divided "
@@ -636,33 +666,37 @@ _MENTHORQ_HELP = SectionHelp(
                     f" x {_int(EXAMPLE_SPOT)} squared x 0.01 = {_int(_NET_GEX)} USD per 1 % move."),
                 HelpCase(
                     "A green bar (positive net GEX at a strike)",
-                    "Under the assumption, dealers are net long gamma at that strike. Their hedging works against "
-                    "price moves around it. This is why call resistance, the largest green bar, is called resistance. "
-                    "It is a tendency, not a barrier.",
+                    "Under the assumption, dealers are net long gamma at that strike. If they delta-hedge, their hedges "
+                    "trade against the move. This is why call resistance, the largest green bar, is called resistance. "
+                    "This report does not test whether that dampens or amplifies price.",
                     f"Net GEX {_int(_NET_GEX)} USD per 1 % move: about that many USD of hedging for a 1 % move at that strike."),
                 HelpCase(
                     "A red bar (negative net GEX at a strike)",
-                    "Under the assumption, dealers are net short gamma at that strike. Their hedging works with price "
-                    "moves around it, which tends to amplify them. Put support is the largest red bar.",
+                    "Under the assumption, dealers are net short gamma at that strike. If they delta-hedge, their hedges "
+                    "trade with the move. Put support is the largest red bar. This report does not test whether "
+                    "that amplifies price.",
                     f"Puts weigh more than calls: calls 0.02, puts 0.05, spot {_int(EXAMPLE_SPOT)}: "
                     f"(0.02 - 0.05) x {_int(EXAMPLE_SPOT)} squared x 0.01 = "
                     f"{_int(net_gex_per_one_percent_usd(0.02, 0.05, EXAMPLE_SPOT))} USD per 1 % move."),
                 HelpCase(
                     "The total net GEX of an expiry is positive or negative",
-                    "Positive total: dealers net long gamma in that expiry (under the assumption), a dampening "
-                    "environment. Negative total: net short gamma, an amplifying one. One expiry is not the whole "
-                    "market: another expiry can point the other way.",
+                    "Positive total: dealers net long gamma in that expiry (under the assumption); if they "
+                    "delta-hedge, their hedges trade against the move. Negative total: net short gamma, hedges "
+                    "trade with the move. This report does not test whether that dampens or amplifies price. One "
+                    "expiry is not the whole market: another expiry can point the other way.",
                     "A weekly with a total of -3 and a monthly with +8 (millions of USD) add to +5, but the weekly "
                     "can still behave as short gamma near its strikes."),
                 HelpCase(
                     "Which panel is shown",
-                    "The first two panels are the next two expiries in time. The last two are the biggest by absolute "
-                    "net GEX among the remaining expiries. A panel can say no expiry when there are too few.",
+                    "The first two panels are the first two expiries of the selected set (monthly by default), in time "
+                    "order. The last two are the biggest by absolute "
+                    "net GEX among the remaining expiries of that set. A panel can say no expiry when there are too few.",
                     "Four expiries in time order with absolute net GEX 30, 10, 60 and 20 (millions): panels one and two "
                     "are the first two expiries (30 and 10); panel three is the biggest of the rest (60), panel four the next (20)."),
                 HelpCase(
                     "GEX Expiring in the panel title",
-                    "How big this expiry's net GEX is compared with all expiries together (by absolute size). Higher "
+                    "How big this expiry's net GEX is compared with the expiries of the chart together (by absolute "
+                    "size; monthly by default, all listed with the switch). Higher "
                     "means more of the gamma sits in this expiry.",
                     f"Net GEX in millions of USD for three expiries: {', '.join(f'{value:+.0f}' for value in GEX_EXPIRING_NETS_MILLION)}. "
                     f"First expiry: {_int(GEX_EXPIRING_NETS_MILLION[0])} / ({_int(sum(abs(v) for v in GEX_EXPIRING_NETS_MILLION))})"
@@ -684,8 +718,9 @@ _MENTHORQ_HELP = SectionHelp(
         HelpTopic(
             title="Net DEX",
             what_you_see=(
-                "Net DEX bars per strike over all expiries (green positive, red negative), an orange DEX profile, a "
-                "yellow GEX profile, the three all-expiry level lines and the spot."),
+                "Net DEX bars per strike over the expiries of the chart (monthly by default; all listed with the "
+                "switch; green positive, red negative), an orange DEX profile, a "
+                "yellow GEX profile, the three level lines of those expiries and the spot."),
             terms=(
                 HelpTerm("Delta", "How much an option's price changes for a one-unit move of the underlying: about 0 to 1 "
                                   "for calls, 0 to -1 for puts."),
@@ -714,7 +749,7 @@ _MENTHORQ_HELP = SectionHelp(
                     "Bars +2, -1, +3 in millions give a running sum of +2, +1, +4."),
                 HelpCase(
                     "The level lines on this chart",
-                    "They are the all-expiry net GEX levels (same rule as the IV x OI chart), not a DEX rule.",
+                    "They are the net GEX levels over the expiries of the chart (same rule as the IV x OI chart), not a DEX rule.",
                     "Call resistance, put support and HVL here come from net GEX, even though the bars are DEX."),
             ),
             limits=(
@@ -769,6 +804,8 @@ _MENTHORQ_HELP = SectionHelp(
             ),
             limits=(
                 "Per-expiry levels come from that expiry's own net GEX, not from the IV x OI bars.",
+                "The table uses the newest chain at report time; the charts use the previous UTC day's close (open "
+                "interest from 00:00 UTC of that day). The two can be more than a day apart.",
                 "OI is the number of open contracts, not a view on direction.",
             ),
         ),
@@ -828,8 +865,8 @@ _FUTURES_HELP = SectionHelp(
                     f"Buys {_billions(FUTURES_EVEN_USD)}, sells {_billions(FUTURES_EVEN_USD)}: ratio {_one(_RATIO_EVEN)}."),
                 HelpCase(
                     "Ratio below 1",
-                    "Takers sold more than they bought: sellers were the more aggressive side. In the stored 30 days the "
-                    "real ratio stayed roughly between 0.8 and 1.15.",
+                    "Takers sold more than they bought: sellers were the more aggressive side. The note under the chart "
+                    "prints the live minimum and maximum of the ratio over the stored days.",
                     f"Buys {_billions(FUTURES_BUY_USD)}, sells {_billions(FUTURES_SELL_USD)}: ratio "
                     f"{_two(_RATIO_BELOW)} ({FUTURES_BUY_USD / 1e9:.1f} / {FUTURES_SELL_USD / 1e9:.1f} = "
                     f"{_RATIO_BELOW:.3f}); net flow {_billions(net_flow_usd(FUTURES_BUY_USD, FUTURES_SELL_USD))}."),
@@ -841,8 +878,10 @@ _FUTURES_HELP = SectionHelp(
                     "The line leaves the band",
                     "The ratio is unusual compared with this 30-day window. It is not a signal by itself: a window with "
                     "a calm month has a narrow band, so smaller moves look unusual.",
-                    f"For the three values {', '.join(str(value) for value in FUTURES_RATIO_VALUES)} the spread is "
-                    f"{_one(_RATIO_SPREAD)}, so the band is about 1.0 plus or minus {_one(_RATIO_SPREAD)}."),
+                    f"For the three values {', '.join(str(value) for value in FUTURES_RATIO_VALUES)} the population "
+                    f"standard deviation is {_RATIO_SPREAD:.3f} (prints as about {_two(_RATIO_SPREAD)}), so the band is "
+                    f"about 1.0 plus or minus {_two(_RATIO_SPREAD)}. The real band is computed over all 30 days, not "
+                    "only the part you have zoomed to."),
                 HelpCase(
                     "The line crosses 1.0",
                     "The 24-hour balance changed from net buying to net selling or back. It is a change of balance, "
@@ -893,10 +932,15 @@ _OPTION_FLOW_HELP = SectionHelp(
                 HelpTerm("Taker side (buy or sell)", "Deribit's direction is the side of the aggressor, the one who crossed "
                                                      "the spread. A buy is a taker who bought. Checked on the data: buys print "
                                                      "above the mark price (median +0.14 %), sells below (-0.58 %)."),
-                HelpTerm("Blocked and screen", "Blocked = a block trade (block_trade_id set; in practice 25 BTC or more per "
-                                               "leg), negotiated off the screen. Screen = a normal order-book trade."),
-                HelpTerm("Notional", "Contracts times the strike, in USD (Laevitas's definition). One contract is 1 BTC. "
-                                     "Contracts times the index price would give about 4 % less at a strike of 77,000 and 35 % less at 108,000."),
+                HelpTerm("Blocked and screen", "Blocked = a block trade (block_trade_id set; for BTC in practice 25 BTC or "
+                                               "more per leg; the BTC minimum is 25 BTC), negotiated off the screen. "
+                                               "Screen = a normal order-book trade."),
+                HelpTerm("Notional", "Contracts times the strike, in USD (Laevitas's definition). One contract is 1 coin "
+                                     "(BTC or ETH). Contracts times the index price differs from it by (strike minus "
+                                     f"index) / strike. At index {_int(EXAMPLE_SPOT)}: {_int(_INDEX_LESS[0])} % less at a "
+                                     f"strike of {_int(FLOW_INDEX_STRIKES[0])}, {_int(_INDEX_LESS[1])} % less at "
+                                     f"{_int(FLOW_INDEX_STRIKES[1])}, and more for strikes below the index "
+                                     f"({_int(-_INDEX_LESS[2])} % more at {_int(FLOW_INDEX_STRIKES[2])})."),
                 HelpTerm("Contracts and trades", "Contracts: the size in coins. Trades: how many separate trades. One big "
                                                  "block is one trade; many small orders are many trades."),
                 HelpTerm("Unit switch", "Notional (USD), contracts or trades. The same trades, counted three ways."),
@@ -945,7 +989,8 @@ _OPTION_FLOW_HELP = SectionHelp(
                 HelpCase(
                     "Large flow far out of the money",
                     "Far out-of-the-money flow is not optimism by itself. Cheap far strikes are used for tail "
-                    "protection, as spread legs, or to sell premium. Notional also inflates far strikes.",
+                    "protection, as spread legs, or to sell premium. Notional also inflates far out-of-the-money calls "
+                    "(high strikes); far puts (low strikes) are deflated.",
                     f"{_int(FLOW_CONTRACTS)} calls at {_int(FLOW_FAR_STRIKE)} with spot at {_int(EXAMPLE_SPOT)}: the strike is "
                     f"{_int(percent_from(FLOW_FAR_STRIKE, EXAMPLE_SPOT))} % above spot."),
                 HelpCase(
@@ -976,7 +1021,8 @@ _OPTION_FLOW_HELP = SectionHelp(
             terms=(
                 HelpTerm("Block structure", "The legs of one block trade. A block can be one leg or several legs traded "
                                             "together, such as a spread."),
-                HelpTerm("Label 'single leg'", "The block has one leg."),
+                HelpTerm("Label 'single leg'", "One leg in the window. A 4-leg block with only 1 leg in the window reads "
+                                               "'single leg (only 1 of 4 legs in the window)'."),
                 HelpTerm("Label 'two legs'", "The block has two legs, for example a spread or a risk reversal."),
                 HelpTerm("Label 'multi-leg structure over N expiries'", "More than two legs over N expiries. The direction of one "
                                                                        "leg is not a view on its own."),
@@ -1047,21 +1093,26 @@ _DEALER_HELP = SectionHelp(
                                                           "dealer. So the dealer position of an option is minus the cumulative "
                                                           "taker flow since the start of the flow (Glassnode's taker-flow method). "
                                                           "This is an assumption: Deribit does not say who is a customer or a dealer."),
-                HelpTerm("Dealer assumption (OI view)", "Dealers are long calls and short puts over the whole open interest. Also an assumption."),
-                HelpTerm("Flow start", "The first stored trade of the expiry, but not before 2026-04-25, when the complete trade "
+                HelpTerm("Dealer assumption (OI view)", "Dealers are long calls and short puts over the whole open interest. Also an assumption."),                HelpTerm("Flow start", "The first stored trade of the expiry, but not before 2026-04-25, when the complete trade "
                                        "history starts. Positions held before that are not known."),
                 HelpTerm("GEX per 1 % move", "Flow view: (dealer calls x call gamma + dealer puts x put gamma) x spot squared x 0.01. "
                                              "OI view: (call gamma x OI minus put gamma x OI) x spot squared x 0.01. "
-                                             "Positive = dealers long gamma (they trade against moves), negative = short gamma (they chase moves)."),
+                                             "Positive = dealers long gamma, negative = short gamma, under the assumption. If "
+                                             "dealers are long gamma and delta-hedge, their hedges trade against the move "
+                                             "(short gamma: with the move). This report does not test whether that dampens "
+                                             "or amplifies price."),
                 HelpTerm("Call wall", "The strike with the largest positive GEX."),
                 HelpTerm("Put wall", "The strike with the most negative GEX."),
                 HelpTerm("Gamma flip", "The strike where the running sum of GEX over ascending strikes changes sign. If it "
                                        "changes sign several times, the highest such strike is kept. It is not computed "
                                        "when it never changes sign. The OI view also counts landing exactly on zero. This is a "
-                                       "different rule from the HVL on the MenthorQ tab (lowest point of the running sum)."),
+                                       "different rule from the HVL on the MenthorQ tab (lowest point of the running sum). "
+                                       "It is a point on the strike axis, not a re-priced zero-gamma level, and it can sit "
+                                       "on the opposite side of spot from one (gex_dex_calculator.py)."),
                 HelpTerm("Agreement and disagreement", "When both views put a level at the same strike, two different assumptions "
-                                                       "point to the same place. When they differ, the dealer assumption matters "
-                                                       "more than the data."),
+                                                       "point to the same place. When they differ, the gap can come from the "
+                                                       "assumption or from the different data each view reads (trades versus "
+                                                       "open interest)."),
             ),
             cases=(
                 HelpCase(
@@ -1080,13 +1131,16 @@ _DEALER_HELP = SectionHelp(
                     f"{_int(net_gex_per_one_percent_usd(GEX_CALL_GAMMA_SUM, GEX_PUT_GAMMA_SUM, EXAMPLE_SPOT))} USD per 1 % move."),
                 HelpCase(
                     "Price is above the gamma flip and below the call wall",
-                    "The usual story: net long gamma side, dampening, with the call wall as the next reference. A common "
-                    "reading that depends on the assumption.",
+                    "Spot is above the flip on the strike axis, with the call wall as the next reference above. Being "
+                    "above the flip does not tell whether the summed exposure is positive or negative: the sign of the "
+                    "total net GEX (per 1 % move) of the view does, under the assumption.",
                     f"Flip {_int(EXAMPLE_HVL)}, call wall {_int(EXAMPLE_CALL_RESISTANCE)}, spot 72,000: spot is "
                     f"{_int(72_000 - EXAMPLE_HVL)} above the flip and {_int(EXAMPLE_CALL_RESISTANCE - 72_000)} below the wall."),
                 HelpCase(
                     "Price is below the gamma flip and above the put wall",
-                    "The usual story: net short gamma side, amplifying moves, with the put wall as the next reference.",
+                    "Spot is below the flip on the strike axis, with the put wall as the next reference below. Being "
+                    "below the flip does not tell whether the summed exposure is positive or negative; the sign of the "
+                    "view's total net GEX does, under the assumption.",
                     f"Flip {_int(EXAMPLE_HVL)}, put wall 65,000, spot 66,000: {_int(EXAMPLE_HVL - 66_000)} below the flip and "
                     f"{_int(66_000 - 65_000)} above the put wall."),
                 HelpCase(
@@ -1099,7 +1153,8 @@ _DEALER_HELP = SectionHelp(
                     f"Put wall 65,000, spot 62,000: {_one(abs(percent_from(62_000, 65_000)))} % below the wall."),
                 HelpCase(
                     "Price is at the gamma flip",
-                    "The regime story is at its turning point; small moves change which side spot is on. Treat the flip as an approximate zone.",
+                    "Price equals the flip; the distance is 0 %. Small moves change which side of the flip spot is on, "
+                    "which says nothing about the sign of the exposure. Treat the flip as an approximate point.",
                     f"Flip {_int(EXAMPLE_HVL)} and spot {_int(EXAMPLE_HVL)}: 0 % apart."),
                 HelpCase(
                     "The gamma flip says not computed",
@@ -1117,7 +1172,8 @@ _DEALER_HELP = SectionHelp(
                     "Flow call wall 75,000 and OI call wall 75,000."),
                 HelpCase(
                     "The two views disagree",
-                    "Common. The dealer assumption changes the answer. There is no ground truth to pick a winner.",
+                    "Common. The assumption, or the different data each view reads (trades versus open interest), can "
+                    "change the answer. There is no ground truth to pick a winner.",
                     f"Flow call wall 73,000 and OI call wall 77,000: {_one(percent_from(77_000, 73_000))} % apart. One real sample "
                     "(2026-11-13) had totals of -3.4M and -69.2M USD per 1 %."),
             ),
@@ -1137,11 +1193,15 @@ _DEALER_HELP = SectionHelp(
             terms=(
                 HelpTerm("Plausibility check", "A dealer cannot hold more than the open interest of an option. The check counts "
                                                "the options whose dealer position, in absolute value, exceeds their open interest."),
-                HelpTerm("Coverage", "The share of hours since the flow start for which trades are stored. It must be at least 95 %."),
+                HelpTerm("Coverage", "The share of hours since the flow start for which trades are stored (hours with any "
+                                     "trade of the currency, not only this expiry). It must be at least 95 %."),
                 HelpTerm("Violations", "Options whose dealer position exceeds their open interest, as a share of the options "
                                        "checked. At most 5 % are allowed."),
-                HelpTerm("Options without open interest", "Traded options that have no open interest to check against. More than "
-                                                          "20 % of those seen, or all of them, fails the check."),
+                HelpTerm("Options without an open interest value", "Traded options that are not in the chain snapshot or have "
+                                                                   "no open interest value, so there is nothing to check against. An "
+                                                                   "option with open interest 0 is checked, and any flow against it "
+                                                                   "counts as a violation. More than "
+                                                                   "20 % of those seen, or all of them, fails the check."),
                 HelpTerm("Other reasons", "No valid index price, or no stored trades for the expiry."),
             ),
             cases=(
@@ -1163,14 +1223,13 @@ _DEALER_HELP = SectionHelp(
                 HelpCase(
                     "Failures are tiny strikes",
                     "Many failures are far strikes with small numbers. The check counts options, not exposure, so a tiny "
-                    "option fails as much as a large one. Look at which strikes failed before discarding the view. Then "
+                    "option fails as much as a large one. The report shows only the counts, so "
                     "weigh that lane low.",
-                    "7 contracts of flow against 0 open interest at a far strike is one failure, the same as a big strike "
+                    "7 contracts of flow against an open interest of 0 at a far strike is one failure, the same as a big strike "
                     "with 700 against 500."),
                 HelpCase(
                     "What to do with a failed check",
-                    "Do not delete the view and do not trust it. Weigh the flow-based lane low, rely on the OI-based lane "
-                    "less than usual too (it also has no ground truth), and keep the check result in mind.",
+                    "Do not delete the view and do not trust it. Weigh the flow-based lane low and keep the check result in mind.",
                     "On the Levels tab a failed lane is drawn with hollow marks."),
             ),
             limits=(
@@ -1255,7 +1314,8 @@ _LEVELS_HELP = SectionHelp(
             ),
             limits=(
                 "The sources are not independent. Counting lanes overstates the evidence.",
-                "Only prices within 15 % of the spot are drawn in the figure; the footer names the others.",
+                "The page opens at plus or minus 15 % of the spot. Levels beyond the zoom are listed at the edge of "
+                "their row; All levels shows every one, and the ledger lists them all.",
             ),
         ),
         HelpTopic(
@@ -1285,9 +1345,10 @@ _LEVELS_HELP = SectionHelp(
                     f"{_int(LEVELS_TOO_FAR_MARKS[-1][1] - LEVELS_TOO_FAR_MARKS[0][1])} from the first, more than "
                     f"{_int(_BAND_WIDTH)}. No band."),
                 HelpCase(
-                    "Many levels, only one source",
+                    "Many levels, fewer than 3 sources",
                     "Several levels of the same source do not make a band. A band needs 3 different sources.",
-                    f"Levels at {', '.join(_int(price) for _, price in LEVELS_SAME_SOURCE_MARKS)} from two sources only. No band."),
+                    f"Levels at {', '.join(_int(price) for _, price in LEVELS_SAME_SOURCE_MARKS)} from two sources only "
+                    "(one level of the MenthorQ replica, two of option flow). No band."),
                 HelpCase(
                     "A band that includes a hollow mark",
                     "One of the agreeing lanes failed its check. Treat the agreement as weaker.",
@@ -1321,14 +1382,16 @@ _LEVELS_HELP = SectionHelp(
             cases=(
                 HelpCase(
                     "A long liquidation level below the price",
-                    "If price falls to it, longs are forced to sell. That is fuel for a drop, not a floor. It can act as a "
-                    "magnet for price. It gives no direction.",
+                    "If price falls to it, longs are forced to sell. That is forced selling, not a floor. If the model is "
+                    "right, forced selling there would add to a move through that price. Whether price is drawn to "
+                    "these levels is not shown by this report; the model is still in a forward test. It gives no direction.",
                     f"A long at 25x opened at {_int(LIQUIDATION_ENTRY)}: {_int(LIQUIDATION_ENTRY)} x (1 - 1/25 + 0.004) = "
                     f"{_int(_LONG_LIQUIDATION)}."),
                 HelpCase(
                     "A short liquidation level above the price",
-                    "If price rises to it, shorts are forced to buy. That is fuel for a rise, not a ceiling. It can act as "
-                    "a magnet. It gives no direction.",
+                    "If price rises to it, shorts are forced to buy. That is forced buying, not a ceiling. If the model "
+                    "is right, forced buying there would add to a move through that price. Whether price is drawn to "
+                    "these levels is not shown by this report; the model is still in a forward test. It gives no direction.",
                     f"A short at 25x opened at {_int(LIQUIDATION_ENTRY)}: {_int(LIQUIDATION_ENTRY)} x (1 + 1/25 - 0.004) = "
                     f"{_int(_SHORT_LIQUIDATION)}."),
                 HelpCase(
@@ -1344,7 +1407,7 @@ _LEVELS_HELP = SectionHelp(
                 "A research model with assumed leverage tiers and simplifications (no fees, no maintenance tiers). Still "
                 "in a forward test, so treat it as unproven.",
                 "A snapshot keeps the bins within 10 % of the reference price.",
-                "Liquidation levels act like magnets and fuel. Neither side gives direction.",
+                "Whether price is drawn to liquidation levels is not shown by this report. Neither side gives direction.",
             ),
         ),
         HelpTopic(
@@ -1373,7 +1436,7 @@ _LEVELS_HELP = SectionHelp(
                     f"{_int(HEDGE_CLUSTER_PRICE)} would already be in the money there."),
                 HelpCase(
                     "Placing a stop",
-                    "Many other orders sit at obvious levels. A stop exactly on a level shares the price with them. "
+                    "Other traders may place orders at the same obvious levels. A stop exactly on a level shares the price with them. "
                     "Use a level as a reference and add your own margin.",
                     f"Put support at {_int(EXAMPLE_PUT_SUPPORT)}: a stop placed 1 % beyond is at "
                     f"{_int(EXAMPLE_PUT_SUPPORT * 0.99)}."),
