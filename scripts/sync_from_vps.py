@@ -89,7 +89,7 @@ SYNC_TABLES = [
         "name": "snapshots",
         "watermark_col": "captured_at",
         "watermark_type": "timestamp",
-        "conflict_target": None,
+        "conflict_target": "(captured_at, instrument_name) DO NOTHING",     # migration 035 must be applied locally
     },
     {
         "name": "hourly_snapshots",

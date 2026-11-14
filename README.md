@@ -12,7 +12,7 @@ Automated crypto options trading for BTC and ETH on Deribit. The long-term goal 
 | **On-chain analysis** | GEX/DEX by strike, max pain, put/call ratios, volatility surface, buy/sell flow (computed on demand from stored trades), dealer inventory, exposure profiles. |
 | **Morning note** | Turns the on-chain analysis into a scored executive summary (`synthesis_logic.md`). |
 | **Health checks** | One shared check registry, run locally (`scripts/validate_system.py`) and on the VPS (`scripts/check_vps_health.py`, hourly cron). |
-| **Desktop GUI** | PySide6 app: API connection, snapshot, on-chain analysis, database sync, system health, MenthorQ Charts and MenthorQ Monitor tabs. |
+| **Desktop GUI** | PySide6 app: API connection, snapshot, on-chain analysis, database sync, system health, MenthorQ Monitor and the Report tab (one HTML report with MenthorQ, futures flow, option flow, dealer levels and the levels overview). |
 
 No code in this repo places real orders.
 
