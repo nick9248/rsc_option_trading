@@ -199,7 +199,7 @@ class TestHelpers:
         assert telegram_html_to_plain_text(code_block("x & y")) == "x & y"
 
     def test_output_directory_is_dated(self):
-        base = Path("outputs/gui")
+        base = Path("output/gui")
         now = datetime(2026, 11, 7, 9, 15, 42, tzinfo=timezone.utc)
         assert monitor_output_directory(base, False, date(2026, 11, 6), now) == base / "2026-11-06"
         assert monitor_output_directory(base, True, date(2026, 11, 6), now) == \

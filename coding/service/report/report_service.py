@@ -1,6 +1,6 @@
 """
 Generates the market report of one currency: first brings the local database in step with the VPS when it is behind, then
-builds the five sections and writes ONE self-contained HTML file to ``outputs/report/``.
+builds the five sections and writes ONE self-contained HTML file to ``output/report/``.
 
 Sync rule (``VpsSyncService.sync_if_behind``): the newest watermark (the column the sync itself uses) of the tables the
 report reads -- historical_trades, snapshots, taker_flow_hourly, liquidation_heatmap_snapshots -- is compared between the
@@ -31,7 +31,7 @@ from coding.service.report.report_sections import SECTION_BUILDERS, SectionConte
 logger = logging.getLogger(__name__)
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_OUTPUT_DIRECTORY = REPOSITORY_ROOT / "outputs" / "report"
+DEFAULT_OUTPUT_DIRECTORY = REPOSITORY_ROOT / "output" / "report"
 CURRENCIES = ("BTC", "ETH")
 SYNC_HINT = "Sync the database (Database tab or scripts/sync_from_vps.py) and generate the report again."
 

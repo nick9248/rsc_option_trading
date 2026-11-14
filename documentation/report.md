@@ -3,7 +3,7 @@
 The Report tab (module 6) replaced five tabs on 2026-11-14: MenthorQ Charts, Futures Flow, Option Flow, Dealer Levels and Levels. One button builds one HTML file per currency with a tab for each of them.
 
 ## What it is
-- One file per run, written to `outputs/report/<currency>_market_report_<UTC time>Z.html` (git-ignored; old files are not deleted).
+- One file per run, written to `output/report/<currency>_market_report_<UTC time>Z.html` (git-ignored; old files are not deleted).
 - Self-contained: no network. plotly.js is inlined once (about 4.8 MB), every chart (MenthorQ included) is a Plotly figure embedded as data, and each Levels page sits in an iframe (`srcdoc`, one per dealer expiry). Size: about 6 MB per currency since the MenthorQ PNGs were replaced by figures (6.05 MB for BTC on 2026-11-14). Build time was about 25 s before the expiry views were added; not measured again.
 - Open interest (OI) is the number of open option contracts. The report shows it per expiry, in coins and as notional (OI x index price).
 - Every number comes from the existing services; the report computes nothing a second way.
