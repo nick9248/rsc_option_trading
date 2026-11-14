@@ -1,17 +1,15 @@
 """
-Generates the taker flow charts (BTC and ETH perpetuals) from the stored hourly
-volumes, into a dated folder, with the numbers beside them as JSON.
+Loads the stored taker flow (BTC and ETH perpetuals) for the report's interactive
+figure: the hourly volumes, the complete days and the warnings.
 
 Reads ``taker_flow_hourly`` (on the PC: the local mirror that
 scripts/sync_from_vps.py fills). Nothing is fetched or invented: a day with a
 missing hour is not drawn and is reported as a warning.
 """
 
-import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Callable, List, Optional, Sequence, Tuple
 
 from coding.core.analytics.futures_flow.taker_flow import (
@@ -21,24 +19,12 @@ from coding.core.analytics.futures_flow.taker_flow import (
     rolling_ratio,
     start_of_utc_hour,
 )
-from coding.core.analytics.futures_flow.taker_flow_chart_renderer import render_taker_flow_chart
 from coding.core.database.repository import DatabaseRepository
 from coding.service.futures_flow.taker_flow_settings import STALE_AFTER, SYMBOLS, symbol_label
 
 logger = logging.getLogger(__name__)
 
-DATA_FILE_NAME = "taker_flow_data.json"
 CHART_DAYS = 30      # days drawn (the collector backfills 30, but the two are set separately)
-
-
-@dataclass
-class TakerFlowChartResult:
-    """What one generation produced."""
-
-    folder: Path
-    files: List[Path] = field(default_factory=list)
-    warnings: List[str] = field(default_factory=list)
-    newest_hour_utc: Optional[datetime] = None
 
 
 @dataclass
@@ -55,7 +41,7 @@ class TakerFlowFigureData:
 
 
 class TakerFlowChartService:
-    """Writes one chart per symbol plus the data file."""
+    """Loads the stored taker flow of each symbol for the report figure."""
 
     def __init__(
         self,
@@ -96,7 +82,7 @@ class TakerFlowChartService:
     def _load(self, symbol: str, now: datetime) -> TakerFlowFigureData:
         """
         The stored hours of ``symbol`` in the window, its complete days and rolling ratio, and the warnings (no data, missing
-        hours, stale data). Shared by ``generate`` and ``figure_data`` so both report the same things.
+        hours, stale data).
         """
         label = symbol_label(symbol)
         first_hour = start_of_utc_hour(now) - timedelta(days=self.days)
@@ -127,43 +113,3 @@ class TakerFlowChartService:
         days, the warnings ``generate`` would give, and the newest stored hour (None without data).
         """
         return self._load(symbol, self.clock())
-
-    def generate(self, output_directory: Path) -> TakerFlowChartResult:
-        """
-        Write ``<output_directory>/<YYYY-MM-DD>/<label>_taker_flow.png`` for each
-        symbol with data, and ``taker_flow_data.json``.
-
-        Returns:
-            The folder, the written files, warnings (missing data, stale data) and the
-            newest stored hour of any symbol.
-        """
-        now = self.clock()
-        folder = output_directory / now.strftime("%Y-%m-%d")
-        folder.mkdir(parents=True, exist_ok=True)
-        result = TakerFlowChartResult(folder=folder)
-        data = {"generated_at_utc": now.isoformat(),
-                "source": "taker_flow_hourly (Binance USD-M perpetual klines)", "symbols": {}}
-
-        for symbol in self.symbols:
-            loaded = self._load(symbol, now)
-            result.warnings.extend(loaded.warnings)
-            if not loaded.hours:
-                continue
-            label, days, newest = loaded.label, loaded.days, loaded.newest_hour_utc
-            result.newest_hour_utc = max(newest, result.newest_hour_utc) if result.newest_hour_utc else newest
-            if not days:
-                continue
-            note = (f"Source: Binance USD-M {symbol} perpetual hourly klines (taker volume in USD). "
-                    f"Data up to {(newest + timedelta(hours=1)).strftime('%Y-%m-%d %H:%M')} UTC.")
-            path = render_taker_flow_chart(label, days, loaded.rolling_points, folder / f"{label}_taker_flow.png", note)
-            result.files.append(path)
-            data["symbols"][symbol] = {
-                "newest_hour_utc": newest.isoformat(),
-                "days": [{"day": day.day.isoformat(), "taker_buy_usd": day.taker_buy_usd,
-                          "taker_sell_usd": day.taker_sell_usd, "ratio": day.ratio} for day in days],
-            }
-
-        data_path = folder / DATA_FILE_NAME
-        data_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        result.files.append(data_path)
-        return result

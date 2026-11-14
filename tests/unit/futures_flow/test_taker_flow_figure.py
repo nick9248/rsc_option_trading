@@ -158,8 +158,13 @@ def test_figure_data_has_hours_points_days_and_newest_hour_and_writes_nothing(tm
     assert data.warnings == [] and list(tmp_path.iterdir()) == []
 
 
-@pytest.mark.parametrize("variant", ["gap", "empty", "stale"])
-def test_figure_data_warnings_are_those_of_generate(tmp_path, variant):
+@pytest.mark.parametrize("variant, expected", [
+    ("gap", ["BTC: missing hours on 2026-11-04; those days are not drawn"]),
+    ("empty", ["BTC: no hourly data stored in the last 30 days "
+               "(run scripts/sync_from_vps.py after the collector has run)"]),
+    ("stale", ["BTC: data ends at 2026-11-13 04:00 UTC (more than 3 hours old; sync the data)"]),
+])
+def test_figure_data_warns_about_gaps_no_data_and_stale_data(variant, expected):
     if variant == "gap":
         hours = hours_for("BTCUSDT", 10, 90.0, 100.0)
         del hours[30]
@@ -167,9 +172,7 @@ def test_figure_data_warnings_are_those_of_generate(tmp_path, variant):
         hours = []
     else:
         hours = hours_for("BTCUSDT", 9, 90.0, 100.0, last_hour=LAST_CLOSED - timedelta(hours=10))
-    service = TakerFlowChartService(cast(Any, FakeRepository(hours)), symbols=("BTCUSDT",), clock=lambda: NOW)
-    assert service.figure_data("BTCUSDT").warnings == service.generate(tmp_path).warnings
-    assert service.figure_data("BTCUSDT").warnings                              # each variant really warns
+    assert service_for(hours).figure_data("BTCUSDT").warnings == expected
 
 
 def test_figure_data_without_hours_has_no_newest_hour():

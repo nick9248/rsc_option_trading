@@ -1,10 +1,7 @@
-"""Brief section (text, staleness, errors, fitting into the brief) and the chart service. No database, no network."""
+"""Brief section (text, staleness, errors, fitting into the brief) and the missing-day check. No database, no network."""
 
-import json
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
-
-import pytest
 
 from coding.core.analytics.futures_flow.taker_flow import TakerFlowHour, summarise
 from coding.service.futures_flow.taker_flow_brief_section import (
@@ -91,42 +88,11 @@ def test_section_is_part_of_the_brief_and_counted_in_its_length_limit():
     assert telegram_length(shortened) <= limit and section in shortened
 
 
-def test_chart_service_writes_pngs_and_data_for_complete_days(tmp_path):
-    hours = hours_for("BTCUSDT", 10, 90.0, 100.0) + hours_for("ETHUSDT", 10, 110.0, 100.0)
-    del hours[30]                                          # BTC hour 20:00 on 2026-11-04, inside a full day
-    result = TakerFlowChartService(cast(Any, FakeRepository(hours)), clock=lambda: NOW).generate(tmp_path)
-    names = sorted(path.name for path in result.files)
-    assert names == ["BTC_taker_flow.png", "ETH_taker_flow.png", "taker_flow_data.json"]
-    assert all(path.stat().st_size > 1000 for path in result.files)
-    assert result.folder == tmp_path / "2026-11-13" and result.newest_hour_utc == LAST_CLOSED
-    assert result.warnings == ["BTC: missing hours on 2026-11-04; those days are not drawn"]
-    data = json.loads((result.folder / "taker_flow_data.json").read_text(encoding="utf-8"))
-    btc_days = data["symbols"]["BTCUSDT"]["days"]
-    assert len(btc_days) == 8 and btc_days[0]["day"] == "2026-11-05"          # 11-04 has the hole
-    assert btc_days[0]["ratio"] == pytest.approx(0.9)
-
-
-def test_chart_service_warns_when_nothing_is_stored(tmp_path):
-    result = TakerFlowChartService(cast(Any, FakeRepository([])), clock=lambda: NOW).generate(tmp_path)
-    assert [path.name for path in result.files] == ["taker_flow_data.json"]
-    assert len(result.warnings) == 2 and all("no hourly data stored" in warning for warning in result.warnings)
-
-
 def test_day_note_names_each_symbol_when_their_last_complete_days_differ():
     btc = hours_for("BTCUSDT", 9, 90.0, 100.0)
     eth = [h for h in hours_for("ETHUSDT", 9, 110.0, 100.0) if h.hour_utc != datetime(2026, 11, 12, 20, tzinfo=timezone.utc)]
     text = TakerFlowBriefSectionBuilder(cast(Any, FakeRepository(btc + eth))).build(NOW)
     assert "Day = BTC 2026-11-12, ETH 2026-11-11 (UTC)." in text
-
-
-def test_rolling_line_breaks_at_a_gap_and_is_drawn_at_window_end():
-    from coding.core.analytics.futures_flow.taker_flow_chart_renderer import _line_with_gaps
-    start = datetime(2026, 11, 1, tzinfo=timezone.utc)
-    points = [(start, 1.0), (start + timedelta(hours=1), 1.1), (start + timedelta(hours=5), 0.9)]
-    moments, values = _line_with_gaps(points)
-    assert moments[0] == start + timedelta(hours=1)               # plotted at the end of the window
-    assert len(values) == 4 and values[2] != values[2]            # NaN between hour 1 and hour 5
-    assert values[3] == 0.9
 
 
 def test_brief_drops_the_extra_section_not_the_whole_brief_when_nothing_else_fits():
