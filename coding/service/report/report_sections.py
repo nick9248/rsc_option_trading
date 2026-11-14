@@ -19,14 +19,17 @@ import plotly.io as plotly_io
 
 from coding.core.analytics.futures_flow.taker_flow_figure import build_taker_flow_figure
 from coding.core.analytics.menthorq_chart_summary import data_notes, data_warnings
+from coding.core.analytics.menthorq.report_figures import (
+    expiry_iv_times_open_interest_figure, net_dex_figure, net_gex_panels_figure, replication_iv_times_open_interest_figure)
 from coding.core.analytics.menthorq_replication_calculator import (
-    EXPIRY_UNIVERSE_MONTHLY, GAMMA_UNDERLYING_INDEX, is_monthly_expiry, parse_expiry_settlement)
+    EXPIRY_UNIVERSE_ALL, EXPIRY_UNIVERSE_MONTHLY, EXPIRY_UNIVERSE_QUARTERLY_PLUS_FRONT_MONTH, GAMMA_UNDERLYING_INDEX,
+    is_monthly_expiry, parse_expiry_settlement)
 from coding.core.analytics.open_interest.expiry_open_interest import ExpiryOpenInterest
 from coding.core.analytics.option_flow.level_overview_page import build_level_overview_page
 from coding.core.analytics.option_flow.block_structure import bar_expiry_shares
 from coding.core.analytics.report.figure_style import apply_paper_style
 from coding.core.analytics.report.report_page import (
-    ReportSection, SwitcherControl, embeddable_page, format_utc, page_frame_fragment, paragraph_fragment, png_data_uri,
+    ReportSection, SwitcherControl, embeddable_page, format_utc, page_frame_fragment, paragraph_fragment,
     switcher_configuration, switcher_fragment, view_key)
 from coding.core.analytics.report.section_fragments import (
     bar_expiry_table, block_structure_table, dealer_levels_caption, expiry_choice_label, open_interest_table, option_flow_caption, taker_flow_table)
@@ -34,8 +37,7 @@ from coding.core.database.repository import DatabaseRepository
 from coding.service.futures_flow.taker_flow_chart_service import CHART_DAYS, TakerFlowChartService
 from coding.service.futures_flow.taker_flow_settings import STALE_AFTER
 from coding.service.on_chain.expiry_open_interest_service import ExpiryOpenInterestReport, ExpiryOpenInterestService
-from coding.service.on_chain.menthorq_replication_service import (
-    CHART_LAYOUT_NESTED, MenthorqReplicationService, last_complete_utc_day, nested_date_folder)
+from coding.service.on_chain.menthorq_replication_service import MenthorqReplicationService, last_complete_utc_day
 from coding.service.option_flow.dealer_flow_levels_service import DealerFlowLevelsService
 from coding.service.option_flow.level_overview_service import LevelOverviewService
 from coding.service.option_flow.option_flow_service import OptionFlowService
@@ -58,7 +60,11 @@ TAKER_FLOW_SYMBOLS = {"BTC": "BTCUSDT", "ETH": "ETHUSDT"}
 
 MENTHORQ_CHARTS: List[Tuple[str, str]] = [("iv_times_open_interest", "IV x OI"), ("net_gex_panels", "Net GEX panels"),
                                           ("net_dex", "Net DEX")]
-MENTHORQ_UNIVERSES: List[Tuple[str, str]] = [("", "Monthly expiries"), ("_all_listed_expiries", "All listed expiries")]
+MENTHORQ_UNIVERSES: List[Tuple[str, str]] = [
+    (EXPIRY_UNIVERSE_MONTHLY, "Monthly"), (EXPIRY_UNIVERSE_ALL, "All listed"),
+    (EXPIRY_UNIVERSE_QUARTERLY_PLUS_FRONT_MONTH, "Quarterly + front month")]
+MENTHORQ_HVL_CAPTION = ("HVL is a point on the strike axis (the lowest running sum of net GEX), not a re-priced gamma flip. "
+                        "Hover a bar or a line for the exact values.")
 
 
 @dataclass
@@ -141,33 +147,35 @@ def figure_json(figure: go.Figure) -> Dict[str, Any]:
 
 def build_menthorq_section(context: SectionContext) -> ReportSection:
     """
-    The MenthorQ replica charts of the last complete UTC day (MenthorQ's daily close: spot and IV at 23:59 UTC, open
-    interest from 00:00 UTC), monthly and all listed expiries, gamma at the index, plus one IV x OI chart per expiry.
+    The MenthorQ replica of the last complete UTC day (MenthorQ's daily close: spot and IV at 23:59 UTC, open interest from
+    00:00 UTC) as interactive figures: IV x OI, net GEX panels and net DEX for the monthly, all listed and quarterly plus
+    front-month expiries (gamma at the index), plus one IV x OI figure per expiry. Nothing is rendered to a file.
     """
     menthorq_date = last_complete_utc_day(context.now)
-    output = MenthorqReplicationService(context.repository).run_menthorq_daily_close(
-        context.currency, menthorq_date, context.working_directory, expiry_universe=EXPIRY_UNIVERSE_MONTHLY,
-        gamma_underlying=GAMMA_UNDERLYING_INDEX, now=context.now, chart_layout=CHART_LAYOUT_NESTED)
-    folder = nested_date_folder(context.working_directory, menthorq_date)
-    charts: Dict[str, str] = output["charts"]
+    output = MenthorqReplicationService(context.repository).replicate_daily_close(
+        context.currency, menthorq_date, context.now, primary_universe=EXPIRY_UNIVERSE_MONTHLY,
+        gamma_underlying=GAMMA_UNDERLYING_INDEX)
+    currency = context.currency
+    figure_builders = {"iv_times_open_interest": replication_iv_times_open_interest_figure,
+                       "net_gex_panels": net_gex_panels_figure, "net_dex": net_dex_figure}
 
-    controls = [SwitcherControl("chart", "Chart", [(key, label) for key, label in MENTHORQ_CHARTS], MENTHORQ_CHARTS[0][0]),
-                SwitcherControl("universe", "Expiries", [(key or "monthly", label) for key, label in MENTHORQ_UNIVERSES],
-                                "monthly")]
+    controls = [SwitcherControl("chart", "Chart", list(MENTHORQ_CHARTS), MENTHORQ_CHARTS[0][0]),
+                SwitcherControl("universe", "Expiries", list(MENTHORQ_UNIVERSES), EXPIRY_UNIVERSE_MONTHLY)]
+    figures: Dict[str, Dict[str, Any]] = {}
     views: Dict[str, Dict[str, Any]] = {}
-    for chart_key, chart_label in MENTHORQ_CHARTS:
-        for suffix, universe_label in MENTHORQ_UNIVERSES:
-            relative = charts.get(f"{chart_key}{suffix}")
-            if relative is None:
-                continue
-            views[view_key([chart_key, suffix or "monthly"])] = {
-                "image": png_data_uri((folder / relative).read_bytes()),
-                "alt": f"{context.currency} {chart_label}, {universe_label.lower()}, {menthorq_date.isoformat()}",
-                "caption": ""}
+    for universe, _ in MENTHORQ_UNIVERSES:
+        replication = output["configurations"][f"{universe}__gamma_at_{GAMMA_UNDERLYING_INDEX}"]["replication"]
+        for chart_key, _ in MENTHORQ_CHARTS:
+            figure_id = f"menthorq-{chart_key}-{universe}"
+            figures[figure_id] = figure_json(figure_builders[chart_key](replication, currency))
+            views[view_key([chart_key, universe])] = {
+                "figure": figure_id,
+                "caption": paragraph_fragment(f"{len(replication['settings']['expirations'])} expiries. " + MENTHORQ_HVL_CAPTION, "note")}
     body = switcher_fragment("menthorq-main", controls)
     switchers = {"menthorq-main": switcher_configuration(controls, views)}
 
-    per_expiry = output.get("per_expiry_iv_times_open_interest", [])
+    per_expiry = output["per_expiry_iv_times_open_interest"]
+    spot = output["inputs"]["index_price"]
     body += open_interest_fragment(context)
     if context.open_interest()[0] is not None:
         body += paragraph_fragment(
@@ -186,11 +194,16 @@ def build_menthorq_section(context: SectionContext) -> ReportSection:
             parts = [f"{name} {levels[key]:,.0f}" for key, name in (("call_resistance", "call resistance"),
                                                                      ("put_support", "put support"), ("hvl", "HVL"))
                      if levels.get(key) is not None]
+            figure_id = f"menthorq-expiry-{entry['expiration']}"
+            figures[figure_id] = figure_json(expiry_iv_times_open_interest_figure(entry, spot, currency))
             expiry_views[view_key([entry["expiration"]])] = {
-                "image": png_data_uri((folder / entry["chart"]).read_bytes()),
-                "alt": f"{context.currency} IV x OI of {entry['expiration']}",
-                "caption": paragraph_fragment(f"{entry['expiration']}: " + (", ".join(parts) if parts else "levels not computed") + ".")}
-        body += "<h3>IV x OI of one expiry</h3>" + switcher_fragment("menthorq-expiry", [expiry_control])
+                "figure": figure_id,
+                "caption": paragraph_fragment(f"{entry['expiration']}: " + (", ".join(parts) if parts else "levels not computed")
+                                              + ". " + MENTHORQ_HVL_CAPTION)}
+        body += ("<h3>IV x OI of one expiry</h3>"
+                 + paragraph_fragment("One figure per expiry of the all-listed set (every expiry that is not settled at the "
+                                      "daily close); the three universes above are not repeated per expiry.", "note")
+                 + switcher_fragment("menthorq-expiry", [expiry_control]))
         switchers["menthorq-expiry"] = switcher_configuration([expiry_control], expiry_views)
 
     inputs = output["inputs"]
@@ -198,10 +211,10 @@ def build_menthorq_section(context: SectionContext) -> ReportSection:
              f"{format_utc(datetime.fromisoformat(inputs['snapshot_captured_at_utc']))}), open interest captured "
              f"{format_utc(datetime.fromisoformat(inputs['open_interest_captured_at_utc']))}.")
     return ReportSection(
-        key="menthorq", title="MenthorQ", as_of=as_of, body_html=body, switchers=switchers,
-        description=("Replica of MenthorQ's charts from the stored Deribit chain: IV x OI, net GEX per expiry panel and net "
-                     "DEX, with call resistance, put support and HVL. The daily close matches the instant MenthorQ prints. "
-                     "Gamma at the index."),
+        key="menthorq", title="MenthorQ", as_of=as_of, body_html=body, switchers=switchers, figures=figures,
+        description=("Interactive replica of MenthorQ's charts from the stored Deribit chain: IV x OI, net GEX per expiry panel "
+                     "and net DEX, with call resistance, put support and HVL, for three expiry sets. The daily close matches "
+                     "the instant MenthorQ prints. Gamma at the index."),
         warnings=data_warnings(output), notes=data_notes(output) + [f"Index price {inputs['index_price']:,.2f}."])
 
 

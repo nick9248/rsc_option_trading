@@ -1,6 +1,5 @@
 """Tests of the report section builders with fake services (no database, no files outside tmp_path)."""
 
-import base64
 import json
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -8,7 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from coding.core.analytics.menthorq_replication_calculator import is_monthly_expiry, parse_expiry_settlement
+from coding.core.analytics.menthorq_replication_calculator import (
+    EXPIRY_UNIVERSES, compute_expiry_iv_times_open_interest, is_monthly_expiry, parse_expiry_settlement, replicate_menthorq)
 from coding.core.analytics.open_interest.expiry_open_interest import open_interest_by_expiry
 from coding.service.on_chain.expiry_open_interest_service import ExpiryOpenInterestReport
 from coding.core.analytics.option_flow.dealer_levels import DealerFlowLevels, StrikeLevelRow
@@ -26,7 +26,6 @@ from coding.service.report.report_sections import (
     build_menthorq_section, build_option_flow_section, dealer_expiries, figure_json)
 
 NOW = datetime(2026, 11, 14, 10, 0, tzinfo=timezone.utc)
-FAKE_PNG = b"\x89PNG fake"
 
 
 @pytest.fixture(autouse=True)
@@ -299,58 +298,74 @@ def test_levels_section_embeds_the_page_with_data_and_the_override_style(tmp_pat
 
 # ---------------------------------------------------------------- MenthorQ
 
+MENTHORQ_AS_OF = datetime(2026, 11, 13, 23, 59, tzinfo=timezone.utc)
+
+
+def menthorq_chain_row(expiration, strike, option_type, open_interest):
+    return {"instrument_name": f"BTC-{expiration}-{strike}-{option_type}", "expiration": expiration, "strike": float(strike),
+            "option_type": option_type, "open_interest": open_interest, "mark_iv": 50.0, "underlying_price": 67_000.0,
+            "mark_price": None}
+
+
+MENTHORQ_CHAIN = [menthorq_chain_row("27NOV26", 60_000, "P", 30.0), menthorq_chain_row("27NOV26", 70_000, "C", 10.0),
+                  menthorq_chain_row("25DEC26", 70_000, "C", 4.0), menthorq_chain_row("25DEC26", 65_000, "P", 8.0)]
+
+
 class FakeMenthorqService:
-    """Writes tiny PNG files where the builder looks for them and returns the output the builder reads."""
+    """Stands in for the service: ``replicate_daily_close`` returns the real replication of a four-row chain (no files)."""
 
     created = []
 
     def __init__(self, repository):
         self.repository = repository
 
-    def run_menthorq_daily_close(self, currency, menthorq_date, output_directory, **kwargs):
-        folder = output_directory / menthorq_date.isoformat()
-        folder.mkdir(parents=True)
-        charts = {}
-        for chart in ("iv_times_open_interest", "net_gex_panels", "net_dex"):
-            for suffix in ("", "_all_listed_expiries"):
-                name = f"{chart}{suffix}.png"
-                (folder / name).write_bytes(FAKE_PNG + name.encode())
-                charts[f"{chart}{suffix}"] = name
-        (folder / "expiry.png").write_bytes(FAKE_PNG + b"expiry")
+    def replicate_daily_close(self, currency, menthorq_date, now=None, **kwargs):
         FakeMenthorqService.created.append((currency, menthorq_date, kwargs))
-        return {
-            "charts": charts,
-            "per_expiry_iv_times_open_interest": [
-                {"expiration": "27NOV26", "chart": "expiry.png", "levels": {"call_resistance": 70_000.0, "put_support": None, "hvl": 66_000.0}},
-                {"expiration": "25DEC26", "chart": "expiry.png", "levels": None}],
-            "inputs": {"snapshot_captured_at_utc": "2026-11-13T23:58:00+00:00",
-                       "open_interest_captured_at_utc": "2026-11-13T00:01:00+00:00", "index_price": 67_000.0}}
+        configurations = {
+            f"{universe}__gamma_at_index": {"replication": replicate_menthorq(MENTHORQ_CHAIN, 67_000.0, MENTHORQ_AS_OF, universe)}
+            for universe in EXPIRY_UNIVERSES}
+        all_replication = configurations["all__gamma_at_index"]["replication"]
+        per_expiry = [
+            {"expiration": expiration, "rows_without_open_interest": 0,
+             **compute_expiry_iv_times_open_interest(MENTHORQ_CHAIN, expiration, all_replication["gex_by_expiration"][expiration])}
+            for expiration in all_replication["settings"]["expirations"]]
+        per_expiry[1]["levels"] = None                    # an expiry whose levels are not computed
+        return {"currency": currency, "primary_configuration": "monthly__gamma_at_index", "configurations": configurations,
+                "per_expiry_iv_times_open_interest": per_expiry,
+                "inputs": {"snapshot_captured_at_utc": "2026-11-13T23:58:00+00:00",
+                           "open_interest_captured_at_utc": "2026-11-13T00:01:00+00:00", "index_price": 67_000.0}}
 
 
-def test_menthorq_section_views_carry_the_data_uris_of_the_written_files(tmp_path, monkeypatch):
+def test_menthorq_section_has_nine_interactive_views_and_no_png(tmp_path, monkeypatch):
     monkeypatch.setattr(report_sections, "MenthorqReplicationService", FakeMenthorqService)
     monkeypatch.setattr(report_sections, "data_warnings", lambda output: ["iv rebuilt"])
     monkeypatch.setattr(report_sections, "data_notes", lambda output: ["gap noted"])
     section = build_menthorq_section(make_context(tmp_path))
-    views = section.switchers["menthorq-main"]["views"]
-    assert len(views) == 6
-    uri = views["net_dex|monthly"]["image"]
-    assert base64.b64decode(uri.split(",", 1)[1]) == FAKE_PNG + b"net_dex.png"
-    assert base64.b64decode(views["net_dex|_all_listed_expiries"]["image"].split(",", 1)[1]) == FAKE_PNG + b"net_dex_all_listed_expiries.png"
+    configuration = section.switchers["menthorq-main"]
+    views = configuration["views"]
+    assert configuration["controls"] == ["chart", "universe"]
+    assert len(views) == 9
+    for chart in ("iv_times_open_interest", "net_gex_panels", "net_dex"):
+        for universe in ("monthly", "all", "quarterly_plus_front_month"):
+            figure_id = views[f"{chart}|{universe}"]["figure"]
+            assert section.figures[figure_id]["data"] and "template" not in section.figures[figure_id]["layout"]
+    assert "image" not in json.dumps(views) and "data:image/png" not in json.dumps(section.switchers)
+    assert "data:image/png" not in section.body_html and "$" not in json.dumps(section.figures)
     assert FakeMenthorqService.created[-1][1].isoformat() == "2026-11-13"      # last complete UTC day
     assert section.warnings == ["iv rebuilt"] and section.notes[0] == "gap noted"
+    assert "not a re-priced gamma flip" in views["net_dex|all"]["caption"]
 
 
-def test_menthorq_section_has_a_per_expiry_switcher_with_levels_caption(tmp_path, monkeypatch):
+def test_menthorq_section_has_a_per_expiry_switcher_with_figures_and_levels_caption(tmp_path, monkeypatch):
     monkeypatch.setattr(report_sections, "MenthorqReplicationService", FakeMenthorqService)
     monkeypatch.setattr(report_sections, "data_warnings", lambda output: [])
     monkeypatch.setattr(report_sections, "data_notes", lambda output: [])
     section = build_menthorq_section(make_context(tmp_path))
     views = section.switchers["menthorq-expiry"]["views"]
     assert set(views) == {"27NOV26", "25DEC26"}
-    assert "call resistance 70,000" in views["27NOV26"]["caption"] and "HVL 66,000" in views["27NOV26"]["caption"]
-    assert "put support" not in views["27NOV26"]["caption"]
-    assert "levels not computed" in views["25DEC26"]["caption"]
+    assert section.figures[views["27NOV26"]["figure"]]["data"]
+    assert "call resistance" in views["27NOV26"]["caption"] and "levels not computed" in views["25DEC26"]["caption"]
+    assert "all-listed set" in section.body_html
 
 
 # ---------------------------------------------------------------- futures flow

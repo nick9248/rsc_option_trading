@@ -508,8 +508,10 @@ REPORT_HELP = SectionHelp(
 _MENTHORQ_HELP = SectionHelp(
     section_key="menthorq",
     summary=(
-        "Replica of MenthorQ's charts, rebuilt from the stored Deribit option chain: IV x OI, net GEX per expiry and "
-        "net DEX, with three drawn levels (call resistance, put support, HVL). It is a fitted replica, not MenthorQ's "
+        "Replica of MenthorQ's charts, rebuilt from the stored Deribit option chain as interactive charts (hover a bar "
+        "or a line for its exact values): IV x OI, net GEX per expiry and "
+        "net DEX, with three drawn levels (call resistance, put support, HVL), for three expiry sets (monthly, all "
+        "listed, quarterly plus front month). It is a fitted replica, not MenthorQ's "
         "own formula, and it was fitted on BTC only. The charts use the daily close of the last complete UTC day; the "
         "open-interest table uses the newest chain at report time."),
     topics=(
@@ -517,8 +519,10 @@ _MENTHORQ_HELP = SectionHelp(
             title="IV x OI chart and its three lines",
             what_you_see=(
                 "Horizontal bars per strike: calls filled green, puts as orange outlines, with three dashed lines "
-                "(call resistance, put support, HVL) and the spot price. Default: the monthly expiries added together; "
-                "a switch shows all listed expiries."),
+                "(call resistance, put support, HVL) and the spot price, each a labelled line. Hover a bar for the strike, "
+                "the call part, the put part and the total; hover a line for the level and its rule. Default: the monthly "
+                "expiries added together; the Expiries switch shows all listed expiries or the quarterly expiries plus the "
+                "front month."),
             terms=(
                 HelpTerm("IV x OI", "Per strike and option type: the mark implied volatility written as a decimal "
                                     "(60 % is 0.6) times the open interest in coins, added over the expiries in the chart. "
@@ -627,7 +631,8 @@ _MENTHORQ_HELP = SectionHelp(
         HelpTopic(
             title="Net GEX panels",
             what_you_see=(
-                "Four panels, within the expiries of the chart (monthly by default; all listed with the switch): the "
+                "One figure with four panels, within the expiries of the chart (monthly by default; all listed or quarterly "
+                "plus front month with the switch; hover a bar for the call part, the put part and both units): the "
                 "first expiry of that set, the next expiry, the expiry with the highest absolute net GEX and the "
                 "one with the second highest (among the rest). Bars are net GEX per strike (green positive, red "
                 "negative), a yellow profile line, the three level lines, the spot, and the share 'GEX Expiring' in the title."),
@@ -718,8 +723,8 @@ _MENTHORQ_HELP = SectionHelp(
         HelpTopic(
             title="Net DEX",
             what_you_see=(
-                "Net DEX bars per strike over the expiries of the chart (monthly by default; all listed with the "
-                "switch; green positive, red negative), an orange DEX profile, a "
+                "Net DEX bars per strike over the expiries of the chart (monthly by default; all listed or quarterly "
+                "plus front month with the switch; green positive, red negative; hover for the exact value), an orange DEX profile, a "
                 "yellow GEX profile, the three level lines of those expiries and the spot."),
             terms=(
                 HelpTerm("Delta", "How much an option's price changes for a one-unit move of the underlying: about 0 to 1 "
@@ -764,7 +769,8 @@ _MENTHORQ_HELP = SectionHelp(
         HelpTopic(
             title="IV x OI per expiry and the open-interest table",
             what_you_see=(
-                "One IV x OI chart per expiry with that expiry's own levels, and a table of open interest per expiry: "
+                "One interactive IV x OI chart per expiry of the all-listed set (the expiry switch under it), with that "
+                "expiry's own levels, and a table of open interest per expiry: "
                 "expiry, days left, calls, puts, total OI in coins, notional and a share with a bar."),
             terms=(
                 HelpTerm("Expiry", "The date the options settle (Deribit: 08:00 UTC)."),
