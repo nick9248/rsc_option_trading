@@ -111,3 +111,28 @@ def test_changing_the_currency_resets_the_expiry_to_all(qapp):
     tab.currency_combo.setCurrentIndex(1)
     assert tab.current_request().expiry is None and tab.expiry_combo.count() == 1
     tab.close()
+
+
+def test_changing_expiry_window_or_unit_starts_a_new_run(qapp):
+    from unittest.mock import patch
+    from coding.gui.tabs import option_flow_tab as tab_module
+    tab = OptionFlowTab(service_factory=fake_service, clock=lambda: NOW)
+    tab._on_succeeded(result_for(None, NOW - timedelta(minutes=5)))
+    with patch.object(tab_module, "OptionFlowWorker") as worker_class:
+        worker_class.return_value.isRunning.return_value = False
+        tab.expiry_combo.setCurrentIndex(1)
+        tab.window_combo.setCurrentIndex(0)
+        tab.unit_combo.setCurrentIndex(1)
+        requests = [call.args[0] for call in worker_class.call_args_list]
+    assert requests[0].expiry == "13NOV26" and requests[1].hours == 6 and requests[2].unit == "contracts"
+    tab.close()
+
+
+def test_a_generate_request_during_a_run_is_remembered(qapp):
+    tab = OptionFlowTab(service_factory=fake_service, clock=lambda: NOW)
+    running = MagicMock()
+    running.isRunning.return_value = True
+    tab.worker = running
+    tab._generate()
+    assert tab._regenerate is True
+    tab.close()

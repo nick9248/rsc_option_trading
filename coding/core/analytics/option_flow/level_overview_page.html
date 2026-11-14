@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Levels</title>
+<style>
+  :root {
+    --paper: #FFFFFF;
+    --ink: #101114;
+    --gray: #6A6F78;
+    --light: #A5AAB3;
+    --rule: #DADDE2;
+    --faint: #F0F1F3;
+    --highlight: #FFE14D;
+    --numerals: "Bahnschrift", "Segoe UI", system-ui, sans-serif;
+    --body: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--paper); color: var(--ink); font: 14px/1.5 var(--body); }
+  main { max-width: 1700px; margin: 0 auto; padding: 28px 34px 48px; }
+  .num { font-family: var(--numerals); font-variant-numeric: tabular-nums; }
+  :focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 36px; }
+  h1 { margin: 0; font: 300 56px/1 var(--numerals); letter-spacing: -1.5px; font-stretch: 80%; }
+  h1 small { font-size: 56px; font-weight: 600; margin-left: 16px; letter-spacing: -1px; }
+  .verdict { margin: 0; font-size: 19px; max-width: 60ch; }
+  .verdict mark { background: linear-gradient(transparent 52%, var(--highlight) 52%); color: inherit; padding: 0 2px; font-weight: 600; }
+
+  .zoom { display: flex; justify-content: flex-end; gap: 18px; margin: 22px 0 4px; color: var(--gray); font-size: 13px; }
+  .zoom button { background: none; border: 0; padding: 2px 0; font: inherit; color: var(--gray); cursor: pointer; border-bottom: 2px solid transparent; }
+  .zoom button:hover { color: var(--ink); }
+  .zoom button[aria-pressed="true"] { color: var(--ink); font-weight: 600; border-bottom-color: var(--ink); }
+  .zoom .label { margin-right: auto; }
+
+  svg { display: block; width: 100%; overflow: visible; }
+  svg text { font-family: var(--body); fill: var(--ink); }
+  .tick-label { font-size: 11.5px; fill: var(--gray); font-family: var(--numerals); }
+  .row-title { font-size: 15px; font-weight: 700; }
+  .row-sub { font-size: 12px; fill: var(--gray); }
+  .row-flag { font-size: 12px; font-weight: 600; }
+  .price { font-family: var(--numerals); font-size: 13.5px; font-weight: 700; }
+  .name { font-size: 11.5px; fill: var(--gray); }
+  .off { font-size: 11.5px; fill: var(--light); font-family: var(--numerals); }
+  .band-caption { font-size: 12px; font-weight: 700; }
+  .spot-caption { font-family: var(--numerals); font-size: 14px; font-weight: 700; }
+  .mark.hot .price, .mark.hot .name { font-weight: 800; fill: var(--ink); }
+  .mark.hot .dot { transform-box: fill-box; transform-origin: center; transform: scale(1.5); }
+
+  h2 { margin: 36px 0 10px; font-size: 15px; font-weight: 700; }
+  .agree p { margin: 0 0 10px; max-width: 110ch; }
+  .agree .range { background: linear-gradient(transparent 52%, var(--highlight) 52%); font-weight: 700; padding: 0 2px; }
+  .agree .none { color: var(--gray); }
+  .ledger { columns: 3 380px; column-gap: 40px; margin: 0; padding: 0; list-style: none; }
+  .ledger li { break-inside: avoid; display: grid; grid-template-columns: 70px 58px 1fr; gap: 0 10px; padding: 3px 0; border-bottom: 1px solid var(--faint); }
+  .ledger li.hot { background: var(--faint); }
+  .ledger .p { font-weight: 700; text-align: right; }
+  .ledger .d { color: var(--gray); text-align: right; }
+  .ledger .s { color: var(--gray); }
+  .ledger li.spot { font-weight: 700; border-top: 2px solid var(--ink); border-bottom: 2px solid var(--ink); margin: 3px 0; }
+  .ledger li.spot .s { color: var(--ink); }
+  .notes { color: var(--gray); font-size: 13px; max-width: 110ch; }
+  .notes p { margin: 0 0 4px; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1><span id="currency"></span><small class="num" id="spot"></small></h1>
+    <p class="verdict" id="verdict"></p>
+  </header>
+
+  <div class="zoom">
+    <span class="label" id="zoomNote"></span>
+    <span id="zoomButtons" role="group" aria-label="Price range around the spot"></span>
+  </div>
+  <svg id="chart" role="img" aria-label="Levels of every source on one price line"></svg>
+
+  <section class="agree">
+    <h2>Where sources agree</h2>
+    <div id="agree"></div>
+  </section>
+
+  <section>
+    <h2>Every level, high to low</h2>
+    <ul class="ledger" id="ledger"></ul>
+  </section>
+
+  <section class="notes">
+    <h2>About this data</h2>
+    <div id="notes"></div>
+  </section>
+</main>
+
+<script>
+const D = /*__DATA__*/null;
+const RANGES = [[0.05, "±5%"], [0.10, "±10%"], [0.15, "±15%"], [null, "All levels"]];
+const NS = "http://www.w3.org/2000/svg";
+const fmt = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
+const pct = (value) => (value >= 0 ? "+" : "-") + Math.abs(value * 100).toFixed(1) + "%";
+const state = { range: 0.15 };
+const sourceOf = (key) => D.sources.find((entry) => entry.key === key);
+const sourceText = (entry) => entry.title + (entry.subtitle ? ", " + entry.subtitle : "") + (entry.failed ? " (check failed)" : "");
+
+function svgEl(name, attributes, parent, text) {
+  const node = document.createElementNS(NS, name);
+  for (const key in attributes) node.setAttribute(key, attributes[key]);
+  if (text !== undefined) node.textContent = text;
+  if (parent) parent.appendChild(node);
+  return node;
+}
+function htmlEl(name, attributes, parent, text) {
+  const node = document.createElement(name);
+  for (const key in attributes) node.setAttribute(key, attributes[key]);
+  if (text !== undefined) node.textContent = text;
+  if (parent) parent.appendChild(node);
+  return node;
+}
+
+/* ---------- header ---------- */
+function drawHeader() {
+  document.getElementById("currency").textContent = D.currency;
+  document.getElementById("spot").textContent = fmt.format(D.spot);
+  const verdict = document.getElementById("verdict");
+  const best = D.confluences.slice().sort((a, b) => b.sources.length - a.sources.length
+      || Math.abs((a.low + a.high) / 2 - D.spot) - Math.abs((b.low + b.high) / 2 - D.spot))[0];
+  if (!best) {
+    verdict.textContent = `No price has levels from ${D.minimumSources} sources within ${D.bandPercent.toFixed(1)}% of the spot.`;
+    return;
+  }
+  const middle = (best.low + best.high) / 2;
+  const away = Math.abs(middle / D.spot - 1) * 100;
+  const where = best.low === best.high ? `at ${fmt.format(best.low)}` : `between ${fmt.format(best.low)} and ${fmt.format(best.high)}`;
+  verdict.innerHTML = "";
+  verdict.append(`${best.sources.length} of ${D.sources.length} sources have a level `);
+  htmlEl("mark", { class: "num" }, verdict, where);
+  verdict.append(`, ${away.toFixed(1)}% ${middle < D.spot ? "below" : "above"} the spot.`);
+}
+
+/* ---------- the price line ---------- */
+function priceWindow() {
+  if (state.range !== null) return [D.spot * (1 - state.range), D.spot * (1 + state.range)];
+  const prices = D.marks.map((mark) => mark.price).concat([D.spot]);
+  const low = Math.min(...prices), high = Math.max(...prices), pad = (high - low) * 0.03 || D.spot * 0.02;
+  return [low - pad, high + pad];
+}
+function niceStep(span, target) {
+  const raw = span / target, magnitude = Math.pow(10, Math.floor(Math.log10(raw)));
+  return [1, 2, 2.5, 5, 10].map((factor) => factor * magnitude).find((step) => step >= raw);
+}
+const labelWidth = (item) => Math.max(String(fmt.format(item.price)).length * 7.8, item.names.join(", ").length * 5.9) + 6;
+
+/* One mark per source and price (marks at the same price share one label). */
+function marksOfSource(key) {
+  const byPrice = new Map();
+  D.marks.forEach((mark, position) => {
+    if (mark.source !== key) return;
+    const entry = byPrice.get(mark.price) || { price: mark.price, names: [], positions: [] };
+    entry.names.push(mark.name);
+    entry.positions.push(position);
+    byPrice.set(mark.price, entry);
+  });
+  return [...byPrice.values()].sort((a, b) => a.price - b.price);
+}
+
+function drawChart() {
+  const svg = document.getElementById("chart");
+  svg.replaceChildren();
+  const width = Math.max(720, svg.clientWidth || 1000);
+  const titleColumn = 210, rightPad = 30, axisHeight = 58, rowHeight = 132, footer = 44;
+  const height = axisHeight + D.sources.length * rowHeight + footer;
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.setAttribute("height", height);
+  const [low, high] = priceWindow();
+  const plotLeft = titleColumn, plotRight = width - rightPad;
+  const x = (price) => plotLeft + (price - low) / (high - low) * (plotRight - plotLeft);
+
+  // where sources agree: highlighter bands behind everything
+  D.confluences.forEach((band) => {
+    const left = Math.max(plotLeft, x(band.low) - 8), right = Math.min(plotRight, x(band.high) + 8);
+    if (right < plotLeft || left > plotRight) return;
+    svgEl("rect", { x: left, y: axisHeight - 6, width: Math.max(16, right - left), height: height - axisHeight - footer + 8, fill: "var(--highlight)", opacity: 0.55 }, svg);
+    svgEl("text", { x: (left + right) / 2, y: 14, "text-anchor": "middle", class: "band-caption" }, svg, `${band.sources.length} sources`);
+  });
+
+  // axis
+  svgEl("line", { x1: plotLeft, x2: plotRight, y1: axisHeight - 6, y2: axisHeight - 6, stroke: "var(--ink)", "stroke-width": 1.5 }, svg);
+  const step = niceStep(high - low, 12);
+  for (let price = Math.ceil(low / step) * step; price <= high; price += step) {
+    svgEl("line", { x1: x(price), x2: x(price), y1: axisHeight - 6, y2: axisHeight - 12, stroke: "var(--ink)" }, svg);
+    svgEl("line", { x1: x(price), x2: x(price), y1: axisHeight - 6, y2: height - footer, stroke: "var(--faint)" }, svg);
+    svgEl("text", { x: x(price), y: axisHeight - 18, "text-anchor": "middle", class: "tick-label" }, svg, fmt.format(price));
+  }
+
+  // the spot runs behind the labels, thin, so it never hides a number
+  svgEl("line", { x1: x(D.spot), x2: x(D.spot), y1: axisHeight - 6, y2: height - footer + 8, stroke: "var(--ink)", "stroke-width": 1.4 }, svg);
+
+  // one row per source
+  D.sources.forEach((source, index) => {
+    const top = axisHeight + index * rowHeight, base = top + rowHeight / 2;
+    svgEl("line", { x1: 0, x2: width, y1: top, y2: top, stroke: "var(--rule)" }, svg);
+    svgEl("text", { x: 0, y: base - 8, class: "row-title" }, svg, source.title);
+    if (source.subtitle) svgEl("text", { x: 0, y: base + 10, class: "row-sub" }, svg, source.subtitle);
+    if (source.failed) svgEl("text", { x: 0, y: base + 28, class: "row-flag" }, svg, "check failed (hollow marks)");
+    svgEl("line", { x1: plotLeft, x2: plotRight, y1: base, y2: base, stroke: "var(--rule)", "stroke-dasharray": "2 4" }, svg);
+
+    const items = marksOfSource(source.key);
+    const inside = items.filter((item) => item.price >= low && item.price <= high);
+    const slots = { up0: -Infinity, down0: -Infinity, up1: -Infinity, down1: -Infinity };
+    const geometry = { up0: [-16, -30], down0: [24, 37], up1: [-46, -60], down1: [54, 67] };       // price y, name y (relative to the line)
+    inside.forEach((item) => {
+      const w = labelWidth(item);
+      const left = Math.min(Math.max(x(item.price) - w / 2, plotLeft), plotRight - w);
+      const slot = ["up0", "down0", "up1", "down1"].find((name) => left >= slots[name] + 6) || "up1";
+      slots[slot] = left + w;
+      const [priceY, nameY] = geometry[slot];
+      const group = svgEl("g", { class: "mark", "data-marks": item.positions.join(",") }, svg);
+      if (slot.endsWith("1")) svgEl("line", { x1: x(item.price), x2: x(item.price), y1: base, y2: base + priceY + (priceY < 0 ? 4 : -12), stroke: "var(--light)" }, group);
+      svgEl("rect", { class: "dot", x: x(item.price) - 5, y: base - 5, width: 10, height: 10,
+                      transform: `rotate(45 ${x(item.price)} ${base})`,
+                      fill: source.failed ? "var(--paper)" : "var(--ink)", stroke: "var(--ink)", "stroke-width": 1.8 }, group);
+      svgEl("text", { x: left + w / 2, y: base + priceY, "text-anchor": "middle", class: "price" }, group, fmt.format(item.price));
+      svgEl("text", { x: left + w / 2, y: base + nameY, "text-anchor": "middle", class: "name" }, group, item.names.join(", "));
+    });
+    const beyondLow = items.filter((item) => item.price < low), beyondHigh = items.filter((item) => item.price > high);
+    if (beyondLow.length) svgEl("text", { x: plotLeft + 4, y: base - 8, class: "off" }, svg, `◂ ${beyondLow.map((item) => fmt.format(item.price)).join(", ")}`);
+    if (beyondHigh.length) svgEl("text", { x: plotRight - 4, y: base - 8, "text-anchor": "end", class: "off" }, svg, `${beyondHigh.map((item) => fmt.format(item.price)).join(", ")} ▸`);
+  });
+  svgEl("line", { x1: 0, x2: width, y1: axisHeight + D.sources.length * rowHeight, y2: axisHeight + D.sources.length * rowHeight, stroke: "var(--rule)" }, svg);
+
+  // the spot, drawn through every row
+  svgEl("path", { d: `M ${x(D.spot) - 6} ${axisHeight - 6} L ${x(D.spot) + 6} ${axisHeight - 6} L ${x(D.spot)} ${axisHeight + 4} Z`, fill: "var(--ink)" }, svg);
+  svgEl("text", { x: x(D.spot), y: height - 14, "text-anchor": "middle", class: "spot-caption" }, svg, `Spot ${fmt.format(D.spot)}`);
+
+  // a ruler that follows the pointer
+  const ruler = svgEl("g", { visibility: "hidden", "pointer-events": "none" }, svg);
+  const rulerLine = svgEl("line", { y1: axisHeight - 6, y2: height - footer, stroke: "var(--gray)", "stroke-dasharray": "3 3" }, ruler);
+  const rulerText = svgEl("text", { y: height - 14, "text-anchor": "middle", class: "price" }, ruler);
+  svg.onmousemove = (event) => {
+    const box = svg.getBoundingClientRect(), px = (event.clientX - box.left) * width / box.width;
+    if (px < plotLeft || px > plotRight) { ruler.setAttribute("visibility", "hidden"); return; }
+    const price = low + (px - plotLeft) / (plotRight - plotLeft) * (high - low);
+    ruler.setAttribute("visibility", "visible");
+    rulerLine.setAttribute("x1", px); rulerLine.setAttribute("x2", px);
+    rulerText.setAttribute("x", Math.min(Math.max(px, plotLeft + 70), plotRight - 70));
+    rulerText.setAttribute("visibility", Math.abs(px - x(D.spot)) < 90 ? "hidden" : "visible");
+    rulerText.textContent = `${fmt.format(price)}  (${pct(price / D.spot - 1)})`;
+  };
+  svg.onmouseleave = () => ruler.setAttribute("visibility", "hidden");
+  svg.querySelectorAll("g.mark").forEach((group) => {
+    const positions = group.getAttribute("data-marks").split(",");
+    group.addEventListener("mouseenter", () => setHot(positions, true));
+    group.addEventListener("mouseleave", () => setHot(positions, false));
+  });
+}
+function setHot(positions, on) {
+  positions.forEach((position) => {
+    document.querySelectorAll("g.mark, li[data-mark]").forEach((node) => {
+      const own = node.tagName === "LI" ? [node.getAttribute("data-mark")] : node.getAttribute("data-marks").split(",");
+      if (own.includes(position)) node.classList.toggle("hot", on);
+    });
+  });
+}
+
+/* ---------- agreements, ledger, notes ---------- */
+function drawText() {
+  const agree = document.getElementById("agree");
+  agree.replaceChildren();
+  if (!D.confluences.length) {
+    htmlEl("p", { class: "none" }, agree, `No band of ${D.bandPercent.toFixed(1)}% holds levels from ${D.minimumSources} different sources. Widen the band or lower the number of sources above the page.`);
+  }
+  D.confluences.slice().sort((a, b) => b.high - a.high).forEach((band) => {
+    const paragraph = htmlEl("p", {}, agree);
+    htmlEl("span", { class: "range num" }, paragraph, band.low === band.high ? fmt.format(band.low) : `${fmt.format(band.low)} to ${fmt.format(band.high)}`);
+    paragraph.append(`  ${band.sources.length} sources, ${pct((band.low + band.high) / 2 / D.spot - 1)} from the spot: ` +
+      band.marks.map((position) => `${sourceOf(D.marks[position].source).title} ${D.marks[position].name}`).join("; ") + ".");
+  });
+
+  const ledger = document.getElementById("ledger");
+  ledger.replaceChildren();
+  let spotDrawn = false;
+  const spotItem = () => {
+    const item = htmlEl("li", { class: "spot" }, ledger);
+    htmlEl("span", { class: "p num" }, item, fmt.format(D.spot));
+    htmlEl("span", { class: "d" }, item, "");
+    htmlEl("span", { class: "s" }, item, "Spot");
+    spotDrawn = true;
+  };
+  D.marks.forEach((mark, position) => {
+    if (!spotDrawn && mark.price < D.spot) spotItem();
+    const item = htmlEl("li", { "data-mark": position }, ledger);
+    htmlEl("span", { class: "p num" }, item, fmt.format(mark.price));
+    htmlEl("span", { class: "d num" }, item, pct(mark.price / D.spot - 1));
+    htmlEl("span", { class: "s" }, item, `${mark.name}, ${sourceText(sourceOf(mark.source))}`);
+    item.addEventListener("mouseenter", () => setHot([String(position)], true));
+    item.addEventListener("mouseleave", () => setHot([String(position)], false));
+  });
+  if (!spotDrawn) spotItem();
+
+  const notes = document.getElementById("notes");
+  notes.replaceChildren();
+  D.notes.forEach((note) => htmlEl("p", {}, notes, note.charAt(0).toUpperCase() + note.slice(1) + "."));
+}
+
+/* ---------- zoom ---------- */
+function drawZoom() {
+  const group = document.getElementById("zoomButtons");
+  group.replaceChildren();
+  RANGES.forEach(([value, label]) => {
+    const button = htmlEl("button", { type: "button", "aria-pressed": String(state.range === value) }, group, label);
+    button.style.marginLeft = "18px";
+    button.addEventListener("click", () => { state.range = value; drawZoom(); drawChart(); });
+  });
+  document.getElementById("zoomNote").textContent = state.range === null ? "Every level is on the line." : `Levels beyond ${(state.range * 100).toFixed(0)}% of the spot are listed at the edge of their row.`;
+}
+
+drawHeader();
+drawZoom();
+drawText();
+drawChart();
+let resizeTimer = null;
+window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(drawChart, 80); });
+</script>
+</body>
+</html>

@@ -159,6 +159,7 @@ class DealerFlowLevelsTab(QWidget):
         if application is not None:
             application.aboutToQuit.connect(self._wait_for_worker)
         self.currency_combo.currentIndexChanged.connect(self._list_expirations)
+        self.expiry_combo.currentIndexChanged.connect(self._generate)    # a changed expiry redraws the chart
 
     def _setup_ui(self) -> None:
         """Build the widgets."""
@@ -269,9 +270,12 @@ class DealerFlowLevelsTab(QWidget):
         levels = result.levels
         if levels is None:
             self._fill_expirations(result.expirations)
-        if levels is None or result.html_path is None:
-            self._set_status("Pick an expiry and press Generate." if result.expirations else
-                             "No option-chain snapshot stored for this currency; sync the database first.", Colors.TEXT_SECONDARY)
+            if result.expirations:                           # draw the selected expiry right away
+                self._generate()
+            else:
+                self._set_status("No option-chain snapshot stored for this currency; sync the database first.", Colors.TEXT_SECONDARY)
+            return
+        if result.html_path is None:
             return
         self.chart_view.setUrl(QUrl.fromLocalFile(str(result.html_path.resolve())))
         self._set_status(f"{levels.currency} {levels.expiry}: {levels.trades_used} trades since {levels.flow_start:%Y-%m-%d}, "
