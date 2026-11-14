@@ -41,7 +41,9 @@ Writes a PNG and a JSON (contracts, notional and trades per strike and series) i
 ## Report section "Option flow" (module 6)
 
 The GUI view is now the Option flow tab of the Report: a fixed 24 h window, all expirations and up to 12 single expirations,
-each in notional, contracts and trades. See `documentation/report.md`. Hovering a strike lists all eight series. The section
+each in notional, contracts and trades. The expiry switcher is ordered by open interest (largest first). Two tables sit below it:
+"Which expiry carries the largest bars" (the 8 biggest bars of the all-expirations chart and the expiries that make them up)
+and "Largest blocks of the window" (the 10 largest block trades by notional, with their legs, expiries and sides). See `documentation/report.md`. Hovering a strike lists all eight series. The section
 warns when the newest stored trade is older than 3 hours (sync first). Code: figure `coding/core/analytics/option_flow/strike_flow_figure.py`
 (Plotly, also used for the PNG through kaleido), service `coding/service/option_flow/option_flow_service.py`, report section
 `build_option_flow_section` in `coding/service/report/report_sections.py`.

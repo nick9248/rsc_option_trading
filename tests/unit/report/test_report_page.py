@@ -7,6 +7,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from coding.core.analytics.open_interest.expiry_open_interest import ExpiryOpenInterest
+from coding.core.analytics.report.section_fragments import expiry_choice_label, open_interest_table, usd_text
 from coding.core.analytics.report.report_page import (
     ReportHeader, ReportSection, SectionFailure, SwitcherControl, build_report_page, embeddable_page, format_utc,
     image_fragment, png_data_uri, sentence, switcher_configuration, switcher_fragment, table_fragment)
@@ -237,3 +239,68 @@ def test_table_fragment_escapes_cells_and_marks_numeric_columns():
     assert "&lt;b&gt;row&lt;/b&gt;" in fragment and "<b>row</b>" not in fragment
     assert '<td class="num">1,000</td>' in fragment and '<th scope="col" class="num">Value</th>' in fragment
     assert '<th scope="row">' in fragment
+
+
+# ---------------------------------------------------------------- open interest fragments and the page view of a switcher
+
+def make_open_interest_row(expiry="25DEC26", total=143_633.0, notional=9.65e9, share=0.40, days_left=40.84):
+    return ExpiryOpenInterest(expiry, None, days_left, None if total is None else total * 0.8, None if total is None else total * 0.2,
+                              total, notional, share, 0)
+
+
+def test_expiry_choice_label_with_every_part():
+    assert expiry_choice_label(make_open_interest_row()) == "25DEC26, 41 days, 9.65B USD OI, 40%"
+
+
+def test_expiry_choice_label_omits_or_names_missing_parts_honestly():
+    assert expiry_choice_label(make_open_interest_row(total=None, notional=None, share=None)) == "25DEC26, 41 days, OI not computed"
+    assert expiry_choice_label(make_open_interest_row(days_left=None, notional=None)) == "25DEC26, 143,633 OI, 40%"
+    assert expiry_choice_label(make_open_interest_row(share=None)) == "25DEC26, 41 days, 9.65B USD OI"
+
+
+def test_usd_text_uses_billions_with_two_decimals_and_millions_with_one():
+    assert usd_text(9.65e9) == "9.65B USD" and usd_text(999.9e6) == "999.9M USD" and usd_text(None) == "not computed"
+
+
+def test_open_interest_table_has_the_columns_bar_and_caption():
+    fragment = open_interest_table([make_open_interest_row()], NOW, 67_000.0)
+    for text in ("Expiry", "Days left", "Calls", "Puts", "Total OI (coins)", "Notional", "Share", "143,633", "9.65B USD", "40.0%"):
+        assert text in fragment
+    assert 'class="share-bar" style="width: 40.0%"' in fragment
+    assert "Open interest per expiry, chain snapshot 2026-11-14 10:29 UTC; notional = open interest x index price 67,000" in fragment
+
+
+def test_open_interest_table_writes_not_computed_for_missing_values_never_zero():
+    fragment = open_interest_table([make_open_interest_row(total=None, notional=None, share=None)], NOW, None)
+    assert fragment.count("not computed") >= 6 and "share-bar" not in fragment
+    assert "<td class=\"num\">0</td>" not in fragment
+
+
+def test_open_interest_table_limit_and_escaping():
+    rows = [make_open_interest_row(f"{day}DEC26") for day in range(1, 6)]
+    rows[0].expiry = SCRIPT_ATTACK
+    fragment = open_interest_table(rows, NOW, 67_000.0, limit=2)
+    assert fragment.count("<tr>") == 3 and SCRIPT_ATTACK not in fragment and "&lt;script&gt;" in fragment
+
+
+def test_open_interest_table_bar_width_is_clamped_numeric():
+    fragment = open_interest_table([make_open_interest_row(share=1.7)], NOW, 67_000.0)
+    assert 'style="width: 100.0%"' in fragment
+
+
+def test_switcher_fragment_has_a_frame_for_page_views():
+    control = SwitcherControl("expiry", "Expiry", [("a", "A")], "a")
+    assert 'class="page-frame switcher-frame"' in switcher_fragment("levels", [control])
+
+
+def test_page_views_are_in_the_data_block_and_the_script_has_the_page_branch():
+    control = SwitcherControl("expiry", "Expiry", [("27NOV26", "27NOV26")], "27NOV26")
+    section = make_section(
+        body_html=switcher_fragment("levels", [control]), pages={"levels-page-27NOV26": "<p>page of 27NOV26</p>"},
+        switchers={"levels": switcher_configuration([control], {"27NOV26": {"page": "levels-page-27NOV26"}})})
+    page = build_report_page(make_header(), [section], None)
+    data = json.loads(data_block(page))
+    assert data["switchers"]["levels"]["views"]["27NOV26"] == {"page": "levels-page-27NOV26"}
+    assert data["pages"]["levels-page-27NOV26"] == "<p>page of 27NOV26</p>"
+    assert "if (view.page)" in page and "showPageInFrame(frame, view.page)" in page
+    assert "if (view.figure)" in page and "view.image" in page            # the old view types are still handled

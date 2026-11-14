@@ -2,20 +2,24 @@
 
 import base64
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from coding.core.analytics.menthorq_replication_calculator import is_monthly_expiry, parse_expiry_settlement
+from coding.core.analytics.open_interest.expiry_open_interest import open_interest_by_expiry
+from coding.service.on_chain.expiry_open_interest_service import ExpiryOpenInterestReport
 from coding.core.analytics.option_flow.dealer_levels import DealerFlowLevels, StrikeLevelRow
 from coding.core.analytics.option_flow.dealer_levels_figure import build_dealer_levels_figure
 from coding.core.analytics.option_flow.level_overview import LevelMark, LevelOverview
 from coding.core.analytics.option_flow.strike_flow import OptionTrade, aggregate_by_strike
 from coding.core.analytics.report.section_fragments import millions_text
-from coding.service.futures_flow.taker_flow_chart_service import DATA_FILE_NAME, TakerFlowChartResult
-from coding.service.option_flow.option_flow_service import OptionFlowService, StrikeFlowReport
+from coding.core.analytics.futures_flow.taker_flow import TakerFlowDay
+from coding.service.futures_flow.taker_flow_chart_service import TakerFlowFigureData
+from coding.core.analytics.option_flow.block_structure import BiggestLeg, BlockStructure
+from coding.service.option_flow.option_flow_service import BlockStructureReport, OptionFlowService, StrikeFlowReport
 from coding.service.report import report_sections
 from coding.service.report.report_sections import (
     ALL_EXPIRATIONS, SectionContext, build_dealer_levels_section, build_futures_flow_section, build_levels_section,
@@ -23,6 +27,12 @@ from coding.service.report.report_sections import (
 
 NOW = datetime(2026, 11, 14, 10, 0, tzinfo=timezone.utc)
 FAKE_PNG = b"\x89PNG fake"
+
+
+@pytest.fixture(autouse=True)
+def no_open_interest_by_default(monkeypatch):
+    """Every test chooses its open-interest path on purpose: by default no chain snapshot is stored (a LookupError)."""
+    install_open_interest(monkeypatch, error=LookupError("no option-chain snapshot stored"))
 
 
 def make_context(tmp_path, currency="BTC"):
@@ -40,11 +50,19 @@ class FakeOptionFlowService:
 
     build_figure = staticmethod(OptionFlowService.build_figure)
 
-    def __init__(self, trades, newest_trade=NOW - timedelta(minutes=5), expiries=None):
+    def __init__(self, trades, newest_trade=NOW - timedelta(minutes=5), expiries=None, blocks=()):
         self.trades = trades
         self.newest_trade = newest_trade
         self.expiries = expiries if expiries is not None else sorted({trade.expiration for trade in trades})
         self.ends = []
+        self.blocks = blocks              # a list of BlockStructure, or an exception to raise
+        self.block_calls = []
+
+    def block_structures(self, currency, hours, end=None, top=10):
+        self.block_calls.append((currency, hours, end, top))
+        if isinstance(self.blocks, Exception):
+            raise self.blocks
+        return BlockStructureReport(end - timedelta(hours=hours), end, list(self.blocks), len(self.blocks))
 
     def strike_flow(self, currency, hours, expiry, end=None):
         self.ends.append(end)
@@ -54,6 +72,11 @@ class FakeOptionFlowService:
     def traded_expirations(self, currency, hours, end=None):
         self.ends.append(end)
         return list(self.expiries)
+
+
+def make_block(block_trade_id):
+    leg = BiggestLeg("25DEC26", 120_000.0, "C", "buy", 10.0, 1_200_000.0)
+    return BlockStructure(block_trade_id, 1, 1, ["25DEC26"], 1, 0, 1, 0, 1_200_000.0, [leg], "single leg", NOW)
 
 
 def fourteen_expiry_service():
@@ -123,6 +146,42 @@ def test_option_flow_warns_when_no_trade_is_stored_at_all(tmp_path):
     service = FakeOptionFlowService([], newest_trade=None, expiries=[])
     section = build_option_flow_section(make_context(tmp_path), service)
     assert any("no stored trades" in warning for warning in section.warnings)
+
+
+def test_option_flow_names_the_expiry_that_carries_the_biggest_bar_and_lists_the_largest_blocks(tmp_path, monkeypatch):
+    # 120,000 call bought: 99 contracts on 25DEC26 and 1 on 26MAR27 -> one expiry carries 99%
+    trades = [OptionTrade("25DEC26", 120_000.0, "C", "buy", 99.0, False), OptionTrade("26MAR27", 120_000.0, "C", "buy", 1.0, False),
+              OptionTrade("25DEC26", 100_000.0, "C", "buy", 5.0, True)]
+    service = FakeOptionFlowService(trades, expiries=["25DEC26", "26MAR27"], blocks=[make_block("BLOCK-306229")])
+    install_open_interest(monkeypatch)
+    section = build_option_flow_section(make_context(tmp_path), service)
+    html_text = section.body_html
+    assert html_text.index("data-switcher=\"option-flow\"") < html_text.index("Which expiry carries the largest bars") \
+        < html_text.index("Largest blocks of the window")
+    assert ">25DEC26</button> 99% (41 days)" in html_text and ">26MAR27</button> 1% (132 days)" in html_text
+    assert 'data-switcher-target="option-flow" data-control="expiry" data-value="25DEC26"' in html_text
+    assert "not explained" not in html_text                  # `single` holds every traded expiry
+    assert "BLOCK-306229" in html_text and "off the order book" in html_text
+    assert service.block_calls == [("BTC", 24, NOW, 10)]
+
+
+def test_option_flow_bars_table_uses_every_traded_expiry_not_only_the_kept_ones(tmp_path, monkeypatch):
+    service, labels = fourteen_expiry_service()          # 12 kept; the strike 68,000 bars are made of all 14
+    section = build_option_flow_section(make_context(tmp_path), service)
+    assert "not explained" not in section.body_html
+
+
+def test_option_flow_section_survives_a_failing_blocks_query_and_says_so(tmp_path):
+    service = FakeOptionFlowService(make_trades("27NOV26", 68_000.0, 1.0), blocks=LookupError("blocks query failed"))
+    section = build_option_flow_section(make_context(tmp_path), service)
+    assert not section.failed
+    assert "Not available: blocks query failed" in section.body_html and "Which expiry carries the largest bars" in section.body_html
+    assert section.switchers["option-flow"]["views"]
+
+
+def test_option_flow_without_blocks_says_none_are_stored(tmp_path):
+    section = build_option_flow_section(make_context(tmp_path), FakeOptionFlowService(make_trades("27NOV26", 68_000.0, 1.0)))
+    assert "No block trades are stored in the window." in section.body_html
 
 
 # ---------------------------------------------------------------- dealer levels
@@ -297,38 +356,47 @@ def test_menthorq_section_has_a_per_expiry_switcher_with_levels_caption(tmp_path
 # ---------------------------------------------------------------- futures flow
 
 class FakeTakerFlowChartService:
-    png_names = ["chart.png"]
-    symbols_data = {"BTCUSDT": {"days": [{"day": "2026-11-13", "taker_buy_usd": 3e6, "taker_sell_usd": 1e6, "ratio": 3.0}]}}
+    """Stands in for the service: ``figure_data`` returns fixed data (the section no longer writes any file)."""
+
+    rolling_points = [(NOW - timedelta(hours=3), 0.95), (NOW - timedelta(hours=2), 1.10), (NOW - timedelta(hours=1), 1.02)]
+    days = [TakerFlowDay(date(2026, 11, 13), 3e6, 1e6)]
     warnings = ["hour missing"]
 
     def __init__(self, repository, symbols, clock):
         self.symbols = symbols
         self.clock = clock
 
-    def generate(self, working_directory):
-        folder = working_directory / "taker"
-        folder.mkdir(parents=True)
-        files = []
-        for name in self.png_names:
-            (folder / name).write_bytes(FAKE_PNG)
-            files.append(folder / name)
-        (folder / DATA_FILE_NAME).write_text(json.dumps({"symbols": self.symbols_data}), encoding="utf-8")
-        return TakerFlowChartResult(folder, files, list(self.warnings), NOW - timedelta(hours=1))
+    def figure_data(self, symbol):
+        return TakerFlowFigureData(symbol, "BTC", [], list(self.rolling_points), list(self.days), list(self.warnings),
+                                   NOW - timedelta(hours=1))
 
 
-def test_futures_section_embeds_the_chart_and_the_day_table(tmp_path, monkeypatch):
+def test_futures_section_embeds_the_interactive_figure_and_the_day_table(tmp_path, monkeypatch):
+    # Changed: was a PNG data URI in the body; now a Plotly figure drawn by a control-free switcher, and the day table stays.
     monkeypatch.setattr(report_sections, "TakerFlowChartService", FakeTakerFlowChartService)
     section = build_futures_flow_section(make_context(tmp_path))
-    assert "data:image/png;base64," + base64.b64encode(FAKE_PNG).decode() in section.body_html
+    assert "data:image/png" not in section.body_html
+    figure = section.figures["futures-flow-rolling-ratio"]
+    ratio = next(trace for trace in figure["data"] if "rolling 24 h ratio" in trace.get("name", ""))
+    assert ratio["y"] == [0.95, 1.10, 1.02]
+    assert section.switchers["futures-flow"]["views"][""] == {"figure": "futures-flow-rolling-ratio"}
+    assert 'data-switcher="futures-flow"' in section.body_html
     assert "2026-11-13" in section.body_html and "2.0M USD" in section.body_html
     assert section.warnings == ["hour missing"]
     assert "10:00 UTC" in section.as_of            # the newest hour 09:00 plus one hour
 
 
-def test_futures_section_fails_when_the_service_wrote_no_picture(tmp_path, monkeypatch):
-    class NoPicture(FakeTakerFlowChartService):
-        png_names = []
-    monkeypatch.setattr(report_sections, "TakerFlowChartService", NoPicture)
+def test_futures_section_says_why_no_trend_line_with_the_real_minimum_and_maximum(tmp_path, monkeypatch):
+    monkeypatch.setattr(report_sections, "TakerFlowChartService", FakeTakerFlowChartService)
+    body = build_futures_flow_section(make_context(tmp_path)).body_html
+    assert "No trend lines are drawn" in body and "about 0.95 to 1.10 over these 30 days" in body
+
+
+def test_futures_section_fails_when_there_is_nothing_to_draw(tmp_path, monkeypatch):
+    # Changed: was "the service wrote no picture"; now "no complete day / no rolling point" with the service's warnings.
+    class NoDays(FakeTakerFlowChartService):
+        days = []
+    monkeypatch.setattr(report_sections, "TakerFlowChartService", NoDays)
     with pytest.raises(LookupError, match="hour missing"):
         build_futures_flow_section(make_context(tmp_path))
 
@@ -336,3 +404,213 @@ def test_futures_section_fails_when_the_service_wrote_no_picture(tmp_path, monke
 def test_futures_section_fails_for_a_currency_without_a_perpetual(tmp_path):
     with pytest.raises(LookupError, match="no Binance perpetual"):
         build_futures_flow_section(make_context(tmp_path, currency="SOL"))
+
+
+# ---------------------------------------------------------------- open interest per expiry
+
+OPEN_INTEREST_BY_EXPIRY = {"25DEC26": 100_000.0, "27NOV26": 60_000.0, "26MAR27": 40_000.0, "20NOV26": 20_000.0,
+                           "18NOV26": 10_000.0, "15NOV26": 5_000.0}
+
+
+def make_open_interest_report(open_interest=None):
+    chain = [{"expiration": expiry, "option_type": "C", "strike": 70_000.0, "open_interest": value}
+             for expiry, value in (open_interest or OPEN_INTEREST_BY_EXPIRY).items()]
+    return ExpiryOpenInterestReport("BTC", NOW - timedelta(minutes=10), 67_000.0, open_interest_by_expiry(chain, 67_000.0, NOW))
+
+
+def install_open_interest(monkeypatch, open_interest=None, error=None):
+    """Replaces the service the context builds; ``built`` records every construction."""
+    built = []
+
+    class FakeOpenInterestService:
+        def __init__(self, repository, clock):
+            built.append(self)
+
+        def open_interest(self, currency):
+            if error is not None:
+                raise error
+            return make_open_interest_report(open_interest)
+
+    monkeypatch.setattr(report_sections, "ExpiryOpenInterestService", FakeOpenInterestService)
+    return built
+
+
+def test_open_interest_is_computed_once_and_is_the_same_object_for_every_section(tmp_path, monkeypatch):
+    built = install_open_interest(monkeypatch)
+    monkeypatch.setattr(report_sections, "MenthorqReplicationService", FakeMenthorqService)
+    monkeypatch.setattr(report_sections, "data_warnings", lambda output: [])
+    monkeypatch.setattr(report_sections, "data_notes", lambda output: [])
+    context = make_context(tmp_path)
+    build_menthorq_section(context)
+    build_option_flow_section(context, FakeOptionFlowService([], expiries=[]))
+    build_levels_section(context, FakeLevelService())
+    assert len(built) == 1
+    assert context.open_interest()[0] is context.open_interest()[0]
+
+
+def test_failed_open_interest_is_computed_once_and_shown_as_a_note_not_as_a_failure(tmp_path, monkeypatch):
+    built = install_open_interest(monkeypatch, error=LookupError("no snapshot"))
+    context = make_context(tmp_path)
+    section = build_option_flow_section(context, FakeOptionFlowService(make_trades("27NOV26", 68_000.0, 1.0)))
+    assert "Open interest per expiry not available: no snapshot" in section.body_html
+    assert not section.failed and "27NOV26" in section.body_html
+    build_levels_section(context, FakeLevelService())
+    assert len(built) == 1
+
+
+def test_a_programming_error_in_the_open_interest_service_fails_the_section_instead_of_becoming_a_note(tmp_path, monkeypatch):
+    install_open_interest(monkeypatch, error=TypeError("unsupported operand"))
+    with pytest.raises(TypeError):
+        build_option_flow_section(make_context(tmp_path), FakeOptionFlowService(make_trades("27NOV26", 68_000.0, 1.0)))
+
+
+def test_a_programming_error_in_a_block_query_fails_the_section(tmp_path):
+    service = FakeOptionFlowService(make_trades("27NOV26", 68_000.0, 1.0), blocks=TypeError("bug"))
+    with pytest.raises(TypeError):
+        build_option_flow_section(make_context(tmp_path), service)
+
+
+def test_menthorq_says_which_instant_the_table_and_the_chart_order_come_from(tmp_path, monkeypatch):
+    install_open_interest(monkeypatch)
+    monkeypatch.setattr(report_sections, "MenthorqReplicationService", FakeMenthorqService)
+    monkeypatch.setattr(report_sections, "data_warnings", lambda output: [])
+    monkeypatch.setattr(report_sections, "data_notes", lambda output: [])
+    html_text = build_menthorq_section(make_context(tmp_path)).body_html
+    note = ("the charts themselves are the daily close of 2026-11-13, so an expiry that settled since then is listed "
+            "last as expired.")
+    assert "This table and the order of the per-expiry charts below use the newest chain snapshot" in html_text and note in html_text
+    assert html_text.index("<h3>Open interest per expiry</h3>") < html_text.index("This table and the order") \
+        < html_text.index("IV x OI of one expiry")
+
+
+def test_option_flow_note_says_how_the_expiries_were_chosen_with_open_interest(tmp_path, monkeypatch):
+    service, _ = fourteen_expiry_service()
+    install_open_interest(monkeypatch, {"1DEC26": 900.0, "2DEC26": 800.0, "14DEC26": 700.0, "13DEC26": 600.0, "5DEC26": 1.0})
+    note = build_option_flow_section(make_context(tmp_path), service).notes[0]
+    assert "12 can be picked one by one" in note and "4 required by open interest" in note
+    assert "8 filled by traded notional" in note and "ordered by open interest" in note
+
+
+def test_option_flow_note_without_open_interest_says_ordered_by_settlement(tmp_path):
+    service, _ = fourteen_expiry_service()
+    note = build_option_flow_section(make_context(tmp_path), service).notes[0]
+    assert "ordered by settlement (open interest not available)" in note
+    assert "required by open interest" not in note and "12 most traded by notional" in note
+
+
+def test_the_embedded_page_frame_is_reset_before_it_is_measured_so_it_can_shrink():
+    template = (Path(__file__).parents[2] / ".." / "coding" / "core" / "analytics" / "report" / "report_page.html").resolve()
+    script = template.read_text(encoding="utf-8")
+    assert script.index('frame.style.height = "0px"') < script.index("document_.documentElement.scrollHeight")
+
+
+def test_menthorq_per_expiry_choices_are_ordered_by_open_interest_with_labels(tmp_path, monkeypatch):
+    install_open_interest(monkeypatch)
+    monkeypatch.setattr(report_sections, "MenthorqReplicationService", FakeMenthorqService)
+    monkeypatch.setattr(report_sections, "data_warnings", lambda output: [])
+    monkeypatch.setattr(report_sections, "data_notes", lambda output: [])
+    section = build_menthorq_section(make_context(tmp_path))
+    assert "<h3>Open interest per expiry</h3>" in section.body_html
+    assert section.body_html.index("Open interest per expiry") < section.body_html.index("IV x OI of one expiry")
+    configuration = section.switchers["menthorq-expiry"]
+    assert configuration["selected"] == {"expiry": "25DEC26"}                  # the largest first, FakeMenthorqService lists 27NOV26 first
+    assert section.body_html.index('data-value="25DEC26"') < section.body_html.index('data-value="27NOV26"')
+    assert "25DEC26, 41 days, 6.70B USD OI, 43%" in section.body_html
+
+
+def test_menthorq_without_open_interest_keeps_its_order_and_says_why(tmp_path, monkeypatch):
+    install_open_interest(monkeypatch, error=LookupError("no snapshot"))
+    monkeypatch.setattr(report_sections, "MenthorqReplicationService", FakeMenthorqService)
+    monkeypatch.setattr(report_sections, "data_warnings", lambda output: [])
+    monkeypatch.setattr(report_sections, "data_notes", lambda output: [])
+    section = build_menthorq_section(make_context(tmp_path))
+    assert section.switchers["menthorq-expiry"]["selected"] == {"expiry": "27NOV26"}
+    assert "Open interest per expiry not available: no snapshot" in section.body_html
+
+
+def test_option_flow_always_precomputes_the_top_open_interest_expiries_that_traded(tmp_path, monkeypatch):
+    service, labels = fourteen_expiry_service()          # 1DEC26 and 2DEC26 are the least traded: dropped without open interest
+    install_open_interest(monkeypatch, {"1DEC26": 900.0, "2DEC26": 800.0, "14DEC26": 700.0, "13DEC26": 600.0, "5DEC26": 1.0})
+    section = build_option_flow_section(make_context(tmp_path), service)
+    scopes = {key.split("|")[0] for key in section.switchers["option-flow"]["views"]}
+    # the four by open interest, the other eight by notional (12DEC26 down to 5DEC26); 3DEC26 and 4DEC26 are out
+    assert scopes == {ALL_EXPIRATIONS, "1DEC26", "2DEC26", "14DEC26", "13DEC26"} | {f"{day}DEC26" for day in range(5, 13)}
+
+
+def test_option_flow_choices_are_ordered_by_open_interest_then_by_settlement_with_expired_labelled(tmp_path, monkeypatch):
+    trades = [trade for label in ("13NOV26", "15NOV26", "27NOV26", "25DEC26", "20NOV26") for trade in make_trades(label, 68_000.0, 1.0)]
+    service = FakeOptionFlowService(trades, expiries=["13NOV26", "15NOV26", "20NOV26", "25DEC26", "27NOV26"])
+    install_open_interest(monkeypatch)
+    section = build_option_flow_section(make_context(tmp_path), service)
+    html_text = section.body_html
+    positions = [html_text.index(f'value="{label}"') for label in ("25DEC26", "27NOV26", "20NOV26", "15NOV26", "13NOV26")]
+    assert positions == sorted(positions)
+    assert "13NOV26, expired" in html_text and "25DEC26, 41 days, 6.70B USD OI, 43%" in html_text
+
+
+def test_option_flow_open_interest_table_shows_eight_rows_and_the_rest_as_a_sentence(tmp_path, monkeypatch):
+    install_open_interest(monkeypatch, {f"{day}DEC26": 1000.0 * (11 - day) for day in range(1, 11)})
+    section = build_option_flow_section(make_context(tmp_path), FakeOptionFlowService([], expiries=[]))
+    table = section.body_html.split("</table>")[0]
+    assert table.count("<tr>") == 1 + 8
+    total = sum(1000.0 * (11 - day) for day in range(1, 11))
+    remaining = (2000.0 + 1000.0) / total * 100
+    assert f"2 more expiries hold the remaining {remaining:.0f}%." in section.body_html
+
+
+# ---------------------------------------------------------------- levels per expiry
+
+class FakeExpiryLevelService:
+    """Returns an overview that carries the expiry it was asked for; ``failing`` expiries raise LookupError."""
+
+    def __init__(self, failing=()):
+        self.calls = []
+        self.failing = set(failing)
+
+    def overview(self, currency, expiry, hours):
+        self.calls.append((currency, expiry, hours))
+        if expiry in self.failing:
+            raise LookupError("no dealer data")
+        return LevelOverview("BTC", 67_000.0, expiry, [LevelMark("MenthorQ replica", f"call resistance {expiry}", 70_000.0, "resistance")])
+
+
+def test_levels_levels_expiries_are_the_top_four_by_open_interest_plus_the_nearest_monthly():
+    rows = {row.expiry: row for row in make_open_interest_report().rows}
+    chosen, first = report_sections.levels_expiries(rows, NOW)
+    assert chosen == ["25DEC26", "27NOV26", "26MAR27", "20NOV26"] and first == "27NOV26"
+    rows = {row.expiry: row for row in make_open_interest_report({**OPEN_INTEREST_BY_EXPIRY, "27NOV26": 1.0}).rows}
+    chosen, first = report_sections.levels_expiries(rows, NOW)
+    assert chosen == ["25DEC26", "26MAR27", "20NOV26", "18NOV26", "27NOV26"] and first == "27NOV26"      # five views at most
+
+
+def test_levels_section_has_a_page_view_per_expiry_and_starts_on_the_nearest_monthly(tmp_path, monkeypatch):
+    install_open_interest(monkeypatch)
+    service = FakeExpiryLevelService()
+    section = build_levels_section(make_context(tmp_path), service)
+    assert [call[1] for call in service.calls] == ["25DEC26", "27NOV26", "26MAR27", "20NOV26"]
+    assert all(call[0] == "BTC" and call[2] == 24 for call in service.calls)
+    configuration = section.switchers["levels"]
+    assert configuration["selected"] == {"expiry": "27NOV26"}
+    assert configuration["views"]["25DEC26"] == {"page": "levels-page-25DEC26"}
+    assert set(section.pages) == {f"levels-page-{expiry}" for expiry in ("25DEC26", "27NOV26", "26MAR27", "20NOV26")}
+    assert "call resistance 25DEC26" in section.pages["levels-page-25DEC26"]
+    assert "Dealer lanes are shown for the 4 expiries with the most open interest and the nearest monthly expiry; " \
+           "the other lanes do not depend on the expiry." in section.body_html
+    assert "Open interest per expiry" in section.body_html and "27NOV26" in section.as_of
+
+
+def test_levels_section_skips_an_expiry_whose_overview_fails_and_fails_when_all_do(tmp_path, monkeypatch):
+    install_open_interest(monkeypatch)
+    section = build_levels_section(make_context(tmp_path), FakeExpiryLevelService(failing=["26MAR27"]))
+    assert set(section.switchers["levels"]["views"]) == {"25DEC26", "27NOV26", "20NOV26"}
+    assert any(note.startswith("Not computed: 26MAR27") for note in section.notes)
+    with pytest.raises(LookupError, match="no expiry could be computed"):
+        build_levels_section(make_context(tmp_path), FakeExpiryLevelService(failing=list(OPEN_INTEREST_BY_EXPIRY)))
+
+
+def test_levels_section_without_open_interest_falls_back_to_the_single_page_with_a_note(tmp_path, monkeypatch):
+    install_open_interest(monkeypatch, error=LookupError("no snapshot"))
+    service = FakeExpiryLevelService()
+    section = build_levels_section(make_context(tmp_path), service)
+    assert service.calls == [("BTC", None, 24)] and set(section.pages) == {"levels-page"}
+    assert "Open interest per expiry not available: no snapshot" in section.body_html

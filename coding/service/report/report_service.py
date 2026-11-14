@@ -21,6 +21,7 @@ from typing import Callable, List, Optional, Protocol, Sequence, Tuple
 
 from plotly.offline import get_plotlyjs
 
+from coding.core.analytics.report.how_to_read import REPORT_HELP, SECTION_HELP
 from coding.core.analytics.report.report_page import (
     ReportHeader, ReportSection, SectionFailure, build_report_page, format_utc, sentence)
 from coding.core.database.repository import DatabaseRepository
@@ -188,9 +189,10 @@ class ReportService:
                     failure = failure_for(title, error)
                     section = ReportSection(key=key, title=title, failure=failure)
                     outcomes.append(SectionOutcome(key, title, False, failure.what))
+                section.help = SECTION_HELP.get(key)          # also on a failed section
                 sections.append(section)
 
-        header = ReportHeader(currency, now, self._freshness(repository, currency, now, sync))
+        header = ReportHeader(currency, now, self._freshness(repository, currency, now, sync), help=REPORT_HELP)
         emit("Writing the report file...")
         javascript = self.plotly_javascript() if any(section.figures for section in sections if not section.failed) else None
         page = build_report_page(header, sections, javascript)

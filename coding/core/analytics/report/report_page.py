@@ -25,6 +25,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from coding.core.analytics.report.help_fragment import help_fragment
+from coding.core.analytics.report.how_to_read import SectionHelp
+
 TEMPLATE_PATH = Path(__file__).with_name("report_page.html")
 MAXIMUM_BUTTON_CHOICES = 4          # a control with more choices is drawn as a list
 VIEW_KEY_SEPARATOR = "|"
@@ -69,6 +72,7 @@ class ReportSection:
     figures: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     switchers: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     pages: Dict[str, str] = field(default_factory=dict)
+    help: Optional[SectionHelp] = None          # "How to read this tab", shown even when the section failed
 
     @property
     def failed(self) -> bool:
@@ -82,7 +86,8 @@ class ReportHeader:
 
     currency: str
     generated_at: datetime
-    facts: List[Tuple[str, str]] = field(default_factory=list)      # (label, value), e.g. ("Newest stored trade", "...")
+    facts: List[Tuple[str, str]] = field(default_factory=list)          # (label, value), e.g. ("Newest stored trade", "...")
+    help: Optional[SectionHelp] = None          # "How to read this report"
 
 
 @dataclass
@@ -179,7 +184,8 @@ def switcher_fragment(switcher_id: str, controls: Sequence[SwitcherControl]) -> 
     return (f'<div class="switcher" data-switcher="{html.escape(switcher_id)}">'
             f'<div class="controls">{"".join(parts)}</div>'
             f'<div class="switcher-caption" aria-live="polite"></div>'
-            f'<div class="switcher-plot"></div><img class="switcher-image" alt="" hidden></div>')
+            f'<div class="switcher-plot"></div><img class="switcher-image" alt="" hidden>'
+            f'<iframe class="page-frame switcher-frame" title="{html.escape(switcher_id)} page" hidden></iframe></div>')
 
 
 def switcher_configuration(controls: Sequence[SwitcherControl], views: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
@@ -209,8 +215,10 @@ def _script_safe_json(value: Any) -> str:
 def _header_html(header: ReportHeader) -> str:
     """Title and the data-freshness facts."""
     facts = "".join(f"<div><dt>{html.escape(label)}</dt><dd>{html.escape(value)}</dd></div>" for label, value in header.facts)
+    report_help = help_fragment(header.help, "How to read this report") if header.help is not None else ""
     return (f'<h1><span class="currency">{html.escape(header.currency)}</span> market report</h1>'
-            f'<dl class="facts"><div><dt>Generated</dt><dd>{html.escape(format_utc(header.generated_at))}</dd></div>{facts}</dl>')
+            f'<dl class="facts"><div><dt>Generated</dt><dd>{html.escape(format_utc(header.generated_at))}</dd></div>{facts}</dl>'
+            f'{report_help}')
 
 
 def _tabs_html(sections: Sequence[ReportSection]) -> str:
@@ -241,8 +249,9 @@ def _section_html(section: ReportSection, index: int) -> str:
     notes = ("<div class=\"notes\"><h3>About this data</h3>"
              + "".join(f"<p>{html.escape(sentence(text))}</p>" for text in section.notes) + "</div>" if section.notes else "")
     hidden = "" if index == 0 else " hidden"
+    section_help = help_fragment(section.help) if section.help is not None else ""
     return (f'<section class="panel" role="tabpanel" id="panel-{key}" aria-labelledby="tab-{key}" tabindex="0"{hidden}>'
-            f'<header class="panel-head"><h2>{html.escape(section.title)}</h2>{as_of}</header>{description}'
+            f'<header class="panel-head"><h2>{html.escape(section.title)}</h2>{as_of}</header>{section_help}{description}'
             f'{warnings}{body}{notes}</section>')
 
 

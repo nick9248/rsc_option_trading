@@ -14,6 +14,7 @@ from psycopg2.extras import Json, execute_values
 
 from coding.core.analytics.futures_flow.taker_flow import TakerFlowHour
 from coding.core.analytics.liquidation_heatmap.level_snapshot import LevelSnapshot, RecordedLiquidation
+from coding.core.analytics.option_flow.block_structure import BlockTradeLeg
 from coding.core.analytics.option_flow.strike_flow import OptionTrade
 from coding.core.analytics.market_wide_calculator import DERIBIT_SETTLEMENT_HOUR_UTC
 from coding.core.analytics.menthorq_monitor.alert_mute import MenthorqMonitorState
@@ -469,6 +470,32 @@ class DatabaseRepository:
             rows = cursor.fetchall()
         return [OptionTrade(expiration=row[0], strike=float(row[1]), option_type=row[2], direction=row[3],
                             amount=float(row[4]), is_block=bool(row[5]))
+                for row in rows]
+
+    def get_block_trade_legs_between(self, currency: str, start_ms: int, end_ms: int) -> List[BlockTradeLeg]:
+        """
+        Every stored leg of a block trade (``block_trade_id`` set) with ``start_ms <= trade_timestamp < end_ms``
+        (epoch milliseconds, the same bounds as ``get_option_trades_between``), oldest first. A block's other legs may
+        lie outside the window; compare ``block_trade_leg_count`` with the legs returned.
+        """
+        query = """
+            SELECT block_trade_id, trade_id, trade_timestamp, expiration, strike, option_type, direction, amount,
+                   block_trade_leg_count, combo_id
+            FROM historical_trades
+            WHERE currency = %s AND trade_timestamp >= %s AND trade_timestamp < %s
+              AND block_trade_id IS NOT NULL
+              AND expiration IS NOT NULL AND strike IS NOT NULL AND direction IS NOT NULL AND option_type IS NOT NULL
+            ORDER BY trade_timestamp, trade_id
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute(query, (currency, start_ms, end_ms))
+            rows = cursor.fetchall()
+        return [BlockTradeLeg(
+                    block_trade_id=row[0], trade_id=row[1],
+                    trade_timestamp=datetime.fromtimestamp(row[2] / 1000, tz=timezone.utc),
+                    expiration=row[3], strike=float(row[4]), option_type=row[5], direction=row[6],
+                    amount=float(row[7]),
+                    block_trade_leg_count=int(row[8]) if row[8] is not None else None, combo_id=row[9])
                 for row in rows]
 
     def get_latest_trade_time(self, currency: str) -> Optional[datetime]:

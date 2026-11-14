@@ -14,6 +14,7 @@ from typing import Callable, List, Optional
 
 import plotly.graph_objects as go
 
+from coding.core.analytics.option_flow.block_structure import BlockStructure, describe_blocks
 from coding.core.analytics.option_flow.strike_flow import SERIES, StrikeFlow, aggregate_by_strike
 from coding.core.analytics.menthorq_replication_calculator import parse_expiry_settlement
 from coding.core.analytics.option_flow.strike_flow_figure import build_strike_flow_figure
@@ -34,6 +35,16 @@ class StrikeFlowReport:
     newest_trade: Optional[datetime]
     first_block_trade: Optional[datetime] = None   # blocks were not stored before this instant
     files: List[Path] = field(default_factory=list)
+
+
+@dataclass
+class BlockStructureReport:
+    """The largest block trades of a window."""
+
+    window_start: datetime
+    window_end: datetime
+    blocks: List[BlockStructure]
+    legs_in_window: int             # every block leg stored in the window, not only those of the blocks listed
 
 
 class OptionFlowService:
@@ -75,6 +86,23 @@ class OptionFlowService:
         start_ms, end_ms = int((end - timedelta(hours=hours)).timestamp() * 1000), int(end.timestamp() * 1000)
         labels = self.repository.get_traded_expirations(currency, start_ms, end_ms)
         return sorted(labels, key=lambda label: (parse_expiry_settlement(label) or datetime.max.replace(tzinfo=timezone.utc), label))
+
+    def block_structures(self, currency: str = "BTC", hours: int = 24, end: Optional[datetime] = None,
+                         top: int = 10) -> BlockStructureReport:
+        """
+        The ``top`` largest block trades (by notional) of the ``hours`` hours before ``end`` (now by default), each with
+        the legs of it that lie in the window. The window is the same one ``strike_flow`` uses.
+
+        Raises:
+            ValueError: when ``end`` is not timezone-aware.
+        """
+        if end is not None and end.tzinfo is None:
+            raise ValueError("end must be timezone-aware (UTC)")
+        end = (end or self.clock()).astimezone(timezone.utc)
+        start = end - timedelta(hours=hours)
+        start_ms, end_ms = int(start.timestamp() * 1000), int(end.timestamp() * 1000)
+        legs = self.repository.get_block_trade_legs_between(currency, start_ms, end_ms)
+        return BlockStructureReport(start, end, describe_blocks(legs, top), len(legs))
 
     @staticmethod
     def build_figure(report: StrikeFlowReport, unit: str = "notional") -> go.Figure:
