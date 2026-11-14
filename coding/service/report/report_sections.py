@@ -1,5 +1,5 @@
 """
-The five sections of the market report. Each builder calls the existing service of its analysis (nothing is computed a
+The sections of the market report (the last one, Decision, is built in ``decision_section.py``). Each builder calls the existing service of its analysis (nothing is computed a
 second way here), turns the result into a ``ReportSection`` and is testable on its own with a fake repository or service.
 
 A builder raises when its analysis cannot run at all (e.g. no option-chain snapshot); ``ReportService`` turns that into a
@@ -40,6 +40,7 @@ from coding.service.on_chain.menthorq_replication_service import MenthorqReplica
 from coding.service.option_flow.dealer_flow_levels_service import DealerFlowLevelsService
 from coding.service.option_flow.level_overview_service import LevelOverviewService
 from coding.service.option_flow.option_flow_service import OptionFlowService
+from coding.service.report.decision_section import build_decision_section
 
 logger = logging.getLogger(__name__)
 
@@ -535,4 +536,5 @@ SECTION_BUILDERS: List[Tuple[str, str, Callable[[SectionContext], ReportSection]
     ("option-flow", "Option flow", build_option_flow_section),
     ("dealer-levels", "Dealer levels", build_dealer_levels_section),
     ("levels", "Levels", build_levels_section),
+    ("decision", "Decision", build_decision_section),
 ]

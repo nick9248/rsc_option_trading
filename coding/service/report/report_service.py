@@ -1,6 +1,6 @@
 """
 Generates the market report of one currency: first brings the local database in step with the VPS when it is behind, then
-builds the five sections and writes ONE self-contained HTML file to ``output/report/``.
+builds the sections and writes ONE self-contained HTML file to ``output/report/``.
 
 Sync rule (``VpsSyncService.sync_if_behind``): the newest watermark (the column the sync itself uses) of the tables the
 report reads -- historical_trades, snapshots, taker_flow_hourly, liquidation_heatmap_snapshots -- is compared between the
