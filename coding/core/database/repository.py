@@ -159,6 +159,7 @@ class DatabaseRepository:
                         strike, option_type, open_interest, volume, volume_usd,
                         underlying_price, mark_price, bid_price, ask_price, mark_iv
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT DO NOTHING
                 """
 
                 rows = []
@@ -196,7 +197,7 @@ class DatabaseRepository:
                 cursor.executemany(insert_sql, rows)
 
                 logger.info(f"Saved {len(rows)} snapshot records for {currency}")
-                return len(rows)
+                return len(rows)           # rows offered; one already stored (migration 035 key) is skipped by the database
 
         except Exception as e:
             logger.error(f"Failed to save snapshot: {e}")
