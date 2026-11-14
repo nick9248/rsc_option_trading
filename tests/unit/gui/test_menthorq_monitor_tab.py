@@ -27,6 +27,7 @@ from PySide6.QtWidgets import QApplication, QTableWidget
 
 from coding.gui import main_window
 from coding.gui.tabs import menthorq_monitor_tab as tab_module
+from coding.gui.tabs.report_tab import ReportTab
 from coding.gui.tabs.menthorq_monitor_tab import (
     MenthorqMonitorTab,
     MenthorqMonitorWorker,
@@ -322,13 +323,14 @@ def test_rich_text_keeps_pre_blocks_and_breaks_other_lines():
         '<b>T</b><pre><code class="language-text">a\nb</code></pre>end')
 
 
-def test_tab_is_registered_after_the_charts_tab():
+def test_monitor_tab_is_registered_after_the_report_tab():
     definitions = {entry["index"]: entry["name"] for entry in main_window.MODULE_DEFS}
-    assert definitions[6] == "MenthorQ Charts" and definitions[7] == "MenthorQ Monitor"
-    assert definitions[8] == "Futures Flow"
-    assert definitions[9] == "Option Flow"
-    assert definitions[10] == "Dealer Levels"
-    assert definitions[11] == "Levels"
-    assert main_window._LAST_ACTIVE == 11
-    assert main_window._PLACEHOLDER_INDICES == {12, 13, 14}
+    assert definitions[6] == "Report" and definitions[7] == "MenthorQ Monitor"
+    assert definitions[8] == "Market Data"
+    assert definitions[9] == "Trading"
+    assert definitions[10] == "Analytics"
+    assert main_window._LAST_ACTIVE == 7
+    assert main_window._PLACEHOLDER_INDICES == {8, 9, 10}
+    assert sorted(entry["index"] for entry in main_window.MODULE_DEFS) == list(range(1, 11))
     assert cast(Any, main_window).MenthorqMonitorTab is MenthorqMonitorTab
+    assert cast(Any, main_window).ReportTab is ReportTab

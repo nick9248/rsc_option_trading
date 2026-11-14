@@ -1,7 +1,6 @@
 """Brief section (text, staleness, errors, fitting into the brief) and the chart service. No database, no network."""
 
 import json
-import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
@@ -111,26 +110,6 @@ def test_chart_service_warns_when_nothing_is_stored(tmp_path):
     result = TakerFlowChartService(cast(Any, FakeRepository([])), clock=lambda: NOW).generate(tmp_path)
     assert [path.name for path in result.files] == ["taker_flow_data.json"]
     assert len(result.warnings) == 2 and all("no hourly data stored" in warning for warning in result.warnings)
-
-
-def test_gui_tab_shows_a_generation_result(tmp_path):
-    pytest.importorskip("PySide6")
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    from PySide6.QtWidgets import QApplication
-    from coding.gui.tabs.taker_flow_tab import TakerFlowTab
-    from coding.service.futures_flow.taker_flow_chart_service import TakerFlowChartResult
-
-    _application = QApplication.instance() or QApplication([])
-    tab = TakerFlowTab()
-    folder = tmp_path / "2026-11-13"
-    tab._on_generation_succeeded(TakerFlowChartResult(
-        folder=folder, files=[folder / "BTC_taker_flow.png", folder / "taker_flow_data.json"],
-        warnings=["ETH: no hourly data stored"], newest_hour_utc=LAST_CLOSED))
-    assert "Generated 1 chart(s)" in tab.status_label.text() and "Data up to 2026-11-13 14:00 UTC" in tab.status_label.text()
-    assert not tab.warning_label.isHidden() and "ETH: no hourly data stored" in tab.warning_label.text()
-    assert tab.open_folder_button.isEnabled() and str(folder) in tab.folder_link_label.text()
-    tab._on_generation_failed("RuntimeError: boom")
-    assert "Generation failed: RuntimeError: boom" in tab.status_label.text() and tab.generate_button.isEnabled()
 
 
 def test_day_note_names_each_symbol_when_their_last_complete_days_differ():
