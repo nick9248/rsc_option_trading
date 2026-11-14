@@ -33,7 +33,7 @@ DEFAULT_BAND_PERCENT = 1.0
 MINIMUM_SOURCES = [2, 3, 4, 5]
 DEFAULT_MINIMUM_SOURCES = 3
 NEAREST_MONTHLY = "Nearest monthly"
-PAGE_BACKGROUND = "#080D18"
+PAGE_BACKGROUND = "#FFFFFF"
 
 DESCRIPTION = ("Every source's levels on one price ladder. A gold band marks a price where several different sources agree. "
                "The sources are not independent (several use the same open interest), so agreement is a coincidence of "

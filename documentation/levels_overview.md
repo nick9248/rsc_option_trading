@@ -27,7 +27,7 @@ A shaded band marks a price range (default 1 % of the spot) holding levels of at
 
 The same levels as an interactive page (`level_overview_page.py` + `level_overview_page.html`, one self-contained file with inline CSS, JS and SVG, no network):
 
-- **Price ladder**: a lane per source, each level at its exact price, the spot as a gold line, a gold band where sources agree. The buttons above the ladder zoom to ±5 %, ±10 %, ±15 % or all levels; levels beyond the zoom are listed at the lane's edge.
+- **Price line**: one horizontal price axis, a row per source, each level a diamond at its exact price with its price and name written next to it (hollow = that source failed its check), the spot as a black line, a highlighter band where sources agree. A ruler follows the pointer. The buttons above zoom to ±5 %, ±10 %, ±15 % or all levels; levels beyond the zoom are listed at the edge of their row.
 - **Ledger**: "Where sources agree" and the full table of every level with its distance from the spot, so every number can be checked. Hovering a level, a table row or an agreement highlights the same item everywhere.
 - **Controls** (Qt): currency, dealer expiry, option flow window, agreement band width and the number of sources needed. Band width and sources only rebuild the page from the levels already loaded; the other three read the database again.
 - **Change a choice and the page redraws** (the Option Flow and Dealer Levels tabs do the same now: changing the expiry, window, unit or currency redraws the chart; a change made during a run waits and runs next).

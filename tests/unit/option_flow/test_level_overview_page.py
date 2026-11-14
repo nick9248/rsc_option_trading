@@ -17,7 +17,7 @@ def overview(extra_marks=()):
 
 
 def embedded_data(page):
-    match = re.search(r"const D = (\{.*?\});\nconst KIND_ORDER", page, re.S)
+    match = re.search(r"const D = (\{.*?\});\nconst RANGES", page, re.S)
     return json.loads(match.group(1).replace("<\\/", "</"))
 
 
