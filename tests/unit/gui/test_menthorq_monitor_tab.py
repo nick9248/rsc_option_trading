@@ -327,6 +327,7 @@ def test_tab_is_registered_after_the_charts_tab():
     assert definitions[6] == "MenthorQ Charts" and definitions[7] == "MenthorQ Monitor"
     assert definitions[8] == "Futures Flow"
     assert definitions[9] == "Option Flow"
-    assert main_window._LAST_ACTIVE == 9
-    assert main_window._PLACEHOLDER_INDICES == {10, 11, 12}
+    assert definitions[10] == "Dealer Levels"
+    assert main_window._LAST_ACTIVE == 10
+    assert main_window._PLACEHOLDER_INDICES == {11, 12, 13}
     assert cast(Any, main_window).MenthorqMonitorTab is MenthorqMonitorTab

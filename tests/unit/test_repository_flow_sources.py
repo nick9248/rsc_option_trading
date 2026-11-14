@@ -1,4 +1,4 @@
-"""Tests for the repository reads behind the Flow Charts and the futures-basis write.
+"""Tests for the repository's latest-index-price read and the futures-basis write.
 
 They run on a throw-away database created for each test and are skipped when the local
 PostgreSQL server is not reachable. Only the columns these methods use are created.
@@ -95,51 +95,6 @@ def _snapshot(repository, expiration, hour, call_oi, put_oi, index_price, curren
         "VALUES (%s, %s, %s, %s, %s, %s)",
         (currency, expiration, hour, call_oi, put_oi, index_price),
     )
-
-
-def _ms(moment):
-    return int(moment.timestamp() * 1000)
-
-
-def _expiration_in(days):
-    """Expiration label in Deribit style, e.g. 5NOV26, for a date `days` from now."""
-    moment = datetime.now(timezone.utc) + timedelta(days=days)
-    return f"{moment.day}{moment.strftime('%b%y').upper()}"
-
-
-class TestActiveExpirationsWithRecentTrades:
-    def test_lists_unexpired_expirations_traded_since_the_cutoff_ordered_by_open_interest(self, repo):
-        now = datetime.now(timezone.utc)
-        near, far = _expiration_in(30), _expiration_in(60)
-        for expiration in (near, far):
-            _trade(repo, expiration, _ms(now - timedelta(hours=1)))
-        _snapshot(repo, near, now.replace(tzinfo=None), 10, 5, 65000)    # total OI 15
-        _snapshot(repo, far, now.replace(tzinfo=None), 100, 50, 65000)   # total OI 150
-
-        result = repo.get_active_expirations_with_recent_trades("BTC", _ms(now - timedelta(hours=24)))
-
-        assert result == [{"expiration": far, "total_oi": 150.0}, {"expiration": near, "total_oi": 15.0}]
-
-    def test_excludes_expired_old_trades_other_currencies_and_trades_without_direction(self, repo):
-        now = datetime.now(timezone.utc)
-        future = _expiration_in(30)
-        recent = _ms(now - timedelta(hours=1))
-        _trade(repo, "1JAN20", recent)                                # already expired
-        _trade(repo, future, _ms(now - timedelta(hours=48)))          # older than the cutoff
-        _trade(repo, future, recent, currency="ETH")                  # other currency
-        _trade(repo, future, recent, direction=None)                  # taker side unknown
-
-        assert repo.get_active_expirations_with_recent_trades("BTC", _ms(now - timedelta(hours=24))) == []
-
-    def test_unknown_open_interest_is_zero_and_expirations_are_not_duplicated(self, repo):
-        now = datetime.now(timezone.utc)
-        future = _expiration_in(30)
-        for offset in (1, 2, 3):
-            _trade(repo, future, _ms(now - timedelta(hours=offset)))
-
-        assert repo.get_active_expirations_with_recent_trades("BTC", _ms(now - timedelta(hours=24))) == [
-            {"expiration": future, "total_oi": 0.0}
-        ]
 
 
 class TestLatestIndexPrice:

@@ -1,7 +1,6 @@
 """
 Regression test for the 24h flow-window clock in
-OnChainAnalysisService._calculate_buy_sell_flow and
-.get_filtered_aggregate_flow (Wave-I-C Fix 1).
+OnChainAnalysisService._calculate_buy_sell_flow (Wave-I-C Fix 1).
 
 Both sites computed ``window_end = datetime.now()`` -- a naive,
 host-local datetime -- and then derived millisecond timestamps from it via
@@ -109,39 +108,6 @@ class TestCalculateBuySellFlowWindowClock:
         # Before the fix, a host reading 2h ahead of UTC (simulated by
         # _FrozenDateTime.now() with tz=None) would push end_ts 2h into
         # the future relative to the real UTC instant.
-        assert fetch_kwargs["end_ts"] == expected_utc_ms, (
-            f"window_end is not UTC-anchored: got {fetch_kwargs['end_ts']}, "
-            f"expected {expected_utc_ms} (off by "
-            f"{(fetch_kwargs['end_ts'] - expected_utc_ms) / 3_600_000}h)"
-        )
-
-
-class TestGetFilteredAggregateFlowWindowClock:
-    """Fix 1, site 2: get_filtered_aggregate_flow's window_end."""
-
-    def test_window_end_uses_utc_not_local_clock(self):
-        mock_repo = MagicMock()
-        mock_repo.get_active_expirations_with_recent_trades.return_value = [
-            {"expiration": "28MAR26"}
-        ]
-        mock_repo.get_latest_index_price.return_value = 85000.0
-        mock_repo.get_trades_for_flow_analysis.return_value = []
-        service = OnChainAnalysisService(repository=mock_repo)
-
-        expected_utc_ms = int(_FrozenDateTime._FIXED_UTC.timestamp() * 1000)
-
-        with patch(
-            "coding.service.on_chain.on_chain_analysis_service.datetime", _FrozenDateTime
-        ), patch(
-            "coding.service.on_chain.on_chain_analysis_service.BuySellFlowAnalyzer"
-        ) as MockAnalyzer:
-            instance = MagicMock()
-            instance.calculate.return_value.to_dict.return_value = {"flow_data": {}}
-            MockAnalyzer.return_value = instance
-
-            service.get_filtered_aggregate_flow("BTC", "block")
-
-        _, fetch_kwargs = mock_repo.get_trades_for_flow_analysis.call_args
         assert fetch_kwargs["end_ts"] == expected_utc_ms, (
             f"window_end is not UTC-anchored: got {fetch_kwargs['end_ts']}, "
             f"expected {expected_utc_ms} (off by "

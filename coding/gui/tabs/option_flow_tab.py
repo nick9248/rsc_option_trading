@@ -20,7 +20,7 @@ from typing import Callable, List, Optional
 
 from PySide6.QtCore import Qt, QThread, QUrl, Signal
 from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QComboBox, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget
 
 from coding.gui.components.menthorq_widgets import panel_frame
 from coding.gui.theme.colors import Colors
@@ -61,6 +61,17 @@ class OptionFlowResult:
     html_path: Path
 
 
+def delete_old_pages(directory: Path, max_age_hours: int = 24) -> None:
+    """Delete chart pages older than ``max_age_hours`` (each page embeds Plotly, about 4.5 MB); never raises."""
+    cutoff = time.time() - max_age_hours * 3600
+    for page in directory.glob("*.html"):
+        try:
+            if page.stat().st_mtime < cutoff:
+                page.unlink()
+        except OSError:
+            logger.warning("Could not delete the old chart page %s", page)
+
+
 class OptionFlowWorker(QThread):
     """Reads, aggregates and draws in a background thread."""
 
@@ -90,6 +101,7 @@ class OptionFlowWorker(QThread):
             expirations = service.traded_expirations(request.currency, request.hours, report.window_end)
             figure = service.build_figure(report, request.unit)
             self.html_directory.mkdir(parents=True, exist_ok=True)
+            delete_old_pages(self.html_directory)
             html_path = self.html_directory / f"{request.currency}_{request.hours}h_{request.expiry or 'all'}_{request.unit}_{time.time_ns()}.html"
             figure.write_html(html_path, include_plotlyjs=True, config={"displaylogo": False})
             self.succeeded.emit(OptionFlowResult(report, expirations, html_path))
@@ -116,6 +128,10 @@ class OptionFlowTab(QWidget):
         self.worker: Optional[OptionFlowWorker] = None
         self._setup_ui()
         self.generate_button.clicked.connect(self._generate)
+        self.currency_combo.currentIndexChanged.connect(self._reset_expiry)
+        application = QApplication.instance()
+        if application is not None:
+            application.aboutToQuit.connect(self._wait_for_worker)
 
     def _setup_ui(self) -> None:
         """Build the widgets."""
@@ -234,10 +250,18 @@ class OptionFlowTab(QWidget):
         self.expiry_combo.setCurrentIndex(0 if selected is None else self.expiry_combo.findData(selected))
         self.expiry_combo.blockSignals(False)
 
-    def closeEvent(self, event) -> None:
+    def _reset_expiry(self) -> None:
+        """Another currency has other expirations: back to all expirations until the next Generate refills the list."""
+        self._fill_expiries([], None)
+
+    def _wait_for_worker(self) -> None:
         """Wait for a running worker so the thread is never destroyed while it runs."""
         if self.worker is not None and self.worker.isRunning():
             self.worker.wait(10000)
+
+    def closeEvent(self, event) -> None:
+        """Also wait when the tab itself is closed."""
+        self._wait_for_worker()
         super().closeEvent(event)
 
     def _on_failed(self, message: str) -> None:

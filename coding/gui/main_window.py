@@ -31,11 +31,12 @@ from coding.gui.tabs.menthorq_charts_tab import MenthorqChartsTab
 from coding.gui.tabs.menthorq_monitor_tab import MenthorqMonitorTab
 from coding.gui.tabs.taker_flow_tab import TakerFlowTab
 from coding.gui.tabs.option_flow_tab import OptionFlowTab
+from coding.gui.tabs.dealer_flow_levels_tab import DealerFlowLevelsTab
 
 
 logger = logging.getLogger(__name__)
 
-# Stack indices 1–9 are active modules. 10–12 are placeholder modules.
+# Stack indices 1–10 are active modules. 11–13 are placeholder modules.
 # NavigationPage is index 0 (not counted in position indicator).
 MODULE_DEFS: list[dict] = [
     {"index": 1,  "icon": "🔗", "name": "API Connection",    "subtitle": "Test endpoints"},
@@ -47,16 +48,17 @@ MODULE_DEFS: list[dict] = [
     {"index": 7,  "icon": "🔔", "name": "MenthorQ Monitor",  "subtitle": "Brief · alerts preview"},
     {"index": 8,  "icon": "🌊", "name": "Futures Flow",      "subtitle": "Taker buy/sell ratio"},
     {"index": 9,  "icon": "⚖",  "name": "Option Flow",       "subtitle": "Buy/sell by strike"},
-    {"index": 10, "icon": "📈", "name": "Market Data",       "subtitle": "Coming soon"},
-    {"index": 11, "icon": "💹", "name": "Trading",           "subtitle": "Coming soon"},
-    {"index": 12, "icon": "🧮", "name": "Analytics",         "subtitle": "Coming soon"},
+    {"index": 10, "icon": "🎯", "name": "Dealer Levels",     "subtitle": "Flow-based gamma levels"},
+    {"index": 11, "icon": "📈", "name": "Market Data",       "subtitle": "Coming soon"},
+    {"index": 12, "icon": "💹", "name": "Trading",           "subtitle": "Coming soon"},
+    {"index": 13, "icon": "🧮", "name": "Analytics",         "subtitle": "Coming soon"},
 ]
 
 # Last active module index (used for wrap-around navigation)
-_LAST_ACTIVE = 9
+_LAST_ACTIVE = 10
 
 # Stack indices that are permanent placeholders (never active modules)
-_PLACEHOLDER_INDICES = {10, 11, 12}
+_PLACEHOLDER_INDICES = {11, 12, 13}
 
 
 class MainWindow(QMainWindow):
@@ -65,7 +67,7 @@ class MainWindow(QMainWindow):
 
     Layout:
         top_bar (fixed 36px)  —  logo | position_label | [← Prev][⌂ Home][Next →]
-        stack (QStackedWidget) — index 0: NavigationPage, 1–12: module tabs
+        stack (QStackedWidget) — index 0: NavigationPage, 1–13: module tabs
     """
 
     def __init__(self):
@@ -191,7 +193,10 @@ class MainWindow(QMainWindow):
         # Index 9: Option Flow (buy/sell volume per strike)
         self.stack.addWidget(OptionFlowTab())
 
-        # Indices 10–12: Future placeholders
+        # Index 10: Dealer Levels (flow-based gamma levels)
+        self.stack.addWidget(DealerFlowLevelsTab())
+
+        # Indices 11–13: Future placeholders
         self.stack.addWidget(self._placeholder_widget("Market data visualization coming soon…"))
         self.stack.addWidget(self._placeholder_widget("Trading interface coming soon…"))
         self.stack.addWidget(self._placeholder_widget("Analytics dashboard coming soon…"))
