@@ -126,9 +126,12 @@ class OptionFlowTab(QWidget):
         self.service_factory = service_factory
         self.clock = clock
         self.worker: Optional[OptionFlowWorker] = None
+        self._regenerate = False       # a choice changed while a run was in progress: run again when it ends
         self._setup_ui()
         self.generate_button.clicked.connect(self._generate)
-        self.currency_combo.currentIndexChanged.connect(self._reset_expiry)
+        self.currency_combo.currentIndexChanged.connect(self._on_currency_changed)
+        for combo in (self.expiry_combo, self.window_combo, self.unit_combo):
+            combo.currentIndexChanged.connect(self._generate)            # a changed choice redraws the chart
         application = QApplication.instance()
         if application is not None:
             application.aboutToQuit.connect(self._wait_for_worker)
@@ -205,6 +208,7 @@ class OptionFlowTab(QWidget):
     def _generate(self) -> None:
         """Start a run in the worker thread."""
         if self.worker is not None and self.worker.isRunning():
+            self._regenerate = True
             return
         self.generate_button.setEnabled(False)
         self.warning_label.setVisible(False)
@@ -212,6 +216,7 @@ class OptionFlowTab(QWidget):
         self.worker = OptionFlowWorker(self.current_request(), self.service_factory, parent=self)
         self.worker.succeeded.connect(self._on_succeeded)
         self.worker.failed.connect(self._on_failed)
+        self.worker.finished.connect(self._run_again_if_asked)
         self.worker.start()
 
     def _on_succeeded(self, result: OptionFlowResult) -> None:
@@ -250,9 +255,16 @@ class OptionFlowTab(QWidget):
         self.expiry_combo.setCurrentIndex(0 if selected is None else self.expiry_combo.findData(selected))
         self.expiry_combo.blockSignals(False)
 
-    def _reset_expiry(self) -> None:
-        """Another currency has other expirations: back to all expirations until the next Generate refills the list."""
+    def _on_currency_changed(self) -> None:
+        """Another currency has other expirations: back to all expirations, then draw that currency."""
         self._fill_expiries([], None)
+        self._generate()
+
+    def _run_again_if_asked(self) -> None:
+        """Run once more when a choice changed during the last run (the controls hold the newest choices)."""
+        if self._regenerate:
+            self._regenerate = False
+            self._generate()
 
     def _wait_for_worker(self) -> None:
         """Wait for a running worker so the thread is never destroyed while it runs."""

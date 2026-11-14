@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Levels overview</title>
+<style>
+  :root {
+    --ink: #080D18;
+    --panel: #0D1428;
+    --raised: #111E35;
+    --line: #1D2A44;
+    --line-soft: #141E33;
+    --text: #E8EAF0;
+    --muted: #8493AA;
+    --faint: #56647C;
+    --gold: #C9A84C;
+    --gold-soft: rgba(201, 168, 76, 0.13);
+    --resistance: #5BD6A6;
+    --support: #FF7F73;
+    --flip: #F1E7C9;
+    --buy: #5AC8FA;
+    --sell: #D79BEB;
+    --long_liquidation: #FF9F5A;
+    --short_liquidation: #A99BFF;
+    --numerals: "Bahnschrift", "DIN Alternate", "Segoe UI", system-ui, sans-serif;
+    --body: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--ink); color: var(--text); font-family: var(--body); font-size: 13px; line-height: 1.45; }
+  body { min-height: 100vh; }
+  button { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+  .num { font-family: var(--numerals); font-variant-numeric: tabular-nums; }
+
+  .page { display: grid; grid-template-columns: minmax(0, 1fr) 430px; gap: 0 28px; padding: 22px 26px 30px; max-width: 1900px; margin: 0 auto; }
+  @media (max-width: 1050px) { .page { grid-template-columns: minmax(0, 1fr); } }
+
+  header { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 14px 40px; padding-bottom: 18px; border-bottom: 1px solid var(--line); margin-bottom: 18px; }
+  h1 { margin: 0; font-family: var(--numerals); font-weight: 300; font-size: 40px; letter-spacing: -0.5px; line-height: 1.05; font-stretch: 85%; }
+  h1 .spot { color: var(--gold); font-weight: 400; margin-left: 14px; }
+  .verdict { margin: 8px 0 0; max-width: 62ch; color: var(--muted); font-size: 15px; }
+  .verdict b { color: var(--text); font-weight: 600; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; max-width: 520px; color: var(--muted); font-size: 12px; }
+  .legend span { display: inline-flex; align-items: center; gap: 7px; }
+  .swatch { width: 14px; height: 0; border-top: 3px solid currentColor; border-radius: 2px; }
+
+  .stage { min-width: 0; }
+  .toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; color: var(--muted); }
+  .segmented { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+  .segmented button { background: transparent; border: 0; padding: 5px 13px; color: var(--muted); cursor: pointer; border-right: 1px solid var(--line); }
+  .segmented button:last-child { border-right: 0; }
+  .segmented button:hover { background: var(--raised); color: var(--text); }
+  .segmented button[aria-pressed="true"] { background: var(--gold); color: #1A1405; font-weight: 600; }
+  #ladder { display: block; width: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+  #ladder text { font-family: var(--body); }
+  #ladder .num-text { font-family: var(--numerals); font-variant-numeric: tabular-nums; }
+  .lane-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+  .lane-sub { fill: var(--muted); font-size: 11px; }
+  .lane-warn { fill: #F5B461; font-size: 11px; font-weight: 600; }
+  .axis-label { fill: var(--faint); font-size: 11px; }
+  .mark-line { stroke-width: 2.4; stroke-linecap: round; transition: stroke-width .12s; }
+  .mark.hot .mark-line { stroke-width: 5; }
+  .mark-text { font-size: 11px; fill: var(--text); pointer-events: none; }
+  .mark.hot .mark-text { font-weight: 700; }
+  .mark-off { fill: var(--faint); font-size: 10.5px; }
+  .band-edge { stroke: var(--gold); stroke-width: 1; opacity: .55; }
+  .band-count { fill: var(--gold); font-size: 11px; font-weight: 700; }
+  .band.hot rect.fill { fill: rgba(201, 168, 76, 0.24); }
+  .spot-line { stroke: var(--gold); stroke-width: 1.4; }
+  .spot-chip { fill: var(--gold); }
+  .spot-chip-text { fill: #1A1405; font-size: 11.5px; font-weight: 700; }
+
+  aside { min-width: 0; }
+  aside section { padding: 0 0 20px; }
+  h2 { margin: 0 0 8px; font-size: 14px; font-weight: 600; color: var(--text); }
+  .agree { list-style: none; margin: 0; padding: 0; }
+  .agree li { padding: 10px 12px; margin: 0 0 6px; border: 1px solid var(--line); border-left: 3px solid var(--gold); border-radius: 6px; background: var(--panel); cursor: default; }
+  .agree li.hot, .agree li:hover { background: var(--raised); }
+  .agree .range { font-family: var(--numerals); font-size: 17px; font-variant-numeric: tabular-nums; }
+  .agree .meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .empty { color: var(--muted); padding: 10px 12px; border: 1px dashed var(--line); border-radius: 6px; margin: 0; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-weight: 500; color: var(--faint); font-size: 11.5px; padding: 0 8px 6px; border-bottom: 1px solid var(--line); }
+  th.r, td.r { text-align: right; }
+  td { padding: 5px 8px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+  tr.level { cursor: default; }
+  tr.level:hover, tr.level.hot { background: var(--raised); }
+  tr.spotrow td { color: var(--gold); border-bottom: 1px solid var(--gold); border-top: 1px solid var(--gold); background: var(--gold-soft); font-weight: 600; padding: 4px 8px; }
+  td .dot { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 8px; transform: rotate(45deg); }
+  td.source { color: var(--muted); }
+  td.far { color: var(--faint); }
+  .notes { margin: 0; padding-left: 18px; color: var(--muted); }
+  .notes li { margin-bottom: 4px; }
+  #tip { position: fixed; pointer-events: none; z-index: 5; background: #050912; border: 1px solid var(--line); border-radius: 7px; padding: 8px 11px; font-size: 12px; max-width: 320px; box-shadow: 0 8px 24px rgba(0,0,0,.5); opacity: 0; transition: opacity .08s; }
+  #tip.on { opacity: 1; }
+  #tip .tip-price { font-family: var(--numerals); font-size: 18px; }
+  #tip .tip-sub { color: var(--muted); }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <div>
+      <h1><span id="title"></span><span class="spot num" id="spot"></span></h1>
+      <p class="verdict" id="verdict"></p>
+    </div>
+    <div class="legend" id="legend" aria-label="Level types"></div>
+  </header>
+
+  <div class="stage">
+    <div class="toolbar">
+      <span id="rangeNote">Prices within</span>
+      <div class="segmented" id="range" role="group" aria-label="Price range around the spot"></div>
+    </div>
+    <svg id="ladder" role="img" aria-label="Price ladder with the levels of every source"></svg>
+  </div>
+
+  <aside>
+    <section>
+      <h2>Where sources agree</h2>
+      <p class="empty" id="agreeEmpty" hidden></p>
+      <ul class="agree" id="agree"></ul>
+    </section>
+    <section>
+      <h2>All levels</h2>
+      <table id="table"><thead><tr><th class="r">Price</th><th class="r">From spot</th><th>Level</th><th>Source</th></tr></thead><tbody></tbody></table>
+    </section>
+    <section>
+      <h2>Notes on the data</h2>
+      <ul class="notes" id="notes"></ul>
+    </section>
+  </aside>
+</div>
+<div id="tip" role="tooltip"></div>
+
+<script>
+const D = /*__DATA__*/null;
+const KIND_ORDER = ["resistance", "support", "flip", "buy", "sell", "long_liquidation", "short_liquidation"];
+const RANGES = [[0.05, "5%"], [0.10, "10%"], [0.15, "15%"], [null, "All"]];
+const SVG_NS = "http://www.w3.org/2000/svg";
+const fmt = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
+const fmtPct = (value) => (value >= 0 ? "+" : "-") + Math.abs(value * 100).toFixed(1) + "%";
+const state = { range: 0.15 };
+const colorOf = (kind) => `var(--${kind})`;
+
+function el(name, attributes, parent, text) {
+  const node = document.createElementNS(SVG_NS, name);
+  for (const key in attributes) node.setAttribute(key, attributes[key]);
+  if (text !== undefined) node.textContent = text;
+  if (parent) parent.appendChild(node);
+  return node;
+}
+function html(name, attributes, parent, text) {
+  const node = document.createElement(name);
+  for (const key in attributes) node.setAttribute(key, attributes[key]);
+  if (text !== undefined) node.textContent = text;
+  if (parent) parent.appendChild(node);
+  return node;
+}
+
+/* ---------- header ---------- */
+function drawHeader() {
+  document.getElementById("title").textContent = `${D.currency} levels`;
+  document.getElementById("spot").textContent = fmt.format(D.spot);
+  const verdict = document.getElementById("verdict");
+  const best = D.confluences.slice().sort((a, b) => b.sources.length - a.sources.length
+      || Math.abs((a.low + a.high) / 2 - D.spot) - Math.abs((b.low + b.high) / 2 - D.spot))[0];
+  if (best) {
+    const middle = (best.low + best.high) / 2;
+    const side = middle < D.spot ? "below" : "above";
+    const away = Math.abs(middle / D.spot - 1) * 100;
+    const span = best.low === best.high ? fmt.format(best.low) : `${fmt.format(best.low)} and ${fmt.format(best.high)}`;
+    verdict.innerHTML = `<b>${best.sources.length} of ${D.sources.length} sources</b> have a level ${best.low === best.high ? "at" : "between"} <b class="num">${span}</b>, ${away.toFixed(1)}% ${side} the spot.`;
+  } else {
+    verdict.textContent = `No price has levels from ${D.minimumSources} sources within ${D.bandPercent.toFixed(1)}% of the spot.`;
+  }
+  const legend = document.getElementById("legend");
+  KIND_ORDER.filter((kind) => D.marks.some((mark) => mark.kind === kind)).forEach((kind) => {
+    const item = html("span", { style: `color: var(--${kind})` }, legend);
+    html("i", { class: "swatch" }, item);
+    const label = html("span", { style: "color: var(--muted)" }, item, D.kinds[kind]);
+    label.style.gap = "0";
+  });
+}
+
+/* ---------- ladder ---------- */
+function priceWindow() {
+  if (state.range !== null) return [D.spot * (1 - state.range), D.spot * (1 + state.range)];
+  const prices = D.marks.map((mark) => mark.price).concat([D.spot]);
+  const low = Math.min(...prices), high = Math.max(...prices), pad = (high - low) * 0.04 || D.spot * 0.02;
+  return [low - pad, high + pad];
+}
+function niceStep(span, target) {
+  const raw = span / target, magnitude = Math.pow(10, Math.floor(Math.log10(raw)));
+  return [1, 2, 2.5, 5, 10].map((factor) => factor * magnitude).find((step) => step >= raw);
+}
+
+function drawLadder() {
+  const svg = document.getElementById("ladder");
+  svg.replaceChildren();
+  const width = Math.max(560, svg.clientWidth || 900);
+  const headerHeight = 62, bottomPad = 18, axisWidth = 78, rightPad = 18, laneGap = 8;
+  const height = Math.max(640, Math.round(window.innerHeight - 250));
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.setAttribute("height", height);
+  const [low, high] = priceWindow();
+  const top = headerHeight, plotHeight = height - headerHeight - bottomPad;
+  const y = (price) => top + (high - price) / (high - low) * plotHeight;
+  const laneWidth = (width - axisWidth - rightPad) / D.sources.length;
+  const laneX = (index) => axisWidth + index * laneWidth;
+
+  const defs = el("defs", {}, svg);
+  const clip = el("clipPath", { id: "plotClip" }, defs);
+  el("rect", { x: axisWidth, y: top, width: width - axisWidth - rightPad, height: plotHeight }, clip);
+
+  // price grid and axis
+  const step = niceStep(high - low, 9);
+  for (let price = Math.ceil(low / step) * step; price <= high; price += step) {
+    el("line", { x1: axisWidth, x2: width - rightPad, y1: y(price), y2: y(price), stroke: "var(--line-soft)" }, svg);
+    el("text", { x: axisWidth - 10, y: y(price) + 4, "text-anchor": "end", class: "axis-label num-text" }, svg, fmt.format(price));
+  }
+
+  // lanes
+  D.sources.forEach((source, index) => {
+    const x = laneX(index);
+    if (index % 2 === 0) el("rect", { x: x, y: top, width: laneWidth, height: plotHeight, fill: "rgba(255,255,255,0.018)" }, svg);
+    el("line", { x1: x, x2: x, y1: 8, y2: height - bottomPad, stroke: "var(--line)" }, svg);
+    el("text", { x: x + 10, y: 24, class: "lane-title" }, svg, source.title);
+    if (source.subtitle) el("text", { x: x + 10, y: 41, class: "lane-sub" }, svg, source.subtitle);
+    if (source.failed) el("text", { x: x + 10, y: 56, class: "lane-warn" }, svg, "check failed");
+  });
+  el("line", { x1: width - rightPad, x2: width - rightPad, y1: 8, y2: height - bottomPad, stroke: "var(--line)" }, svg);
+
+  // bands where sources agree
+  const bands = el("g", { "clip-path": "url(#plotClip)" }, svg);
+  D.confluences.forEach((band, index) => {
+    const upper = y(band.high) - 4, lower = y(band.low) + 4;
+    const group = el("g", { class: "band", "data-band": index }, bands);
+    el("rect", { class: "fill", x: axisWidth, y: upper, width: width - axisWidth - rightPad, height: lower - upper, fill: "rgba(201,168,76,0.13)" }, group);
+    el("line", { class: "band-edge", x1: axisWidth, x2: width - rightPad, y1: upper, y2: upper }, group);
+    el("line", { class: "band-edge", x1: axisWidth, x2: width - rightPad, y1: lower, y2: lower }, group);
+    el("text", { x: width - rightPad - 8, y: lower + 14, "text-anchor": "end", class: "band-count" }, group, `${band.sources.length} sources agree`);
+  });
+
+  // levels, one lane at a time
+  const marksLayer = el("g", { "clip-path": "url(#plotClip)" }, svg);
+  const offScale = el("g", {}, svg);
+  D.sources.forEach((source, index) => {
+    const x = laneX(index) + laneGap;
+    const innerWidth = laneWidth - 2 * laneGap;
+    const items = D.marks.map((mark, position) => ({ mark, position })).filter((item) => item.mark.source === source.key);
+    const onScale = items.filter((item) => item.mark.price >= low && item.mark.price <= high).sort((a, b) => b.mark.price - a.mark.price);
+    let lastLabelY = -Infinity;
+    onScale.forEach((item) => {
+      const lineY = y(item.mark.price);
+      const labelY = Math.max(lineY - 5, lastLabelY + 13);          // labels sit above their line and never overlap
+      lastLabelY = labelY;
+      const group = el("g", { class: "mark", "data-mark": item.position }, marksLayer);
+      el("line", { class: "mark-line", x1: x, x2: x + innerWidth, y1: lineY, y2: lineY, stroke: colorOf(item.mark.kind) }, group);
+      if (Math.abs(labelY - (lineY - 5)) > 2) el("line", { x1: x + 3, x2: x + 3, y1: lineY, y2: labelY + 2, stroke: colorOf(item.mark.kind), "stroke-width": 1, opacity: .6 }, group);
+      const room = Math.floor((innerWidth - 8) / 6.2);
+      const text = `${fmt.format(item.mark.price)}  ${item.mark.name}`;
+      el("text", { class: "mark-text num-text", x: x + 4, y: labelY }, group, text.length > room ? text.slice(0, room - 1) + "…" : text);
+      el("rect", { x: x - 2, y: lineY - 9, width: innerWidth + 4, height: 18, fill: "transparent", "data-hit": item.position }, group);
+    });
+    const above = items.filter((item) => item.mark.price > high), below = items.filter((item) => item.mark.price < low);
+    if (above.length) el("text", { x: x + 4, y: top + 14, class: "mark-off num-text" }, offScale, `▲ ${above.map((item) => fmt.format(item.mark.price)).join(", ")}`);
+    if (below.length) el("text", { x: x + 4, y: top + plotHeight - 6, class: "mark-off num-text" }, offScale, `▼ ${below.map((item) => fmt.format(item.mark.price)).join(", ")}`);
+  });
+
+  // spot
+  const spotY = y(D.spot);
+  el("line", { class: "spot-line", x1: axisWidth - 4, x2: width - rightPad, y1: spotY, y2: spotY }, svg);
+  el("rect", { class: "spot-chip", x: 4, y: spotY - 10, width: axisWidth - 10, height: 20, rx: 4 }, svg);
+  el("text", { class: "spot-chip-text num-text", x: axisWidth / 2 - 1, y: spotY + 4, "text-anchor": "middle" }, svg, fmt.format(D.spot));
+
+  wireLadder(svg);
+}
+
+/* ---------- ledger ---------- */
+function drawLedger() {
+  const agree = document.getElementById("agree");
+  agree.replaceChildren();
+  const empty = document.getElementById("agreeEmpty");
+  empty.hidden = D.confluences.length > 0;
+  empty.textContent = `No band of ${D.bandPercent.toFixed(1)}% holds levels from ${D.minimumSources} different sources. Widen the band or lower the minimum above the chart.`;
+  D.confluences.slice().sort((a, b) => b.high - a.high).forEach((band) => {
+    const index = D.confluences.indexOf(band);
+    const item = html("li", { "data-band": index, tabindex: 0 }, agree);
+    const range = band.low === band.high ? fmt.format(band.low) : `${fmt.format(band.low)} to ${fmt.format(band.high)}`;
+    html("div", { class: "range" }, item, range);
+    html("div", { class: "meta" }, item, `${band.sources.length} sources, ${fmtPct((band.low + band.high) / 2 / D.spot - 1)} from the spot`);
+    html("div", { class: "meta" }, item, band.sources.map((source) => D.sources.find((entry) => entry.key === source).title + (D.sources.find((entry) => entry.key === source).subtitle ? ` (${D.sources.find((entry) => entry.key === source).subtitle})` : "")).join("; "));
+  });
+
+  const body = document.querySelector("#table tbody");
+  body.replaceChildren();
+  let spotDrawn = false;
+  const spotRow = () => {
+    const row = html("tr", { class: "spotrow" }, body);
+    html("td", { class: "r num" }, row, fmt.format(D.spot));
+    html("td", { colspan: 3 }, row, "Spot");
+    spotDrawn = true;
+  };
+  D.marks.forEach((mark, position) => {
+    if (!spotDrawn && mark.price < D.spot) spotRow();
+    const row = html("tr", { class: "level", "data-mark": position }, body);
+    html("td", { class: "r num" }, row, fmt.format(mark.price));
+    const away = html("td", { class: "r num" }, row, fmtPct(mark.price / D.spot - 1));
+    if (Math.abs(mark.price / D.spot - 1) > 0.15) away.className += " far";
+    const level = html("td", {}, row);
+    html("span", { class: "dot", style: `background: ${colorOf(mark.kind)}` }, level);
+    level.appendChild(document.createTextNode(mark.name));
+    const source = D.sources.find((entry) => entry.key === mark.source);
+    html("td", { class: "source" }, row, source.title + (source.subtitle ? `, ${source.subtitle}` : "") + (source.failed ? ", check failed" : ""));
+  });
+  if (!spotDrawn) spotRow();
+
+  const notes = document.getElementById("notes");
+  notes.replaceChildren();
+  D.notes.forEach((note) => html("li", {}, notes, note.charAt(0).toUpperCase() + note.slice(1) + "."));
+}
+
+/* ---------- linking and tooltip ---------- */
+function setHot(selector, on) { document.querySelectorAll(selector).forEach((node) => node.classList.toggle("hot", on)); }
+function bandsOfMark(position) { return D.confluences.map((band, index) => band.marks.includes(position) ? index : -1).filter((index) => index >= 0); }
+function showTip(position, event) {
+  const mark = D.marks[position], source = D.sources.find((entry) => entry.key === mark.source);
+  const tip = document.getElementById("tip");
+  tip.replaceChildren();
+  html("div", { class: "tip-price" }, tip, fmt.format(mark.price));
+  html("div", {}, tip, mark.name);
+  html("div", { class: "tip-sub" }, tip, `${source.title}${source.subtitle ? ", " + source.subtitle : ""}${source.failed ? ", check failed" : ""}`);
+  html("div", { class: "tip-sub" }, tip, `${D.kinds[mark.kind]}, ${fmtPct(mark.price / D.spot - 1)} from the spot`);
+  tip.style.left = Math.min(window.innerWidth - 340, event.clientX + 16) + "px";
+  tip.style.top = Math.min(window.innerHeight - 120, event.clientY + 14) + "px";
+  tip.classList.add("on");
+}
+function hideTip() { document.getElementById("tip").classList.remove("on"); }
+function hoverMark(position, on, event) {
+  setHot(`[data-mark="${position}"]`, on);
+  bandsOfMark(position).forEach((index) => setHot(`[data-band="${index}"]`, on));
+  if (on && event) showTip(position, event); else if (!on) hideTip();
+}
+function hoverBand(index, on) {
+  setHot(`[data-band="${index}"]`, on);
+  D.confluences[index].marks.forEach((position) => setHot(`g.mark[data-mark="${position}"], tr[data-mark="${position}"]`, on));
+}
+function wireLadder(svg) {
+  svg.querySelectorAll("g.mark").forEach((group) => {
+    const position = Number(group.getAttribute("data-mark"));
+    group.addEventListener("mouseenter", (event) => hoverMark(position, true, event));
+    group.addEventListener("mousemove", (event) => showTip(position, event));
+    group.addEventListener("mouseleave", () => hoverMark(position, false));
+  });
+}
+function wireLedger() {
+  document.querySelectorAll("tr.level").forEach((row) => {
+    const position = Number(row.getAttribute("data-mark"));
+    row.addEventListener("mouseenter", () => hoverMark(position, true));
+    row.addEventListener("mouseleave", () => hoverMark(position, false));
+  });
+  document.querySelectorAll("#agree li").forEach((item) => {
+    const index = Number(item.getAttribute("data-band"));
+    ["mouseenter", "focus"].forEach((name) => item.addEventListener(name, () => hoverBand(index, true)));
+    ["mouseleave", "blur"].forEach((name) => item.addEventListener(name, () => hoverBand(index, false)));
+  });
+}
+
+/* ---------- range control ---------- */
+function drawRange() {
+  const group = document.getElementById("range");
+  group.replaceChildren();
+  RANGES.forEach(([value, label]) => {
+    const button = html("button", { type: "button", "aria-pressed": String(state.range === value) }, group, value === null ? label : `±${label}`);
+    button.addEventListener("click", () => { state.range = value; drawRange(); drawLadder(); });
+  });
+  document.getElementById("rangeNote").textContent = state.range === null ? "Showing every level" : `Prices within ${(state.range * 100).toFixed(0)}% of the spot; levels beyond are listed at the edge`;
+}
+
+drawHeader();
+drawRange();
+drawLedger();
+wireLedger();
+drawLadder();
+let resizeTimer = null;
+window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(drawLadder, 80); });
+</script>
+</body>
+</html>

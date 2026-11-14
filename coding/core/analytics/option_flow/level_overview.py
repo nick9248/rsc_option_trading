@@ -7,7 +7,7 @@ A confluence is a coincidence of methods, not a proof; the sources are not indep
 """
 
 import textwrap
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Sequence
 
 import plotly.graph_objects as go
@@ -35,6 +35,17 @@ class LevelMark:
     name: str       # what it is, e.g. "call resistance"
     price: float
     kind: str       # a key of KIND_COLORS
+
+
+@dataclass
+class LevelOverview:
+    """The collected levels of every source for one currency."""
+
+    currency: str
+    spot: float
+    expiry: str
+    marks: List[LevelMark]
+    notes: List[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

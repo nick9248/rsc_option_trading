@@ -86,9 +86,11 @@ def test_summary_shows_both_views_and_the_check():
 def test_tab_fills_expirations_enables_generate_and_shows_the_result(qapp):
     tab = DealerFlowLevelsTab(service_factory=FakeService, clock=lambda: NOW)
     assert not tab.generate_button.isEnabled()
+    tab._generate = MagicMock()
     tab._on_succeeded(DealerLevelsResult(["14NOV26", "27NOV26"]))
     assert [tab.expiry_combo.itemText(i) for i in range(tab.expiry_combo.count())] == ["14NOV26", "27NOV26"]
     assert tab.generate_button.isEnabled() and tab.current_request() == DealerLevelsRequest("BTC", "14NOV26")
+    tab._generate.assert_called_once_with()                                    # the first expiry is drawn right away
     tab._on_succeeded(DealerLevelsResult(["14NOV26", "27NOV26"], make_levels(), Path("chart.html")))
     assert not tab.summary_label.isHidden() and "27NOV26" in tab.status_label.text() and tab.warning_label.isHidden()
     tab.close()
@@ -121,4 +123,14 @@ def test_a_request_made_while_one_runs_waits_and_an_outdated_answer_is_ignored(q
     assert tab._pending == DealerLevelsRequest("ETH", None)
     tab._on_succeeded(DealerLevelsResult(["14NOV26"]))                       # the BTC answer arrives after the switch
     assert tab.expiry_combo.count() == 0                                      # not shown: it belongs to the old currency
+    tab.close()
+
+
+def test_changing_the_expiry_draws_that_expiry(qapp):
+    tab = DealerFlowLevelsTab(service_factory=FakeService, clock=lambda: NOW)
+    tab._fill_expirations(["14NOV26", "27NOV26"])
+    started = []
+    tab._start = started.append
+    tab.expiry_combo.setCurrentIndex(1)
+    assert started == [DealerLevelsRequest("BTC", "27NOV26")]
     tab.close()

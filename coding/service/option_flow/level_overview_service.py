@@ -11,12 +11,11 @@ Every source that cannot be computed is skipped with a note (never drawn as a ma
 """
 
 import logging
-from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Callable, List, Optional, Sequence
 
 from coding.core.analytics.menthorq_replication_calculator import replicate_menthorq, select_drawn_levels
-from coding.core.analytics.option_flow.level_overview import LevelMark
+from coding.core.analytics.option_flow.level_overview import LevelMark, LevelOverview
 from coding.core.analytics.option_flow.strike_flow import StrikeFlow, series_key
 from coding.core.database.repository import DatabaseRepository
 from coding.service.on_chain.menthorq_input_loader import MenthorqInputLoader
@@ -28,17 +27,6 @@ logger = logging.getLogger(__name__)
 MENTHORQ_SOURCE = "MenthorQ replica (monthly expiries)"
 LIQUIDATION_SNAPSHOT_MAX_AGE_HOURS = 24
 LIQUIDATION_SYMBOLS = {"BTC": "BTCUSDT", "ETH": "ETHUSDT"}
-
-
-@dataclass
-class LevelOverview:
-    """The collected levels."""
-
-    currency: str
-    spot: float
-    expiry: str
-    marks: List[LevelMark]
-    notes: List[str] = field(default_factory=list)
 
 
 def top_strikes(flow: StrikeFlow, option_type: str, direction: str, count: int) -> List[tuple]:
@@ -80,6 +68,10 @@ class LevelOverviewService:
         """
         self.repository = repository or DatabaseRepository()
         self.clock = clock
+
+    def expirations(self, currency: str = "BTC") -> List[str]:
+        """The not-yet-expired expirations of the newest stored chain snapshot, soonest first (for the dealer levels)."""
+        return DealerFlowLevelsService(self.repository, self.clock).expirations(currency)
 
     def overview(self, currency: str = "BTC", expiry: Optional[str] = None, flow_hours: int = 24,
                  flow_levels_per_side: int = 2) -> LevelOverview:
