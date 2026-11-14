@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import plotly.graph_objects as go
+import psycopg2
 import plotly.io as plotly_io
 
 from coding.core.analytics.futures_flow.taker_flow_figure import build_taker_flow_figure
@@ -86,7 +87,7 @@ class SectionContext:
             self._open_interest_tried = True
             try:
                 self._open_interest = ExpiryOpenInterestService(self.repository, self.clock).open_interest(self.currency)
-            except Exception as error:      # optional addition to a section: log it, show the reason, keep the section
+            except (LookupError, psycopg2.Error) as error:      # data missing or database down: show the reason, keep the section
                 logger.warning("open interest per expiry not available: %s", error, exc_info=True)
                 self._open_interest_failure = str(error) or type(error).__name__
         return self._open_interest, self._open_interest_failure
@@ -168,6 +169,11 @@ def build_menthorq_section(context: SectionContext) -> ReportSection:
 
     per_expiry = output.get("per_expiry_iv_times_open_interest", [])
     body += open_interest_fragment(context)
+    if context.open_interest()[0] is not None:
+        body += paragraph_fragment(
+            "This table and the order of the per-expiry charts below use the newest chain snapshot (time in the table "
+            f"caption); the charts themselves are the daily close of {menthorq_date.isoformat()}, so an expiry that settled "
+            "since then is listed last as expired.", "note")
     if per_expiry:
         rows = open_interest_order(context.open_interest()[0])
         order = order_by_open_interest([entry["expiration"] for entry in per_expiry], rows)
@@ -253,15 +259,44 @@ def _option_flow_warnings(report: Any, now: datetime) -> List[str]:
     return warnings
 
 
+@dataclass
+class OptionFlowExpiries:
+    """The expiries picked one by one in the option-flow section and why: by open interest or by traded notional."""
+
+    by_open_interest: List[str]
+    by_notional: List[str]
+
+    @property
+    def kept(self) -> List[str]:
+        """Every expiry that can be picked one by one."""
+        return self.by_open_interest + self.by_notional
+
+
 def option_flow_expiries(ranked: List[str], rows: Dict[str, ExpiryOpenInterest],
-                         maximum: int = MAXIMUM_OPTION_FLOW_EXPIRIES) -> List[str]:
+                         maximum: int = MAXIMUM_OPTION_FLOW_EXPIRIES) -> OptionFlowExpiries:
     """
     The single expiries to precompute, at most ``maximum``: the traded ones among the ``TOP_OPEN_INTEREST_EXPIRIES`` with the
     most open interest always, the rest filled in the order of ``ranked`` (traded expiries, most traded notional first).
     """
     top = [label for label, row in rows.items() if row.total_open_interest is not None][:TOP_OPEN_INTEREST_EXPIRIES]
     required = [label for label in top if label in ranked]
-    return required + [label for label in ranked if label not in required][:max(maximum - len(required), 0)]
+    return OptionFlowExpiries(required, [label for label in ranked if label not in required][:max(maximum - len(required), 0)])
+
+
+def _option_flow_pick_sentence(chosen: OptionFlowExpiries, traded_count: int, has_open_interest: bool) -> str:
+    """What the option-flow expiry list really contains: how many were required by open interest, how many filled by notional."""
+    kept_count = len(chosen.kept)
+    order = "ordered by open interest" if has_open_interest else "ordered by settlement (open interest not available)"
+    if not has_open_interest:
+        origin = f"the {len(chosen.by_notional)} most traded by notional"
+    elif chosen.by_notional:
+        origin = (f"{len(chosen.by_open_interest)} required by open interest (traded among the {TOP_OPEN_INTEREST_EXPIRIES} "
+                  f"with the most) and {len(chosen.by_notional)} filled by traded notional")
+    else:
+        origin = f"{len(chosen.by_open_interest)} required by open interest (traded among the {TOP_OPEN_INTEREST_EXPIRIES} with the most)"
+    if traded_count > kept_count:
+        return f"{kept_count} can be picked one by one ({origin}), the rest only within all expirations; the list is {order}."
+    return f"each can be picked on its own ({origin}); the list is {order}."
 
 
 def _days_left(label: str, rows: Dict[str, ExpiryOpenInterest], now: datetime) -> Optional[float]:
@@ -276,18 +311,19 @@ def _bar_expiry_fragment(context: SectionContext, single: Dict[str, Any], everyt
                          rows: Dict[str, ExpiryOpenInterest]) -> str:
     """
     "Which expiry carries the largest bars": ``single`` must hold EVERY traded expiry, else the bars cannot be explained.
-    A failure is logged and shown as a one-line note; it must not fail the section whose charts are fine.
+    A pure computation over in-memory flows: a ``LookupError`` (data missing) is shown as a one-line note, a programming
+    error raises and fails the section.
     """
     heading = "<h3>Which expiry carries the largest bars</h3>"
     try:
         bars = bar_expiry_shares({label: report.flow for label, report in single.items()}, everything.flow, BAR_TABLE_ROWS)
-        if not bars:
-            return heading + paragraph_fragment("No trades in the window, so there are no bars.", "note")
-        days = {item.expiry: _days_left(item.expiry, rows, context.now) for bar in bars for item in bar.expiries}
-        return heading + bar_expiry_table(bars, days, set(kept))
-    except Exception as error:      # optional addition to the section: log it, show one line, keep the section
+    except LookupError as error:
         logger.warning("expiry shares of the biggest bars not available: %s", error, exc_info=True)
         return heading + paragraph_fragment(f"Not available: {str(error) or type(error).__name__}", "note")
+    if not bars:
+        return heading + paragraph_fragment("No trades in the window, so there are no bars.", "note")
+    days = {item.expiry: _days_left(item.expiry, rows, context.now) for bar in bars for item in bar.expiries}
+    return heading + bar_expiry_table(bars, days, set(kept))
 
 
 def _block_structure_fragment(context: SectionContext, service: Any, hours: int) -> str:
@@ -301,7 +337,7 @@ def _block_structure_fragment(context: SectionContext, service: Any, hours: int)
                 + block_structure_table(report.blocks)
                 + paragraph_fragment(f"{report.legs_in_window:,} block legs in the window; the {len(report.blocks)} "
                                      "largest blocks are shown.", "note"))
-    except Exception as error:
+    except (LookupError, psycopg2.Error) as error:
         logger.warning("block structures not available: %s", error, exc_info=True)
         return heading + paragraph_fragment(f"Not available: {str(error) or type(error).__name__}", "note")
 
@@ -320,7 +356,8 @@ def build_option_flow_section(context: SectionContext, service: Optional[OptionF
     open_interest_rows = open_interest_order(context.open_interest()[0])
     ranked = sorted(single, key=lambda label: -sum(cell.notional_usd for cells in single[label].flow.cells.values()
                                                    for cell in cells.values()))
-    kept = option_flow_expiries(ranked, open_interest_rows)
+    chosen = option_flow_expiries(ranked, open_interest_rows)
+    kept = chosen.kept
     reports.update({label: single[label] for label in kept})
 
     figures: Dict[str, Dict[str, Any]] = {}
@@ -342,10 +379,8 @@ def build_option_flow_section(context: SectionContext, service: Optional[OptionF
     controls = [SwitcherControl("expiry", "Expiry", expiry_choices, ALL_EXPIRATIONS),
                 SwitcherControl("unit", "Unit", OPTION_FLOW_UNITS, "notional")]
     notes = [f"Window {format_utc(everything.window_start)} to {format_utc(everything.window_end)}. "
-             f"{len(traded)} expirations traded in it"
-             + (f"; {len(kept)} can be picked one by one (the 4 with the most open interest, then the most traded by "
-                "notional), the rest only within all expirations; the list is ordered by open interest."
-                if len(traded) > len(kept) else "; each can be picked on its own, ordered by open interest.")
+             f"{len(traded)} expirations traded in it; "
+             + _option_flow_pick_sentence(chosen, len(traded), bool(open_interest_rows))
              + " Buy/sell is the taker's side (aggressor); blocked = Deribit block trades, drawn next to the axis.",
              "The window is fixed at 24 hours in the report; other windows: scripts/option_flow_by_strike.py."]
     below_switcher = (_bar_expiry_fragment(context, single, everything, kept, open_interest_rows)

@@ -231,7 +231,10 @@
     frame.addEventListener("load", () => {
       const document_ = frame.contentDocument;
       if (!document_) return;
-      const fit = () => { frame.style.height = (document_.documentElement.scrollHeight + 4) + "px"; };
+      const fit = () => {
+        frame.style.height = "0px";          /* reset first, so a page shorter than the previous one shrinks the frame */
+        frame.style.height = (document_.documentElement.scrollHeight + 4) + "px";
+      };
       fit();
       if (observers.has(frame)) observers.get(frame).disconnect();
       if (window.ResizeObserver) {

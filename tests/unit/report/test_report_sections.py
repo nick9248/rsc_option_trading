@@ -29,6 +29,12 @@ NOW = datetime(2026, 11, 14, 10, 0, tzinfo=timezone.utc)
 FAKE_PNG = b"\x89PNG fake"
 
 
+@pytest.fixture(autouse=True)
+def no_open_interest_by_default(monkeypatch):
+    """Every test chooses its open-interest path on purpose: by default no chain snapshot is stored (a LookupError)."""
+    install_open_interest(monkeypatch, error=LookupError("no option-chain snapshot stored"))
+
+
 def make_context(tmp_path, currency="BTC"):
     return SectionContext(currency, NOW, repository=object(), working_directory=tmp_path / "x")
 
@@ -166,7 +172,7 @@ def test_option_flow_bars_table_uses_every_traded_expiry_not_only_the_kept_ones(
 
 
 def test_option_flow_section_survives_a_failing_blocks_query_and_says_so(tmp_path):
-    service = FakeOptionFlowService(make_trades("27NOV26", 68_000.0, 1.0), blocks=RuntimeError("blocks query failed"))
+    service = FakeOptionFlowService(make_trades("27NOV26", 68_000.0, 1.0), blocks=LookupError("blocks query failed"))
     section = build_option_flow_section(make_context(tmp_path), service)
     assert not section.failed
     assert "Not available: blocks query failed" in section.body_html and "Which expiry carries the largest bars" in section.body_html
@@ -450,6 +456,52 @@ def test_failed_open_interest_is_computed_once_and_shown_as_a_note_not_as_a_fail
     assert not section.failed and "27NOV26" in section.body_html
     build_levels_section(context, FakeLevelService())
     assert len(built) == 1
+
+
+def test_a_programming_error_in_the_open_interest_service_fails_the_section_instead_of_becoming_a_note(tmp_path, monkeypatch):
+    install_open_interest(monkeypatch, error=TypeError("unsupported operand"))
+    with pytest.raises(TypeError):
+        build_option_flow_section(make_context(tmp_path), FakeOptionFlowService(make_trades("27NOV26", 68_000.0, 1.0)))
+
+
+def test_a_programming_error_in_a_block_query_fails_the_section(tmp_path):
+    service = FakeOptionFlowService(make_trades("27NOV26", 68_000.0, 1.0), blocks=TypeError("bug"))
+    with pytest.raises(TypeError):
+        build_option_flow_section(make_context(tmp_path), service)
+
+
+def test_menthorq_says_which_instant_the_table_and_the_chart_order_come_from(tmp_path, monkeypatch):
+    install_open_interest(monkeypatch)
+    monkeypatch.setattr(report_sections, "MenthorqReplicationService", FakeMenthorqService)
+    monkeypatch.setattr(report_sections, "data_warnings", lambda output: [])
+    monkeypatch.setattr(report_sections, "data_notes", lambda output: [])
+    html_text = build_menthorq_section(make_context(tmp_path)).body_html
+    note = ("the charts themselves are the daily close of 2026-11-13, so an expiry that settled since then is listed "
+            "last as expired.")
+    assert "This table and the order of the per-expiry charts below use the newest chain snapshot" in html_text and note in html_text
+    assert html_text.index("<h3>Open interest per expiry</h3>") < html_text.index("This table and the order") \
+        < html_text.index("IV x OI of one expiry")
+
+
+def test_option_flow_note_says_how_the_expiries_were_chosen_with_open_interest(tmp_path, monkeypatch):
+    service, _ = fourteen_expiry_service()
+    install_open_interest(monkeypatch, {"1DEC26": 900.0, "2DEC26": 800.0, "14DEC26": 700.0, "13DEC26": 600.0, "5DEC26": 1.0})
+    note = build_option_flow_section(make_context(tmp_path), service).notes[0]
+    assert "12 can be picked one by one" in note and "4 required by open interest" in note
+    assert "8 filled by traded notional" in note and "ordered by open interest" in note
+
+
+def test_option_flow_note_without_open_interest_says_ordered_by_settlement(tmp_path):
+    service, _ = fourteen_expiry_service()
+    note = build_option_flow_section(make_context(tmp_path), service).notes[0]
+    assert "ordered by settlement (open interest not available)" in note
+    assert "required by open interest" not in note and "12 most traded by notional" in note
+
+
+def test_the_embedded_page_frame_is_reset_before_it_is_measured_so_it_can_shrink():
+    template = (Path(__file__).parents[2] / ".." / "coding" / "core" / "analytics" / "report" / "report_page.html").resolve()
+    script = template.read_text(encoding="utf-8")
+    assert script.index('frame.style.height = "0px"') < script.index("document_.documentElement.scrollHeight")
 
 
 def test_menthorq_per_expiry_choices_are_ordered_by_open_interest_with_labels(tmp_path, monkeypatch):

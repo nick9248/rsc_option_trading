@@ -34,18 +34,18 @@ def repo():
     with admin.cursor() as cursor:
         cursor.execute(f"CREATE DATABASE {scratch_name}")
 
-    scratch_connection: Dict[str, Any] = {**base_connection, "database": scratch_name}
-    with psycopg2.connect(**scratch_connection) as connection:
-        with connection.cursor() as cursor:
-            for name in ("006_add_prospective_collection_tables.sql", "022_add_block_trade_columns.sql"):
-                cursor.execute((MIGRATIONS / name).read_text(encoding="utf-8"))
+    try:          # from here on the scratch database exists: drop it whatever fails below
+        scratch_connection: Dict[str, Any] = {**base_connection, "database": scratch_name}
+        with psycopg2.connect(**scratch_connection) as connection:
+            with connection.cursor() as cursor:
+                for name in ("006_add_prospective_collection_tables.sql", "022_add_block_trade_columns.sql"):
+                    cursor.execute((MIGRATIONS / name).read_text(encoding="utf-8"))
 
-    ConnectionPool().close_all()
-    repository = DatabaseRepository(config=DatabaseConfig(
-        host=scratch_connection["host"], port=int(scratch_connection["port"]), database=scratch_name,
-        user=scratch_connection["user"], password=scratch_connection["password"],
-    ))
-    try:
+        ConnectionPool().close_all()
+        repository = DatabaseRepository(config=DatabaseConfig(
+            host=scratch_connection["host"], port=int(scratch_connection["port"]), database=scratch_name,
+            user=scratch_connection["user"], password=scratch_connection["password"],
+        ))
         yield repository, scratch_connection
     finally:
         ConnectionPool().close_all()

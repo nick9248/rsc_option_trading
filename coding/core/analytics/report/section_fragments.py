@@ -236,7 +236,7 @@ def block_structure_table(blocks: Sequence[BlockStructure]) -> str:
 
 
 def taker_flow_table(days: List[dict], count: int = 7) -> str:
-    """The last ``count`` complete days of the taker flow (newest first), from the chart service's data file."""
+    """The last ``count`` complete days of the taker flow (newest first); the rows are built in memory from complete days."""
     rows = []
     for day in sorted(days, key=lambda item: item["day"], reverse=True)[:count]:
         buy, sell, ratio = day.get("taker_buy_usd"), day.get("taker_sell_usd"), day.get("ratio")

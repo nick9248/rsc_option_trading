@@ -86,8 +86,8 @@ class ReportHeader:
 
     currency: str
     generated_at: datetime
-    facts: List[Tuple[str, str]] = field(default_factory=list)
-    help: Optional[SectionHelp] = None          # "How to read this report"      # (label, value), e.g. ("Newest stored trade", "...")
+    facts: List[Tuple[str, str]] = field(default_factory=list)          # (label, value), e.g. ("Newest stored trade", "...")
+    help: Optional[SectionHelp] = None          # "How to read this report"
 
 
 @dataclass
