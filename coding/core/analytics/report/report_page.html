@@ -82,11 +82,42 @@
   .table-wrap { overflow-x: auto; margin: 6px 0 4px; }
   table { border-collapse: collapse; font-size: 13.5px; }
   caption { text-align: left; color: var(--gray); font-size: 12px; padding-bottom: 4px; }
-  th, td { padding: 4px 18px 4px 0; text-align: left; border-bottom: 1px solid var(--faint); white-space: nowrap; }
+  th, td { padding: 4px 18px 4px 0; vertical-align: top; text-align: left; border-bottom: 1px solid var(--faint); white-space: nowrap; }
   thead th { color: var(--gray); font-weight: 400; font-size: 12px; border-bottom: 1px solid var(--rule); }
   tbody th { font-weight: 600; }
   .num { text-align: right; }
+  td.wrap { white-space: normal; min-width: 22ch; max-width: 60ch; }
+  button.jump { background: none; border: 0; border-bottom: 1px solid var(--ink); padding: 0; font: inherit; color: var(--ink); cursor: pointer; }
+  table.bar-expiries td, table.block-structures td { vertical-align: top; }
   .verdict-failed { font-weight: 600; }
+
+  .share-cell { white-space: nowrap; }
+  .share-track { display: inline-block; width: 120px; height: 6px; margin-right: 8px; vertical-align: middle; background: var(--faint); }
+  .share-bar { display: block; height: 6px; background: var(--ink); }
+  .share-value { display: inline-block; min-width: 4.5ch; }
+  table.open-interest td, table.open-interest th { padding-right: 22px; }
+
+  /* how to read this */
+  .how-to-read { margin: 14px 0 4px; max-width: 120ch; }
+  .how-to-read summary { cursor: pointer; display: inline-block; padding: 2px 0; font-weight: 600; color: var(--ink); border-bottom: 1px solid var(--light); }
+  .how-to-read summary:hover { border-bottom-color: var(--ink); }
+  .how-to-read[open] summary { margin-bottom: 8px; }
+  .help-body { border-left: 2px solid var(--rule); padding: 2px 0 6px 16px; }
+  .help-summary { margin: 0 0 8px; }
+  .help-topic h4 { margin: 18px 0 4px; font-size: 14.5px; }
+  .help-what { margin: 0 0 8px; }
+  .help-terms { margin: 0 0 10px; }
+  .help-terms div { margin: 0 0 4px; }
+  .help-terms dt { display: inline; font-weight: 600; }
+  .help-terms dt::after { content: ": "; }
+  .help-terms dd { display: inline; margin: 0; font-family: var(--body); font-variant-numeric: normal; }
+  .help-cases { overflow-x: auto; margin: 4px 0 8px; }
+  .help-cases table { font-size: 13px; min-width: 560px; }
+  .help-cases th, .help-cases td { white-space: normal; vertical-align: top; max-width: 46ch; padding-right: 16px; }
+  .help-cases tbody th { font-weight: 600; }
+  .help-example { color: var(--gray); font-family: var(--numerals); }
+  .help-limits-title { margin: 6px 0 2px; color: var(--gray); font-size: 13px; }
+  .help-limits { margin: 0 0 6px; padding-left: 18px; color: var(--gray); font-size: 13px; }
 
   .page-frame { display: block; width: 100%; height: 900px; border: 0; margin-top: 10px; background: var(--paper); }
 
@@ -125,13 +156,18 @@
     const caption = element.querySelector(".switcher-caption");
     const plot = element.querySelector(".switcher-plot");
     const image = element.querySelector(".switcher-image");
+    const frame = element.querySelector(".switcher-frame");
+    if (frame) frame.hidden = true;
     if (!view) {
       caption.textContent = "Nothing was computed for this choice.";
       plot.hidden = true; image.hidden = true;
       return;
     }
     caption.innerHTML = view.caption || "";        // built and escaped by the report generator
-    if (view.figure) {
+    if (view.page) {
+      plot.hidden = true; image.hidden = true;
+      if (frame) { frame.hidden = false; showPageInFrame(frame, view.page); }   // loaded on first selection
+    } else if (view.figure) {
       image.hidden = true; plot.hidden = false;
       const figure = DATA.figures[view.figure];
       if (window.Plotly && figure) {
@@ -163,18 +199,64 @@
     });
   }
 
+  /* a button elsewhere on the page (data-switcher-target, data-control, data-value) makes a switcher show that choice */
+  function jumpSwitcher(trigger) {
+    const element = document.querySelector(`.switcher[data-switcher="${trigger.dataset.switcherTarget}"]`);
+    const configuration = element && DATA.switchers[trigger.dataset.switcherTarget];
+    if (!configuration) return;
+    const name = trigger.dataset.control, value = trigger.dataset.value;
+    const buttons = Array.from(element.querySelectorAll(`button[data-control="${name}"]`));
+    const select = element.querySelector(`select[data-control="${name}"]`);
+    if (select) {
+      if (!Array.from(select.options).some((option) => option.value === value)) return;
+      select.value = value;
+    } else if (buttons.some((button) => button.dataset.value === value)) {
+      buttons.forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.value === value)));
+    } else {
+      return;
+    }
+    configuration.selected[name] = value;
+    drawSwitcher(element);
+    const reduced = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    element.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
+  }
+  document.addEventListener("click", (event) => {
+    const trigger = event.target.closest && event.target.closest("[data-switcher-target]");
+    if (trigger) jumpSwitcher(trigger);
+  });
+
   /* ---------- embedded pages ---------- */
+  const observers = new WeakMap();
+  function fitOnLoad(frame) {
+    frame.addEventListener("load", () => {
+      const document_ = frame.contentDocument;
+      if (!document_) return;
+      const fit = () => {
+        frame.style.height = "0px";          /* reset first, so a page shorter than the previous one shrinks the frame */
+        frame.style.height = (document_.documentElement.scrollHeight + 4) + "px";
+      };
+      fit();
+      if (observers.has(frame)) observers.get(frame).disconnect();
+      if (window.ResizeObserver) {
+        const observer = new ResizeObserver(fit);
+        observer.observe(document_.body);
+        observers.set(frame, observer);
+      }
+    });
+  }
   function loadFrame(frame) {
     const page = DATA.pages[frame.dataset.page];
     if (page === undefined || frame.dataset.loaded) return;
     frame.dataset.loaded = "1";
-    frame.addEventListener("load", () => {
-      const document_ = frame.contentDocument;
-      if (!document_) return;
-      const fit = () => { frame.style.height = (document_.documentElement.scrollHeight + 4) + "px"; };
-      fit();
-      if (window.ResizeObserver) new ResizeObserver(fit).observe(document_.body);
-    });
+    fitOnLoad(frame);
+    frame.srcdoc = page;
+  }
+  /* a frame inside a switcher: shows DATA.pages[pageId]; the page is loaded when first selected */
+  function showPageInFrame(frame, pageId) {
+    const page = DATA.pages[pageId];
+    if (page === undefined || frame.dataset.shownPage === pageId) return;
+    if (!frame.dataset.fitting) { frame.dataset.fitting = "1"; fitOnLoad(frame); }
+    frame.dataset.shownPage = pageId;
     frame.srcdoc = page;
   }
 
