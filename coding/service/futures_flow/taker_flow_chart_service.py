@@ -20,7 +20,7 @@ from coding.core.analytics.futures_flow.taker_flow import (
     start_of_utc_hour,
 )
 from coding.core.database.repository import DatabaseRepository
-from coding.service.futures_flow.taker_flow_settings import STALE_AFTER, SYMBOLS, symbol_label
+from coding.service.futures_flow.taker_flow_settings import STALE_AFTER, symbol_label
 
 logger = logging.getLogger(__name__)
 
@@ -46,19 +46,16 @@ class TakerFlowChartService:
     def __init__(
         self,
         repository: Optional[DatabaseRepository] = None,
-        symbols: Sequence[str] = SYMBOLS,
         days: int = CHART_DAYS,
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ):
         """
         Args:
             repository: Where the hours are read (default: the configured database).
-            symbols: Binance symbols to chart.
             days: How many days back to chart.
             clock: Wall clock (UTC-aware).
         """
         self.repository = repository or DatabaseRepository()
-        self.symbols = tuple(symbols)
         self.days = days
         self.clock = clock
 
@@ -110,6 +107,6 @@ class TakerFlowChartService:
     def figure_data(self, symbol: str) -> TakerFlowFigureData:
         """
         Everything the interactive figure needs for one symbol (nothing is written): the hours, rolling ratio, complete
-        days, the warnings ``generate`` would give, and the newest stored hour (None without data).
+        days, the warnings (no data, missing hours, stale data), and the newest stored hour (None without data).
         """
         return self._load(symbol, self.clock())

@@ -7,7 +7,7 @@ The Dealer levels tab of the Report (Report is module 6, see `documentation/repo
 ## Method
 
 1. **Dealer position.** Every trade has a taker (crossed the book) and a maker. We assume the maker is a dealer. The dealer
-   position of an option is minus the cumulative taker flow since the option was listed (`dealer_net = -taker_net`, Glassnode's
+   position of an option is minus the cumulative taker flow since the start of the flow (the expiry's first stored trade, not before 2026-04-25; `dealer_net = -taker_net`, Glassnode's
    taker-flow method, reusing `DealerInventoryCalculator`). Deribit gives no customer-or-dealer information, so this is an
    assumption, not an observation.
 2. **Gamma exposure per strike.** `GEX = (dealer_calls x gamma + dealer_puts x gamma) x spot^2 x 0.01` in USD per 1 % move of the
@@ -44,14 +44,17 @@ The result states every failing reason. The check counts options, not exposure.
 
 ### Why options fail the check
 
-The method assumes that every taker trade opens a position, so the cumulative taker flow equals the dealer's position. Many trades
-close positions instead. Then the cumulative taker flow can be larger than what is still open, and the check reports a violation.
-The dealer position of those options is wrong by an unknown amount, and so is the gamma computed from it.
+The flow is a netted, signed sum (buys minus sells per option), so a customer closing a position against a dealer nets out
+correctly. The method assumes the maker of every trade is a dealer, so the dealer position is minus the net taker flow. When
+customers trade with each other (for example one customer closing against another customer's resting order) or a dealer takes
+a customer's resting order, the trade is given to the wrong side. Trades before the flow start or in hours without stored
+trades are also missing. Then the net taker flow at a strike can exceed what is still open, and the inferred dealer position
+there is wrong by an unknown amount, and so is the gamma computed from it.
 
 ### Failures are not limited to small strikes
 
 Do not read a failed check as "only a few tiny strikes". On the data of mid-November 2026 (reproduced on 2026-11-14 with `violating_gamma_share`: the sum of |flow GEX| over the strikes with at least one failing option, divided by the sum of |flow GEX| over all strikes of the expiry; the Dealer levels tab lists every failing option and shows this share) the strikes that fail carry a
-large part of the flow-based gamma on some expiries:
+large part of the flow-based gamma. On 2026-11-14 the check failed on every precomputed BTC expiry and most had a large share (15NOV26 83.7 %, 18NOV26 100 %, 27NOV26 48.6 %, 25DEC26 31.5 %, 20NOV26 7.3 %); three of them in detail:
 
 | Expiry | Options failing | Share of the flow-based gamma on the failing strikes |
 |---|---|---|
@@ -59,13 +62,24 @@ large part of the flow-based gamma on some expiries:
 | 25DEC26 | 10 of 114 | 31.5 % |
 | 20NOV26 | 5 of 59 | 7.3 % |
 
-Weighting the check by size would therefore not make these views pass. For an expiry where the failing strikes carry a large
-share of the gamma, treat the flow-based view as unreliable (the figures above are a snapshot of one day and change with the data).
+A gamma-weighted version of the check with the same 5 % limit would fail these expiries too (48.6 %, 31.5 %, 7.3 %). For an
+expiry where the failing strikes carry a large share of the gamma, treat the flow-based levels as unreliable. The open-interest
+based view does not have this problem, but it rests on its own unverified assumption (dealers long calls, short puts). The
+figures above are a snapshot of one day and change with the data.
+
+### The 25 % threshold
+
+The report calls the flow-based levels of an expiry unreliable when the failing strikes carry more than 25 % of its
+flow-based gamma (`UNRELIABLE_GAMMA_SHARE = 0.25` in `section_fragments.py`, strict `>`, so exactly 25 % is "less affected"). It is a
+display threshold chosen for this report, not a calibrated limit: it marks "a quarter or more of the gamma sits on strikes
+whose position cannot be right". It is applied to the share only, not to the pass or fail gate, which is unchanged. "Less
+affected" means relatively: 7.3 % would still fail a gamma-weighted check with the 5 % limit. When the share cannot be
+computed (no flow gamma at all) the report says so and advises not to rely on the flow-based levels of that expiry.
 
 ## Limits
 
 - No ground truth for either view; they can disagree strongly (the sample below does).
-- Flow is read up to the time of the computation. The chain snapshot is the newest stored one. The comparison caption under the
+- Flow is read up to the time of the computation. The chain snapshot is the newest stored one. The comparison caption above the
   chart shows the chain snapshot time (`dealer_levels_caption`: "chain snapshot <UTC time>") and the section header shows it as
   "Chain snapshot <time>; trades up to the report time". There is no age warning: an old snapshot is not flagged, so read the
   time.

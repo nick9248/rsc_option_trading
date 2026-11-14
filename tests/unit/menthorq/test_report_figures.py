@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from coding.core.analytics.menthorq.report_figures import (
-    HVL_NOTE, expiry_iv_times_open_interest_figure, iv_times_open_interest_figure, net_dex_figure, net_gex_panels_figure,
+    HVL_NOTE, _scaled_text, expiry_iv_times_open_interest_figure, iv_times_open_interest_figure, net_dex_figure, net_gex_panels_figure,
     replication_iv_times_open_interest_figure)
 from coding.core.analytics.menthorq_replication_calculator import (
     EXPIRY_UNIVERSE_ALL, compute_expiry_iv_times_open_interest, replicate_menthorq, select_drawn_levels)
@@ -55,7 +55,9 @@ def test_iv_times_open_interest_hover_has_strike_call_put_total_and_units(replic
     figure = replication_iv_times_open_interest_figure(replication, "BTC")
     calls = next(trace for trace in figure.data if trace.name == "IV x OI calls")
     text = calls.hovertext[list(calls.y).index(100.0)]
-    assert "Strike 100 USD" in text and "Calls 7.00" in text and "Puts not computed" in text and "Total 7.00" in text
+    assert "Strike 100 USD" in text and "Calls 7.00" in text and "Puts not computed" in text and "Total not computed" in text
+    both = iv_times_open_interest_figure({100.0: {"call": 7.0, "put": 2.5}}, {}, SPOT, "BTC")
+    assert "Total 9.50" in both.data[0].hovertext[0]
     assert "IV decimal x OI in BTC" in text
     assert "IV x OI" in figure.layout.xaxis.title.text and "BTC" in figure.layout.xaxis.title.text
 
@@ -103,6 +105,8 @@ def test_net_gex_panels_bars_are_net_gex_over_spot_times_one_percent(replication
     expected = {row["strike"]: row["net_gex"] / (SPOT * 0.01) for row in replication["gex_by_expiration"][first]["strikes"]}
     assert dict(zip(first_panel.y, first_panel.x)) == {strike: pytest.approx(value) for strike, value in expected.items()}
     assert "Call part" in first_panel.hovertext[0] and "per 1 % move" in first_panel.hovertext[0]
+    assert "net = call part - put part" in first_panel.hovertext[0]
+    assert "-3 USD" not in " ".join(first_panel.hovertext) and _scaled_text(-3.14159) == "-3.14" and _scaled_text(12345.6) == "12,346"
     subplot_titles = [annotation.text for annotation in figure.layout.annotations if "expiration" in annotation.text.lower()]
     assert len(subplot_titles) == 4 and "27NOV26" in subplot_titles[0] and "GEX expiring" in subplot_titles[0]
     assert "no expiry" in subplot_titles[2]
@@ -126,6 +130,8 @@ def test_net_dex_bars_equal_the_replication_net_dex(replication):
     assert dict(zip(bars.y, bars.x)) == {strike: pytest.approx(value) for strike, value in expected.items()}
     assert "Net DEX" in bars.hovertext[0] and "USD" in bars.hovertext[0]
     assert {trace.name for trace in figure.data} >= {"Net DEX", "DEX profile", "Spot"}
+    profile = next(trace for trace in figure.data if trace.name == "DEX profile")
+    assert "drawn value" in profile.hovertext[0] and "rescaled, no unit" in profile.hovertext[0]
 
 
 def test_per_expiry_figure_uses_the_levels_of_that_expiry(replication):

@@ -9,7 +9,7 @@ Which component computes which level:
 | Component | What it computes |
 |---|---|
 | `GexDexCalculator` (`gex_dex_calculator.py`) | Per-strike GEX/DEX, Call Resistance, Put Support, and `hvl` / `gamma_flip` (the last sign change of cumulative net GEX along the strike axis). This is what is stored in the database and used by the synthesis engine. |
-| `GammaProfileCalculator` (`gamma_profile_calculator.py`) | The Zero Gamma Level (`zero_gamma_level`): total gamma re-priced at a grid of hypothetical spot prices (0.5x to 1.5x spot, sticky-strike Black-Scholes), and where it changes sign. |
+| `GammaProfileCalculator` (`gamma_profile_calculator.py`) | The Zero Gamma Level (`zero_gamma_level`): net (call minus put) gamma x OI re-priced at a grid of hypothetical spot prices (0.5x to 1.5x spot, sticky-strike Black-Scholes), and where it changes sign (`zero_gamma_level` is the crossing nearest to spot). |
 | MenthorQ replica (`menthorq_replication_calculator.py`) | Calls `GexDexCalculator` for the per-strike numbers, then computes several candidate rules per level. The level that is drawn is picked by `DEFAULT_LEVEL_CANDIDATES` (see "HVL" below). |
 
 ## Formulas
@@ -27,7 +27,7 @@ Net GEX = (Call Gamma - Put Gamma) × Spot Price² × 0.01
   - `Put Gamma = Σ(gamma_i × OI_i)` for all puts at the strike
 - **Gamma**: Black-Scholes gamma (r = q = 0) from the mark IV, evaluated at the index price (per USD of underlying move, per 1 coin of contract). In the live on-chain analysis it is computed in `OnChainAnalysisService._compute_bs_gamma`, not read from the Deribit ticker. The MenthorQ replica can also evaluate gamma at each expiry's forward (`gamma_underlying="forward"`), but its default and the `GexDexCalculator` anchor is the index price.
 - **OI**: Open interest in coins (contract multiplier 1 coin).
-- **Spot Price**: The index price (`analyzer.index_price`, from `get_index_price`) in the live analysis; the replica uses the stored index price. It is one number for all expiries.
+- **Spot Price**: The index price (`analyzer.index_price`, from `get_index_price`) in the live analysis; the replica uses the stored index price. It is one number for all expiries. If the index price cannot be fetched, the live analysis falls back to the median underlying price of the nearest expiry's instruments (`OnChainAnalysisService`, `nearest_expiry_median_underlying_price`), and stops with an error when that is missing too.
 - **Spot²**: Converts the coin-denominated gamma exposure into USD.
 - **0.01**: Scales exposure to 1% underlying price move
 
@@ -96,7 +96,7 @@ Three different rules exist in the code. They are not the same number, so say wh
 2. **The HVL the MenthorQ replica draws.** `DEFAULT_LEVEL_CANDIDATES["hvl"] = "cumulative_net_gex_argmin"` (`strike_of_cumulative_minimum`): the strike where cumulative net GEX (summed from the lowest strike up) is **lowest**, i.e. the turning point of the cumulative curve, **not** its zero crossing. `LEVEL_RULE_DESCRIPTION` says the same. This rule was chosen because it matched MenthorQ's charts best on the dates compared (see the comment above `DEFAULT_LEVEL_CANDIDATES`); MenthorQ itself only publishes "HVL = inflection of the GEX profile".
 3. **Other candidates** that `compute_exposure` returns next to it (in `levels["hvl"]`) but does not draw: `spot_sweep_gex_argmin` (the spot at which the re-priced net GEX profile is lowest), `spot_sweep_gex_argmin_nearest_strike`, `spot_sweep_zero_crossing_nearest_spot` (the Zero Gamma Level), and `cumulative_sign_change_existing` (rule 1).
 
-> **Rules 1 and 2 are strike-axis points, not the Zero Gamma Level.** They depend only on how open interest is spread along the strike axis; they are not a re-priced dealer gamma flip (`GexDexCalculator` docstring). The actual Zero Gamma Level (`GexDexKeyLevels.zero_gamma_level`, shown in the report's "GAMMA PROFILE" block) re-prices total gamma across a grid of spot prices (sticky-strike Black-Scholes, `GammaProfileCalculator`) and finds where it changes sign. The two can sit on opposite sides of spot. The market-wide aggregate has no `zero_gamma_level` (always `None`), because merged strike rows have lost each option's own IV and expiry.
+> **Rules 1 and 2 are strike-axis points, not the Zero Gamma Level.** They depend only on how open interest is spread along the strike axis; they are not a re-priced dealer gamma flip (`GexDexCalculator` docstring). The actual Zero Gamma Level (`GexDexKeyLevels.zero_gamma_level`, shown in the report's "GAMMA PROFILE" block) re-prices net (call minus put) gamma x OI across a grid of spot prices (sticky-strike Black-Scholes, `GammaProfileCalculator`) and finds where it changes sign; with several crossings it is the one nearest to spot. The two can sit on opposite sides of spot. The market-wide aggregate has no `zero_gamma_level` (always `None`), because merged strike rows have lost each option's own IV and expiry.
 
 The HVL says nothing by itself about where dealers are long or short gamma. The earlier statements "above HVL dealers are short gamma, below HVL long gamma" are not supported by the code: cumulative GEX is a running sum over strikes, and its sign below or above a strike is not the gamma regime at spot. The regime at spot comes from the sign of the re-priced profile at spot (`net_gex_at_spot`, `gamma_regime`).
 
@@ -241,7 +241,7 @@ If this is the maximum positive GEX, $72,000 is identified as **Call Resistance*
    - Zero crossing detection depends on cumulative distribution
    - Time difference could affect market positioning
 
-**Key Finding at the time:** The put support matched; the call resistance and HVL did not. Possible causes named then (not verified): different data collection timestamps, a different expiry set or filtering by MenthorQ, market changes between Feb 16 and Feb 27. A single matching level is weak evidence that the formula is right; the later replica comparison (24 of 24 per-expiry panel levels, 3 of 3 all-expiry levels on two dates, with a different expiry set per date) is the better evidence.
+**Key Finding at the time:** The put support matched; the call resistance and HVL did not. Possible causes named then (not verified): different data collection timestamps, a different expiry set or filtering by MenthorQ, market changes between Feb 16 and Feb 27. A single matching level is weak evidence that the formula is right; the later replica comparison (24 of 24 per-expiry panel levels, 3 of 3 all-expiry levels on two dates, with a different expiry set per date) shows that the replica can reproduce MenthorQ, not that the formula is right: the replica matched after its rules and expiry set were chosen on those same dates (in-sample).
 
 ## Usage in System
 

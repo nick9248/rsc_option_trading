@@ -1186,7 +1186,7 @@ _DEALER_HELP = SectionHelp(
             limits=(
                 "No ground truth for either view. Dealer positioning is not published.",
                 "Flow is read up to the report time but the chain snapshot is the newest stored one. The snapshot time is shown "
-                "under the chart; check how old it is.",
+                "above the chart; check how old it is.",
                 "Only one expiry at a time. Other expiries: scripts/dealer_flow_levels.py.",
                 "The flow view assumes zero dealer position at the flow start.",
             ),
@@ -1234,22 +1234,29 @@ _DEALER_HELP = SectionHelp(
                     "expiry's flow-based gamma that sits on those strikes (sum of |flow GEX| at the failing strikes divided "
                     "by the sum of |flow GEX| at all strikes). Failures are not only small far strikes: on one real sample "
                     "(2026-11-14) the failing strikes of the 27NOV26 expiry carried 48.6 % of the flow-based gamma, "
-                    "with a put at 65,000 held at -4,139.8 contracts against an open interest of 174.0.",
-                    "|Flow GEX| of the failing strikes adds up to 20 (millions), over all strikes to 80: 20 / 80 = 25 %."),
+                    "with a put at 65,000 at an inferred dealer position of -4,139.8 contracts against an open interest "
+                    "of 174.0 (23.8 x). On that date the check failed on every precomputed BTC expiry, and most had a "
+                    "large share: 15NOV26 83.7 %, 18NOV26 100 %, 27NOV26 48.6 %, 25DEC26 31.5 %, 20NOV26 7.3 %.",
+                    "|Flow GEX| of the failing strikes adds up to 30 (millions), over all strikes to 80: 30 / 80 = 37.5 %."),
                 HelpCase(
                     "Why the flow view fails, and a large share",
-                    "The flow method assumes every taker trade opens a new position and the dealer holds the other side. "
-                    "Many trades close positions (for example a customer closing against a dealer), so the cumulative taker "
-                    "flow at a strike can be far larger than what is still open, and the flow-based dealer position there is "
-                    "wrong. When the failing strikes carry a large share of the gamma (the report says so above about a "
-                    "quarter), treat the flow-based view of that expiry as unreliable and use the open-interest based view. "
-                    "Weighting the check by size would not make such an expiry pass.",
-                    "Failing strikes carry 48.6 % of the gamma: unreliable. They carry 7.3 %: less affected, still read with care."),
+                    "The flow method assumes the maker of every trade is a dealer, so the dealer position is minus the "
+                    "net taker flow. When customers trade with each other (for example one customer closing against another "
+                    "customer's resting order) or a dealer takes a customer's resting order, the trade is given to the wrong "
+                    "side. Trades before the flow start or in hours without stored trades are also missing. Then the net "
+                    "taker flow at a strike can exceed what is still open, and the inferred dealer position there is wrong "
+                    "by an unknown amount. When the failing strikes carry more than 25 % of the gamma (a display threshold "
+                    "chosen for this report, not a calibrated limit), the report calls the flow-based levels of that expiry "
+                    "unreliable. A gamma-weighted version of the check with the same 5 % limit would fail these expiries "
+                    "too (48.6 %, 31.5 %, 7.3 %), so 'less affected' means relatively, not fine.",
+                    "On 2026-11-14 the 27NOV26 expiry had 48.6 %: unreliable. The 20NOV26 expiry had 7.3 %: less affected, "
+                    "still read with care."),
                 HelpCase(
                     "What to do with a failed check",
                     "Do not delete the view and do not trust it blindly. Look at the share of gamma on the failing strikes: "
-                    "a large share means use the open-interest based view; a small share means the flow-based levels are "
-                    "less affected but still need care.",
+                    "a large share means treat the flow-based levels of this expiry as unreliable (the open-interest based view "
+                    "does not have this problem, but it rests on its own unverified assumption: dealers long calls, short "
+                    "puts); a small share means the flow-based levels are less affected, relatively, but still need care.",
                     "On the Levels tab a failed lane is drawn with hollow marks."),
             ),
             limits=(
@@ -1303,7 +1310,10 @@ _LEVELS_HELP = SectionHelp(
                 HelpTerm("Diamond", "One level of one source, at its exact price."),
                 HelpTerm("Hollow mark", "That source failed its plausibility check. If the Dealer levels tab says the failing "
                                         "strikes carry a large share of the gamma, treat the flow-based lane as unreliable; "
-                                        "otherwise read it with less weight."),
+                                        "otherwise read it with less weight. The Dealer levels tab lists only the 5 nearest "
+                                        "expiries and the nearest monthly one, the Levels tab the 4 with the most open interest "
+                                        "and the nearest monthly one, so the share is shown there only for the expiries the "
+                                        "Dealer levels tab lists."),
             ),
             cases=(
                 HelpCase(

@@ -101,7 +101,7 @@ def open_interest_table(report_rows: Sequence[ExpiryOpenInterest], captured_at: 
             f'<thead><tr>{head}</tr></thead><tbody>{"".join(body)}</tbody></table></div>')
 
 
-UNRELIABLE_GAMMA_SHARE = 0.25       # display text only: above this the failing strikes carry a large part of the gamma
+UNRELIABLE_GAMMA_SHARE = 0.25       # display threshold chosen for this report, not calibrated (see dealer_flow_levels.md)
 _OPTION_TYPE_TEXT = {"C": "Calls", "P": "Puts"}
 _VIOLATION_REASON = re.compile(r"^[\d.]+% of options exceed their open interest \(limit (\d+)%\)$")
 _COVERAGE_REASON = re.compile(r"^trade coverage ([\d.]+)% is below (\d+)%$")
@@ -152,20 +152,31 @@ def violation_explanation(levels: DealerFlowLevels) -> str:
                       "The share of the flow-based gamma on the failing strikes is not computed")
     definition = (" (sum of |flow GEX| at those strikes divided by the sum of |flow GEX| at all strikes; "
                   "call and put of a strike together).")
-    why = ("Why: the flow method assumes every taker trade opens a new position and the dealer holds the other side. "
-           "Many trades instead close positions (for example a customer closing against a dealer), so the cumulative "
-           "taker flow at a strike can be far larger than what is still open. Then the flow-based dealer position at "
-           "that strike is wrong.")
-    if share is not None and share > UNRELIABLE_GAMMA_SHARE:
-        verdict = ("Treat the flow-based view of this expiry as unreliable; use the open-interest based view.")
+    why = ("Why: the flow method assumes the maker of every trade is a dealer, so the dealer position is minus the net "
+           "taker flow. When customers trade with each other (for example one customer closing against another "
+           "customer's resting order) or a dealer takes a customer's resting order, the trade is given to the wrong side. "
+           "Trades before the flow start or in hours without stored trades are also missing. Then the net taker flow at a "
+           "strike can exceed what is still open, and the inferred dealer position there is wrong by an unknown amount.")
+    threshold = (f"{UNRELIABLE_GAMMA_SHARE * 100:.0f} %, a display threshold chosen for this report, not a calibrated "
+                 "limit.")
+    if share is None:
+        verdict = "How much of the gamma is affected cannot be said; do not rely on the flow-based levels of this expiry."
+        verdict_class = "verdict-failed"
+    elif share > UNRELIABLE_GAMMA_SHARE:
+        verdict = (f"The share is above {threshold} Treat the flow-based levels of this expiry as unreliable. "
+                   "The open-interest based view does not have this problem, but it rests on its own unverified "
+                   "assumption (dealers long calls, short puts).")
+        verdict_class = "verdict-failed"
     else:
-        verdict = ("The flow-based levels are less affected by these strikes, but still read them with care.")
+        verdict = (f"The share is not above {threshold} The flow-based levels are less affected by these strikes, "
+                   "which means relatively: still read them with care.")
+        verdict_class = "note"
     return (paragraph_fragment(share_sentence + definition) + paragraph_fragment(why)
-            + paragraph_fragment(verdict, "verdict-failed"))
+            + paragraph_fragment(verdict, verdict_class))
 
 
 def dealer_levels_caption(levels: DealerFlowLevels) -> str:
-    """The comparison table of both views of one expiry, what the plausibility check found, and the check line."""
+    """The comparison table of both views of one expiry, what the plausibility check found, and the facts line."""
     rows = [
         ["Flow-based", level_text(levels.flow_call_wall), level_text(levels.flow_put_wall),
          level_text(levels.flow_gamma_flip), millions_text(levels.total_flow_gex)],
@@ -174,16 +185,14 @@ def dealer_levels_caption(levels: DealerFlowLevels) -> str:
     ]
     table = table_fragment(["", "Call wall", "Put wall", "Gamma flip", "Total GEX per 1 % move"], rows,
                            numeric_columns=(1, 2, 3, 4))
-    verdict = "passed" if levels.gate_passed else f"not passed: {levels.gate_reason or 'no reason given'}"
-    check = (f"Spot {levels.index_price:,.0f}. Plausibility check of the flow-based view (a dealer cannot hold more than "
-             f"the open interest): {verdict}. {levels.violations} of {levels.options_checked} options exceed their open "
-             f"interest; trade coverage {levels.coverage:.1%}. Flow since {levels.flow_start:%Y-%m-%d}, "
-             f"{levels.trades_used:,} trades; chain snapshot {format_utc(levels.chain_captured_at)}.")
+    check = (f"Spot {levels.index_price:,.0f}. Trade coverage {levels.coverage:.1%}. Flow since "
+             f"{levels.flow_start:%Y-%m-%d}, {levels.trades_used:,} trades; chain snapshot "
+             f"{format_utc(levels.chain_captured_at)}.")
     notes = "".join(paragraph_fragment(note[:1].upper() + note[1:] + ".", "note") for note in levels.notes)
     details = paragraph_fragment(check_sentence(levels), "" if levels.gate_passed else "verdict-failed")
     if not levels.gate_passed and levels.violating_options:
         details += violating_options_table(levels) + violation_explanation(levels)
-    return table + details + paragraph_fragment(check, "" if levels.gate_passed else "verdict-failed") + notes
+    return table + details + paragraph_fragment(check, "note") + notes
 
 
 def flow_totals(flow: StrikeFlow) -> Tuple[float, float, float, float]:

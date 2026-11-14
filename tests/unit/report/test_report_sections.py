@@ -35,7 +35,7 @@ def no_open_interest_by_default(monkeypatch):
 
 
 def make_context(tmp_path, currency="BTC"):
-    return SectionContext(currency, NOW, repository=object(), working_directory=tmp_path / "x")
+    return SectionContext(currency, NOW, repository=object())
 
 
 # ---------------------------------------------------------------- option flow
@@ -308,11 +308,13 @@ def menthorq_chain_row(expiration, strike, option_type, open_interest):
 
 
 MENTHORQ_CHAIN = [menthorq_chain_row("27NOV26", 60_000, "P", 30.0), menthorq_chain_row("27NOV26", 70_000, "C", 10.0),
-                  menthorq_chain_row("25DEC26", 70_000, "C", 4.0), menthorq_chain_row("25DEC26", 65_000, "P", 8.0)]
+                  menthorq_chain_row("25DEC26", 70_000, "C", 4.0), menthorq_chain_row("25DEC26", 65_000, "P", 8.0),
+                  # a weekly and a monthly that is not a quarterly: monthly, all and quarterly + front month all differ
+                  menthorq_chain_row("20NOV26", 70_000, "C", 3.0), menthorq_chain_row("29JAN27", 70_000, "C", 5.0)]
 
 
 class FakeMenthorqService:
-    """Stands in for the service: ``replicate_daily_close`` returns the real replication of a four-row chain (no files)."""
+    """Stands in for the service: ``replicate_daily_close`` returns the real replication of a six-row chain (no files)."""
 
     created = []
 
@@ -329,7 +331,7 @@ class FakeMenthorqService:
             {"expiration": expiration, "rows_without_open_interest": 0,
              **compute_expiry_iv_times_open_interest(MENTHORQ_CHAIN, expiration, all_replication["gex_by_expiration"][expiration])}
             for expiration in all_replication["settings"]["expirations"]]
-        per_expiry[1]["levels"] = None                    # an expiry whose levels are not computed
+        next(entry for entry in per_expiry if entry["expiration"] == "25DEC26")["levels"] = None    # levels not computed
         return {"currency": currency, "primary_configuration": "monthly__gamma_at_index", "configurations": configurations,
                 "per_expiry_iv_times_open_interest": per_expiry,
                 "inputs": {"snapshot_captured_at_utc": "2026-11-13T23:58:00+00:00",
@@ -362,7 +364,11 @@ def test_menthorq_section_has_a_per_expiry_switcher_with_figures_and_levels_capt
     monkeypatch.setattr(report_sections, "data_notes", lambda output: [])
     section = build_menthorq_section(make_context(tmp_path))
     views = section.switchers["menthorq-expiry"]["views"]
-    assert set(views) == {"27NOV26", "25DEC26"}
+    assert set(views) == {"20NOV26", "27NOV26", "25DEC26", "29JAN27"}              # the all-listed set, weekly included
+    monthly = section.switchers["menthorq-main"]["views"]["net_gex_panels|monthly"]["caption"]
+    everything = section.switchers["menthorq-main"]["views"]["net_gex_panels|all"]["caption"]
+    quarterly = section.switchers["menthorq-main"]["views"]["net_gex_panels|quarterly_plus_front_month"]["caption"]
+    assert "3 expiries." in monthly and "4 expiries." in everything and "2 expiries." in quarterly   # the universes differ
     assert section.figures[views["27NOV26"]["figure"]]["data"]
     assert "call resistance" in views["27NOV26"]["caption"] and "levels not computed" in views["25DEC26"]["caption"]
     assert "all-listed set" in section.body_html
@@ -377,8 +383,7 @@ class FakeTakerFlowChartService:
     days = [TakerFlowDay(date(2026, 11, 13), 3e6, 1e6)]
     warnings = ["hour missing"]
 
-    def __init__(self, repository, symbols, clock):
-        self.symbols = symbols
+    def __init__(self, repository, clock):
         self.clock = clock
 
     def figure_data(self, symbol):
@@ -539,7 +544,7 @@ def test_menthorq_without_open_interest_keeps_its_order_and_says_why(tmp_path, m
     monkeypatch.setattr(report_sections, "data_warnings", lambda output: [])
     monkeypatch.setattr(report_sections, "data_notes", lambda output: [])
     section = build_menthorq_section(make_context(tmp_path))
-    assert section.switchers["menthorq-expiry"]["selected"] == {"expiry": "27NOV26"}
+    assert section.switchers["menthorq-expiry"]["selected"] == {"expiry": "20NOV26"}      # settlement order: the weekly first
     assert "Open interest per expiry not available: no snapshot" in section.body_html
 
 

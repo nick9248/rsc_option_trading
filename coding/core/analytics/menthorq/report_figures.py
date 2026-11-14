@@ -67,6 +67,11 @@ def _number_text(value: Optional[float], decimals: int = 0) -> str:
     return "not computed" if value is None else f"{value:,.{decimals}f}"
 
 
+def _scaled_text(value: float) -> str:
+    """A converted value with enough digits for small numbers: '1,234' from 1,000 up, else three significant digits ('-3.14')."""
+    return f"{value:,.0f}" if abs(value) >= 1000 else f"{value:,.3g}"
+
+
 def _million_text(value: Optional[float]) -> str:
     """'12.3M USD' (or 'not computed')."""
     return "not computed" if value is None else f"{value / 1e6:,.1f}M USD"
@@ -111,8 +116,7 @@ def iv_times_open_interest_figure(by_strike: Mapping[float, Mapping[str, Optiona
     hover: List[str] = []
     for strike in strikes:
         call, put = by_strike[strike].get("call"), by_strike[strike].get("put")
-        parts = [value for value in (call, put) if value is not None]
-        total = sum(parts) if parts else None
+        total = call + put if call is not None and put is not None else None
         hover.append(f"Strike {strike:,.0f} USD<br>Calls {_number_text(call, 2)}<br>Puts {_number_text(put, 2)}<br>"
                      f"Total {_number_text(total, 2)}<br>(IV decimal x OI in {currency})")
     figure = go.Figure()
@@ -181,8 +185,9 @@ def net_gex_panels_figure(replication: Dict[str, Any], currency: str) -> go.Figu
         rows = [item for item in exposure["strikes"] if low <= item["strike"] <= high and item["net_gex"] is not None]
         strikes = [item["strike"] for item in rows]
         values = [item["net_gex"] / scale for item in rows]
-        hover = [f"Strike {item['strike']:,.0f} USD<br>Net GEX {value:,.0f} USD (gamma x OI x spot)<br>"
-                 f"Call part {item['call_gex'] / scale:,.0f} USD, put part {item['put_gex'] / scale:,.0f} USD<br>"
+        hover = [f"Strike {item['strike']:,.0f} USD<br>Net GEX {_scaled_text(value)} USD (gamma x OI x spot)<br>"
+                 f"Call part {_scaled_text(item['call_gex'] / scale)} USD, put part "
+                 f"{_scaled_text(item['put_gex'] / scale)} USD (net = call part - put part)<br>"
                  f"Stored unit: net {item['net_gex']:,.0f} USD per 1 % move" for item, value in zip(rows, values)]
         figure.add_trace(go.Bar(x=values, y=strikes, orientation="h", showlegend=False, hoverinfo="text", hovertext=hover,
                                 marker=dict(color=[POSITIVE_COLOR if value >= 0 else NEGATIVE_COLOR for value in values])),
@@ -234,8 +239,8 @@ def net_dex_figure(replication: Dict[str, Any], currency: str) -> go.Figure:
         figure.add_trace(go.Scatter(
             x=[row[key] for row in profile_rows], y=[row["strike"] for row in profile_rows], mode="lines", name=name,
             line=dict(color=color, width=1.5), hoverinfo="text",
-            hovertext=[f"{name} at {row['strike']:,.0f} USD: {meaning}, drawn rescaled to the largest bar "
-                       f"({row[key]:,.0f})" for row in profile_rows]))
+            hovertext=[f"{name} at {row['strike']:,.0f} USD: {meaning}, drawn rescaled to the largest bar; "
+                       f"drawn value {row[key]:,.0f} (rescaled, no unit)" for row in profile_rows]))
         shown += [row[key] for row in profile_rows]
     largest = max((abs(value) for value in shown), default=0.0)
     limit = largest * 1.1 if largest > 0 else 1.0

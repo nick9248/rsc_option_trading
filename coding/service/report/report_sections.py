@@ -10,7 +10,6 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import plotly.graph_objects as go
@@ -74,7 +73,6 @@ class SectionContext:
     currency: str
     now: datetime
     repository: DatabaseRepository
-    working_directory: Path              # scratch folder for chart files that are read back and embedded
     _open_interest: Optional[ExpiryOpenInterestReport] = field(default=None, init=False, repr=False)
     _open_interest_failure: Optional[str] = field(default=None, init=False, repr=False)
     _open_interest_tried: bool = field(default=False, init=False, repr=False)
@@ -228,7 +226,7 @@ def build_futures_flow_section(context: SectionContext) -> ReportSection:
     symbol = TAKER_FLOW_SYMBOLS.get(context.currency)
     if symbol is None:
         raise LookupError(f"no Binance perpetual is configured for {context.currency}")
-    data = TakerFlowChartService(context.repository, symbols=(symbol,), clock=context.clock).figure_data(symbol)
+    data = TakerFlowChartService(context.repository, clock=context.clock).figure_data(symbol)
     if not data.days or not data.rolling_points:
         raise LookupError("; ".join(data.warnings) or f"no taker flow stored for {symbol}")
     end = data.newest_hour_utc + timedelta(hours=1) if data.newest_hour_utc is not None else None
@@ -459,7 +457,7 @@ def build_dealer_levels_section(context: SectionContext, service: Optional[Deale
         body_html=switcher_fragment("dealer-levels", [control]), figures=figures,
         switchers={"dealer-levels": switcher_configuration([control], views)}, notes=notes,
         description=("Dealer gamma levels of one expiry two ways: from the trades (the dealer holds minus the cumulative taker "
-                     "flow since listing) and from open interest (dealers long calls, short puts). The check tells whether "
+                     "flow since the start of the flow, the expiry's first stored trade, not before 2026-04-25) and from open interest (dealers long calls, short puts). The check tells whether "
                      "the flow-based view is plausible."))
 
 

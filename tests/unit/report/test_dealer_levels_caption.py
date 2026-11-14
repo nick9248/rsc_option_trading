@@ -6,7 +6,7 @@ from coding.core.analytics.option_flow.dealer_levels import DealerFlowLevels, St
 from coding.core.analytics.report.section_fragments import check_sentence, dealer_levels_caption
 
 NOW = datetime(2026, 11, 14, 12, 0, tzinfo=timezone.utc)
-UNRELIABLE = "Treat the flow-based view of this expiry as unreliable; use the open-interest based view."
+UNRELIABLE = "Treat the flow-based levels of this expiry as unreliable."
 
 
 def make_levels(gate_reason, share_rows=((1.0, 30.0), (2.0, 70.0)), violating=(), passed=False, violations=10,
@@ -44,7 +44,13 @@ def test_caption_has_the_table_sorted_as_given_the_share_and_the_unreliable_verd
     assert "3,965.8" in caption and "23.8 x" in caption                                # 4139.8 / 174.0
     assert "carry 100.0 % of the flow-based gamma" in caption                          # both strikes violate
     assert caption.count(UNRELIABLE) == 1
-    assert "closing against a dealer" in caption
+    assert "the maker of every trade is a dealer" in caption and "closing against a dealer" not in caption
+    assert "assumes every taker trade opens" not in caption
+    assert "does not have this problem, but it rests on its own unverified assumption" in caption
+    assert "25 %, a display threshold chosen for this report, not a calibrated limit" in caption
+    assert 'class="verdict-failed"' in caption.split("Why:")[1]
+    assert "Plausibility check of the flow-based view" not in caption             # the verdict is shown once, not twice
+    assert "Trade coverage 100.0%" in caption
 
 
 def test_a_small_share_says_less_affected_and_not_unreliable():
@@ -52,7 +58,18 @@ def test_a_small_share_says_less_affected_and_not_unreliable():
     caption = dealer_levels_caption(make_levels("10.9% of options exceed their open interest (limit 5%)", violating=violating,
                                                 share_rows=((1.0, 5.0), (2.0, 95.0))))
     assert "carry 5.0 % of the flow-based gamma" in caption
-    assert UNRELIABLE not in caption and "less affected" in caption
+    assert UNRELIABLE not in caption and "less affected" in caption and "relatively" in caption
+    assert 'class="verdict-failed"' not in caption.split("Why:")[1]               # neutral, not a failure colour
+
+
+def test_a_missing_share_says_so_and_warns_not_to_rely_on_the_flow_levels():
+    violating = [ViolatingOption(1.0, "P", -9.0, 5.0, 4.0)]
+    caption = dealer_levels_caption(make_levels("10.9% of options exceed their open interest (limit 5%)", violating=violating,
+                                                share_rows=((1.0, 0.0), (2.0, 0.0))))
+    assert "is not computed" in caption
+    assert ("How much of the gamma is affected cannot be said; do not rely on the flow-based levels of this expiry."
+            in caption)
+    assert UNRELIABLE not in caption and "less affected" not in caption
 
 
 def test_open_interest_zero_has_no_ratio_and_a_passed_view_has_no_table():
