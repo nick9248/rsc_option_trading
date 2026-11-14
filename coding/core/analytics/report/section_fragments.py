@@ -3,9 +3,11 @@ Small HTML fragments of the report sections built from analysis results (pure; a
 ``report_page``). Missing values are written as "not computed", never as zero.
 """
 
+import html
 from datetime import datetime
 from typing import List, Optional, Sequence, Tuple
 
+from coding.core.analytics.open_interest.expiry_open_interest import ExpiryOpenInterest
 from coding.core.analytics.option_flow.dealer_levels import DealerFlowLevels
 from coding.core.analytics.option_flow.strike_flow import SERIES, StrikeFlow
 from coding.core.analytics.report.report_page import format_utc, paragraph_fragment, table_fragment
@@ -23,6 +25,78 @@ def millions_text(value: Optional[float]) -> str:
     if value is None:
         return NOT_COMPUTED
     return f"{'-' if value < 0 else ''}{abs(value) / 1e6:,.1f}M USD"
+
+
+def usd_text(value: Optional[float]) -> str:
+    """USD as billions with 2 decimals from 1e9 up ("9.65B USD"), else millions with 1 decimal; "not computed" when missing."""
+    if value is None:
+        return NOT_COMPUTED
+    if abs(value) >= 1e9:
+        return f"{value / 1e9:,.2f}B USD"
+    return f"{value / 1e6:,.1f}M USD"
+
+
+def days_text(days_left: Optional[float]) -> str:
+    """Days to settlement: whole days from 10 up, one decimal below; "not computed" when missing."""
+    if days_left is None:
+        return NOT_COMPUTED
+    return f"{days_left:.0f}" if days_left >= 10 else f"{days_left:.1f}"
+
+
+def coins_text(value: Optional[float]) -> str:
+    """Open interest in coins with thousands separators; "not computed" when missing."""
+    return f"{value:,.0f}" if value is not None else NOT_COMPUTED
+
+
+def share_text(share: Optional[float]) -> str:
+    """A fraction as a percentage with one decimal; "not computed" when missing."""
+    return f"{share * 100:.1f}%" if share is not None else NOT_COMPUTED
+
+
+def expiry_choice_label(row: ExpiryOpenInterest) -> str:
+    """
+    Label of an expiry choice, e.g. "25DEC26, 41 days, 9.65B USD OI, 40%". Parts that are missing are left out or named
+    honestly ("25DEC26, 41 days, OI not computed"); without an index price the coins are shown instead of the USD value.
+    """
+    parts = [row.expiry]
+    if row.days_left is not None:
+        parts.append(f"{days_text(row.days_left)} days")
+    if row.total_open_interest is None:
+        parts.append("OI not computed")
+        return ", ".join(parts)
+    parts.append(f"{usd_text(row.notional_usd)} OI" if row.notional_usd is not None
+                 else f"{coins_text(row.total_open_interest)} OI")
+    if row.share is not None:
+        parts.append(f"{row.share * 100:.0f}%")
+    return ", ".join(parts)
+
+
+def open_interest_table(report_rows: Sequence[ExpiryOpenInterest], captured_at: datetime, index_price: Optional[float],
+                        limit: Optional[int] = None) -> str:
+    """
+    The open interest per expiry as a compact table (the first ``limit`` rows when given) with a small bar for each share.
+    """
+    price = f"{index_price:,.0f}" if index_price is not None else NOT_COMPUTED
+    caption = (f"Open interest per expiry, chain snapshot {format_utc(captured_at)}; "
+               f"notional = open interest x index price {price}")
+    headers = ["Expiry", "Days left", "Calls", "Puts", "Total OI (coins)", "Notional", "Share"]
+    head = "".join(f'<th scope="col"{" class=\"num\"" if index else ""}>{html.escape(text)}</th>'
+                   for index, text in enumerate(headers))
+    body = []
+    for row in report_rows if limit is None else report_rows[:limit]:
+        if row.share is not None:
+            width = min(max(row.share * 100, 0.0), 100.0)
+            share_cell = (f'<span class="share-track"><span class="share-bar" style="width: {width:.1f}%"></span></span>'
+                          f'<span class="share-value">{html.escape(share_text(row.share))}</span>')
+        else:
+            share_cell = html.escape(NOT_COMPUTED)
+        cells = [days_text(row.days_left), coins_text(row.call_open_interest), coins_text(row.put_open_interest),
+                 coins_text(row.total_open_interest), usd_text(row.notional_usd)]
+        body.append(f'<tr><th scope="row">{html.escape(row.expiry)}</th>'
+                    + "".join(f'<td class="num">{html.escape(cell)}</td>' for cell in cells)
+                    + f'<td class="num share-cell">{share_cell}</td></tr>')
+    return (f'<div class="table-wrap"><table class="open-interest"><caption>{html.escape(caption)}</caption>'
+            f'<thead><tr>{head}</tr></thead><tbody>{"".join(body)}</tbody></table></div>')
 
 
 def dealer_levels_caption(levels: DealerFlowLevels) -> str:

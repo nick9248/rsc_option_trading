@@ -9,6 +9,8 @@ from types import SimpleNamespace
 import pytest
 
 from coding.core.analytics.menthorq_replication_calculator import is_monthly_expiry, parse_expiry_settlement
+from coding.core.analytics.open_interest.expiry_open_interest import open_interest_by_expiry
+from coding.service.on_chain.expiry_open_interest_service import ExpiryOpenInterestReport
 from coding.core.analytics.option_flow.dealer_levels import DealerFlowLevels, StrikeLevelRow
 from coding.core.analytics.option_flow.dealer_levels_figure import build_dealer_levels_figure
 from coding.core.analytics.option_flow.level_overview import LevelMark, LevelOverview
@@ -336,3 +338,167 @@ def test_futures_section_fails_when_the_service_wrote_no_picture(tmp_path, monke
 def test_futures_section_fails_for_a_currency_without_a_perpetual(tmp_path):
     with pytest.raises(LookupError, match="no Binance perpetual"):
         build_futures_flow_section(make_context(tmp_path, currency="SOL"))
+
+
+# ---------------------------------------------------------------- open interest per expiry
+
+OPEN_INTEREST_BY_EXPIRY = {"25DEC26": 100_000.0, "27NOV26": 60_000.0, "26MAR27": 40_000.0, "20NOV26": 20_000.0,
+                           "18NOV26": 10_000.0, "15NOV26": 5_000.0}
+
+
+def make_open_interest_report(open_interest=None):
+    chain = [{"expiration": expiry, "option_type": "C", "strike": 70_000.0, "open_interest": value}
+             for expiry, value in (open_interest or OPEN_INTEREST_BY_EXPIRY).items()]
+    return ExpiryOpenInterestReport("BTC", NOW - timedelta(minutes=10), 67_000.0, open_interest_by_expiry(chain, 67_000.0, NOW))
+
+
+def install_open_interest(monkeypatch, open_interest=None, error=None):
+    """Replaces the service the context builds; ``built`` records every construction."""
+    built = []
+
+    class FakeOpenInterestService:
+        def __init__(self, repository, clock):
+            built.append(self)
+
+        def open_interest(self, currency):
+            if error is not None:
+                raise error
+            return make_open_interest_report(open_interest)
+
+    monkeypatch.setattr(report_sections, "ExpiryOpenInterestService", FakeOpenInterestService)
+    return built
+
+
+def test_open_interest_is_computed_once_and_is_the_same_object_for_every_section(tmp_path, monkeypatch):
+    built = install_open_interest(monkeypatch)
+    monkeypatch.setattr(report_sections, "MenthorqReplicationService", FakeMenthorqService)
+    monkeypatch.setattr(report_sections, "data_warnings", lambda output: [])
+    monkeypatch.setattr(report_sections, "data_notes", lambda output: [])
+    context = make_context(tmp_path)
+    build_menthorq_section(context)
+    build_option_flow_section(context, FakeOptionFlowService([], expiries=[]))
+    build_levels_section(context, FakeLevelService())
+    assert len(built) == 1
+    assert context.open_interest()[0] is context.open_interest()[0]
+
+
+def test_failed_open_interest_is_computed_once_and_shown_as_a_note_not_as_a_failure(tmp_path, monkeypatch):
+    built = install_open_interest(monkeypatch, error=LookupError("no snapshot"))
+    context = make_context(tmp_path)
+    section = build_option_flow_section(context, FakeOptionFlowService(make_trades("27NOV26", 68_000.0, 1.0)))
+    assert "Open interest per expiry not available: no snapshot" in section.body_html
+    assert not section.failed and "27NOV26" in section.body_html
+    build_levels_section(context, FakeLevelService())
+    assert len(built) == 1
+
+
+def test_menthorq_per_expiry_choices_are_ordered_by_open_interest_with_labels(tmp_path, monkeypatch):
+    install_open_interest(monkeypatch)
+    monkeypatch.setattr(report_sections, "MenthorqReplicationService", FakeMenthorqService)
+    monkeypatch.setattr(report_sections, "data_warnings", lambda output: [])
+    monkeypatch.setattr(report_sections, "data_notes", lambda output: [])
+    section = build_menthorq_section(make_context(tmp_path))
+    assert "<h3>Open interest per expiry</h3>" in section.body_html
+    assert section.body_html.index("Open interest per expiry") < section.body_html.index("IV x OI of one expiry")
+    configuration = section.switchers["menthorq-expiry"]
+    assert configuration["selected"] == {"expiry": "25DEC26"}                  # the largest first, FakeMenthorqService lists 27NOV26 first
+    assert section.body_html.index('data-value="25DEC26"') < section.body_html.index('data-value="27NOV26"')
+    assert "25DEC26, 41 days, 6.70B USD OI, 43%" in section.body_html
+
+
+def test_menthorq_without_open_interest_keeps_its_order_and_says_why(tmp_path, monkeypatch):
+    install_open_interest(monkeypatch, error=LookupError("no snapshot"))
+    monkeypatch.setattr(report_sections, "MenthorqReplicationService", FakeMenthorqService)
+    monkeypatch.setattr(report_sections, "data_warnings", lambda output: [])
+    monkeypatch.setattr(report_sections, "data_notes", lambda output: [])
+    section = build_menthorq_section(make_context(tmp_path))
+    assert section.switchers["menthorq-expiry"]["selected"] == {"expiry": "27NOV26"}
+    assert "Open interest per expiry not available: no snapshot" in section.body_html
+
+
+def test_option_flow_always_precomputes_the_top_open_interest_expiries_that_traded(tmp_path, monkeypatch):
+    service, labels = fourteen_expiry_service()          # 1DEC26 and 2DEC26 are the least traded: dropped without open interest
+    install_open_interest(monkeypatch, {"1DEC26": 900.0, "2DEC26": 800.0, "14DEC26": 700.0, "13DEC26": 600.0, "5DEC26": 1.0})
+    section = build_option_flow_section(make_context(tmp_path), service)
+    scopes = {key.split("|")[0] for key in section.switchers["option-flow"]["views"]}
+    # the four by open interest, the other eight by notional (12DEC26 down to 5DEC26); 3DEC26 and 4DEC26 are out
+    assert scopes == {ALL_EXPIRATIONS, "1DEC26", "2DEC26", "14DEC26", "13DEC26"} | {f"{day}DEC26" for day in range(5, 13)}
+
+
+def test_option_flow_choices_are_ordered_by_open_interest_then_by_settlement_with_expired_labelled(tmp_path, monkeypatch):
+    trades = [trade for label in ("13NOV26", "15NOV26", "27NOV26", "25DEC26", "20NOV26") for trade in make_trades(label, 68_000.0, 1.0)]
+    service = FakeOptionFlowService(trades, expiries=["13NOV26", "15NOV26", "20NOV26", "25DEC26", "27NOV26"])
+    install_open_interest(monkeypatch)
+    section = build_option_flow_section(make_context(tmp_path), service)
+    html_text = section.body_html
+    positions = [html_text.index(f'value="{label}"') for label in ("25DEC26", "27NOV26", "20NOV26", "15NOV26", "13NOV26")]
+    assert positions == sorted(positions)
+    assert "13NOV26, expired" in html_text and "25DEC26, 41 days, 6.70B USD OI, 43%" in html_text
+
+
+def test_option_flow_open_interest_table_shows_eight_rows_and_the_rest_as_a_sentence(tmp_path, monkeypatch):
+    install_open_interest(monkeypatch, {f"{day}DEC26": 1000.0 * (11 - day) for day in range(1, 11)})
+    section = build_option_flow_section(make_context(tmp_path), FakeOptionFlowService([], expiries=[]))
+    table = section.body_html.split("</table>")[0]
+    assert table.count("<tr>") == 1 + 8
+    total = sum(1000.0 * (11 - day) for day in range(1, 11))
+    remaining = (2000.0 + 1000.0) / total * 100
+    assert f"2 more expiries hold the remaining {remaining:.0f}%." in section.body_html
+
+
+# ---------------------------------------------------------------- levels per expiry
+
+class FakeExpiryLevelService:
+    """Returns an overview that carries the expiry it was asked for; ``failing`` expiries raise LookupError."""
+
+    def __init__(self, failing=()):
+        self.calls = []
+        self.failing = set(failing)
+
+    def overview(self, currency, expiry, hours):
+        self.calls.append((currency, expiry, hours))
+        if expiry in self.failing:
+            raise LookupError("no dealer data")
+        return LevelOverview("BTC", 67_000.0, expiry, [LevelMark("MenthorQ replica", f"call resistance {expiry}", 70_000.0, "resistance")])
+
+
+def test_levels_levels_expiries_are_the_top_four_by_open_interest_plus_the_nearest_monthly():
+    rows = {row.expiry: row for row in make_open_interest_report().rows}
+    chosen, first = report_sections.levels_expiries(rows, NOW)
+    assert chosen == ["25DEC26", "27NOV26", "26MAR27", "20NOV26"] and first == "27NOV26"
+    rows = {row.expiry: row for row in make_open_interest_report({**OPEN_INTEREST_BY_EXPIRY, "27NOV26": 1.0}).rows}
+    chosen, first = report_sections.levels_expiries(rows, NOW)
+    assert chosen == ["25DEC26", "26MAR27", "20NOV26", "18NOV26", "27NOV26"] and first == "27NOV26"      # five views at most
+
+
+def test_levels_section_has_a_page_view_per_expiry_and_starts_on_the_nearest_monthly(tmp_path, monkeypatch):
+    install_open_interest(monkeypatch)
+    service = FakeExpiryLevelService()
+    section = build_levels_section(make_context(tmp_path), service)
+    assert [call[1] for call in service.calls] == ["25DEC26", "27NOV26", "26MAR27", "20NOV26"]
+    assert all(call[0] == "BTC" and call[2] == 24 for call in service.calls)
+    configuration = section.switchers["levels"]
+    assert configuration["selected"] == {"expiry": "27NOV26"}
+    assert configuration["views"]["25DEC26"] == {"page": "levels-page-25DEC26"}
+    assert set(section.pages) == {f"levels-page-{expiry}" for expiry in ("25DEC26", "27NOV26", "26MAR27", "20NOV26")}
+    assert "call resistance 25DEC26" in section.pages["levels-page-25DEC26"]
+    assert "Dealer lanes are shown for the 4 expiries with the most open interest and the nearest monthly expiry; " \
+           "the other lanes do not depend on the expiry." in section.body_html
+    assert "Open interest per expiry" in section.body_html and "27NOV26" in section.as_of
+
+
+def test_levels_section_skips_an_expiry_whose_overview_fails_and_fails_when_all_do(tmp_path, monkeypatch):
+    install_open_interest(monkeypatch)
+    section = build_levels_section(make_context(tmp_path), FakeExpiryLevelService(failing=["26MAR27"]))
+    assert set(section.switchers["levels"]["views"]) == {"25DEC26", "27NOV26", "20NOV26"}
+    assert any(note.startswith("Not computed: 26MAR27") for note in section.notes)
+    with pytest.raises(LookupError, match="no expiry could be computed"):
+        build_levels_section(make_context(tmp_path), FakeExpiryLevelService(failing=list(OPEN_INTEREST_BY_EXPIRY)))
+
+
+def test_levels_section_without_open_interest_falls_back_to_the_single_page_with_a_note(tmp_path, monkeypatch):
+    install_open_interest(monkeypatch, error=LookupError("no snapshot"))
+    service = FakeExpiryLevelService()
+    section = build_levels_section(make_context(tmp_path), service)
+    assert service.calls == [("BTC", None, 24)] and set(section.pages) == {"levels-page"}
+    assert "Open interest per expiry not available: no snapshot" in section.body_html

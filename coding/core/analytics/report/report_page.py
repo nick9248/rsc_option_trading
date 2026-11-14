@@ -179,7 +179,8 @@ def switcher_fragment(switcher_id: str, controls: Sequence[SwitcherControl]) -> 
     return (f'<div class="switcher" data-switcher="{html.escape(switcher_id)}">'
             f'<div class="controls">{"".join(parts)}</div>'
             f'<div class="switcher-caption" aria-live="polite"></div>'
-            f'<div class="switcher-plot"></div><img class="switcher-image" alt="" hidden></div>')
+            f'<div class="switcher-plot"></div><img class="switcher-image" alt="" hidden>'
+            f'<iframe class="page-frame switcher-frame" title="{html.escape(switcher_id)} page" hidden></iframe></div>')
 
 
 def switcher_configuration(controls: Sequence[SwitcherControl], views: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
