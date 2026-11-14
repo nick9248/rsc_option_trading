@@ -52,10 +52,10 @@ from scripts.sync_from_vps import (
 
 logger = logging.getLogger(__name__)
 
-# One sync at a time in this application: two syncs reading the same local watermark would both insert the same
-# new rows of a table without a unique key (``snapshots`` uses a plain INSERT), doubling a chain snapshot. A sync in
-# another process is stopped by the tunnel instead: its ssh cannot bind the forwarded port and exits
-# (ExitOnForwardFailure in scripts/sync_from_vps.py).
+# One sync at a time in this application: two syncs reading the same local watermark would both read and write the
+# same new rows. Since migration 035 a repeated chain snapshot is also skipped by the database (unique key on
+# ``snapshots``), the lock keeps the work from being done twice. A sync in another process is stopped by the tunnel
+# instead: its ssh cannot bind the forwarded port and exits (ExitOnForwardFailure in scripts/sync_from_vps.py).
 _SYNC_LOCK = threading.Lock()
 
 
