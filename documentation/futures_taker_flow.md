@@ -20,7 +20,7 @@ Volumes are in USD (USDT).
 | Report section | `coding/service/report/report_sections.py` (`build_futures_flow_section`), "Futures flow" tab of the Report | Report currency only (BTCUSDT for BTC, ETHUSDT for ETH), embedded in the report file as one interactive Plotly chart (`coding/core/analytics/futures_flow/taker_flow_figure.py`): the rolling 24 h ratio over the last 30 days with 1d/3d/7d/all buttons, a trailing 7-day mean and a +-1 standard deviation band; the hover shows the day's ratio and net flow. Below it, a table of the last 7 complete days. It reads the local copy of the table; the report syncs first when the VPS is ahead. See `documentation/report.md`. |
 | Sync | `scripts/sync_from_vps.py` | `taker_flow_hourly` is an optional table (skipped with a log line until migration 033 is on the VPS). |
 
-`TakerFlowChartService.generate()` and the PNG renderer (`taker_flow_chart_renderer.py`) have no production caller left; the report no longer uses them.
+The report's interactive figure is the only consumer of the stored data: `TakerFlowChartService.figure_data()` reads it and nothing is written to disk.
 
 Nothing is computed from missing data: a ratio whose hours are not all present is "n/a" with the
 reason in the brief; a day with a missing hour is left out and named in the GUI warning.

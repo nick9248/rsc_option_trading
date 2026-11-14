@@ -42,7 +42,7 @@ Hand-checked by `tests/unit/liquidation_heatmap/test_liquidation_heatmap_model.p
 .venv\Scripts\python -m scripts.research_liquidation_heatmap --end 2026-11-13T14:20Z --hours 24
 ```
 
-Writes a PNG and a JSON into `outputs/liquidation_heatmap/` (git-ignored).
+Writes a PNG and a JSON into `output/liquidation_heatmap/` (git-ignored).
 
 ## What was read off the Coinglass screenshots (Model 1, Binance BTC/USDT, threshold 0.85)
 

@@ -4,12 +4,13 @@ Small HTML fragments of the report sections built from analysis results (pure; a
 """
 
 import html
+import re
 from datetime import datetime
 from typing import Collection, Dict, List, Optional, Sequence, Tuple
 
 from coding.core.analytics.open_interest.expiry_open_interest import ExpiryOpenInterest
 from coding.core.analytics.option_flow.block_structure import BarExpiryShare, BiggestLeg, BlockStructure
-from coding.core.analytics.option_flow.dealer_levels import DealerFlowLevels
+from coding.core.analytics.option_flow.dealer_levels import DealerFlowLevels, violating_gamma_share
 from coding.core.analytics.option_flow.strike_flow import SERIES, StrikeFlow
 from coding.core.analytics.report.report_page import format_utc, paragraph_fragment, table_fragment
 
@@ -100,8 +101,82 @@ def open_interest_table(report_rows: Sequence[ExpiryOpenInterest], captured_at: 
             f'<thead><tr>{head}</tr></thead><tbody>{"".join(body)}</tbody></table></div>')
 
 
+UNRELIABLE_GAMMA_SHARE = 0.25       # display threshold chosen for this report, not calibrated (see dealer_flow_levels.md)
+_OPTION_TYPE_TEXT = {"C": "Calls", "P": "Puts"}
+_VIOLATION_REASON = re.compile(r"^[\d.]+% of options exceed their open interest \(limit (\d+)%\)$")
+_COVERAGE_REASON = re.compile(r"^trade coverage ([\d.]+)% is below (\d+)%$")
+_NO_OPEN_INTEREST_REASON = re.compile(r"^(\d+) of (\d+) traded options have no open interest to check against$")
+
+
+def _plain_reason(reason: str, levels: DealerFlowLevels) -> str:
+    """One gate reason of ``DealerFlowLevelsService`` in plain words; an unknown reason is passed through unchanged."""
+    if match := _VIOLATION_REASON.match(reason):
+        return (f"{levels.violations} of {levels.options_checked} options ({levels.violation_rate * 100:.1f} %) show a dealer "
+                f"position larger than their open interest; the limit is {match.group(1)} %")
+    if match := _COVERAGE_REASON.match(reason):
+        return (f"trade coverage {match.group(1)} % is below {match.group(2)} %: hours without stored trades, "
+                "so the dealer position is incomplete")
+    if match := _NO_OPEN_INTEREST_REASON.match(reason):
+        return (f"{match.group(1)} of {match.group(2)} traded options have no open interest value, "
+                "so there is nothing to check them against")
+    return reason
+
+
+def check_sentence(levels: DealerFlowLevels) -> str:
+    """What the plausibility check found, in one plain sentence (built from ``gate_reason``)."""
+    if levels.gate_passed:
+        return "Check passed: no rule of the plausibility check is broken beyond its limits."
+    reasons = (levels.gate_reason or "no reason given").split("; ")
+    return "Check failed: " + "; ".join(_plain_reason(reason, levels) for reason in reasons) + "."
+
+
+def violating_options_table(levels: DealerFlowLevels) -> str:
+    """All options whose dealer position exceeds their open interest, largest excess first (as stored in ``levels``)."""
+    rows = []
+    for option in levels.violating_options:
+        ratio = option.position_to_open_interest
+        rows.append([strike_text(option.strike), _OPTION_TYPE_TEXT.get(option.option_type, option.option_type),
+                     f"{option.dealer_position:,.1f}", f"{option.open_interest:,.1f}", f"{option.excess:,.1f}",
+                     f"{ratio:,.1f} x" if ratio is not None else "open interest is 0"])
+    return table_fragment(["Strike", "Type", "Dealer position (contracts)", "Open interest (contracts)",
+                           "Excess = |position| - open interest", "|position| / open interest"], rows,
+                          caption="Every option that breaks the rule, largest excess first", numeric_columns=(2, 3, 4, 5))
+
+
+def violation_explanation(levels: DealerFlowLevels) -> str:
+    """The gamma share of the violating strikes, why they fail, and what to do with the flow-based view (paragraphs)."""
+    share = violating_gamma_share(levels)
+    strike_count = len({option.strike for option in levels.violating_options})
+    share_sentence = (f"The {strike_count} strikes with a failing option carry "
+                      f"{share * 100:.1f} % of the flow-based gamma of this expiry" if share is not None else
+                      "The share of the flow-based gamma on the failing strikes is not computed")
+    definition = (" (sum of |flow GEX| at those strikes divided by the sum of |flow GEX| at all strikes; "
+                  "call and put of a strike together).")
+    why = ("Why: the flow method assumes the maker of every trade is a dealer, so the dealer position is minus the net "
+           "taker flow. When customers trade with each other (for example one customer closing against another "
+           "customer's resting order) or a dealer takes a customer's resting order, the trade is given to the wrong side. "
+           "Trades before the flow start or in hours without stored trades are also missing. Then the net taker flow at a "
+           "strike can exceed what is still open, and the inferred dealer position there is wrong by an unknown amount.")
+    threshold = (f"{UNRELIABLE_GAMMA_SHARE * 100:.0f} %, a display threshold chosen for this report, not a calibrated "
+                 "limit.")
+    if share is None:
+        verdict = "How much of the gamma is affected cannot be said; do not rely on the flow-based levels of this expiry."
+        verdict_class = "verdict-failed"
+    elif share > UNRELIABLE_GAMMA_SHARE:
+        verdict = (f"The share is above {threshold} Treat the flow-based levels of this expiry as unreliable. "
+                   "The open-interest based view does not have this problem, but it rests on its own unverified "
+                   "assumption (dealers long calls, short puts).")
+        verdict_class = "verdict-failed"
+    else:
+        verdict = (f"The share is not above {threshold} The flow-based levels are less affected by these strikes, "
+                   "which means relatively: still read them with care.")
+        verdict_class = "note"
+    return (paragraph_fragment(share_sentence + definition) + paragraph_fragment(why)
+            + paragraph_fragment(verdict, verdict_class))
+
+
 def dealer_levels_caption(levels: DealerFlowLevels) -> str:
-    """The comparison table of both views of one expiry and the plausibility check, shown above its chart."""
+    """The comparison table of both views of one expiry, what the plausibility check found, and the facts line."""
     rows = [
         ["Flow-based", level_text(levels.flow_call_wall), level_text(levels.flow_put_wall),
          level_text(levels.flow_gamma_flip), millions_text(levels.total_flow_gex)],
@@ -110,13 +185,14 @@ def dealer_levels_caption(levels: DealerFlowLevels) -> str:
     ]
     table = table_fragment(["", "Call wall", "Put wall", "Gamma flip", "Total GEX per 1 % move"], rows,
                            numeric_columns=(1, 2, 3, 4))
-    verdict = "passed" if levels.gate_passed else f"not passed: {levels.gate_reason or 'no reason given'}"
-    check = (f"Spot {levels.index_price:,.0f}. Plausibility check of the flow-based view (a dealer cannot hold more than "
-             f"the open interest): {verdict}. {levels.violations} of {levels.options_checked} options exceed their open "
-             f"interest; trade coverage {levels.coverage:.1%}. Flow since {levels.flow_start:%Y-%m-%d}, "
-             f"{levels.trades_used:,} trades; chain snapshot {format_utc(levels.chain_captured_at)}.")
+    check = (f"Spot {levels.index_price:,.0f}. Trade coverage {levels.coverage:.1%}. Flow since "
+             f"{levels.flow_start:%Y-%m-%d}, {levels.trades_used:,} trades; chain snapshot "
+             f"{format_utc(levels.chain_captured_at)}.")
     notes = "".join(paragraph_fragment(note[:1].upper() + note[1:] + ".", "note") for note in levels.notes)
-    return table + paragraph_fragment(check, "" if levels.gate_passed else "verdict-failed") + notes
+    details = paragraph_fragment(check_sentence(levels), "" if levels.gate_passed else "verdict-failed")
+    if not levels.gate_passed and levels.violating_options:
+        details += violating_options_table(levels) + violation_explanation(levels)
+    return table + details + paragraph_fragment(check, "note") + notes
 
 
 def flow_totals(flow: StrikeFlow) -> Tuple[float, float, float, float]:

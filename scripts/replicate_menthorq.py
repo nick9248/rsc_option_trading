@@ -5,7 +5,7 @@ panels from the local database.
 Usage (from repo root):
     .venv\\Scripts\\python -m scripts.replicate_menthorq --menthorq-date 2026-10-12 ^
         --expiry-universe all ^
-        --reference outputs/menthorq_replicate/menthorq_reference_20261012T2359Z.json
+        --reference output/menthorq_replicate/menthorq_reference_20261012T2359Z.json
 
 --menthorq-date YYYY-MM-DD replays a MenthorQ chart labelled with that date:
 as_of = 23:59 UTC of the date, open interest as of 00:00 UTC of the same date.
@@ -68,7 +68,7 @@ def build_parser() -> argparse.ArgumentParser:
                                     "that date (a consistent choice, not a proven instant)")
     parser.add_argument("--currency", default="BTC")
     parser.add_argument("--output-directory", type=Path,
-                        default=Path("outputs") / "menthorq_replicate")
+                        default=Path("output") / "menthorq_replicate")
     parser.add_argument("--expiry-universe", choices=EXPIRY_UNIVERSES,
                         default=EXPIRY_UNIVERSE_MONTHLY,
                         help="Expiry set used for the rendered charts (not pinned down: "

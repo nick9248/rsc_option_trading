@@ -224,6 +224,24 @@ class TestEdgeCases:
         assert worst[0]["excess"] == pytest.approx(200.0)
         assert worst[1]["strike"] == 70000
 
+    def test_coverage_report_lists_every_violation_and_keeps_worst_strikes_at_five(self):
+        strikes = [70000 + 1000 * index for index in range(7)]
+        flow_rows = [_flow_row(strike, "C", taker_net=100 + 10 * index) for index, strike in enumerate(strikes)]
+        flow_rows.append(_flow_row(80000, "P", taker_net=-50))           # within its OI: not a violation
+        oi_by_instrument = {(strike, "C"): 100 for strike in strikes}
+        oi_by_instrument[(80000, "P")] = 100
+        greeks = {k: {"gamma": 0.00001, "delta": 0.1} for k in oi_by_instrument}
+        calc = DealerInventoryCalculator(flow_rows, greeks, spot_price=64000, currency="BTC")
+
+        coverage = calc.coverage_report(oi_by_instrument)
+        assert coverage["n_strikes"] == 8 and coverage["n_violations"] == 6       # the first leg has excess 0: no violation
+        assert [v["strike"] for v in coverage["violations"]] == [76000, 75000, 74000, 73000, 72000, 71000]
+        assert [v["excess"] for v in coverage["violations"]] == pytest.approx([60, 50, 40, 30, 20, 10])
+        assert coverage["worst_strikes"] == coverage["violations"][:5]
+        assert len(coverage["worst_strikes"]) == 5
+        assert set(coverage) == {"n_strikes", "n_violations", "violation_rate", "worst_strikes", "violations",
+                                 "legs_excluded_no_oi"}
+
     def test_call_resistance_and_put_support_recomputed_on_inferred_sign(self):
         """
         Fix round (Minor #3): the original fixture used the SAME taker_net

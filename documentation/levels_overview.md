@@ -7,7 +7,7 @@
 .venv\Scripts\python -m scripts.levels_overview --currency BTC [--expiry 27NOV26] [--band-percent 1.0] [--minimum-sources 3]
 ```
 
-Writes `outputs/levels_overview/<currency>_levels_overview.png` and `.html` and logs every level and every confluence.
+Writes `output/levels_overview/<currency>_levels_overview.png` and `.html` and logs every level and every confluence.
 
 ## Sources (one lane each)
 

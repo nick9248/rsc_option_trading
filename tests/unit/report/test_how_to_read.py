@@ -17,6 +17,7 @@ from coding.core.analytics.menthorq_replication_calculator import (
 from coding.core.analytics.dealer_inventory_calculator import DealerInventoryCalculator
 from coding.core.analytics.option_flow.level_overview import LevelMark, find_confluences
 from coding.core.analytics.report import how_to_read as help_module
+from coding.core.analytics.report.section_fragments import UNRELIABLE_GAMMA_SHARE
 from coding.core.analytics.report.how_to_read import (
     REPORT_HELP, SECTION_HELP, HelpCase, HelpTopic, SectionHelp, all_help, confluence_width, cumulative_minimum_strike,
     days_left, example_ratio, flow_gex_per_one_percent_usd, flow_view_passes, gex_expiring_percent,
@@ -402,8 +403,23 @@ def test_plausibility_check_examples():
     assert "95 %" in thresholds and "5 %" in thresholds and "20 %" in thresholds
     terms = {term.term: term.meaning for term in topic_of("dealer-levels", "The plausibility check").terms}
     assert "95 %" in terms["Coverage"] and "5 %" in terms["Violations"] and "20 %" in terms["Options without an open interest value"]
-    assert "tiny" in case_of("dealer-levels", "Failures are tiny strikes").reading.lower()
-    assert "weigh that lane low" in case_of("dealer-levels", "Failures are tiny strikes").reading
+    share_case = case_of("dealer-levels", "The table of failing options and the gamma share")
+    assert "48.6 %" in share_case.reading and "30 / 80 = 37.5 %" in share_case.example
+    assert 30 / 80 == 0.375 and 30 / 80 > UNRELIABLE_GAMMA_SHARE                  # the example is above the (strict) display threshold
+    assert "inferred dealer position of -4,139.8 contracts against an open interest of 174.0 (23.8 x)" in share_case.reading
+    assert round(4139.8 / 174.0, 1) == 23.8
+    why = case_of("dealer-levels", "Why the flow view fails, and a large share").reading
+    assert "unreliable" in why and "the maker of every trade is a dealer" in why and "closing against a dealer" not in why
+    assert "assumes every taker trade opens" not in why and "display threshold" in why
+    assert "gamma-weighted version" in why and "would not make" not in why
+
+
+def test_help_never_claims_failures_are_tiny_strikes():
+    """The old claim (failures are mostly tiny strikes; weighting by size would fix it) is false for 27NOV26 and 25DEC26."""
+    for where, text in all_text():
+        lowered = text.lower()
+        assert "tiny strike" not in lowered and "mostly tiny" not in lowered and "failures are tiny" not in lowered, where
+        assert not re.search(r"weighting.{0,80}would fix", lowered), where
 
 
 def test_confluence_examples_against_the_code():

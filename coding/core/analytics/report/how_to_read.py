@@ -508,8 +508,10 @@ REPORT_HELP = SectionHelp(
 _MENTHORQ_HELP = SectionHelp(
     section_key="menthorq",
     summary=(
-        "Replica of MenthorQ's charts, rebuilt from the stored Deribit option chain: IV x OI, net GEX per expiry and "
-        "net DEX, with three drawn levels (call resistance, put support, HVL). It is a fitted replica, not MenthorQ's "
+        "Replica of MenthorQ's charts, rebuilt from the stored Deribit option chain as interactive charts (hover a bar "
+        "or a line for its exact values): IV x OI, net GEX per expiry and "
+        "net DEX, with three drawn levels (call resistance, put support, HVL), for three expiry sets (monthly, all "
+        "listed, quarterly plus front month). It is a fitted replica, not MenthorQ's "
         "own formula, and it was fitted on BTC only. The charts use the daily close of the last complete UTC day; the "
         "open-interest table uses the newest chain at report time."),
     topics=(
@@ -517,8 +519,10 @@ _MENTHORQ_HELP = SectionHelp(
             title="IV x OI chart and its three lines",
             what_you_see=(
                 "Horizontal bars per strike: calls filled green, puts as orange outlines, with three dashed lines "
-                "(call resistance, put support, HVL) and the spot price. Default: the monthly expiries added together; "
-                "a switch shows all listed expiries."),
+                "(call resistance, put support, HVL) and the spot price, each a labelled line. Hover a bar for the strike, "
+                "the call part, the put part and the total; hover a line for the level and its rule. Default: the monthly "
+                "expiries added together; the Expiries switch shows all listed expiries or the quarterly expiries plus the "
+                "front month."),
             terms=(
                 HelpTerm("IV x OI", "Per strike and option type: the mark implied volatility written as a decimal "
                                     "(60 % is 0.6) times the open interest in coins, added over the expiries in the chart. "
@@ -627,7 +631,8 @@ _MENTHORQ_HELP = SectionHelp(
         HelpTopic(
             title="Net GEX panels",
             what_you_see=(
-                "Four panels, within the expiries of the chart (monthly by default; all listed with the switch): the "
+                "One figure with four panels, within the expiries of the chart (monthly by default; all listed or quarterly "
+                "plus front month with the switch; hover a bar for the call part, the put part and both units): the "
                 "first expiry of that set, the next expiry, the expiry with the highest absolute net GEX and the "
                 "one with the second highest (among the rest). Bars are net GEX per strike (green positive, red "
                 "negative), a yellow profile line, the three level lines, the spot, and the share 'GEX Expiring' in the title."),
@@ -718,8 +723,8 @@ _MENTHORQ_HELP = SectionHelp(
         HelpTopic(
             title="Net DEX",
             what_you_see=(
-                "Net DEX bars per strike over the expiries of the chart (monthly by default; all listed with the "
-                "switch; green positive, red negative), an orange DEX profile, a "
+                "Net DEX bars per strike over the expiries of the chart (monthly by default; all listed or quarterly "
+                "plus front month with the switch; green positive, red negative; hover for the exact value), an orange DEX profile, a "
                 "yellow GEX profile, the three level lines of those expiries and the spot."),
             terms=(
                 HelpTerm("Delta", "How much an option's price changes for a one-unit move of the underlying: about 0 to 1 "
@@ -764,7 +769,8 @@ _MENTHORQ_HELP = SectionHelp(
         HelpTopic(
             title="IV x OI per expiry and the open-interest table",
             what_you_see=(
-                "One IV x OI chart per expiry with that expiry's own levels, and a table of open interest per expiry: "
+                "One interactive IV x OI chart per expiry of the all-listed set (the expiry switch under it), with that "
+                "expiry's own levels, and a table of open interest per expiry: "
                 "expiry, days left, calls, puts, total OI in coins, notional and a share with a bar."),
             terms=(
                 HelpTerm("Expiry", "The date the options settle (Deribit: 08:00 UTC)."),
@@ -1180,7 +1186,7 @@ _DEALER_HELP = SectionHelp(
             limits=(
                 "No ground truth for either view. Dealer positioning is not published.",
                 "Flow is read up to the report time but the chain snapshot is the newest stored one. The snapshot time is shown "
-                "under the chart; check how old it is.",
+                "above the chart; check how old it is.",
                 "Only one expiry at a time. Other expiries: scripts/dealer_flow_levels.py.",
                 "The flow view assumes zero dealer position at the flow start.",
             ),
@@ -1188,8 +1194,9 @@ _DEALER_HELP = SectionHelp(
         HelpTopic(
             title="The plausibility check",
             what_you_see=(
-                "A line under the chart that says whether the flow-based view passed its check, and if not, why. The "
-                "expiry switcher marks a failed expiry with 'check failed'."),
+                "Under the level table, a sentence that says whether the flow-based view passed its check and, if not, what "
+                "failed. A failed check also shows a table of every failing option, the share of the flow-based gamma on "
+                "those strikes, and why. The expiry switcher marks a failed expiry with 'check failed'."),
             terms=(
                 HelpTerm("Plausibility check", "A dealer cannot hold more than the open interest of an option. The check counts "
                                                "the options whose dealer position, in absolute value, exceeds their open interest."),
@@ -1221,15 +1228,35 @@ _DEALER_HELP = SectionHelp(
                     "Hours of trades are missing, so the dealer position is wrong by an unknown amount.",
                     f"Coverage {_int(CHECK_COVERAGE_LOW * 100)} % is below the 95 % gate."),
                 HelpCase(
-                    "Failures are tiny strikes",
-                    "Many failures are far strikes with small numbers. The check counts options, not exposure, so a tiny "
-                    "option fails as much as a large one. The report shows only the counts, so "
-                    "weigh that lane low.",
-                    "7 contracts of flow against an open interest of 0 at a far strike is one failure, the same as a big strike "
-                    "with 700 against 500."),
+                    "The table of failing options and the gamma share",
+                    "Under a failed check the report lists every option whose dealer position is larger than its open "
+                    "interest (excess = |position| - open interest, and |position| / open interest), and the share of the "
+                    "expiry's flow-based gamma that sits on those strikes (sum of |flow GEX| at the failing strikes divided "
+                    "by the sum of |flow GEX| at all strikes). Failures are not only small far strikes: on one real sample "
+                    "(2026-11-14) the failing strikes of the 27NOV26 expiry carried 48.6 % of the flow-based gamma, "
+                    "with a put at 65,000 at an inferred dealer position of -4,139.8 contracts against an open interest "
+                    "of 174.0 (23.8 x). On that date the check failed on every precomputed BTC expiry, and most had a "
+                    "large share: 15NOV26 83.7 %, 18NOV26 100 %, 27NOV26 48.6 %, 25DEC26 31.5 %, 20NOV26 7.3 %.",
+                    "|Flow GEX| of the failing strikes adds up to 30 (millions), over all strikes to 80: 30 / 80 = 37.5 %."),
+                HelpCase(
+                    "Why the flow view fails, and a large share",
+                    "The flow method assumes the maker of every trade is a dealer, so the dealer position is minus the "
+                    "net taker flow. When customers trade with each other (for example one customer closing against another "
+                    "customer's resting order) or a dealer takes a customer's resting order, the trade is given to the wrong "
+                    "side. Trades before the flow start or in hours without stored trades are also missing. Then the net "
+                    "taker flow at a strike can exceed what is still open, and the inferred dealer position there is wrong "
+                    "by an unknown amount. When the failing strikes carry more than 25 % of the gamma (a display threshold "
+                    "chosen for this report, not a calibrated limit), the report calls the flow-based levels of that expiry "
+                    "unreliable. A gamma-weighted version of the check with the same 5 % limit would fail these expiries "
+                    "too (48.6 %, 31.5 %, 7.3 %), so 'less affected' means relatively, not fine.",
+                    "On 2026-11-14 the 27NOV26 expiry had 48.6 %: unreliable. The 20NOV26 expiry had 7.3 %: less affected, "
+                    "still read with care."),
                 HelpCase(
                     "What to do with a failed check",
-                    "Do not delete the view and do not trust it. Weigh the flow-based lane low and keep the check result in mind.",
+                    "Do not delete the view and do not trust it blindly. Look at the share of gamma on the failing strikes: "
+                    "a large share means treat the flow-based levels of this expiry as unreliable (the open-interest based view "
+                    "does not have this problem, but it rests on its own unverified assumption: dealers long calls, short "
+                    "puts); a small share means the flow-based levels are less affected, relatively, but still need care.",
                     "On the Levels tab a failed lane is drawn with hollow marks."),
             ),
             limits=(
@@ -1281,7 +1308,12 @@ _LEVELS_HELP = SectionHelp(
                                           "is partly built in. Only the liquidation estimate uses a different market "
                                           "(Binance futures)."),
                 HelpTerm("Diamond", "One level of one source, at its exact price."),
-                HelpTerm("Hollow mark", "That source failed its plausibility check. Read it with less weight."),
+                HelpTerm("Hollow mark", "That source failed its plausibility check. If the Dealer levels tab says the failing "
+                                        "strikes carry a large share of the gamma, treat the flow-based lane as unreliable; "
+                                        "otherwise read it with less weight. The Dealer levels tab lists only the 5 nearest "
+                                        "expiries and the nearest monthly one, the Levels tab the 4 with the most open interest "
+                                        "and the nearest monthly one, so the share is shown there only for the expiries the "
+                                        "Dealer levels tab lists."),
             ),
             cases=(
                 HelpCase(

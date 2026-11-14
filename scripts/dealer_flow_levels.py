@@ -4,7 +4,7 @@ Flow-based dealer levels of one expiry next to the open-interest based levels.
 Usage (from repo root; sync the local database first for current trades and chain: scripts/sync_from_vps.py):
     .venv\\Scripts\\python -m scripts.dealer_flow_levels --currency BTC --expiry 27NOV26
 
-Reads the local database and writes a PNG into outputs/dealer_flow_levels/ (git-ignored). Reads only; places no orders.
+Reads the local database and writes a PNG into output/dealer_flow_levels/ (git-ignored). Reads only; places no orders.
 """
 
 import argparse
@@ -17,7 +17,7 @@ from coding.core.logging.logging_setup import init_logging
 from coding.service.option_flow.dealer_flow_levels_service import DealerFlowLevelsService
 
 logger = logging.getLogger(__name__)
-DEFAULT_OUTPUT = Path(__file__).resolve().parents[1] / "outputs" / "dealer_flow_levels"
+DEFAULT_OUTPUT = Path(__file__).resolve().parents[1] / "output" / "dealer_flow_levels"
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

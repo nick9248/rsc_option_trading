@@ -9,7 +9,7 @@ Usage (from repo root):
 The window is ``[end - hours, end]`` in UTC (default end: the latest complete 5-minute step).
 The model state is warmed up over ``--warmup-days`` before the window. Reads Binance public data
 (from the PC, never the VPS), writes a PNG and a JSON (settings, data notes, the strongest levels
-at the end of the window) into ``outputs/liquidation_heatmap/`` (git-ignored). Places no orders.
+at the end of the window) into ``output/liquidation_heatmap/`` (git-ignored). Places no orders.
 Method and caveats: documentation/liquidation_heatmap_research.md.
 """
 
@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 SYMBOL = "BTCUSDT"
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_OUTPUT_DIRECTORY = REPOSITORY_ROOT / "outputs" / "liquidation_heatmap"
+DEFAULT_OUTPUT_DIRECTORY = REPOSITORY_ROOT / "output" / "liquidation_heatmap"
 TOP_LEVELS = 12
 
 

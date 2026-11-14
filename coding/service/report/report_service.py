@@ -1,6 +1,6 @@
 """
 Generates the market report of one currency: first brings the local database in step with the VPS when it is behind, then
-builds the five sections and writes ONE self-contained HTML file to ``outputs/report/``.
+builds the five sections and writes ONE self-contained HTML file to ``output/report/``.
 
 Sync rule (``VpsSyncService.sync_if_behind``): the newest watermark (the column the sync itself uses) of the tables the
 report reads -- historical_trades, snapshots, taker_flow_hourly, liquidation_heatmap_snapshots -- is compared between the
@@ -13,7 +13,6 @@ unaffected. Every service sees the same report instant.
 """
 
 import logging
-import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,7 +31,7 @@ from coding.service.report.report_sections import SECTION_BUILDERS, SectionConte
 logger = logging.getLogger(__name__)
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_OUTPUT_DIRECTORY = REPOSITORY_ROOT / "outputs" / "report"
+DEFAULT_OUTPUT_DIRECTORY = REPOSITORY_ROOT / "output" / "report"
 CURRENCIES = ("BTC", "ETH")
 SYNC_HINT = "Sync the database (Database tab or scripts/sync_from_vps.py) and generate the report again."
 
@@ -175,22 +174,21 @@ class ReportService:
         repository = self.repository_factory()
         sections: List[ReportSection] = []
         outcomes: List[SectionOutcome] = []
-        with tempfile.TemporaryDirectory(prefix="market_report_") as scratch:
-            for key, title, builder in self.builders:
-                if stop_requested():
-                    raise ReportStopped(f"stopped before {title}")
-                emit(f"Building {title}...")
-                context = SectionContext(currency, now, repository, Path(scratch) / key)
-                try:
-                    section = builder(context)
-                    outcomes.append(SectionOutcome(key, title, True, "built"))
-                except Exception as error:
-                    logger.exception("Report section %s failed", title)
-                    failure = failure_for(title, error)
-                    section = ReportSection(key=key, title=title, failure=failure)
-                    outcomes.append(SectionOutcome(key, title, False, failure.what))
-                section.help = SECTION_HELP.get(key)          # also on a failed section
-                sections.append(section)
+        for key, title, builder in self.builders:
+            if stop_requested():
+                raise ReportStopped(f"stopped before {title}")
+            emit(f"Building {title}...")
+            context = SectionContext(currency, now, repository)
+            try:
+                section = builder(context)
+                outcomes.append(SectionOutcome(key, title, True, "built"))
+            except Exception as error:
+                logger.exception("Report section %s failed", title)
+                failure = failure_for(title, error)
+                section = ReportSection(key=key, title=title, failure=failure)
+                outcomes.append(SectionOutcome(key, title, False, failure.what))
+            section.help = SECTION_HELP.get(key)          # also on a failed section
+            sections.append(section)
 
         header = ReportHeader(currency, now, self._freshness(repository, currency, now, sync), help=REPORT_HELP)
         emit("Writing the report file...")

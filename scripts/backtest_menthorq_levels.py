@@ -13,7 +13,7 @@ level changes to expiry settlements; next 1d / 3d realized volatility and
 absolute return from hourly index samples; a fixed battery of predictive
 tests; candidate alert thresholds with historical counts.
 
-Writes to --output-directory (default outputs/menthorq_replicate/backtest,
+Writes to --output-directory (default output/menthorq_replicate/backtest,
 gitignored): {currency}_daily_levels.csv / .json and
 {currency}_backtest_analysis.json.
 """
@@ -41,7 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--last-date", type=date.fromisoformat, default=None,
                         help="Last UTC date (default: yesterday, UTC)")
     parser.add_argument("--output-directory", type=Path,
-                        default=Path("outputs") / "menthorq_replicate" / "backtest")
+                        default=Path("output") / "menthorq_replicate" / "backtest")
     return parser
 
 
