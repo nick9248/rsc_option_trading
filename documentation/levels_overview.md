@@ -23,11 +23,10 @@ A source that cannot be computed is left out with a note, never drawn as a made-
 
 A shaded band marks a price range (default 1 % of the spot) holding levels of at least 3 different sources. This is a coincidence of methods, not a proof: sources 1 to 3 all use the same open interest and trades, so they are not independent.
 
-## GUI tab "Levels" (module 11)
+## Levels section of the Report (module 6)
 
-The same levels as an interactive page (`level_overview_page.py` + `level_overview_page.html`, one self-contained file with inline CSS, JS and SVG, no network):
+The Report's Levels tab shows the same levels as an interactive page, with the settings fixed there (nearest monthly dealer expiry, 24 h option flow, band 1 % and 3 sources). See `documentation/report.md`. The page (`level_overview_page.py` + `level_overview_page.html`) is one self-contained file with inline CSS, JS and SVG, no network:
 
 - **Price line**: one horizontal price axis, a row per source, each level a diamond at its exact price with its price and name written next to it (hollow = that source failed its check), the spot as a black line, a highlighter band where sources agree. A ruler follows the pointer. The buttons above zoom to ±5 %, ±10 %, ±15 % or all levels; levels beyond the zoom are listed at the edge of their row.
 - **Ledger**: "Where sources agree" and the full table of every level with its distance from the spot, so every number can be checked. Hovering a level, a table row or an agreement highlights the same item everywhere.
-- **Controls** (Qt): currency, dealer expiry, option flow window, agreement band width and the number of sources needed. Band width and sources only rebuild the page from the levels already loaded; the other three read the database again.
-- **Change a choice and the page redraws** (the Option Flow and Dealer Levels tabs do the same now: changing the expiry, window, unit or currency redraws the chart; a change made during a run waits and runs next).
+- **No controls in the Report.** The page is built once per report run for the report currency. Other expiries, windows, band widths and source counts: `scripts/levels_overview.py`.

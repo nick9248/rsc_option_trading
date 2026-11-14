@@ -1,8 +1,8 @@
 # Flow-based dealer levels (one expiry)
 
-GUI tab "Dealer Levels" (module 10) and `scripts/dealer_flow_levels.py`. Code: `coding/service/option_flow/dealer_flow_levels_service.py`
+The Dealer levels tab of the Report (Report is module 6, see `documentation/report.md`) and `scripts/dealer_flow_levels.py`. Code: `coding/service/option_flow/dealer_flow_levels_service.py`
 (computation), `coding/core/analytics/option_flow/dealer_levels.py` (result types), `dealer_levels_figure.py` (chart),
-`coding/gui/tabs/dealer_flow_levels_tab.py` (tab).
+`coding/service/report/report_sections.py` (`build_dealer_levels_section`, the report section).
 
 ## Method
 

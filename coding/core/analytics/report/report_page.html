@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title><!--__TITLE__--></title>
+<style>
+  :root {
+    --paper: #FFFFFF;
+    --ink: #101114;
+    --gray: #6A6F78;
+    --light: #A5AAB3;
+    --rule: #DADDE2;
+    --faint: #F0F1F3;
+    --highlight: #FFE14D;
+    --numerals: "Bahnschrift", "Segoe UI", system-ui, sans-serif;
+    --body: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--paper); color: var(--ink); font: 14px/1.5 var(--body); }
+  main { max-width: 1500px; margin: 0 auto; padding: 28px 34px 56px; }
+  .num, dd, td.num, th.num { font-family: var(--numerals); font-variant-numeric: tabular-nums; }
+  :focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  [hidden] { display: none !important; }
+
+  /* header */
+  h1 { margin: 0; font: 300 40px/1.05 var(--numerals); letter-spacing: -0.5px; }
+  h1 .currency { font-weight: 600; margin-right: 6px; }
+  .facts { display: flex; flex-wrap: wrap; gap: 6px 32px; margin: 14px 0 0; }
+  .facts div { min-width: 0; }
+  .facts dt { color: var(--gray); font-size: 12px; }
+  .facts dd { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
+
+  /* tabs */
+  .tabs { display: flex; gap: 4px 26px; margin: 26px 0 0; border-bottom: 1.5px solid var(--ink); overflow-x: auto; scrollbar-width: thin; }
+  .tabs button { flex: none; background: none; border: 0; padding: 8px 2px 7px; font: 15px/1.3 var(--body); color: var(--gray); cursor: pointer; white-space: nowrap; }
+  .tabs button:hover { color: var(--ink); }
+  .tabs button[aria-selected="true"] { color: var(--ink); font-weight: 600; background: linear-gradient(transparent 58%, var(--highlight) 58%, var(--highlight) 88%, transparent 88%); }
+  .tabs .flag { margin-left: 6px; font-size: 12px; color: var(--gray); font-weight: 400; }
+
+  /* panels */
+  .panel { padding-top: 22px; }
+  .panel:focus-visible { outline-offset: 6px; }
+  .panel-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 22px; }
+  h2 { margin: 0; font-size: 22px; font-weight: 600; }
+  h3 { margin: 26px 0 8px; font-size: 15px; font-weight: 700; }
+  .as-of { margin: 0; color: var(--gray); }
+  .description { margin: 6px 0 0; max-width: 110ch; color: var(--gray); }
+  p { max-width: 110ch; }
+  .warnings { margin: 14px 0 0; padding: 0; list-style: none; max-width: 110ch; }
+  .warnings li { padding: 2px 0 2px 14px; border-left: 3px solid var(--ink); margin-bottom: 4px; }
+  .notes { color: var(--gray); font-size: 13px; margin-top: 18px; }
+  .notes h3 { color: var(--ink); }
+  .notes p { margin: 0 0 4px; }
+
+  .failure { margin: 22px 0 0; padding: 18px 20px; border: 1.5px solid var(--ink); max-width: 90ch; }
+  .failure h3 { margin: 0 0 6px; }
+  .failure p { margin: 0 0 6px; }
+  .failure .fix { color: var(--gray); }
+
+  /* content */
+  .chart-image { margin: 20px 0 0; }
+  .chart-image img, .switcher-image { display: block; width: 100%; max-width: 1200px; height: auto; }
+  .chart-image figcaption { color: var(--gray); font-size: 13px; margin-top: 6px; }
+  .image-row { display: flex; flex-wrap: wrap; gap: 0 28px; align-items: flex-start; }
+  .image-row .chart-image { flex: 1 1 520px; min-width: 0; max-width: 1100px; }
+
+  .switcher { margin-top: 18px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 10px 30px; align-items: center; }
+  .control { display: flex; align-items: center; gap: 10px; }
+  .control-label { color: var(--gray); font-size: 13px; }
+  .choice-buttons { display: inline-flex; flex-wrap: wrap; gap: 0 16px; }
+  .choice-buttons button { background: none; border: 0; border-bottom: 2px solid transparent; padding: 2px 0; font: inherit; color: var(--gray); cursor: pointer; }
+  .choice-buttons button:hover { color: var(--ink); }
+  .choice-buttons button[aria-pressed="true"] { color: var(--ink); font-weight: 600; border-bottom-color: var(--ink); }
+  select { font: inherit; color: var(--ink); background: var(--paper); border: 1px solid var(--light); border-radius: 0; padding: 3px 6px; max-width: 100%; }
+  .switcher-caption { margin: 12px 0 0; max-width: 120ch; }
+  .switcher-caption p { margin: 0 0 6px; }
+  .switcher-plot { margin-top: 8px; min-height: 40px; }
+  .switcher-image { margin-top: 12px; }
+
+  .table-wrap { overflow-x: auto; margin: 6px 0 4px; }
+  table { border-collapse: collapse; font-size: 13.5px; }
+  caption { text-align: left; color: var(--gray); font-size: 12px; padding-bottom: 4px; }
+  th, td { padding: 4px 18px 4px 0; text-align: left; border-bottom: 1px solid var(--faint); white-space: nowrap; }
+  thead th { color: var(--gray); font-weight: 400; font-size: 12px; border-bottom: 1px solid var(--rule); }
+  tbody th { font-weight: 600; }
+  .num { text-align: right; }
+  .verdict-failed { font-weight: 600; }
+
+  .page-frame { display: block; width: 100%; height: 900px; border: 0; margin-top: 10px; background: var(--paper); }
+
+  @media (max-width: 640px) {
+    main { padding: 18px 16px 40px; }
+    h1 { font-size: 30px; }
+    .facts { gap: 4px 20px; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<main>
+<header class="report-head">
+<!--__HEADER__-->
+</header>
+<!--__TABS__-->
+<!--__PANELS__-->
+</main>
+<script type="application/json" id="report-data">/*__DATA__*/null</script>
+<!--__PLOTLY__-->
+<script>
+(function () {
+  "use strict";
+  const DATA = JSON.parse(document.getElementById("report-data").textContent);
+  const PLOT_CONFIG = { displaylogo: false, responsive: true, modeBarButtonsToRemove: ["lasso2d", "select2d"] };
+  const tabs = Array.from(document.querySelectorAll('[role="tab"]'));
+  const shown = new Set();
+
+  /* ---------- switchers ---------- */
+  function drawSwitcher(element) {
+    const configuration = DATA.switchers[element.dataset.switcher];
+    if (!configuration) return;
+    const key = configuration.controls.map((name) => configuration.selected[name]).join("|");
+    const view = configuration.views[key];
+    const caption = element.querySelector(".switcher-caption");
+    const plot = element.querySelector(".switcher-plot");
+    const image = element.querySelector(".switcher-image");
+    if (!view) {
+      caption.textContent = "Nothing was computed for this choice.";
+      plot.hidden = true; image.hidden = true;
+      return;
+    }
+    caption.innerHTML = view.caption || "";        // built and escaped by the report generator
+    if (view.figure) {
+      image.hidden = true; plot.hidden = false;
+      const figure = DATA.figures[view.figure];
+      if (window.Plotly && figure) {
+        window.Plotly.react(plot, figure.data, figure.layout, PLOT_CONFIG);
+      } else {
+        plot.textContent = "The chart library is missing from this file, so the chart cannot be drawn.";
+      }
+    } else if (view.image) {
+      plot.hidden = true; image.hidden = false;
+      image.src = view.image; image.alt = view.alt || "";
+    }
+  }
+  function bindSwitcher(element) {
+    const configuration = DATA.switchers[element.dataset.switcher];
+    if (!configuration) return;
+    element.querySelectorAll("button[data-control]").forEach((button) => {
+      button.addEventListener("click", () => {
+        configuration.selected[button.dataset.control] = button.dataset.value;
+        element.querySelectorAll(`button[data-control="${button.dataset.control}"]`).forEach((other) =>
+          other.setAttribute("aria-pressed", String(other === button)));
+        drawSwitcher(element);
+      });
+    });
+    element.querySelectorAll("select[data-control]").forEach((select) => {
+      select.addEventListener("change", () => {
+        configuration.selected[select.dataset.control] = select.value;
+        drawSwitcher(element);
+      });
+    });
+  }
+
+  /* ---------- embedded pages ---------- */
+  function loadFrame(frame) {
+    const page = DATA.pages[frame.dataset.page];
+    if (page === undefined || frame.dataset.loaded) return;
+    frame.dataset.loaded = "1";
+    frame.addEventListener("load", () => {
+      const document_ = frame.contentDocument;
+      if (!document_) return;
+      const fit = () => { frame.style.height = (document_.documentElement.scrollHeight + 4) + "px"; };
+      fit();
+      if (window.ResizeObserver) new ResizeObserver(fit).observe(document_.body);
+    });
+    frame.srcdoc = page;
+  }
+
+  /* ---------- tabs ---------- */
+  function showPanel(panel) {
+    if (!shown.has(panel.id)) {
+      shown.add(panel.id);
+      panel.querySelectorAll(".switcher").forEach(drawSwitcher);
+      panel.querySelectorAll("iframe[data-page]").forEach(loadFrame);
+    } else if (window.Plotly) {
+      panel.querySelectorAll(".js-plotly-plot").forEach((plot) => window.Plotly.Plots.resize(plot));
+    }
+  }
+  function select(tab, moveFocus) {
+    tabs.forEach((other) => {
+      const selected = other === tab;
+      other.setAttribute("aria-selected", String(selected));
+      other.tabIndex = selected ? 0 : -1;
+      document.getElementById(other.getAttribute("aria-controls")).hidden = !selected;
+    });
+    if (moveFocus) tab.focus();
+    try { history.replaceState(null, "", "#" + tab.dataset.key); } catch (error) { /* a file without history support */ }
+    showPanel(document.getElementById(tab.getAttribute("aria-controls")));
+  }
+  tabs.forEach((tab, index) => {
+    tab.addEventListener("click", () => select(tab, false));
+    tab.addEventListener("keydown", (event) => {
+      let target = null;
+      if (event.key === "ArrowRight") target = tabs[(index + 1) % tabs.length];
+      else if (event.key === "ArrowLeft") target = tabs[(index - 1 + tabs.length) % tabs.length];
+      else if (event.key === "Home") target = tabs[0];
+      else if (event.key === "End") target = tabs[tabs.length - 1];
+      if (target) { event.preventDefault(); select(target, true); }
+    });
+  });
+
+  document.querySelectorAll(".switcher").forEach(bindSwitcher);
+  const fromAddress = tabs.find((tab) => "#" + tab.dataset.key === location.hash);
+  select(fromAddress || tabs[0], false);
+})();
+</script>
+</body>
+</html>

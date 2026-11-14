@@ -580,6 +580,9 @@ def open_ssh_tunnel() -> subprocess.Popen:
     proc = subprocess.Popen(
         ["ssh", "-L", f"{VPS_TUNNEL_PORT}:localhost:5432", "-N",
          "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no",
+         # Exit when the local port is taken (e.g. by another sync's tunnel) instead of running
+         # without the forward while the connection silently uses the other tunnel.
+         "-o", "ExitOnForwardFailure=yes",
          SSH_HOST],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL

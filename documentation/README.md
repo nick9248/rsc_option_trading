@@ -23,12 +23,13 @@ Other specifications live outside this folder: `synthesis_logic.md` (morning-not
 
 One file per tab that exists in `coding/gui/tabs/`:
 
+- `report.md`: the Report tab (MenthorQ, futures flow, option flow, dealer levels and levels in one HTML file per currency)
 - `gui_tabs/tab_api_connection.md`
 - `gui_tabs/tab_snapshot.md`
 - `gui_tabs/tab_on_chain_analysis.md`
 - `gui_tabs/tab_database.md`
 - `gui_tabs/tab_system_validation.md`
-- `gui_tabs/tab_menthorq_charts.md`
+- `gui_tabs/tab_menthorq_charts.md` (a pointer only: the tab was merged into the Report)
 - `gui_tabs/tab_menthorq_monitor.md`
 
 ## Keeping documentation current

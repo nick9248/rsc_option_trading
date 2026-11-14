@@ -2,8 +2,8 @@
 
 The "Buy/Sell Volume by strike" view of Laevitas, built from the Deribit option trades the collector stores
 (`historical_trades`). Code: `coding/core/analytics/option_flow/` (aggregation and chart), `coding/service/option_flow/`
-(service), `scripts/option_flow_by_strike.py` (command line). Status: working and checked against Laevitas; no GUI tab
-yet; nothing runs on the VPS (it only reads the table).
+(service), `scripts/option_flow_by_strike.py` (command line). Status: working and checked against Laevitas; the GUI view is
+the Option flow tab of the Report (`documentation/report.md`); nothing runs on the VPS (it only reads the table).
 
 ## What it shows
 
@@ -38,13 +38,13 @@ A "sell" is sell-side volume, not "they are now short".
 
 Writes a PNG and a JSON (contracts, notional and trades per strike and series) into `outputs/option_flow/`.
 
-## GUI tab "Option Flow" (module 9)
+## Report section "Option flow" (module 6)
 
-Currency, window (6 to 72 h), expiry (all, or any expiry that traded in the window, expired ones included) and unit
-(notional, contracts, trades); Generate draws the interactive chart. Hovering a strike lists all eight series. The tab warns
-when the newest stored trade is older than 3 hours (sync first). Code: figure `coding/core/analytics/option_flow/strike_flow_figure.py`
-(Plotly, also used for the PNG through kaleido), service `coding/service/option_flow/option_flow_service.py`, tab
-`coding/gui/tabs/option_flow_tab.py`.
+The GUI view is now the Option flow tab of the Report: a fixed 24 h window, all expirations and up to 12 single expirations,
+each in notional, contracts and trades. See `documentation/report.md`. Hovering a strike lists all eight series. The section
+warns when the newest stored trade is older than 3 hours (sync first). Code: figure `coding/core/analytics/option_flow/strike_flow_figure.py`
+(Plotly, also used for the PNG through kaleido), service `coding/service/option_flow/option_flow_service.py`, report section
+`build_option_flow_section` in `coding/service/report/report_sections.py`.
 
 Data: the collector on the VPS already stores every Deribit option trade (table `historical_trades`, every 60 s, since
 2026-03-15), including direction and block flag; nothing new is captured. The PC reads its local mirror.
