@@ -23,7 +23,7 @@ from typing import Callable, Dict, List, Optional, Tuple, cast
 import plotly.graph_objects as go
 
 from coding.core.analytics.dealer_inventory_calculator import DealerInventoryCalculator
-from coding.core.analytics.option_flow.dealer_levels import DealerFlowLevels, StrikeLevelRow
+from coding.core.analytics.option_flow.dealer_levels import DealerFlowLevels, StrikeLevelRow, ViolatingOption
 from coding.core.analytics.option_flow.dealer_levels_figure import build_dealer_levels_figure
 from coding.core.analytics.menthorq_replication_calculator import (
     GAMMA_UNDERLYING_INDEX, build_priced_instruments, compute_exposure, parse_expiry_settlement)
@@ -150,4 +150,7 @@ class DealerFlowLevelsService:
             total_flow_gex=flow["total_inferred_gex"], total_open_interest_gex=exposure["total_net_gex"],
             coverage=coverage, violation_rate=check["violation_rate"], violations=check["n_violations"],
             options_checked=check["n_strikes"], options_without_open_interest=excluded,
-            gate_passed=not reasons, gate_reason="; ".join(reasons) or None, notes=notes)
+            gate_passed=not reasons, gate_reason="; ".join(reasons) or None, notes=notes,
+            violating_options=[ViolatingOption(
+                strike=item["strike"], option_type=item["option_type"], dealer_position=-item["taker_net"],
+                open_interest=item["open_interest"], excess=item["excess"]) for item in check["violations"]])

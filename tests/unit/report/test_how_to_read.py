@@ -402,8 +402,17 @@ def test_plausibility_check_examples():
     assert "95 %" in thresholds and "5 %" in thresholds and "20 %" in thresholds
     terms = {term.term: term.meaning for term in topic_of("dealer-levels", "The plausibility check").terms}
     assert "95 %" in terms["Coverage"] and "5 %" in terms["Violations"] and "20 %" in terms["Options without an open interest value"]
-    assert "tiny" in case_of("dealer-levels", "Failures are tiny strikes").reading.lower()
-    assert "weigh that lane low" in case_of("dealer-levels", "Failures are tiny strikes").reading
+    share_case = case_of("dealer-levels", "The table of failing options and the gamma share")
+    assert "48.6 %" in share_case.reading and "20 / 80 = 25 %" in share_case.example
+    assert "unreliable" in case_of("dealer-levels", "Why the flow view fails, and a large share").reading
+
+
+def test_help_never_claims_failures_are_tiny_strikes():
+    """The old claim (failures are mostly tiny strikes; weighting by size would fix it) is false for 27NOV26 and 25DEC26."""
+    for where, text in all_text():
+        lowered = text.lower()
+        assert "tiny strike" not in lowered and "mostly tiny" not in lowered and "failures are tiny" not in lowered, where
+        assert not re.search(r"weighting.{0,80}would fix", lowered), where
 
 
 def test_confluence_examples_against_the_code():

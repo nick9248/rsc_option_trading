@@ -50,7 +50,7 @@ The dealer position of those options is wrong by an unknown amount, and so is th
 
 ### Failures are not limited to small strikes
 
-Do not read a failed check as "only a few tiny strikes". On the data of mid-November 2026 (figures measured by the project owner, not recomputed from this document's code) the strikes that fail carry a
+Do not read a failed check as "only a few tiny strikes". On the data of mid-November 2026 (reproduced on 2026-11-14 with `violating_gamma_share`: the sum of |flow GEX| over the strikes with at least one failing option, divided by the sum of |flow GEX| over all strikes of the expiry; the Dealer levels tab lists every failing option and shows this share) the strikes that fail carry a
 large part of the flow-based gamma on some expiries:
 
 | Expiry | Options failing | Share of the flow-based gamma on the failing strikes |

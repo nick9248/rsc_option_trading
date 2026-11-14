@@ -6,6 +6,8 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from coding.core.analytics.menthorq_replication_calculator import SECONDS_PER_YEAR
+from coding.core.analytics.option_flow.dealer_levels import (
+    DealerFlowLevels, StrikeLevelRow, ViolatingOption, violating_gamma_share)
 from coding.core.analytics.option_flow.dealer_levels_figure import bar_widths, build_dealer_levels_figure, visible_range
 from coding.service.option_flow.dealer_flow_levels_service import DealerFlowLevelsService
 
@@ -90,6 +92,32 @@ def test_a_dealer_position_above_open_interest_fails_the_gate_and_says_why():
     levels = service(FakeRepository(flow(250.0, -4.0))).levels("BTC", EXPIRY)           # 250 calls > open interest 100
     assert (levels.violations, levels.options_checked) == (1, 2) and levels.violation_rate == 0.5
     assert not levels.gate_passed and "50.0% of options exceed their open interest" in levels.gate_reason
+
+
+def test_violating_options_are_carried_with_the_dealer_sign_and_the_excess():
+    levels = service(FakeRepository(flow(250.0, -4.0))).levels("BTC", EXPIRY)           # takers bought 250 calls, open interest 100
+    assert len(levels.violating_options) == 1
+    option = levels.violating_options[0]
+    assert (option.strike, option.option_type) == (SPOT, "C")
+    assert (option.dealer_position, option.open_interest, option.excess) == (-250.0, 100.0, 150.0)
+    assert option.position_to_open_interest == pytest.approx(2.5)
+    assert service(FakeRepository(flow(10.0, -4.0))).levels("BTC", EXPIRY).violating_options == []
+
+
+def test_violating_gamma_share_by_hand():
+    """Strikes 1 (|GEX| 10), 2 (|GEX| 30), 3 (|GEX| 60); strikes 1 and 3 violate (3 with both legs): (10 + 60) / 100 = 0.7."""
+    rows = [StrikeLevelRow(1.0, 0.0, 0.0, -10.0, None, None, None), StrikeLevelRow(2.0, 0.0, 0.0, 30.0, None, None, None),
+            StrikeLevelRow(3.0, 0.0, 0.0, -60.0, None, None, None)]
+    violating = [ViolatingOption(1.0, "P", -5.0, 1.0, 4.0), ViolatingOption(3.0, "C", 5.0, 1.0, 4.0),
+                 ViolatingOption(3.0, "P", -5.0, 0.0, 5.0)]
+    levels = DealerFlowLevels("BTC", EXPIRY, SPOT, CAPTURED, CAPTURED, 0, rows, None, None, None, None, None, None, -40.0, None,
+                              1.0, 0.0, 3, 6, 0, False, "x", violating_options=violating)
+    assert violating_gamma_share(levels) == pytest.approx(0.7)
+    levels.violating_options = []
+    assert violating_gamma_share(levels) == 0.0
+    levels.rows = [StrikeLevelRow(1.0, 0.0, 0.0, 0.0, None, None, None)]
+    assert violating_gamma_share(levels) is None                                              # no gamma: not computed, not 0
+    assert ViolatingOption(1.0, "C", 5.0, 0.0, 5.0).position_to_open_interest is None
 
 
 def test_low_trade_coverage_and_no_trades_fail_the_gate():

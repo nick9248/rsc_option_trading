@@ -1194,8 +1194,9 @@ _DEALER_HELP = SectionHelp(
         HelpTopic(
             title="The plausibility check",
             what_you_see=(
-                "A line under the chart that says whether the flow-based view passed its check, and if not, why. The "
-                "expiry switcher marks a failed expiry with 'check failed'."),
+                "Under the level table, a sentence that says whether the flow-based view passed its check and, if not, what "
+                "failed. A failed check also shows a table of every failing option, the share of the flow-based gamma on "
+                "those strikes, and why. The expiry switcher marks a failed expiry with 'check failed'."),
             terms=(
                 HelpTerm("Plausibility check", "A dealer cannot hold more than the open interest of an option. The check counts "
                                                "the options whose dealer position, in absolute value, exceeds their open interest."),
@@ -1227,15 +1228,28 @@ _DEALER_HELP = SectionHelp(
                     "Hours of trades are missing, so the dealer position is wrong by an unknown amount.",
                     f"Coverage {_int(CHECK_COVERAGE_LOW * 100)} % is below the 95 % gate."),
                 HelpCase(
-                    "Failures are tiny strikes",
-                    "Many failures are far strikes with small numbers. The check counts options, not exposure, so a tiny "
-                    "option fails as much as a large one. The report shows only the counts, so "
-                    "weigh that lane low.",
-                    "7 contracts of flow against an open interest of 0 at a far strike is one failure, the same as a big strike "
-                    "with 700 against 500."),
+                    "The table of failing options and the gamma share",
+                    "Under a failed check the report lists every option whose dealer position is larger than its open "
+                    "interest (excess = |position| - open interest, and |position| / open interest), and the share of the "
+                    "expiry's flow-based gamma that sits on those strikes (sum of |flow GEX| at the failing strikes divided "
+                    "by the sum of |flow GEX| at all strikes). Failures are not only small far strikes: on one real sample "
+                    "(2026-11-14) the failing strikes of the 27NOV26 expiry carried 48.6 % of the flow-based gamma, "
+                    "with a put at 65,000 held at -4,139.8 contracts against an open interest of 174.0.",
+                    "|Flow GEX| of the failing strikes adds up to 20 (millions), over all strikes to 80: 20 / 80 = 25 %."),
+                HelpCase(
+                    "Why the flow view fails, and a large share",
+                    "The flow method assumes every taker trade opens a new position and the dealer holds the other side. "
+                    "Many trades close positions (for example a customer closing against a dealer), so the cumulative taker "
+                    "flow at a strike can be far larger than what is still open, and the flow-based dealer position there is "
+                    "wrong. When the failing strikes carry a large share of the gamma (the report says so above about a "
+                    "quarter), treat the flow-based view of that expiry as unreliable and use the open-interest based view. "
+                    "Weighting the check by size would not make such an expiry pass.",
+                    "Failing strikes carry 48.6 % of the gamma: unreliable. They carry 7.3 %: less affected, still read with care."),
                 HelpCase(
                     "What to do with a failed check",
-                    "Do not delete the view and do not trust it. Weigh the flow-based lane low and keep the check result in mind.",
+                    "Do not delete the view and do not trust it blindly. Look at the share of gamma on the failing strikes: "
+                    "a large share means use the open-interest based view; a small share means the flow-based levels are "
+                    "less affected but still need care.",
                     "On the Levels tab a failed lane is drawn with hollow marks."),
             ),
             limits=(
@@ -1287,7 +1301,9 @@ _LEVELS_HELP = SectionHelp(
                                           "is partly built in. Only the liquidation estimate uses a different market "
                                           "(Binance futures)."),
                 HelpTerm("Diamond", "One level of one source, at its exact price."),
-                HelpTerm("Hollow mark", "That source failed its plausibility check. Read it with less weight."),
+                HelpTerm("Hollow mark", "That source failed its plausibility check. If the Dealer levels tab says the failing "
+                                        "strikes carry a large share of the gamma, treat the flow-based lane as unreliable; "
+                                        "otherwise read it with less weight."),
             ),
             cases=(
                 HelpCase(

@@ -229,7 +229,8 @@ class DealerInventoryCalculator:
             Dict with ``n_strikes`` (legs actually considered -- flow rows
             WITH an OI reference only, matching spec T2.2's per-leg count),
             ``n_violations``, ``violation_rate`` (0.0 if ``n_strikes == 0``),
-            ``worst_strikes`` (up to 5, sorted by excess descending), and
+            ``worst_strikes`` (up to 5, sorted by excess descending),
+            ``violations`` (all of them, same order and entries), and
             ``legs_excluded_no_oi`` (fix round, Important #3 -- see below).
         """
         # Fix round (Important #3, bugfix_spec.md section 2(c)): a leg with
@@ -278,6 +279,7 @@ class DealerInventoryCalculator:
             "n_violations": len(violations),
             "violation_rate": (len(violations) / n_strikes) if n_strikes else 0.0,
             "worst_strikes": tuple(violations[:_MAX_WORST_STRIKES]),
+            "violations": tuple(violations),
             "legs_excluded_no_oi": legs_excluded_no_oi,
         }
 
