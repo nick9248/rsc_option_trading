@@ -180,7 +180,7 @@ def test_a_naive_clock_is_refused(tmp_path):
         make_service(tmp_path, clock=lambda: datetime(2026, 11, 14, 10, 0)).generate("BTC")
 
 
-def test_every_builder_gets_the_same_instant_and_its_own_scratch_folder(tmp_path):
+def test_every_builder_gets_the_same_instant(tmp_path):
     contexts = []
 
     def recording(key):
@@ -193,7 +193,6 @@ def test_every_builder_gets_the_same_instant_and_its_own_scratch_folder(tmp_path
     make_service(tmp_path, builders=[recording("a"), recording("b"), recording("c")], clock=lambda: next(ticks)).generate("ETH")
     assert [context.now for context in contexts] == [NOW] * 3
     assert {context.currency for context in contexts} == {"ETH"}
-    assert len({context.working_directory for context in contexts}) == 3
 
 
 def test_plotly_is_only_read_when_a_built_section_has_a_figure(tmp_path):

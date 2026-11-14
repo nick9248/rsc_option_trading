@@ -10,7 +10,7 @@ import json
 import logging
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from coding.core.analytics.menthorq_chart_renderer import (
     render_expiry_iv_times_open_interest_chart,
@@ -239,36 +239,8 @@ class MenthorqReplicationService:
             output_directory = nested_date_folder(output_directory, as_of.astimezone(timezone.utc).date())
         output_directory.mkdir(parents=True, exist_ok=True)
 
-        # Expiries listed after the open-interest snapshot (no row has open interest) are
-        # expected: ONE info line per run each (below), not a warning per configuration.
-        listed_after_open_interest = set(expiries_without_any_open_interest(
-            inputs["chain_rows"], {row.get("expiration") for row in inputs["chain_rows"]}))
-        configurations: Dict[str, Dict[str, Any]] = {}
-        for universe in EXPIRY_UNIVERSES:
-            for underlying in GAMMA_UNDERLYINGS:
-                replication = replicate_menthorq(
-                    inputs["chain_rows"], inputs["index_price"], as_of, universe, underlying,
-                    currency=currency,
-                )
-                not_computed = [expiration for expiration, exposure
-                                in replication["gex_by_expiration"].items()
-                                if exposure["total_net_gex"] is None
-                                and expiration not in listed_after_open_interest]
-                if not_computed:
-                    logger.warning(
-                        "%s / gamma at %s: GEX not computed (no leg has both gamma and open "
-                        "interest) for %d of %d "
-                        "expiries %s; their levels are None and they are skipped for panels",
-                        universe, underlying, len(not_computed),
-                        len(replication["gex_by_expiration"]), not_computed,
-                    )
-                configurations[f"{universe}__gamma_at_{underlying}"] = {
-                    "replication": replication,
-                    "comparison": (
-                        compare_with_reference(replication, reference)
-                        if reference is not None else None
-                    ),
-                }
+        configurations, listed_after_open_interest = self._replicate_configurations(
+            currency, inputs, as_of, GAMMA_UNDERLYINGS, reference)
 
         # The "all" universe holds every unsettled expiry of every universe.
         all_expiries_replication = configurations[
@@ -388,6 +360,105 @@ class MenthorqReplicationService:
             reference=reference, open_interest_as_of=open_interest_as_of,
             run_mode=RUN_MODE_MENTHORQ_DAILY_CLOSE, chart_layout=chart_layout,
         )
+
+    @staticmethod
+    def _replicate_configurations(
+        currency: str, inputs: Dict[str, Any], as_of: datetime, underlyings: Sequence[str],
+        reference: Optional[Dict[str, Any]],
+    ) -> Tuple[Dict[str, Dict[str, Any]], Set[str]]:
+        """
+        ``replicate_menthorq`` for every expiry universe at each of ``underlyings`` (shared by ``run`` and
+        ``replicate_daily_close``), with the "GEX not computed" warning per configuration.
+
+        Returns:
+            ``{"<universe>__gamma_at_<underlying>": {"replication": ..., "comparison": ... or None}}`` (the comparison with
+            ``reference`` when one is given) and the expiries listed after the open-interest snapshot (no row has open
+            interest; expected, so no warning is given for them).
+        """
+        chain_rows = inputs["chain_rows"]
+        listed_after_open_interest = set(expiries_without_any_open_interest(
+            chain_rows, {row.get("expiration") for row in chain_rows}))
+        configurations: Dict[str, Dict[str, Any]] = {}
+        for universe in EXPIRY_UNIVERSES:
+            for underlying in underlyings:
+                replication = replicate_menthorq(
+                    chain_rows, inputs["index_price"], as_of, universe, underlying, currency=currency)
+                not_computed = [expiration for expiration, exposure in replication["gex_by_expiration"].items()
+                                if exposure["total_net_gex"] is None and expiration not in listed_after_open_interest]
+                if not_computed:
+                    logger.warning(
+                        "%s / gamma at %s: GEX not computed (no leg has both gamma and open "
+                        "interest) for %d of %d "
+                        "expiries %s; their levels are None and they are skipped for panels",
+                        universe, underlying, len(not_computed),
+                        len(replication["gex_by_expiration"]), not_computed,
+                    )
+                configurations[f"{universe}__gamma_at_{underlying}"] = {
+                    "replication": replication,
+                    "comparison": (compare_with_reference(replication, reference) if reference is not None else None),
+                }
+        return configurations, listed_after_open_interest
+
+    def replicate_daily_close(
+        self, currency: str, menthorq_date: date, now: Optional[datetime] = None,
+        primary_universe: str = EXPIRY_UNIVERSE_MONTHLY, gamma_underlying: str = GAMMA_UNDERLYING_INDEX,
+    ) -> Dict[str, Any]:
+        """
+        The numbers of ``run_menthorq_daily_close`` without drawing or writing anything (for interactive figures).
+
+        Same instants (``menthorq_daily_close_instants``), same inputs and the same ``replicate_menthorq`` per expiry
+        universe at ``gamma_underlying``, plus the IV x OI of every expiry of the "all" universe.
+
+        Returns:
+            A dict shaped like the ``run`` output where ``menthorq_chart_summary.data_warnings`` / ``data_notes`` read it
+            ("currency", "as_of_utc", "inputs", "primary_configuration", "configurations" with one
+            ``{"replication": ...}`` per universe, "expiries_not_in_open_interest_snapshot") but without "charts"; each
+            "per_expiry_iv_times_open_interest" entry has expiration, levels, level_rule, rows_without_open_interest and
+            by_strike (no chart path).
+
+        Raises:
+            ValueError: when ``menthorq_date`` has not ended at ``now`` (default: the current UTC time).
+        """
+        now = now or datetime.now(timezone.utc)
+        if menthorq_date > last_complete_utc_day(now):
+            raise ValueError(f"{menthorq_date.isoformat()} has not ended at {now.isoformat()}: no daily close yet")
+        as_of, open_interest_as_of = menthorq_daily_close_instants(menthorq_date)
+        inputs = self.load_inputs(currency, as_of, open_interest_as_of)
+        chain_rows = inputs["chain_rows"]
+        configurations, listed_after_open_interest = self._replicate_configurations(
+            currency, inputs, as_of, (gamma_underlying,), None)
+        all_replication = configurations[f"{EXPIRY_UNIVERSE_ALL}__gamma_at_{gamma_underlying}"]["replication"]
+        not_in_open_interest_snapshot = [expiration for expiration in all_replication["settings"]["expirations"]
+                                         if expiration in listed_after_open_interest]
+        per_expiry = []
+        for expiration in all_replication["settings"]["expirations"]:
+            expiry_result = compute_expiry_iv_times_open_interest(
+                chain_rows, expiration, all_replication["gex_by_expiration"][expiration])
+            per_expiry.append({
+                "expiration": expiration,
+                "levels": expiry_result["levels"],
+                "level_rule": expiry_result["level_rule"],
+                "rows_without_open_interest": sum(1 for row in chain_rows if row.get("expiration") == expiration
+                                                  and row.get("open_interest") is None),
+                "by_strike": expiry_result["by_strike"],
+            })
+        return {
+            "run_mode": RUN_MODE_MENTHORQ_DAILY_CLOSE,
+            "as_of_utc": as_of.isoformat(),
+            "currency": currency,
+            "inputs": {
+                "snapshot_captured_at_utc": inputs["snapshot_captured_at_utc"].isoformat(),
+                "open_interest_captured_at_utc": inputs["open_interest_captured_at_utc"].isoformat(),
+                "chain_row_count": len(chain_rows),
+                "iv_source_counts": inputs["iv_source_counts"],
+                "index_price": inputs["index_price"],
+                "index_price_time_utc": inputs["index_price_time_utc"].isoformat(),
+            },
+            "primary_configuration": f"{primary_universe}__gamma_at_{gamma_underlying}",
+            "per_expiry_iv_times_open_interest": per_expiry,
+            "expiries_not_in_open_interest_snapshot": not_in_open_interest_snapshot,
+            "configurations": configurations,
+        }
 
     def run_live(
         self,

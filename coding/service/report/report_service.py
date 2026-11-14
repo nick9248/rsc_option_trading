@@ -13,7 +13,6 @@ unaffected. Every service sees the same report instant.
 """
 
 import logging
-import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -175,22 +174,21 @@ class ReportService:
         repository = self.repository_factory()
         sections: List[ReportSection] = []
         outcomes: List[SectionOutcome] = []
-        with tempfile.TemporaryDirectory(prefix="market_report_") as scratch:
-            for key, title, builder in self.builders:
-                if stop_requested():
-                    raise ReportStopped(f"stopped before {title}")
-                emit(f"Building {title}...")
-                context = SectionContext(currency, now, repository, Path(scratch) / key)
-                try:
-                    section = builder(context)
-                    outcomes.append(SectionOutcome(key, title, True, "built"))
-                except Exception as error:
-                    logger.exception("Report section %s failed", title)
-                    failure = failure_for(title, error)
-                    section = ReportSection(key=key, title=title, failure=failure)
-                    outcomes.append(SectionOutcome(key, title, False, failure.what))
-                section.help = SECTION_HELP.get(key)          # also on a failed section
-                sections.append(section)
+        for key, title, builder in self.builders:
+            if stop_requested():
+                raise ReportStopped(f"stopped before {title}")
+            emit(f"Building {title}...")
+            context = SectionContext(currency, now, repository)
+            try:
+                section = builder(context)
+                outcomes.append(SectionOutcome(key, title, True, "built"))
+            except Exception as error:
+                logger.exception("Report section %s failed", title)
+                failure = failure_for(title, error)
+                section = ReportSection(key=key, title=title, failure=failure)
+                outcomes.append(SectionOutcome(key, title, False, failure.what))
+            section.help = SECTION_HELP.get(key)          # also on a failed section
+            sections.append(section)
 
         header = ReportHeader(currency, now, self._freshness(repository, currency, now, sync), help=REPORT_HELP)
         emit("Writing the report file...")
