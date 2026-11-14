@@ -41,7 +41,7 @@ class FakeService:
         self.gate = gate
         self.log = log if log is not None else []
 
-    def generate(self, currency, progress=None):
+    def generate(self, currency, progress=None, should_stop=None):
         self.log.append(currency)
         progress("Checking whether the local database is behind the VPS...")
         progress("Building MenthorQ...")
@@ -151,4 +151,76 @@ def test_result_summary_names_the_failed_section_and_the_sync_step(tmp_path):
 
 def test_result_summary_of_a_complete_report_has_no_not_built_part(tmp_path):
     assert "Not built" not in result_summary(make_result(tmp_path / "x.html"))
+
+
+# ---------------------------------------------------------------------------
+# Plain-text status, stop requests, waiting for a running worker
+# ---------------------------------------------------------------------------
+import time  # noqa: E402
+
+from PySide6.QtCore import Qt  # noqa: E402
+
+from coding.service.report.report_service import ReportStopped  # noqa: E402
+
+
+class StoppingService:
+    """generate() is stopped on request, with a reason."""
+
+    def generate(self, currency, progress=None, should_stop=None):
+        raise ReportStopped("stopped before Levels")
+
+
+class StoppedWithoutReasonService:
+    def generate(self, currency, progress=None, should_stop=None):
+        raise ReportStopped()
+
+
+class BlockingService:
+    """generate() waits until should_stop() says so, then stops like a report cut short by application exit."""
+
+    def __init__(self):
+        self.started = threading.Event()
+        self.stop_seen = threading.Event()
+
+    def generate(self, currency, progress=None, should_stop=None):
+        self.started.set()
+        deadline = time.monotonic() + 5
+        while not should_stop():
+            if time.monotonic() > deadline:
+                raise AssertionError("the stop was never requested")
+            time.sleep(0.01)
+        self.stop_seen.set()
+        raise ReportStopped("stopped before Levels")
+
+
+def test_status_label_is_plain_text(qapp, tmp_path):
+    tab = ReportTab(service_factory=lambda: FakeService(tmp_path))
+    assert tab.status_label.textFormat() == Qt.TextFormat.PlainText
+
+
+def test_a_report_stopped_on_request_shows_failed_stopped_with_the_reason(qapp, tmp_path):
+    tab = ReportTab(service_factory=StoppingService)
+    tab.generate_button.click()
+    wait_for_worker(tab, qapp)
+    assert tab.status_label.text() == "Failed: stopped (stopped before Levels)"
+    assert not tab.open_button.isEnabled()
+
+
+def test_a_stop_without_a_reason_shows_failed_stopped(qapp, tmp_path):
+    tab = ReportTab(service_factory=StoppedWithoutReasonService)
+    tab.generate_button.click()
+    wait_for_worker(tab, qapp)
+    assert tab.status_label.text() == "Failed: stopped"
+
+
+def test_wait_for_worker_requests_a_stop_and_returns_when_the_worker_has_ended(qapp, tmp_path):
+    service = BlockingService()
+    tab = ReportTab(service_factory=lambda: service)
+    tab.generate_button.click()
+    assert service.started.wait(5)
+    worker = tab.worker
+    assert worker.isRunning()
+    tab._wait_for_worker()
+    assert service.stop_seen.is_set()                      # the running generate() saw the request
+    assert not worker.isRunning()
 

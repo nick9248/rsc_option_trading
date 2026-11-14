@@ -32,6 +32,7 @@ after cleanup runs -- callers (e.g. SyncWorker) decide how to report that,
 this class does not swallow it.
 """
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional, Sequence
@@ -50,6 +51,17 @@ from scripts.sync_from_vps import (
 )
 
 logger = logging.getLogger(__name__)
+
+# One sync at a time in this application: two syncs reading the same local watermark would both insert the same
+# new rows of a table without a unique key (``snapshots`` uses a plain INSERT), doubling a chain snapshot. A sync in
+# another process is stopped by the tunnel instead: its ssh cannot bind the forwarded port and exits
+# (ExitOnForwardFailure in scripts/sync_from_vps.py).
+_SYNC_LOCK = threading.Lock()
+
+
+class SyncAlreadyRunningError(RuntimeError):
+    """Another VPS sync of this application is still running."""
+
 
 # The tables the market report reads.
 REPORT_SYNC_TABLES = ("historical_trades", "snapshots", "taker_flow_hourly", "liquidation_heatmap_snapshots")
@@ -237,6 +249,7 @@ class VpsSyncService:
         vps_conn = None
         local_conn = None
 
+        self._acquire_sync_lock()
         try:
             _emit("Opening SSH tunnel to VPS...")
             tunnel = open_ssh_tunnel()
@@ -252,18 +265,28 @@ class VpsSyncService:
 
         finally:
             self._close_all(vps_conn, local_conn, tunnel)
+            _SYNC_LOCK.release()
 
     def sync_if_behind(
         self,
         table_names: Sequence[str] = REPORT_SYNC_TABLES,
         progress_callback: Optional[Callable[[str], None]] = None,
+        should_stop: Optional[Callable[[], bool]] = None,
     ) -> SyncCheckResult:
         """
         Compare the newest rows of ``table_names`` with the VPS and run the full
         incremental sync only when the VPS is ahead (or a table cannot be compared).
 
         Uses one SSH tunnel and one pair of connections for the check and the sync.
-        Raises whatever open_ssh_tunnel / psycopg2.connect raise, after cleanup.
+        A table that cannot be compared on every run (e.g. missing locally, or a column
+        type that differs between the two databases) makes every call sync; the summary
+        names it. ``should_stop`` is asked between tables; when it returns True the sync
+        stops after the current table (tables commit batch by batch, so the next sync
+        resumes cleanly).
+
+        Raises:
+            SyncAlreadyRunningError: another sync of this application is running.
+            Whatever open_ssh_tunnel / psycopg2.connect raise, after cleanup.
         """
         def _emit(message: str) -> None:
             if progress_callback is not None:
@@ -273,6 +296,7 @@ class VpsSyncService:
         vps_conn = None
         local_conn = None
 
+        self._acquire_sync_lock()
         try:
             _emit("Opening SSH tunnel to VPS...")
             tunnel = open_ssh_tunnel()
@@ -304,13 +328,21 @@ class VpsSyncService:
                 return check
 
             start = time.monotonic()
-            check.sync_result = self._sync_all_tables(vps_conn, local_conn, _emit)
+            check.sync_result = self._sync_all_tables(vps_conn, local_conn, _emit, should_stop)
             check.sync_result.duration_seconds = time.monotonic() - start
             check.sync_ran = True
             return check
 
         finally:
             self._close_all(vps_conn, local_conn, tunnel)
+            _SYNC_LOCK.release()
+
+    @staticmethod
+    def _acquire_sync_lock() -> None:
+        """Take the one-sync-at-a-time lock or raise SyncAlreadyRunningError."""
+        if not _SYNC_LOCK.acquire(blocking=False):
+            raise SyncAlreadyRunningError("another VPS sync is running in this application; "
+                                          "wait for it to finish and try again")
 
     @staticmethod
     def _describe_comparison(comparison: WatermarkComparison) -> str:
@@ -325,12 +357,22 @@ class VpsSyncService:
             f"local {comparison.local_newest} ({state})"
         )
 
-    def _sync_all_tables(self, vps_connection, local_connection, emit: Callable[[str], None]) -> VpsSyncResult:
-        """Sync every table in SYNC_TABLES, then pull the health JSON. Duration is left at 0."""
+    def _sync_all_tables(self, vps_connection, local_connection, emit: Callable[[str], None],
+                         should_stop: Optional[Callable[[], bool]] = None) -> VpsSyncResult:
+        """
+        Sync every table in SYNC_TABLES, then pull the health JSON. Duration is left at 0.
+        When ``should_stop`` returns True between two tables, the remaining tables are
+        skipped and reported as an error ("stopped before ...").
+        """
         total_rows = 0
         errors: List[str] = []
 
-        for table in SYNC_TABLES:
+        for position, table in enumerate(SYNC_TABLES):
+            if should_stop is not None and should_stop():
+                skipped = [entry["name"] for entry in SYNC_TABLES[position:]]
+                emit(f"  Stopped on request; not synced: {', '.join(skipped)}")
+                errors.append(f"stopped before {table['name']}")
+                return VpsSyncResult(success=False, total_rows=total_rows, errors=errors)
             count, msg = sync_table(vps_connection, local_connection, table)
             status = "OK " if count >= 0 else "ERR"
             emit(f"  [{status}] {table['name']}: {msg}")
@@ -345,10 +387,13 @@ class VpsSyncService:
 
     @staticmethod
     def _close_all(vps_conn, local_conn, tunnel) -> None:
-        """Close whatever was opened: connections first, then the tunnel."""
-        if vps_conn is not None:
-            vps_conn.close()
-        if local_conn is not None:
-            local_conn.close()
-        if tunnel is not None:
-            tunnel.terminate()
+        """Close whatever was opened: connections first, then the tunnel; one failing close does not skip the others."""
+        for name, closer in (("VPS connection", vps_conn.close if vps_conn is not None else None),
+                             ("local connection", local_conn.close if local_conn is not None else None),
+                             ("SSH tunnel", tunnel.terminate if tunnel is not None else None)):
+            if closer is None:
+                continue
+            try:
+                closer()
+            except Exception as error:   # keep closing the rest; the original outcome is not masked
+                logger.warning("Closing the %s failed (ignored): %s", name, error)

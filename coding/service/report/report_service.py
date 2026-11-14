@@ -24,6 +24,7 @@ from plotly.offline import get_plotlyjs
 from coding.core.analytics.report.report_page import (
     ReportHeader, ReportSection, SectionFailure, build_report_page, format_utc, sentence)
 from coding.core.database.repository import DatabaseRepository
+from coding.service.on_chain.menthorq_input_loader import MissingIndexPriceError
 from coding.service.database.vps_sync_service import REPORT_SYNC_TABLES, SyncCheckResult, VpsSyncService
 from coding.service.report.report_sections import SECTION_BUILDERS, SectionContext
 
@@ -41,9 +42,14 @@ class Synchronizer(Protocol):
     """What the report needs from the sync machinery (``VpsSyncService``; a fake in tests)."""
 
     def sync_if_behind(self, table_names: Sequence[str] = REPORT_SYNC_TABLES,
-                       progress_callback: Optional[Callable[[str], None]] = None) -> SyncCheckResult:
+                       progress_callback: Optional[Callable[[str], None]] = None,
+                       should_stop: Optional[Callable[[], bool]] = None) -> SyncCheckResult:
         """Compare the newest rows with the VPS and sync when the VPS is ahead."""
         ...
+
+
+class ReportStopped(Exception):
+    """The report was stopped on request (the application is closing); no file was written."""
 
 
 @dataclass
@@ -82,12 +88,18 @@ class ReportResult:
         return [outcome.title for outcome in self.sections if not outcome.built]
 
 
+def is_missing_data(error: Exception) -> bool:
+    """
+    True for the errors the services raise when data is missing (a plain ``LookupError``, or ``MissingIndexPriceError``).
+    ``KeyError`` and ``IndexError`` are lookup errors too, but they are programming errors, not missing data.
+    """
+    return type(error) is LookupError or isinstance(error, MissingIndexPriceError)
+
+
 def failure_for(title: str, error: Exception) -> SectionFailure:
     """A plain explanation of a failed section and how to fix it."""
     message = str(error) or type(error).__name__
-    lowered = message.lower()
-    if "snapshot" in lowered or "index price" in lowered or "no stored" in lowered or "no hourly data" in lowered \
-            or "no taker flow" in lowered or isinstance(error, LookupError):
+    if is_missing_data(error):
         return SectionFailure(sentence(message.rstrip(".")) + ".", SYNC_HINT)
     return SectionFailure(f"{title} failed with {type(error).__name__}: {message.rstrip('.')}.",
                           "This is unexpected; the log (output/log/) has the details. Check that the local database is running "
@@ -119,11 +131,12 @@ class ReportService:
         self.builders = list(builders)
         self.plotly_javascript = plotly_javascript
 
-    def check_and_sync(self, progress: Callable[[str], None]) -> SyncStep:
+    def check_and_sync(self, progress: Callable[[str], None],
+                       should_stop: Optional[Callable[[], bool]] = None) -> SyncStep:
         """Bring the local database in step with the VPS when it is behind; never raises."""
         progress("Checking whether the local database is behind the VPS...")
         try:
-            result = self.synchronizer.sync_if_behind(REPORT_SYNC_TABLES, progress)
+            result = self.synchronizer.sync_if_behind(REPORT_SYNC_TABLES, progress, should_stop)
         except Exception as error:
             logger.exception("Sync check failed")
             return SyncStep(f"Sync check failed ({type(error).__name__}: {error}); the report uses the local data as it is.",
@@ -132,7 +145,7 @@ class ReportService:
         return SyncStep(result.summary_message, result.sync_ran, failed=failed)
 
     def generate(self, currency: str, progress: Optional[Callable[[str], None]] = None,
-                 skip_sync: bool = False) -> ReportResult:
+                 skip_sync: bool = False, should_stop: Optional[Callable[[], bool]] = None) -> ReportResult:
         """
         Build and write the report.
 
@@ -140,8 +153,10 @@ class ReportService:
             currency: "BTC" or "ETH".
             progress: Called with one line per step.
             skip_sync: Do not contact the VPS (the header says the sync was skipped).
+            should_stop: Asked between sync tables and between sections; True stops the run.
 
         Raises:
+            ReportStopped: ``should_stop`` returned True.
             ValueError: for an unknown currency.
             OSError: when the file cannot be written.
         """
@@ -149,8 +164,9 @@ class ReportService:
             raise ValueError(f"currency must be one of {CURRENCIES}, not {currency!r}")
         emit = progress or (lambda message: logger.info(message))
         sync = (SyncStep("Sync skipped: the VPS was not contacted; the report uses the local data as it is.", None)
-                if skip_sync else self.check_and_sync(emit))
+                if skip_sync else self.check_and_sync(emit, should_stop))
         emit(sync.summary)
+        stop_requested = should_stop or (lambda: False)
 
         now = self.clock()
         if now.tzinfo is None:
@@ -160,6 +176,8 @@ class ReportService:
         outcomes: List[SectionOutcome] = []
         with tempfile.TemporaryDirectory(prefix="market_report_") as scratch:
             for key, title, builder in self.builders:
+                if stop_requested():
+                    raise ReportStopped(f"stopped before {title}")
                 emit(f"Building {title}...")
                 context = SectionContext(currency, now, repository, Path(scratch) / key)
                 try:

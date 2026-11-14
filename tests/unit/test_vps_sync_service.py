@@ -296,3 +296,77 @@ class TestCompareWatermarks:
         assert WatermarkComparison("t", "c", EARLIER, LATER).behind is False
         assert WatermarkComparison("t", "c", LATER, None, error="x").behind is False
         assert SyncCheckResult([], False).tables_behind == []
+
+
+# ---------------------------------------------------------------------------
+# One sync at a time (_SYNC_LOCK), stop requests, a failing close
+# ---------------------------------------------------------------------------
+from coding.service.database import vps_sync_service  # noqa: E402
+from coding.service.database.vps_sync_service import SyncAlreadyRunningError  # noqa: E402
+
+
+class TestSyncLock:
+    def test_sync_and_sync_if_behind_refuse_to_start_while_the_lock_is_held(self):
+        assert vps_sync_service._SYNC_LOCK.acquire(blocking=False)
+        try:
+            with patch(f"{MODULE}.open_ssh_tunnel") as mock_tunnel:
+                with pytest.raises(SyncAlreadyRunningError):
+                    VpsSyncService().sync()
+                with pytest.raises(SyncAlreadyRunningError):
+                    VpsSyncService().sync_if_behind()
+            mock_tunnel.assert_not_called()
+        finally:
+            vps_sync_service._SYNC_LOCK.release()
+
+    def test_lock_is_free_again_after_a_sync_whose_tunnel_failed(self):
+        with patch(f"{MODULE}.open_ssh_tunnel", side_effect=RuntimeError("tunnel failed")), pytest.raises(
+            RuntimeError, match="tunnel failed"
+        ):
+            VpsSyncService().sync()
+        assert vps_sync_service._SYNC_LOCK.acquire(blocking=False) is True
+        vps_sync_service._SYNC_LOCK.release()
+
+
+def _run_stoppable_sync(tables, should_stop):
+    """sync_if_behind with every table behind (VPS newer), all mocked; returns (result, mock of sync_table)."""
+    vps_conn, local_conn, tunnel = MagicMock(), MagicMock(), MagicMock()
+
+    def fake_watermark(cursor, entry):
+        return LATER if cursor is vps_conn.cursor.return_value else EARLIER
+
+    with patch(f"{MODULE}.open_ssh_tunnel", return_value=tunnel), patch(
+        f"{MODULE}.psycopg2.connect", side_effect=[vps_conn, local_conn]
+    ), patch(f"{MODULE}.SYNC_TABLES", tables), patch(
+        f"{MODULE}.get_columns", return_value=["captured_at"]
+    ), patch(f"{MODULE}.get_local_watermark", side_effect=fake_watermark), patch(
+        f"{MODULE}.sync_table", return_value=(1, "+1 rows")
+    ) as mock_sync_table, patch(f"{MODULE}._pull_health_json"):
+        result = VpsSyncService().sync_if_behind([table["name"] for table in tables], should_stop=should_stop)
+    return result, mock_sync_table
+
+
+class TestStopRequest:
+    def test_stop_requested_from_the_start_syncs_no_table(self):
+        tables = [_table("snapshots"), _table("historical_trades")]
+        result, mock_sync = _run_stoppable_sync(tables, should_stop=lambda: True)
+        mock_sync.assert_not_called()
+        assert result.sync_ran is True
+        assert result.sync_result.success is False
+        assert result.sync_result.errors == ["stopped before snapshots"]
+
+    def test_stop_requested_after_the_first_table_syncs_exactly_one(self):
+        answers = iter([False, True])
+        tables = [_table("snapshots"), _table("historical_trades")]
+        result, mock_sync = _run_stoppable_sync(tables, should_stop=lambda: next(answers))
+        assert mock_sync.call_count == 1
+        assert result.sync_result.success is False
+        assert result.sync_result.errors == ["stopped before historical_trades"]
+
+
+class TestCloseAll:
+    def test_a_failing_vps_close_does_not_stop_the_other_closes(self):
+        vps_conn, local_conn, tunnel = MagicMock(), MagicMock(), MagicMock()
+        vps_conn.close.side_effect = OSError("connection already gone")
+        VpsSyncService._close_all(vps_conn, local_conn, tunnel)
+        local_conn.close.assert_called_once()
+        tunnel.terminate.assert_called_once()

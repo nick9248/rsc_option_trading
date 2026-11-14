@@ -40,7 +40,7 @@ class FakeSynchronizer:
         self.sync_result = sync_result
         self.calls = 0
 
-    def sync_if_behind(self, table_names=(), progress_callback=None):
+    def sync_if_behind(self, table_names=(), progress_callback=None, should_stop=None):
         self.calls += 1
         if self.recorder is not None:
             self.recorder.events.append("sync")
@@ -209,3 +209,59 @@ def test_plotly_is_only_read_when_a_built_section_has_a_figure(tmp_path):
     service2.plotly_javascript = lambda: calls.append("again") or "/*js*/"
     service2.generate("BTC")
     assert calls == ["read"]
+
+
+# ---------------------------------------------------------------------------
+# Failure classification, stop requests
+# ---------------------------------------------------------------------------
+from coding.service.on_chain.menthorq_input_loader import MissingIndexPriceError  # noqa: E402
+from coding.service.report.report_service import ReportStopped, is_missing_data  # noqa: E402
+
+
+class TestFailureClassification:
+    @pytest.mark.parametrize("error", [KeyError("symbols"), IndexError("list index out of range")])
+    def test_key_and_index_errors_are_programming_errors_with_the_unexpected_fix(self, error):
+        assert not is_missing_data(error)
+        failure = failure_for("X", error)
+        assert failure.fix != SYNC_HINT and "unexpected" in failure.fix
+
+    @pytest.mark.parametrize("error", [LookupError("no snapshot"), MissingIndexPriceError("no index")])
+    def test_missing_data_errors_get_the_sync_hint(self, error):
+        assert is_missing_data(error)
+        assert failure_for("X", error).fix == SYNC_HINT
+
+
+class RecordingSynchronizer(FakeSynchronizer):
+    def __init__(self):
+        super().__init__()
+        self.should_stop_seen = []
+
+    def sync_if_behind(self, table_names=(), progress_callback=None, should_stop=None):
+        self.should_stop_seen.append(should_stop)
+        return super().sync_if_behind(table_names, progress_callback, should_stop)
+
+
+def test_stop_request_raises_before_any_section_is_built_and_writes_no_file(tmp_path):
+    built = []
+
+    def recording(key):
+        def build(context):
+            built.append(key)
+            return ReportSection(key=key, title=key)
+        return key, key, build
+
+    service = make_service(tmp_path, builders=[recording("a"), recording("b")])
+    with pytest.raises(ReportStopped):
+        service.generate("BTC", should_stop=lambda: True)
+    assert built == []
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_generate_passes_should_stop_to_the_synchronizer(tmp_path):
+    synchronizer = RecordingSynchronizer()
+
+    def should_stop():
+        return False
+
+    make_service(tmp_path, synchronizer=synchronizer).generate("BTC", should_stop=should_stop)
+    assert synchronizer.should_stop_seen == [should_stop]

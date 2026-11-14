@@ -19,7 +19,7 @@ from PySide6.QtWidgets import QApplication, QComboBox, QHBoxLayout, QLabel, QPus
 
 from coding.gui.components.menthorq_widgets import panel_frame, secondary_button
 from coding.gui.theme.colors import Colors
-from coding.service.report.report_service import CURRENCIES, ReportResult, ReportService
+from coding.service.report.report_service import CURRENCIES, ReportResult, ReportService, ReportStopped
 
 logger = logging.getLogger(__name__)
 
@@ -51,9 +51,16 @@ class ReportWorker(QThread):
         self.service_factory = service_factory
 
     def run(self) -> None:
-        """Emit ``progress`` per step, then ``succeeded`` with the ``ReportResult`` or ``failed`` (class: message)."""
+        """
+        Emit ``progress`` per step, then ``succeeded`` with the ``ReportResult`` or ``failed`` (class: message).
+        ``requestInterruption`` (on application exit) stops the run between sync tables and between sections.
+        """
         try:
-            self.succeeded.emit(self.service_factory().generate(self.currency, progress=self.progress.emit))
+            self.succeeded.emit(self.service_factory().generate(self.currency, progress=self.progress.emit,
+                                                                should_stop=self.isInterruptionRequested))
+        except ReportStopped as stopped:
+            logger.info("Report stopped on request: %s", stopped)
+            self.failed.emit(f"stopped ({stopped})" if str(stopped) else "stopped")
         except Exception as error:
             logger.exception("Report generation failed")
             self.failed.emit(f"{type(error).__name__}: {error}")
@@ -125,6 +132,7 @@ class ReportTab(QWidget):
         frame_layout.addLayout(controls)
 
         self.status_label = QLabel("No report generated yet.")
+        self.status_label.setTextFormat(Qt.TextFormat.PlainText)       # messages may contain "<"; never rich text
         self.status_label.setWordWrap(True)
         self.status_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         frame_layout.addWidget(self.status_label)
@@ -155,6 +163,8 @@ class ReportTab(QWidget):
             self._set_status(f"{self._progress_text()}\n{currency} report queued: it starts when this one is done.", Colors.WARNING)
             return
         self.progress_lines = []
+        if self.worker is not None:
+            self.worker.deleteLater()                                   # the finished worker of the last run
         self._set_status(f"Generating the {currency} report (sync check, then five sections; about a minute)...", Colors.WARNING)
         self.worker = ReportWorker(currency, self.service_factory, parent=self)
         self.worker.progress.connect(self._on_progress)
@@ -204,9 +214,14 @@ class ReportTab(QWidget):
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.report_path.parent)))
 
     def _wait_for_worker(self) -> None:
-        """Wait for a running worker so the thread is never destroyed while it runs."""
+        """
+        Ask a running worker to stop and wait for it, so the thread is never destroyed while it runs. It stops between
+        two sync tables or two sections; a table being copied is finished first (it commits batch by batch).
+        """
         self.pending_currency = None
         if self.worker is not None and self.worker.isRunning():
+            self.worker.requestInterruption()
+            logger.info("Waiting for the running report to stop before closing")
             self.worker.wait()
 
     def closeEvent(self, event) -> None:
