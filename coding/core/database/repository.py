@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from psycopg2.extras import Json, execute_values
 
+from coding.core.analytics.decision.decision_report import DecisionSnapshotRecord
 from coding.core.analytics.futures_flow.taker_flow import TakerFlowHour
 from coding.core.analytics.liquidation_heatmap.level_snapshot import LevelSnapshot, RecordedLiquidation
 from coding.core.analytics.option_flow.block_structure import BlockTradeLeg
@@ -1490,6 +1491,56 @@ class DatabaseRepository:
         return [LevelSnapshot(symbol=symbol, as_of_utc=row[0].astimezone(timezone.utc),
                               computed_at=row[1].astimezone(timezone.utc), reference_price=float(row[2]),
                               bin_size_usd=float(row[3]), levels=[list(level) for level in row[4]]) for row in rows]
+
+    # Decision maker snapshots (migration 036)
+
+    def save_decision_snapshot(self, currency: str, computed_at: datetime, reference_price: float,
+                               report: Dict[str, Any]) -> bool:
+        """
+        Store one decision report (``DecisionReport.to_dict()``). A report already stored for the same currency and
+        ``computed_at`` is kept unchanged (point in time: a stored report is never rewritten).
+
+        Returns:
+            True when a row was inserted.
+
+        Raises:
+            ValueError: for a naive ``computed_at`` or a report holding NaN or infinity (not valid JSON).
+        """
+        if computed_at.tzinfo is None:
+            raise ValueError("computed_at must be timezone-aware (UTC)")
+        text = json.dumps(report, allow_nan=False, sort_keys=True)     # refuses NaN / infinity before touching the table
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO decision_snapshots (currency, computed_at, reference_price, report)
+                VALUES (%s, %s, %s, %s::jsonb)
+                ON CONFLICT ON CONSTRAINT unique_decision_snapshot DO NOTHING
+                RETURNING id
+                """,
+                (currency, computed_at, reference_price, text))
+            return cursor.fetchone() is not None
+
+    def get_decision_snapshot_at_or_before(self, currency: str, instant: datetime) -> Optional[DecisionSnapshotRecord]:
+        """The newest stored report with ``computed_at <= instant``, or None."""
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                "SELECT computed_at, reference_price, report FROM decision_snapshots "
+                "WHERE currency = %s AND computed_at <= %s ORDER BY computed_at DESC LIMIT 1",
+                (currency, instant))
+            row = cursor.fetchone()
+        if row is None:
+            return None
+        return DecisionSnapshotRecord(currency, row[0].astimezone(timezone.utc), float(row[1]), row[2])
+
+    def get_decision_snapshots_between(self, currency: str, start: datetime, end: datetime) -> List[DecisionSnapshotRecord]:
+        """The stored reports with ``start <= computed_at < end``, oldest first."""
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                "SELECT computed_at, reference_price, report FROM decision_snapshots "
+                "WHERE currency = %s AND computed_at >= %s AND computed_at < %s ORDER BY computed_at",
+                (currency, start, end))
+            rows = cursor.fetchall()
+        return [DecisionSnapshotRecord(currency, row[0].astimezone(timezone.utc), float(row[1]), row[2]) for row in rows]
 
     def save_menthorq_alert_deliveries(
         self, currency: str, alert_keys: List[str], delivered_at: datetime, message: str,
