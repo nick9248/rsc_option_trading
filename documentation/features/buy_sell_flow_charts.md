@@ -1,6 +1,6 @@
 # Buy/sell flow in the on-chain analysis
 
-Rewritten 2026-11-14. The "Flow Charts" window (button "View Flow Charts" in the On-Chain Analysis tab) was removed; its replacement is the **Option Flow** tab, see `documentation/option_flow_by_strike.md`. Differences: the new tab uses contracts x strike as notional, Deribit's real block flag, every expiration that traded in the window, and the Laevitas layout.
+Rewritten 2026-11-14. The "Flow Charts" window (button "View Flow Charts" in the On-Chain Analysis tab) was removed; its replacement is the **Option flow** section of the report, see `documentation/report.md` and `documentation/option_flow_by_strike.md`. Differences: the new section uses contracts x strike as notional, Deribit's real block flag, every expiration that traded in the window, and the Laevitas layout.
 
 ## What remains
 
@@ -11,7 +11,7 @@ Rewritten 2026-11-14. The "Flow Charts" window (button "View Flow Charts" in the
 - the flow section of the report,
 - three HTML charts per expiration saved under `output/charts/flow_analysis/<expiration>/` (distribution, net flow, trend).
 
-Its definitions differ from the Option Flow tab: notional = amount x index price; "block" = a trade with notional of at least $100k (not Deribit's block flag). Replacing it would change the synthesis inputs and thresholds, so it needs a separate decision.
+Its definitions differ from the Option flow section of the report: notional = amount x index price; "block" = a trade with notional of at least $100k (not Deribit's block flag). Replacing it would change the synthesis inputs and thresholds, so it needs a separate decision.
 
 ## Tests
 
