@@ -3,7 +3,7 @@ Decision maker: the evidence of every source, the price map, scored scenarios an
 
 Usage (from repo root; sync the local database first for current data: scripts/sync_from_vps.py):
     .venv\\Scripts\\python -m scripts.decision_maker --currency BTC
-    .venv\\Scripts\\python -m scripts.decision_maker --currency ETH --save --json outputs/decision_maker/eth.json
+    .venv\\Scripts\\python -m scripts.decision_maker --currency ETH --save --json output/decision_maker/eth.json
 
 Reads the local database and logs a readable summary. ``--save`` stores the report in ``decision_snapshots`` (migration
 036; never rewritten). ``--json`` writes the full report. Places no orders; the output is decision support, not a forecast.
