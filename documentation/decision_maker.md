@@ -23,6 +23,12 @@ Run it (from repo root, after `scripts/sync_from_vps.py`):
   hedge) and conditions to watch. Nothing here places or suggests a trade size.
 - **No LLM.** Same inputs give the same JSON. An LLM may later explain a report, never produce its numbers.
 
+## In the report
+The market report has a "Decision" tab (last tab; see `documentation/report.md`). It runs `DecisionMakerService` once at
+the report's time and shows the same report the script prints: scenarios, price map, decisions, every evidence item
+grouped by input group, what would change it, and the data caveats. It only reads: it never records a snapshot
+(`scripts/decision_maker.py --save` does).
+
 ## Code
 
 | Layer | Path | Role |
