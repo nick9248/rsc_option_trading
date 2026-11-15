@@ -1,6 +1,6 @@
 """
 Generates the market report of one currency: first brings the local database in step with the VPS when it is behind, then
-builds the five sections and writes ONE self-contained HTML file to ``output/report/``.
+builds the sections and writes ONE self-contained HTML file to ``output/report/``.
 
 Sync rule (``VpsSyncService.sync_if_behind``): the newest watermark (the column the sync itself uses) of the tables the
 report reads -- historical_trades, snapshots, taker_flow_hourly, liquidation_heatmap_snapshots -- is compared between the
@@ -24,7 +24,7 @@ from coding.core.analytics.report.how_to_read import REPORT_HELP, SECTION_HELP
 from coding.core.analytics.report.report_page import (
     ReportHeader, ReportSection, SectionFailure, build_report_page, format_utc, sentence)
 from coding.core.database.repository import DatabaseRepository
-from coding.service.on_chain.menthorq_input_loader import MissingIndexPriceError
+from coding.service.on_chain.missing_data import is_missing_data
 from coding.service.database.vps_sync_service import REPORT_SYNC_TABLES, SyncCheckResult, VpsSyncService
 from coding.service.report.report_sections import SECTION_BUILDERS, SectionContext
 
@@ -86,14 +86,6 @@ class ReportResult:
     def failed_sections(self) -> List[str]:
         """Titles of the sections that could not be built."""
         return [outcome.title for outcome in self.sections if not outcome.built]
-
-
-def is_missing_data(error: Exception) -> bool:
-    """
-    True for the errors the services raise when data is missing (a plain ``LookupError``, or ``MissingIndexPriceError``).
-    ``KeyError`` and ``IndexError`` are lookup errors too, but they are programming errors, not missing data.
-    """
-    return type(error) is LookupError or isinstance(error, MissingIndexPriceError)
 
 
 def failure_for(title: str, error: Exception) -> SectionFailure:

@@ -1,6 +1,6 @@
 """
-The five sections of the market report. Each builder calls the existing service of its analysis (nothing is computed a
-second way here), turns the result into a ``ReportSection`` and is testable on its own with a fake repository or service.
+The sections of the market report (the last one, Decision, is built in ``decision_section.py``). Each builder calls the
+existing service of its analysis (nothing is computed a second way here), turns the result into a ``ReportSection`` and is testable on its own with a fake repository or service.
 
 A builder raises when its analysis cannot run at all (e.g. no option-chain snapshot); ``ReportService`` turns that into a
 section that explains what failed. Data that is merely thin (no trades in the window) is shown as such, never drawn as zero.
@@ -40,6 +40,7 @@ from coding.service.on_chain.menthorq_replication_service import MenthorqReplica
 from coding.service.option_flow.dealer_flow_levels_service import DealerFlowLevelsService
 from coding.service.option_flow.level_overview_service import LevelOverviewService
 from coding.service.option_flow.option_flow_service import OptionFlowService
+from coding.service.report.decision_section import build_decision_section
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +54,7 @@ BLOCK_TABLE_ROWS = 10                    # largest blocks listed
 BLOCK_EXPLANATION = ("A block is negotiated off the order book and often has several legs; the taker side of one leg of a "
                      "multi-leg block is not a directional view on its own.")
 OPTION_FLOW_TABLE_ROWS = 8              # rows of the open interest table in the option flow tab
-DEALER_NEAREST_EXPIRIES = 5             # nearest expiries precomputed, plus the nearest monthly one
+DEALER_NEAREST_EXPIRIES = 5             # nearest expiries precomputed, plus the nearest monthly and the largest-open-interest one
 STALE_TRADE_HOURS = 3
 TAKER_FLOW_SYMBOLS = {"BTC": "BTCUSDT", "ETH": "ETHUSDT"}
 
@@ -408,26 +409,32 @@ def build_option_flow_section(context: SectionContext, service: Optional[OptionF
 
 # ---------------------------------------------------------------- Dealer levels
 
-def dealer_expiries(expirations: List[str], nearest: int = DEALER_NEAREST_EXPIRIES) -> Tuple[List[str], Optional[str]]:
+def dealer_expiries(expirations: List[str], nearest: int = DEALER_NEAREST_EXPIRIES,
+                    largest_open_interest: Optional[str] = None) -> Tuple[List[str], Optional[str]]:
     """
-    The expiries to precompute (the ``nearest`` soonest plus the nearest monthly, soonest first) and the one to show first
-    (the nearest monthly, else the soonest; None when there is none). ``expirations`` must be sorted soonest first.
+    The expiries to precompute (the ``nearest`` soonest, the nearest monthly and ``largest_open_interest`` when it is
+    listed; no duplicates, soonest first) and the one to show first (the nearest monthly, else the soonest; None when there
+    is none). ``expirations`` must be sorted soonest first.
     """
     monthly = next((label for label in expirations
                     if (settlement := parse_expiry_settlement(label)) is not None and is_monthly_expiry(settlement)), None)
     chosen = expirations[:nearest]
-    if monthly is not None and monthly not in chosen:
-        chosen.append(monthly)
+    for extra in (monthly, largest_open_interest):
+        if extra is not None and extra in expirations and extra not in chosen:
+            chosen.append(extra)
+    chosen.sort(key=expirations.index)
     return chosen, monthly or (chosen[0] if chosen else None)
 
 
 def build_dealer_levels_section(context: SectionContext, service: Optional[DealerFlowLevelsService] = None) -> ReportSection:
-    """Flow-based next to open-interest based dealer GEX for the nearest expiries and the nearest monthly one."""
+    """Flow-based next to open-interest based dealer GEX: the nearest expiries, the nearest monthly one and the largest one."""
     service = service or DealerFlowLevelsService(context.repository, context.clock)
     expirations = service.expirations(context.currency)
     if not expirations:
         raise LookupError(f"no {context.currency} option-chain snapshot with an unexpired expiry is stored")
-    chosen, first = dealer_expiries(expirations)
+    report, _ = context.open_interest()
+    largest = next((row.expiry for row in report.rows if row.total_open_interest is not None), None) if report else None
+    chosen, first = dealer_expiries(expirations, largest_open_interest=largest)
     figures: Dict[str, Dict[str, Any]] = {}
     views: Dict[str, Dict[str, Any]] = {}
     labels: List[Tuple[str, str]] = []
@@ -448,8 +455,8 @@ def build_dealer_levels_section(context: SectionContext, service: Optional[Deale
         raise LookupError("no expiry could be computed: " + "; ".join(skipped))
     selected = first if first is not None and view_key([first]) in views else labels[0][0]
     control = SwitcherControl("expiry", "Expiry", labels, selected)
-    notes = [f"Precomputed in this file: the {DEALER_NEAREST_EXPIRIES} nearest expiries and the nearest monthly one "
-             f"({', '.join(label for label, _ in labels)}); {len(expirations)} are listed. Others: scripts/dealer_flow_levels.py.",
+    notes = [f"Precomputed in this file: the {DEALER_NEAREST_EXPIRIES} nearest expiries, the nearest monthly one and the one "
+             f"with the most open interest ({', '.join(label for label, _ in labels)}); {len(expirations)} are listed. Others: scripts/dealer_flow_levels.py.",
              "Dealer = the other side of every taker. There is no ground truth for either view."]
     notes += [f"Not computed: {text}" for text in skipped]
     return ReportSection(
@@ -535,4 +542,5 @@ SECTION_BUILDERS: List[Tuple[str, str, Callable[[SectionContext], ReportSection]
     ("option-flow", "Option flow", build_option_flow_section),
     ("dealer-levels", "Dealer levels", build_dealer_levels_section),
     ("levels", "Levels", build_levels_section),
+    ("decision", "Decision", build_decision_section),
 ]

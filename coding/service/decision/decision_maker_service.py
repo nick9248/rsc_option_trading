@@ -3,8 +3,9 @@ Builds a ``DecisionReport`` for one currency from the existing services (read-on
 
 Each source is read through the service that already computes it (``ExpiryOpenInterestService``, the MenthorQ replica,
 ``DealerFlowLevelsService``, ``OptionFlowService``, ``TakerFlowChartService``, the stored liquidation snapshots) with ONE
-fixed clock reading, so every source describes the same instant. A source that cannot be computed (``LookupError``: no
-stored data) is listed under "not computed" and the report is built without it; programming errors are not caught.
+fixed clock reading, so every source describes the same instant. A source that cannot be computed (a plain ``LookupError``
+or ``MissingIndexPriceError``: no stored data) is listed under "not computed" and the report is built without it;
+programming errors (``KeyError``, ``IndexError``, ...) are not caught.
 
 Point in time: the chain snapshot, index price, option flow window, taker ratio (only 24 h windows closed by the clock) and
 liquidation snapshot are all read at or before the clock. The spot's own time is in the context and an old spot is flagged. Two inputs are not yet bounded by it (so a replay of a past instant would see later data there):
@@ -27,6 +28,7 @@ from coding.service.futures_flow.taker_flow_chart_service import TakerFlowChartS
 from coding.service.futures_flow.taker_flow_settings import SYMBOLS
 from coding.service.on_chain.expiry_open_interest_service import ExpiryOpenInterestReport, ExpiryOpenInterestService
 from coding.service.on_chain.menthorq_input_loader import MenthorqInputLoader
+from coding.service.on_chain.missing_data import is_missing_data
 from coding.service.option_flow.dealer_flow_levels_service import DealerFlowLevelsService
 from coding.service.option_flow.level_overview_service import LIQUIDATION_SYMBOLS
 from coding.service.option_flow.option_flow_service import OptionFlowService
@@ -71,6 +73,8 @@ class DecisionMakerService:
             try:
                 items = collect()
             except LookupError as error:
+                if not is_missing_data(error):
+                    raise   # a KeyError or IndexError is a programming error, not missing data
                 not_computed.append(f"{name}: {error}")
                 continue
             logger.info("%s %s: %d evidence items", currency, name, len(items))
@@ -112,6 +116,8 @@ class DecisionMakerService:
             try:
                 levels = service.levels(currency, expiry)
             except LookupError as error:
+                if not is_missing_data(error):
+                    raise
                 not_computed.append(f"dealer GEX {expiry}: {error}")
                 continue
             items.extend(extractors.dealer_evidence(levels, rows.get(expiry), now))
@@ -133,7 +139,7 @@ class DecisionMakerService:
         symbol = f"{currency}USDT"
         if symbol not in SYMBOLS:
             raise LookupError(f"no taker flow is collected for {symbol}")
-        data = TakerFlowChartService(self.repository, symbols=(symbol,), clock=clock).figure_data(symbol)
+        data = TakerFlowChartService(self.repository, clock=clock).figure_data(symbol)
         item, reason = extractors.taker_ratio_evidence(symbol, data.rolling_points, now)
         if item is None:
             raise LookupError(reason or "not computed")

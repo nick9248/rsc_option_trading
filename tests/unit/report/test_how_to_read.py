@@ -27,7 +27,7 @@ from coding.core.analytics.report.how_to_read import (
 from coding.service.on_chain.on_chain_analysis_service import (
     _DEALER_INVENTORY_COVERAGE_GATE, _DEALER_INVENTORY_MAX_EXCLUSION_RATE, _DEALER_INVENTORY_VIOLATION_GATE)
 
-SECTION_KEYS = ("menthorq", "futures-flow", "option-flow", "dealer-levels", "levels")
+SECTION_KEYS = ("menthorq", "futures-flow", "option-flow", "dealer-levels", "levels", "decision")
 ALLOWED_CAPITAL_WORDS = {"USDT", "BTCUSDT", "ETHUSDT"}
 
 
@@ -108,6 +108,7 @@ def test_expected_topics_exist():
     assert topic_of("dealer-levels", "The plausibility check")
     assert topic_of("levels", "The liquidation estimate")
     assert topic_of("levels", "Using the levels")
+    assert len(topics_of("decision")) == 4
 
 
 # ------------------------------------------------------------------ wording rules
