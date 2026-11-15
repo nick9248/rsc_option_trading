@@ -1,20 +1,22 @@
 """The Decision tab help: every constant and worked example recomputed against the decision engine itself."""
 
+import statistics
 from datetime import timedelta
 
 import pytest
 
 from coding.core.analytics.decision import decision_config as config
-from coding.core.analytics.decision.decision_report import BREAK_DOWN, BREAK_UP, INSIDE
+from coding.core.analytics.decision.decision_report import BREAK_DOWN, BREAK_UP, INSIDE, SCENARIO_ORDER
 from coding.core.analytics.decision.evidence import EvidenceItem
 from coding.core.analytics.decision.independence import group_contribution
 from coding.core.analytics.decision.price_map import build_price_map
-from coding.core.analytics.decision.scenario_engine import _confidence, apply_freshness, build_decision_report
+from coding.core.analytics.decision.scenario_engine import (
+    _confidence, _variant, apply_freshness, build_decision_report, stances)
 from coding.core.analytics.report import how_to_read as help_module
 from coding.core.analytics.report.how_to_read import (
     SECTION_HELP, confidence_label, confidence_points, evidence_score, group_contribution_value, quality_after_age)
 from coding.service.decision import evidence_extractors as extractors
-from tests.unit.decision.evidence_builders import NOW, level
+from tests.unit.decision.evidence_builders import NOW, directional, level, magnet, regime
 from tests.unit.decision.test_evidence_extractors import dealer_levels, open_interest_row
 from tests.unit.report.test_how_to_read import case_of, topic_of
 
@@ -126,14 +128,17 @@ def test_confidence_examples_match_the_engine(name):
 
 
 def test_confidence_example_labels_in_the_text():
-    expected = {"Three groups agree": ("high", 3), "A supporting item is stale": ("medium", 3),
+    expected = {"Three groups agree": ("high", 3), "A supporting item is stale": ("medium", 2),
                 "The evidence conflicts": ("medium", 1), "Only one input group supports": ("low", 2)}
     for start, (label, points) in expected.items():
         example = case_of("decision", start).example
         assert example.endswith(f"{label}."), (start, example)
         assert f"{points:+d}" in example, (start, example)
     assert engine_label(help_module.DECISION_HIGH_EXAMPLE) == ("high", 3)
-    assert engine_label(help_module.DECISION_CAPPED_EXAMPLE) == ("medium", 3)
+    assert engine_label(help_module.DECISION_CAPPED_EXAMPLE) == ("medium", 2)
+    assert "+1, +1, 0, -1, +1 = +2" in case_of("decision", "A supporting item is stale").example
+    assert "+1, -1, +1, 0, 0 = +1" in case_of("decision", "The evidence conflicts").example
+    assert "high is still possible" in case_of("decision", "The evidence conflicts").reading
     assert engine_label(help_module.DECISION_CONFLICT_EXAMPLE) == ("medium", 1)
     assert engine_label(help_module.DECISION_ONE_GROUP_EXAMPLE) == ("low", 2)
     assert confidence_label(3, 2, 0.0, 0) == "low"          # a score of 0 is low whatever else holds

@@ -141,6 +141,32 @@ def test_a_programming_error_in_a_source_is_not_swallowed(service, monkeypatch):
         service.build_report("BTC")
 
 
+def test_a_key_error_in_a_source_is_a_programming_error_and_propagates(service, monkeypatch):
+    class Broken(FakeOptionFlowService):
+        def strike_flow(self, currency, hours, end=None):
+            raise KeyError("bug")
+    monkeypatch.setattr(module, "OptionFlowService", Broken)
+    with pytest.raises(KeyError):
+        service.build_report("BTC")
+
+
+def test_a_key_error_in_the_dealer_levels_of_one_expiry_propagates(service, monkeypatch):
+    class Broken(FakeDealerService):
+        def levels(self, currency, expiry):
+            raise IndexError("bug")
+    monkeypatch.setattr(module, "DealerFlowLevelsService", Broken)
+    with pytest.raises(IndexError):
+        service.build_report("BTC")
+
+
+def test_a_plain_lookup_error_in_a_source_is_listed_as_not_computed(service, monkeypatch):
+    class NoTrades(FakeOptionFlowService):
+        def strike_flow(self, currency, hours, end=None):
+            raise LookupError("no trades")
+    monkeypatch.setattr(module, "OptionFlowService", NoTrades)
+    assert "option flow: no trades" in service.build_report("BTC").not_computed
+
+
 def test_save_snapshot_stores_the_report_dict_under_its_key(service):
     report = service.build_report("BTC")
     assert service.save_snapshot(report) is True

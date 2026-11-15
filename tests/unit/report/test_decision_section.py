@@ -76,7 +76,7 @@ def test_header_marks_the_top_scenario_and_says_the_score_is_uncalibrated():
     html_text = fragments.decision_header_fragment(make_report())
     assert "<mark>stays above 66,000 (no mapped level above within 15%: the upside is unmapped)</mark>" in html_text
     assert "Confidence: medium" in html_text
-    assert "Evidence score 54 of 100 (uncalibrated, not a probability)" in html_text
+    assert "Evidence score 54.5 of 100 (uncalibrated, not a probability)" in html_text
     assert "uncalibrated, not a probability" in html_text
     assert html_text.count("<mark>") == 1
 
@@ -142,8 +142,8 @@ def test_decisions_are_listed_exactly_as_produced_with_the_note():
 
 def test_evidence_table_is_grouped_by_input_group_with_every_column():
     html_text = fragments.evidence_fragment(make_report())
-    for header in ("Id", "Source", "Kind", "Direction or regime", "Strength", "Quality", "Quality reasons", "As of (UTC)",
-                   "Says / does not say"):
+    for header in ("Id", "Source", "Kind", "Direction or regime", "Strength", "Quality", "Horizon (days)", "Quality reasons",
+                   "As of (UTC)", "Says / does not say"):
         assert f">{header}</th>" in html_text, header
     assert "count once" in html_text or "counts a group once" in html_text
     open_interest_row = html_text.index("deribit_open_interest: 2 items, counted once")
@@ -157,6 +157,16 @@ def test_evidence_table_is_grouped_by_input_group_with_every_column():
                  "not applicable"):
         assert text in html_text, text
     assert fragments.evidence_fragment(make_report(evidence=[])) == "<p>No evidence was computed.</p>"
+
+
+def test_tiny_values_are_never_shown_as_zero_and_the_horizon_is_shown():
+    assert fragments._small_value_text(0.004) == "<0.01" and fragments._small_value_text(0.0) == "0.00"
+    assert fragments._small_value_text(0.005) == "0.01" and fragments._small_value_text(0.5) == "0.50"
+    tiny = replace(make_report().evidence[0], strength=0.003, horizon_days=12.34)
+    none = replace(make_report().evidence[1], horizon_days=None)
+    html_text = fragments.evidence_fragment(make_report(evidence=[tiny, none]))
+    assert "<td class=\"num\">&lt;0.01</td>" in html_text and "<td class=\"num\">12.3</td>" in html_text
+    assert "<td class=\"num\">not computed</td>" in html_text
 
 
 def test_what_would_change_lists_the_triggers_and_says_when_there_are_none():
@@ -175,7 +185,7 @@ def test_caveats_and_freshness_list_not_computed_caveats_and_ages():
     assert "Option chain snapshot" in html_text and "0.7 h" in html_text         # 40 minutes
     assert "Dealer GEX 27NOV26, open interest" in html_text and "MenthorQ replica" in html_text and "2.0 h" in html_text
     clean = fragments.caveats_fragment(make_report(not_computed=[], context={"caveats": []}))
-    assert "Every source was computed." in clean and "None." in clean
+    assert "Every source was computed." in clean and "No data caveats." in clean and "None." not in clean
     assert clean.count("not computed") >= 2          # no time in the context: the spot and the chain snapshot say so, never 0 h
 
 

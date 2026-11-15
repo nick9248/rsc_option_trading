@@ -38,6 +38,11 @@ def _ids_text(identifiers: Sequence[str]) -> str:
     return ", ".join(identifiers) if identifiers else "none"
 
 
+def _small_value_text(value: float) -> str:
+    """Two decimals; a positive value that would round to 0.00 is written "<0.01" (0.00 only for an exact 0)."""
+    return "<0.01" if 0 < value < 0.005 else f"{value:.2f}"
+
+
 def _price_text(price: Optional[float]) -> str:
     return f"{price:,.0f}" if price is not None else NOT_COMPUTED
 
@@ -60,7 +65,7 @@ def decision_header_fragment(report: DecisionReport) -> str:
                 f'Confidence: {html.escape(report.confidence)}. Reason: {html.escape(reason)}.</p>')
     return (f'<p class="verdict">Best-supported scenario: <mark>{html.escape(top.title)}</mark>. '
             f'Confidence: {html.escape(top.confidence)} (an ordinal label, built from the reasons below). '
-            f'Evidence score {top.evidence_score:.0f} of 100 ({html.escape(UNCALIBRATED_WORDS)}).</p>')
+            f'Evidence score {top.evidence_score:.1f} of 100 ({html.escape(UNCALIBRATED_WORDS)}).</p>')
 
 
 # ---------------------------------------------------------------- (2) price map
@@ -74,8 +79,8 @@ def _map_row(role: str, level: Optional[MapLevel], spot: float, unmapped_text: s
         return f'<tr><th scope="row">{html.escape(role)}</th>' + _cell(unmapped_text, "wrap") + _cell("") * 5 + "</tr>"
     band = _price_text(level.low) if level.low == level.high else f"{_price_text(level.low)} to {_price_text(level.high)}"
     return (f'<tr><th scope="row">{html.escape(role)}</th>' + _cell(_price_text(level.price), "num")
-            + _cell(band, "num") + _cell(_distance_text(level.price, spot), "num") + _cell(f"{level.weight:.2f}", "num")
-            + _cell(", ".join(level.input_groups)) + _cell(", ".join(level.evidence_ids), "wrap") + "</tr>")
+            + _cell(band, "num") + _cell(_distance_text(level.price, spot), "num") + _cell(_small_value_text(level.weight), "num")
+            + _cell(", ".join(level.input_groups), "wrap") + _cell(", ".join(level.evidence_ids), "wrap") + "</tr>")
 
 
 def price_map_fragment(report: DecisionReport) -> str:
@@ -158,7 +163,8 @@ def _lean_text(item: EvidenceItem) -> str:
 def _evidence_row(item: EvidenceItem) -> str:
     return (f'<tr><th scope="row">{html.escape(item.id)}</th>' + _cell(item.source, "wrap") + _cell(item.kind.replace("_", " "))
             + _cell(_lean_text(item)) + _cell(_price_text(item.price) if item.price is not None else "not applicable", "num")
-            + _cell(f"{item.strength:.2f}", "num") + _cell(f"{item.quality:.2f}", "num")
+            + _cell(_small_value_text(item.strength), "num") + _cell(_small_value_text(item.quality), "num")
+            + _cell(f"{item.horizon_days:.1f}" if item.horizon_days is not None else NOT_COMPUTED, "num")
             + _cell("; ".join(item.quality_reasons) or "none", "wrap") + _cell(format_utc(item.as_of))
             + _cell(item.statement, "wrap") + "</tr>")
 
@@ -166,14 +172,14 @@ def _evidence_row(item: EvidenceItem) -> str:
 def evidence_fragment(report: DecisionReport) -> str:
     """
     The full evidence table, one group of rows per input group (sorted by group name) so the independence logic can be
-    checked: id, source, kind, direction or regime, price, strength, quality, quality reasons, as-of (UTC), and what the item
+    checked: id, source, kind, direction or regime, price, strength, quality, horizon, quality reasons, as-of (UTC), and what the item
     says and does not say.
     """
     if not report.evidence:
         return paragraph_fragment("No evidence was computed.")
-    headers = ["Id", "Source", "Kind", "Direction or regime", "Price", "Strength", "Quality", "Quality reasons",
-               "As of (UTC)", "Says / does not say"]
-    head = "".join(f'<th scope="col"{" class=\"num\"" if index in (4, 5, 6) else ""}>{html.escape(text)}</th>'
+    headers = ["Id", "Source", "Kind", "Direction or regime", "Price", "Strength", "Quality", "Horizon (days)",
+               "Quality reasons", "As of (UTC)", "Says / does not say"]
+    head = "".join(f'<th scope="col"{" class=\"num\"" if index in (4, 5, 6, 7) else ""}>{html.escape(text)}</th>'
                    for index, text in enumerate(headers))
     groups: Dict[str, List[EvidenceItem]] = {}
     for item in report.evidence:
@@ -242,7 +248,7 @@ def caveats_fragment(report: DecisionReport) -> str:
     parts = ["<h4>Sources not computed</h4>"
              + (_list_fragment(report.not_computed) if report.not_computed else paragraph_fragment("Every source was computed.")),
              "<h4>Data caveats</h4>"
-             + (_list_fragment([str(text) for text in caveat_list]) if caveat_list else paragraph_fragment("None.")),
+             + (_list_fragment([str(text) for text in caveat_list]) if caveat_list else paragraph_fragment("No data caveats.")),
              "<h4>Data ages</h4>"]
     rows = [[name, format_utc(instant, missing=NOT_COMPUTED), _age_text(instant, report.as_of)]
             for name, instant in data_ages(report)]

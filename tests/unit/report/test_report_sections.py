@@ -206,6 +206,24 @@ def test_dealer_expiries_of_an_empty_list():
     assert dealer_expiries([]) == ([], None)
 
 
+def test_dealer_expiries_add_the_largest_open_interest_expiry_once_and_keep_the_order_soonest_first():
+    labels = ["15NOV26", "16NOV26", "17NOV26", "18NOV26", "19NOV26", "20NOV26", "27NOV26", "25DEC26", "26MAR27"]
+    chosen, first = dealer_expiries(labels, largest_open_interest="25DEC26")
+    assert chosen == labels[:5] + ["27NOV26", "25DEC26"] and first == "27NOV26"
+    assert dealer_expiries(labels, largest_open_interest="27NOV26")[0] == labels[:5] + ["27NOV26"]      # no duplicate
+    assert dealer_expiries(labels, largest_open_interest="16NOV26")[0] == labels[:5] + ["27NOV26"]      # already among the nearest
+    assert dealer_expiries(labels, largest_open_interest="NOT-LISTED")[0] == labels[:5] + ["27NOV26"]
+
+
+def test_dealer_section_precomputes_the_expiry_with_the_most_open_interest(tmp_path, monkeypatch):
+    install_open_interest(monkeypatch)                    # the largest is 25DEC26 (100,000)
+    labels = ["15NOV26", "16NOV26", "17NOV26", "18NOV26", "19NOV26", "20NOV26", "27NOV26", "25DEC26"]
+    section = build_dealer_levels_section(make_context(tmp_path), FakeDealerService(labels))
+    assert list(section.switchers["dealer-levels"]["views"]) == labels[:5] + ["27NOV26", "25DEC26"]
+    assert section.switchers["dealer-levels"]["selected"] == {"expiry": "27NOV26"}
+    assert any("nearest monthly one and the one with the most open interest" in note for note in section.notes)
+
+
 def make_levels(expiry, gate_passed=True, flow_gamma_flip=67_100.0):
     return DealerFlowLevels(
         currency="BTC", expiry=expiry, index_price=67_000.0, chain_captured_at=NOW - timedelta(minutes=10),
