@@ -19,6 +19,7 @@ from coding.core.analytics.results.market_wide_results import MarketWideResult
 from coding.service.on_chain.on_chain_workflow_service import (
     OnChainWorkflowOutput,
     OnChainWorkflowService,
+    save_report,
 )
 
 
@@ -48,26 +49,22 @@ def _make_result(currency: str = "BTC") -> OnChainAnalysisResult:
 @pytest.fixture
 def patched_collaborators():
     """
-    Patch the three collaborators OnChainWorkflowService composes, so
-    ``run()`` can be exercised without a live API, DB, or synthesis engine.
+    Patch the collaborators OnChainWorkflowService composes, so ``run()`` can be exercised without a live API, DB
+    or file write.
     """
     fake_result = _make_result()
 
     with patch(
         "coding.service.on_chain.on_chain_workflow_service.OnChainAnalysisService"
     ) as mock_service_cls, patch(
-        "coding.service.on_chain.on_chain_workflow_service.MorningNoteService"
-    ) as mock_morning_cls, patch(
+        "coding.service.on_chain.on_chain_workflow_service.save_report", return_value=Path("/tmp/bundle")
+    ) as mock_save, patch(
         "coding.service.on_chain.on_chain_workflow_service.DeribitApiService"
     ) as mock_api_cls, patch(
         "coding.service.on_chain.on_chain_workflow_service.DatabaseRepository"
     ) as mock_repo_cls:
         mock_service = mock_service_cls.return_value
         mock_service.fetch_and_analyze.return_value = ("REPORT TEXT", fake_result)
-
-        mock_morning = mock_morning_cls.return_value
-        mock_morning.generate.return_value = "SYNTHESIS TEXT"
-        mock_morning.save_report_bundle.return_value = Path("/tmp/bundle")
 
         # DeribitApiService used as a context manager in run()
         mock_api_instance = MagicMock()
@@ -77,8 +74,7 @@ def patched_collaborators():
         yield {
             "service_cls": mock_service_cls,
             "service": mock_service,
-            "morning_cls": mock_morning_cls,
-            "morning": mock_morning,
+            "save": mock_save,
             "api_cls": mock_api_cls,
             "repo_cls": mock_repo_cls,
             "result": fake_result,
@@ -86,14 +82,14 @@ def patched_collaborators():
 
 
 class TestSingleCallContract:
-    def test_run_returns_workflow_output_with_all_four_fields(self, patched_collaborators):
+    def test_run_returns_workflow_output_with_all_three_fields(self, patched_collaborators):
         workflow = OnChainWorkflowService("BTC")
         output = workflow.run()
 
         assert isinstance(output, OnChainWorkflowOutput)
         assert output.result is patched_collaborators["result"]
         assert output.report_text == "REPORT TEXT"
-        assert output.synthesis_text == "SYNTHESIS TEXT"
+        assert not hasattr(output, "synthesis_text")
         assert output.bundle_path == Path("/tmp/bundle")
 
     def test_run_calls_fetch_and_analyze_exactly_once_with_return_result(self, patched_collaborators):
@@ -106,40 +102,11 @@ class TestSingleCallContract:
         assert kwargs["currency"] == "ETH"
         assert kwargs["return_result"] is True
 
-    def test_run_calls_generate_then_save_report_bundle_once_each(self, patched_collaborators):
+    def test_run_saves_the_report_text_once(self, patched_collaborators):
         workflow = OnChainWorkflowService("BTC")
         workflow.run()
 
-        mock_morning = patched_collaborators["morning"]
-        assert mock_morning.generate.call_count == 1
-        assert mock_morning.save_report_bundle.call_count == 1
-
-    def test_save_bundle_false_skips_save_report_bundle(self, patched_collaborators):
-        """
-        Carried finding #3 (A6 review): morning_note_checker.py's health
-        check runs the full workflow on every invocation, including
-        save_report_bundle -- an unflagged side effect (timestamped folders
-        under output/data/onchain_analysis/) and failure surface for what
-        should be a read-only synthesis check. save_bundle=False must skip
-        it entirely while still generating the synthesis.
-        """
-        workflow = OnChainWorkflowService("BTC")
-        output = workflow.run(save_bundle=False)
-
-        mock_morning = patched_collaborators["morning"]
-        assert mock_morning.generate.call_count == 1
-        assert mock_morning.save_report_bundle.call_count == 0
-        assert output.bundle_path is None
-
-    def test_save_bundle_default_true_preserves_existing_behavior(self, patched_collaborators):
-        """save_bundle defaults to True -- existing callers (GUI worker) are
-        unaffected by this parameter's addition."""
-        workflow = OnChainWorkflowService("BTC")
-        output = workflow.run()
-
-        mock_morning = patched_collaborators["morning"]
-        assert mock_morning.save_report_bundle.call_count == 1
-        assert output.bundle_path == Path("/tmp/bundle")
+        patched_collaborators["save"].assert_called_once_with("BTC", "REPORT TEXT")
 
     def test_progress_callback_forwarded_to_fetch_and_analyze(self, patched_collaborators):
         workflow = OnChainWorkflowService("BTC")
@@ -191,16 +158,18 @@ class TestErrorPropagation:
         with pytest.raises(RuntimeError, match="api down"):
             workflow.run()
 
-    def test_morning_note_generate_error_propagates(self, patched_collaborators):
-        patched_collaborators["morning"].generate.side_effect = ValueError("bad synthesis")
-        workflow = OnChainWorkflowService("BTC")
-
-        with pytest.raises(ValueError, match="bad synthesis"):
-            workflow.run()
-
-    def test_save_report_bundle_error_propagates(self, patched_collaborators):
-        patched_collaborators["morning"].save_report_bundle.side_effect = OSError("disk full")
+    def test_save_report_error_propagates(self, patched_collaborators):
+        patched_collaborators["save"].side_effect = OSError("disk full")
         workflow = OnChainWorkflowService("BTC")
 
         with pytest.raises(OSError, match="disk full"):
             workflow.run()
+
+
+class TestSaveReport:
+    def test_writes_only_report_txt_in_a_timestamped_folder(self, tmp_path):
+        folder = save_report("BTC", "REPORT TEXT", output_directory=tmp_path)
+
+        assert folder.parent == tmp_path / "BTC" / "report"
+        assert [path.name for path in folder.iterdir()] == ["report.txt"]
+        assert (folder / "report.txt").read_text(encoding="utf-8") == "REPORT TEXT"

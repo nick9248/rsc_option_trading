@@ -6,9 +6,11 @@ Pure presentation on a copy of the figure: only colours, fonts and the backgroun
 stays exactly what the figure builder produced.
 """
 
+import json
 from typing import Any, Dict, Optional
 
 import plotly.graph_objects as go
+import plotly.io as plotly_io
 
 PAPER = "#FFFFFF"
 INK = "#101114"
@@ -81,3 +83,12 @@ def apply_paper_style(figure: go.Figure) -> go.Figure:
     styled.update_xaxes(gridcolor=RULE, zerolinecolor=INK, linecolor=GRAY, tickfont=dict(family=NUMERAL_FONT, color=INK))
     styled.update_yaxes(gridcolor=RULE, linecolor=GRAY, tickfont=dict(family=NUMERAL_FONT, color=INK))
     return styled
+
+
+def figure_json(figure: go.Figure) -> Dict[str, Any]:
+    """A figure in paper style as plain JSON data (``data`` and ``layout``), without Plotly's default template."""
+    data = json.loads(plotly_io.to_json(apply_paper_style(figure), validate=False))
+    layout = data.get("layout", {})
+    layout.pop("template", None)
+    layout.pop("title", None)          # the report shows the scope above the chart already
+    return {"data": data.get("data", []), "layout": data.get("layout", {})}

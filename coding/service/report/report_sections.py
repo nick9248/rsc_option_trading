@@ -26,7 +26,7 @@ from coding.core.analytics.menthorq_replication_calculator import (
 from coding.core.analytics.open_interest.expiry_open_interest import ExpiryOpenInterest
 from coding.core.analytics.option_flow.level_overview_page import build_level_overview_page
 from coding.core.analytics.option_flow.block_structure import bar_expiry_shares
-from coding.core.analytics.report.figure_style import apply_paper_style
+from coding.core.analytics.report.figure_style import apply_paper_style, figure_json   # figure_json: kept importable from here
 from coding.core.analytics.report.report_page import (
     ReportSection, SwitcherControl, embeddable_page, format_utc, page_frame_fragment, paragraph_fragment,
     switcher_configuration, switcher_fragment, view_key)
@@ -131,15 +131,6 @@ def choice_label(label: str, rows: Dict[str, ExpiryOpenInterest], now: datetime)
         return expiry_choice_label(rows[label])
     settlement = parse_expiry_settlement(label)
     return f"{label}, expired" if settlement is not None and settlement <= now else label
-
-
-def figure_json(figure: go.Figure) -> Dict[str, Any]:
-    """A figure in paper style as plain JSON data (``data`` and ``layout``), without Plotly's default template."""
-    data = json.loads(plotly_io.to_json(apply_paper_style(figure), validate=False))
-    layout = data.get("layout", {})
-    layout.pop("template", None)
-    layout.pop("title", None)          # the report shows the scope above the chart already
-    return {"data": data.get("data", []), "layout": data.get("layout", {})}
 
 
 # ---------------------------------------------------------------- MenthorQ
