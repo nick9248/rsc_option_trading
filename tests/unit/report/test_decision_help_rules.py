@@ -12,7 +12,7 @@ from coding.core.analytics.decision.scenario_engine import _confidence, _variant
 from coding.core.analytics.report import how_to_read as help_module
 from coding.core.analytics.report.how_to_read import evidence_score
 from coding.service.decision import evidence_extractors as extractors
-from tests.unit.decision.evidence_builders import NOW, directional, level, magnet, regime
+from tests.unit.decision.evidence_builders import NOW, directional, level, regime
 from tests.unit.report.test_decision_help import example_items
 from tests.unit.report.test_how_to_read import all_text, case_of, topic_of
 
@@ -92,18 +92,8 @@ def test_how_an_item_counts_matches_stances():
     expansion = regime("x", OPEN_INTEREST, "expansion")
     assert stances(expansion, KEYS, two_sided) == {INSIDE: -1.0, BREAK_UP: 0.5, BREAK_DOWN: 0.5}
     assert stances(expansion, [INSIDE, BREAK_DOWN], one_sided) == {INSIDE: -0.5, BREAK_DOWN: 0.5}
-    # a pool between the bounds, or toward the unmapped side, supports inside at half strength
-    between = stances(magnet("m", BINANCE, 69_000.0, strength=1.0), KEYS, two_sided)
-    assert between[INSIDE] == pytest.approx(0.5 * (1 - 1_000.0 / (0.10 * SPOT))) and between[BREAK_UP] == 0.0
-    toward_unmapped = stances(magnet("u", BINANCE, 74_000.0, strength=1.0), [INSIDE, BREAK_DOWN], one_sided)
-    assert toward_unmapped[INSIDE] == pytest.approx(0.5 * (1 - 4_000.0 / (0.10 * SPOT)))
-    beyond = stances(magnet("a", BINANCE, 76_000.0, strength=1.0), KEYS, two_sided)
-    assert beyond[BREAK_UP] == pytest.approx(1 - 6_000.0 / (0.10 * SPOT)) and beyond[INSIDE] == 0.0
-    far = stances(magnet("f", BINANCE, 77_000.0, strength=1.0), KEYS, two_sided)          # at 10 % or further: 0
-    assert all(value == 0.0 for value in far.values())
-    assert config.MAGNET_REACH_SHARE == 0.10
     text = term_of("Scenarios, evidence score", "How an item counts")
-    for expected in ("at half strength", "unless it points toward the unmapped side", "10 % of the spot", "0 at 10 % or further"):
+    for expected in ("at half strength", "unless it points toward the unmapped side"):
         assert expected in text, expected
 
 
@@ -133,12 +123,12 @@ def test_tied_scores_are_ordered_and_a_tied_top_has_margin_zero():
     assert "margin of 0" in case_of("decision", "Two scenarios have the same score").reading
 
 
-def test_what_would_change_reverses_directional_and_removes_balanced_items_levels_and_magnets():
+def test_what_would_change_reverses_directional_and_removes_balanced_items_and_levels():
     assert _variant(directional("d", BINANCE, "bullish"))[0].direction == "bearish"
     assert _variant(regime("r", OPEN_INTEREST, "range_bound"))[0].regime == "expansion"
     assert _variant(directional("n", BINANCE, "neutral"))[0] is None
-    assert _variant(level("l", OPEN_INTEREST, 66_000.0))[0] is None and _variant(magnet("m", BINANCE, 69_000.0))[0] is None
-    assert "reversed (bullish or bearish items, range hints) or removed (balanced items, levels, magnets)" in term_of(
+    assert _variant(level("l", OPEN_INTEREST, 66_000.0))[0] is None
+    assert "reversed (bullish or bearish items, range hints) or removed (balanced items, levels)" in term_of(
         "Decisions, what would change", "What would change this")
 
 

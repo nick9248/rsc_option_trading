@@ -14,7 +14,7 @@ Steps:
    normalised across scenarios, not a probability.
 5. Confidence label per scenario from: agreeing distinct input groups, conflict share, mean quality of the supporting items,
    staleness of the supporting items, and the margin to the next scenario.
-6. "What would change this": every item is flipped (directional, regime) or removed (levels, magnets) one at a time and
+6. "What would change this": every item is flipped (directional, regime) or removed (levels) one at a time and
    the whole report is recomputed; the items that change the top scenario are listed.
 7. Decision-support lines (reference range, reference level for a hedge, what to watch, caveats). Never orders or targets.
 
@@ -24,8 +24,6 @@ Stance rules (before strength):
 * directional bullish: break up +, break down -, inside -DIRECTIONAL_OPPOSES_INSIDE (bearish mirrored);
   neutral: inside +BALANCED_SUPPORTS_INSIDE.
 * range_regime range_bound: inside +, each break -RANGE_BOUND_OPPOSES_BREAK; expansion: inside -, each break +half.
-* magnet beyond the resistance: break up +; beyond the support: break down +; between: inside +half. Times proximity
-  (1 - distance / reach, not below 0), so the nearer and (through strength) larger pool weighs more.
 """
 
 from dataclasses import replace
@@ -37,7 +35,7 @@ from coding.core.analytics.decision.decision_report import (
     BREAK_DOWN, BREAK_UP, HIGH, INSIDE, LOW, MEDIUM, SCENARIO_ORDER, ChangeTrigger, DecisionItem, DecisionReport,
     ScenarioAssessment)
 from coding.core.analytics.decision.evidence import (
-    BEARISH, BULLISH, DIRECTIONAL, EXPANSION, MAGNET, NEUTRAL, PRICE_LEVEL, RANGE_BOUND, RANGE_REGIME, EvidenceItem,
+    BEARISH, BULLISH, DIRECTIONAL, EXPANSION, NEUTRAL, PRICE_LEVEL, RANGE_BOUND, RANGE_REGIME, EvidenceItem,
     sorted_evidence)
 from coding.core.analytics.decision.independence import contributions_by_group
 from coding.core.analytics.decision.price_map import PriceMap, build_price_map
@@ -93,7 +91,7 @@ def _scenario_keys(price_map: PriceMap) -> List[str]:
 
 
 def stances(item: EvidenceItem, keys: Sequence[str], price_map: PriceMap) -> Dict[str, float]:
-    """The signed value (stance x strength, x proximity for magnets) of one item for each scenario of ``keys`` (0 when silent)."""
+    """The signed value (stance x strength) of one item for each scenario of ``keys`` (0 when silent)."""
     values = {key: 0.0 for key in keys}
 
     def add(key: str, amount: float) -> None:
@@ -131,16 +129,6 @@ def stances(item: EvidenceItem, keys: Sequence[str], price_map: PriceMap) -> Dic
                           else config.ONE_SIDED_EXPANSION_OPPOSES_INSIDE) * strength)
             add(BREAK_UP, config.EXPANSION_SUPPORTS_BREAK * strength)
             add(BREAK_DOWN, config.EXPANSION_SUPPORTS_BREAK * strength)
-    elif item.kind == MAGNET and item.price is not None:
-        reach = config.MAGNET_REACH_SHARE * price_map.spot
-        proximity = max(0.0, 1.0 - abs(item.price - price_map.spot) / reach)
-        amount = strength * proximity
-        if price_map.resistance is not None and item.price > price_map.resistance.high:
-            add(BREAK_UP, config.MAGNET_SUPPORTS_BREAK * amount)
-        elif price_map.support is not None and item.price < price_map.support.low:
-            add(BREAK_DOWN, config.MAGNET_SUPPORTS_BREAK * amount)
-        else:
-            add(INSIDE, config.MAGNET_SUPPORTS_INSIDE * amount)
     return values
 
 

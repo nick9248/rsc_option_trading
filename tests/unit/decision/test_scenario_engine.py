@@ -12,7 +12,7 @@ import pytest
 from coding.core.analytics.decision.decision_report import BREAK_DOWN, BREAK_UP, INSIDE, DecisionReport
 from coding.core.analytics.decision.evidence import EvidenceItem
 from coding.core.analytics.decision.scenario_engine import apply_freshness, build_decision_report
-from tests.unit.decision.evidence_builders import NOW, SPOT, directional, level, magnet, regime
+from tests.unit.decision.evidence_builders import NOW, SPOT, directional, level, regime
 
 
 def report_of(items, not_computed=()):
@@ -104,18 +104,12 @@ def test_no_level_at_all_gives_no_scenario_and_low_confidence():
     assert "Not computed: dealer GEX: no chain." in [item.text for item in report.decisions]
 
 
-def test_regime_and_magnets_follow_their_rules():
-    items = [level("support", "g1", 95_000), level("resistance", "g2", 105_000), regime("damped", "g3", "range_bound"),
-             magnet("pool_above", "g4", 106_000), magnet("pool_inside", "g5", 102_000)]
+def test_range_bound_regime_follows_its_rules():
+    items = [level("support", "g1", 95_000), level("resistance", "g2", 105_000), regime("damped", "g3", "range_bound")]
     report = report_of(items)
     # range_bound: inside +1 x 0.5 = 0.5; each break -0.5 x 1 x 0.5 = -0.25
     assert report.scenario(INSIDE).group_contributions["g3"] == pytest.approx(0.5)
     assert report.scenario(BREAK_UP).group_contributions["g3"] == pytest.approx(-0.25)
-    # pool above the resistance: proximity 1 - 6,000 / 10,000 = 0.4 -> break up +0.4 x 0.5 = 0.2
-    assert report.scenario(BREAK_UP).group_contributions["g4"] == pytest.approx(0.2)
-    # pool inside the range: proximity 1 - 2,000 / 10,000 = 0.8, half -> inside +0.4 x 0.5 = 0.2
-    assert report.scenario(INSIDE).group_contributions["g5"] == pytest.approx(0.2)
-    assert "g4" not in report.scenario(BREAK_DOWN).group_contributions
 
 
 def test_expansion_regime_opposes_inside_and_supports_both_breaks():
@@ -182,7 +176,7 @@ def test_what_would_change_lists_the_items_whose_flip_or_removal_changes_the_top
 
 
 def test_same_input_gives_identical_json_whatever_the_order():
-    items = three_group_range() + [magnet("pool", "g4", 103_000), regime("wild", "g5", "expansion")]
+    items = three_group_range() + [regime("wild", "g5", "expansion")]
     first = json.dumps(report_of(items).to_dict(), sort_keys=True)
     shuffled = list(items)
     random.Random(7).shuffle(shuffled)
@@ -191,7 +185,7 @@ def test_same_input_gives_identical_json_whatever_the_order():
 
 
 def test_the_report_survives_a_json_round_trip():
-    items = three_group_range() + [directional("lean", "g4", "bearish", horizon_days=2.5), magnet("pool", "g5", 97_000),
+    items = three_group_range() + [directional("lean", "g4", "bearish", horizon_days=2.5),
                                    level("stale", "deribit_trades", 104_800, age_hours=4)]
     report = report_of(items, not_computed=["futures taker ratio: none"])
     text = json.dumps(report.to_dict(), allow_nan=False)

@@ -16,7 +16,7 @@ from coding.core.analytics.report import how_to_read as help_module
 from coding.core.analytics.report.how_to_read import (
     SECTION_HELP, confidence_label, confidence_points, evidence_score, group_contribution_value, quality_after_age)
 from coding.service.decision import evidence_extractors as extractors
-from tests.unit.decision.evidence_builders import NOW, directional, level, magnet, regime
+from tests.unit.decision.evidence_builders import NOW, directional, level, regime
 from tests.unit.decision.test_evidence_extractors import dealer_levels, open_interest_row
 from tests.unit.report.test_how_to_read import case_of, topic_of
 

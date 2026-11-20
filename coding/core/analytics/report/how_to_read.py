@@ -402,7 +402,6 @@ LEVELS_ZOOM_SHARE = 0.05
 STRATEGY_LONG_STRIKE = 70_000.0
 STRATEGY_SHORT_STRIKE = 75_000.0
 
-
 # Decision tab (spot: EXAMPLE_SPOT)
 DECISION_ITEM_QUALITY = 0.6
 DECISION_ITEM_VALUE = 0.8
@@ -1589,8 +1588,6 @@ _DECISION_HELP = SectionHelp(
                                               "and the futures taker ratio."),
                 HelpTerm("Kind: range_regime", "Moves are damped (range-bound) or amplified (expansion). It has no direction. "
                                                "It comes from the sign of the total dealer GEX, a weak, assumption-based hint."),
-                HelpTerm("Kind: magnet", "A pool of orders at a price. It has no direction of its own. No current source produces "
-                                         "one."),
                 HelpTerm("Input group", "The underlying data an item is derived from: deribit_open_interest, deribit_trades or "
                                         "binance_perpetual_candles. Items of one group are derived from the same data and are "
                                         "not independent, so the engine counts each group once."),
@@ -1747,11 +1744,7 @@ _DECISION_HELP = SectionHelp(
                                                "unless it points toward the unmapped side. Balanced evidence supports 'inside'. "
                                                "A range-bound hint supports 'inside' and opposes each break at half strength. An "
                                                "expansion hint supports each break at half strength; it opposes 'inside' fully "
-                                               "when both sides are mapped and at half strength on a one-sided map. A "
-                                               "pool beyond a bound supports the break toward it. A pool between the "
-                                               "bounds, or toward the unmapped side, supports 'inside' at half strength. The "
-                                               "nearer a pool, the more it weighs: proximity = 1 - distance / (10 % of the "
-                                               "spot), and 0 at 10 % or further."),
+                                               "when both sides are mapped and at half strength on a one-sided map. A"),
                 HelpTerm("Evidence score", "0 to 100. Within each input group the supporting and opposing items net into one "
                                            "contribution (at most plus or minus 1). Support is the sum of the positive group "
                                            "contributions, opposition the sum of the negative ones. Net = support minus "
@@ -1837,7 +1830,7 @@ _DECISION_HELP = SectionHelp(
                 HelpTerm("Decision line", "A reference range for a strategy, a reference level for a hedge, a condition to "
                                           "watch, or a caveat. It is not an order and not a price target."),
                 HelpTerm("What would change this", "Each item is reversed (bullish or bearish items, range hints) or removed "
-                                                   "(balanced items, levels, magnets) alone and the whole report is recomputed. The items that change the top "
+                                                   "(balanced items, levels) alone and the whole report is recomputed. The items that change the top "
                                                    "scenario are listed with what would then lead."),
                 HelpTerm("Sources not computed", "Sources that could not be computed, with the reason. They are left out of the "
                                                  "scores."),
