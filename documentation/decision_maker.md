@@ -59,7 +59,6 @@ Kinds:
   follows only from its side of the spot (a put wall above the spot is a level above the spot).
 - **directional**: a lean up or down, or "neutral" (balanced flow).
 - **range_regime**: moves damped (`range_bound`) or amplified (`expansion`); no direction.
-- **magnet**: a pool of forced orders at a price (liquidations); no direction of its own.
 
 ### Input groups (independence)
 
@@ -69,7 +68,7 @@ Items of one input group are derived from the same data and are NOT independent;
 |---|---|
 | `deribit_open_interest` | MenthorQ replica levels (call resistance, put support, HVL); open-interest dealer walls, gamma flip and total-GEX sign |
 | `deribit_trades` | flow-based dealer walls, flip and total-GEX sign; option-flow strikes; net taker flow (screen, single-leg blocks, multi-leg blocks) |
-| `binance_perpetual_candles` | futures taker ratio; liquidation estimate (both computed from the Binance perpetual candles) |
+| `binance_perpetual_candles` | futures taker ratio (computed from the Binance perpetual candles) |
 
 So today there are at most three distinct groups. "high" confidence needs all three on one side. Distinct is not
 independent: open interest is the accumulated result of the trades, and all three react to the same price moves.
@@ -85,7 +84,6 @@ independent: open interest is the accumulated result of the trades, and all thre
 | Net option flow, screen and single-leg blocks | directional | 0.5 | intent (open/close/hedge) unknown; measured in contracts |
 | Net option flow, multi-leg blocks | directional | 0.075 | x0.15: one leg of a structure is not a view |
 | Futures taker ratio (rolling 24 h vs own 30-day mean +- 1 sd) | directional | 0.4 | weak, mean-reverting, horizon 3 days |
-| Liquidation estimate (newest snapshot, 2 pools per side) | magnet | 0.25 | research model in its forward test |
 
 The open interest per expiry (`ExpiryOpenInterestService`) picks the dealer expiries, sets their horizon (days left)
 and scales their strength; it is also listed in the report's `context`.
@@ -117,8 +115,6 @@ Each item gets a signed stance per scenario (times its strength):
 - bullish: break up +1, break down -1, inside -0.5 (bearish mirrored); neutral: inside +1; on a one-sided map a lean
   toward the unmapped side does not oppose inside ("stays above support" is open upward);
 - range_bound: inside +1, each break -0.5; expansion: inside -1 (-0.5 on a one-sided map), each break +0.5;
-- magnet beyond a boundary: that break +1; between the boundaries: inside +0.5; times proximity
-  (1 - distance / 10 % of the spot).
 
 Per input group the contribution = weight x quality-weighted mean value x quality-weighted mean quality, capped at +-1.
 Net = support - opposition; score = 100 x net / (net + 1). Ties are broken in the fixed order inside, break up, break down.
@@ -136,7 +132,7 @@ One point (+1, 0 or -1) per criterion, each with its reason in the report:
 Label: low when at most one group agrees, the points are <= -1 or the score is 0; high when at least three groups agree
 and the points are >= 2 and no supporting item is stale; otherwise medium.
 
-"What would change this": each item is flipped (directional, regime) or removed (levels, magnets) alone and the whole
+"What would change this": each item is flipped (directional, regime) or removed (levels) alone and the whole
 report recomputed; the items that change the top scenario are listed.
 
 ## Recording and calibration (later)
@@ -156,7 +152,6 @@ The table is local only (not synced, no VPS job). Applying 036 on the VPS is a s
   directional evidence is strong.
 - `MINIMUM_LEVEL_WEIGHT` 0.3: on 14 Nov a 65,000 BTC band weighed 0.29 and was not mapped.
 - The taker ratio is read as aggressor pressure in its own direction (above band = bullish), not as a contrarian signal.
-- The liquidation estimate and the taker ratio share one group (both from Binance perpetual candles).
 - The group aggregation is the agreed quality-weighted mean. Consequence (found in review): a weak item that AGREES with a
   stronger one of the same group lowers the group's contribution, and can drop a band below the 0.3 threshold (HVL
   strength 0.5 at quality 0.7 = 0.35, plus a strength-0.05 flip at quality 0.6 in the same band = 0.19). A max or

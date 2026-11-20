@@ -1,17 +1,15 @@
 """
 Extractors: turn the outputs of the existing services into ``EvidenceItem`` values. Nothing is recomputed a second way:
 each function takes what a service already produced (``DealerFlowLevels``, a ``StrikeFlow``, block legs, the rolling taker
-ratio, a liquidation snapshot, the MenthorQ replica levels) and only translates it, adding the quality discounts that
-the source itself reports (a failed plausibility check, a multi-leg block, a model under test).
+ratio, the MenthorQ replica levels) and only translates it, adding the quality discounts that
+the source itself reports (a failed plausibility check, a multi-leg block).
 
 Input groups (items of one group are NOT independent):
 * ``deribit_open_interest``: MenthorQ replica levels and open-interest dealer walls and their total GEX sign (all from
   the open interest of the Deribit chain snapshot);
 * ``deribit_trades``: flow-based dealer walls and total GEX, option flow strikes and net taker flow (all from the stored
   Deribit trades);
-* ``binance_perpetual_candles``: the futures taker ratio (taker volume of the Binance perpetual klines) and the
-  liquidation estimate (a model run on the Binance perpetual candles); grouped together because both come from the same
-  candles.
+* ``binance_perpetual_candles``: the futures taker ratio (taker volume of the Binance perpetual klines).
 
 Every function returns items only for what was computed; a missing input gives no item, never a made-up one.
 """
@@ -23,14 +21,13 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 from coding.core.analytics.decision import decision_config as config
 from coding.core.analytics.decision.evidence import (
-    BEARISH, BULLISH, DIRECTIONAL, EXPANSION, MAGNET, NEUTRAL, PRICE_LEVEL, RANGE_BOUND, RANGE_REGIME, EvidenceItem)
-from coding.core.analytics.liquidation_heatmap.level_snapshot import LevelSnapshot
+    BEARISH, BULLISH, DIRECTIONAL, EXPANSION, NEUTRAL, PRICE_LEVEL, RANGE_BOUND, RANGE_REGIME, EvidenceItem)
 from coding.core.analytics.menthorq_replication_calculator import is_monthly_expiry, parse_expiry_settlement
 from coding.core.analytics.open_interest.expiry_open_interest import ExpiryOpenInterest
 from coding.core.analytics.option_flow.block_structure import BlockTradeLeg, describe_blocks
 from coding.core.analytics.option_flow.dealer_levels import DealerFlowLevels
 from coding.core.analytics.option_flow.strike_flow import StrikeFlow, series_key
-from coding.service.option_flow.level_overview_service import strongest_separated, top_strikes
+from coding.service.option_flow.level_overview_service import top_strikes
 
 OPEN_INTEREST_GROUP = "deribit_open_interest"
 TRADES_GROUP = "deribit_trades"
@@ -39,7 +36,6 @@ BINANCE_CANDLES_GROUP = "binance_perpetual_candles"
 MENTHORQ_SOURCE = "MenthorQ replica (monthly expiries)"
 OPTION_FLOW_SOURCE = "Option flow (Deribit taker trades)"
 TAKER_RATIO_SOURCE = "Futures taker ratio (Binance perpetual)"
-LIQUIDATION_SOURCE = "Liquidation estimate (Binance, research model)"
 OPEN_INTEREST_ASSUMPTION = "assumption-based: dealers assumed long every call and short every put of the open interest"
 FLOW_ASSUMPTION = "assumption-based: every taker assumed a customer and every maker a dealer"
 
@@ -300,35 +296,6 @@ def taker_ratio_evidence(symbol: str, rolling_points: Sequence[Tuple[datetime, f
         details={"symbol": symbol, "ratio": latest, "mean": mean, "standard_deviation": deviation, "z": z,
                  "points": len(points)})
     return item, None
-
-
-def liquidation_evidence(snapshot: LevelSnapshot, per_side: int = config.LIQUIDATION_LEVELS_PER_SIDE) -> List[EvidenceItem]:
-    """
-    The strongest estimated long pools below and short pools above the snapshot's reference price
-    (``strongest_separated``, 1 % apart, as on the Levels page) as magnets. Strength = pool / largest chosen pool, so the
-    larger pool weighs more; no direction of its own. Low quality: the model is in its forward test.
-    """
-    gap = 0.01 * snapshot.reference_price
-    below = [row for row in snapshot.levels if row[0] < snapshot.reference_price]
-    above = [row for row in snapshot.levels if row[0] > snapshot.reference_price]
-    chosen = ([("long", price, usd) for price, usd in strongest_separated(below, 1, gap, per_side)]
-              + [("short", price, usd) for price, usd in strongest_separated(above, 2, gap, per_side)])
-    largest = max((usd for _, _, usd in chosen), default=0.0)
-    if largest <= 0:
-        return []
-    items = []
-    for side, price, usd in chosen:
-        forced = "forced selling if longs are liquidated" if side == "long" else "forced buying if shorts are liquidated"
-        items.append(EvidenceItem(
-            id=f"liquidation.{side}.{price:g}", source=LIQUIDATION_SOURCE, input_group=BINANCE_CANDLES_GROUP, kind=MAGNET,
-            statement=(f"The model estimates about {usd / 1e6:,.0f}M USD of {side} liquidations near {price:,.0f} "
-                       f"({forced}). An estimate, not observed positions; it does not say the price will go there."),
-            as_of=snapshot.as_of_utc.astimezone(timezone.utc), strength=usd / largest,
-            quality=config.LIQUIDATION_MAGNET_QUALITY, price=price,
-            quality_reasons=("research model under forward test, no measured hit rate yet",),
-            details={"side": side, "usd": usd, "snapshot_reference_price": snapshot.reference_price,
-                     "computed_at": snapshot.computed_at.isoformat()}))
-    return items
 
 
 def open_interest_context(rows: Sequence[ExpiryOpenInterest], limit: int = 6) -> List[Dict]:

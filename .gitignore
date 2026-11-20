@@ -93,7 +93,6 @@ report_*.txt
 # Only the hand-transcribed MenthorQ reference numbers are tracked.
 output/menthorq_replicate/*
 !output/menthorq_replicate/menthorq_reference_*.json
-output/liquidation_heatmap/
 output/option_flow/
 output/dealer_flow_levels/
 output/levels_overview/

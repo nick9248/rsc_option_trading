@@ -1,4 +1,4 @@
-"""Level overview: confluence bands, merged labels, the strikes chosen from the flow and the liquidation levels."""
+"""Level overview: confluence bands, merged labels, the strikes chosen from the flow."""
 
 from datetime import datetime, timedelta, timezone
 
@@ -7,9 +7,8 @@ import pytest
 from coding.core.analytics.option_flow.level_overview import (
     LevelMark, build_level_overview_figure, find_confluences, merged_labels)
 from coding.core.analytics.option_flow.strike_flow import OptionTrade, aggregate_by_strike
-from coding.core.analytics.liquidation_heatmap.level_snapshot import LevelSnapshot
 from coding.service.option_flow.level_overview_service import (
-    LevelOverviewService, strongest_separated, top_strikes)
+    LevelOverviewService, top_strikes)
 
 NOW = datetime(2026, 11, 13, 21, 25, tzinfo=timezone.utc)
 
@@ -64,18 +63,9 @@ def test_top_strikes_sum_screen_and_blocked_notional_of_one_type_and_side():
     assert top_strikes(flow, "P", "sell", 3) == []
 
 
-def test_strongest_separated_skips_neighbours_of_a_stronger_level():
-    rows = [[68_000.0, 10.0, 0.0], [68_050.0, 9.0, 0.0], [66_000.0, 5.0, 0.0], [64_000.0, 0.0, 0.0]]
-    assert strongest_separated(rows, 1, 680.0, 3) == [(68_000.0, 10.0), (66_000.0, 5.0)]     # 68,050 is too close; 0 is no level
-
-
 class FakeRepository:
-    def __init__(self, snapshots, flow_trades, newest=NOW - timedelta(hours=1)):
-        self.snapshots, self.flow_trades, self.newest = snapshots, flow_trades, newest
-
-    def get_liquidation_heatmap_snapshots_between(self, symbol, start, end):
-        self.symbol = symbol
-        return self.snapshots
+    def __init__(self, flow_trades, newest=NOW - timedelta(hours=1)):
+        self.flow_trades, self.newest = flow_trades, newest
 
     def get_option_trades_between(self, currency, start_ts, end_ts, expiration=None):
         return self.flow_trades
@@ -87,26 +77,12 @@ class FakeRepository:
         return None
 
 
-def test_liquidation_levels_come_from_the_newest_snapshot_below_and_above_the_reference():
-    snapshot = LevelSnapshot("BTCUSDT", NOW, NOW, 68_000.0, 50.0, [[67_000.0, 8e6, 0.0], [66_000.0, 2e6, 0.0], [70_000.0, 0.0, 6e6]])
-    service = LevelOverviewService(FakeRepository([snapshot], []), clock=lambda: NOW)
-    marks, notes = [], []
-    service._add_liquidation_levels("BTC", NOW, marks, notes)
-    assert [(m.kind, m.price, m.name) for m in marks] == [
-        ("long_liquidation", 67_000.0, "longs 8M USD"), ("long_liquidation", 66_000.0, "longs 2M USD"),
-        ("short_liquidation", 70_000.0, "shorts 6M USD")]
-    empty = LevelOverviewService(FakeRepository([], []), clock=lambda: NOW)
-    marks, notes = [], []
-    empty._add_liquidation_levels("BTC", NOW, marks, notes)
-    assert marks == [] and "no snapshot" in notes[0]
-
-
 def test_flow_levels_are_skipped_with_a_note_when_there_are_no_trades():
-    service = LevelOverviewService(FakeRepository([], []), clock=lambda: NOW)
+    service = LevelOverviewService(FakeRepository([]), clock=lambda: NOW)
     marks, notes = [], []
     service._add_flow_levels("BTC", 24, 2, marks, notes)
     assert marks == [] and "no trades" in notes[0]
     trades = [OptionTrade("27NOV26", 70_000.0, "C", "sell", 2.0, False)]
-    service = LevelOverviewService(FakeRepository([], trades), clock=lambda: NOW)
+    service = LevelOverviewService(FakeRepository(trades), clock=lambda: NOW)
     service._add_flow_levels("BTC", 24, 2, marks, notes)
     assert [(m.kind, m.price) for m in marks] == [("sell", 70_000.0)] and marks[0].name.startswith("calls sold")

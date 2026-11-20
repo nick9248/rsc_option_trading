@@ -142,18 +142,6 @@ move toward the unmapped side does not contradict it, a move through the mapped 
 EXPANSION_SUPPORTS_BREAK = 0.5
 """An expansion regime hint supports each break only half: it has no direction, so it splits between both sides."""
 
-MAGNET_SUPPORTS_BREAK = 1.0
-"""A pool beyond a boundary supports the break toward it (before proximity and the low quality of the model)."""
-
-MAGNET_SUPPORTS_INSIDE = 0.5
-"""A pool inside the range supports "stays inside" half: it pulls the price within the range but bounds nothing."""
-
-MAGNET_REACH_SHARE = 0.10
-"""
-Distance (share of the spot) at which a pool stops pulling: proximity = 1 - distance / (MAGNET_REACH_SHARE x spot), never
-below 0. 10 % is the window the liquidation snapshots store, so a pool at its edge counts zero.
-"""
-
 # ---------------------------------------------------------------- confidence label (low / medium / high)
 
 HIGH_CONFIDENCE_MINIMUM_GROUPS = 3
@@ -279,15 +267,6 @@ TAKER_BAND_MINIMUM_POINTS = 240
 
 TAKER_HORIZON_DAYS = 3.0
 """Horizon of the taker evidence: 1 to 3 days, the time an aggressor imbalance usually takes to fade."""
-
-LIQUIDATION_MAGNET_QUALITY = 0.25
-"""Quality of the liquidation estimate pools: a research model still in its forward test, without a measured hit rate yet."""
-
-LIQUIDATION_LEVELS_PER_SIDE = 2
-"""How many of the strongest pools per side become evidence (the same number the Levels page draws)."""
-
-LIQUIDATION_SNAPSHOT_MAXIMUM_AGE_HOURS = 24
-"""Only a snapshot computed in the last 24 h is read (the Levels page's rule); the engine's freshness check then applies."""
 
 OPTION_FLOW_WINDOW_HOURS = 24
 """Window of the option flow (screen and block) read for the directional evidence and the flow strikes."""
