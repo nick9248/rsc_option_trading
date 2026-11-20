@@ -5,7 +5,6 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from coding.core.analytics.liquidation_heatmap.level_snapshot import LevelSnapshot
 from coding.core.analytics.open_interest.expiry_open_interest import ExpiryOpenInterest
 from coding.core.analytics.option_flow.block_structure import BlockTradeLeg
 from coding.core.analytics.option_flow.dealer_levels import DealerFlowLevels
@@ -150,21 +149,6 @@ def test_taker_ratio_needs_enough_points_and_a_band():
     flat = [(NOW - timedelta(hours=offset), 1.0) for offset in range(300)]
     item, reason = extractors.taker_ratio_evidence("BTCUSDT", flat, NOW)
     assert item is None and "no width" in reason
-
-
-def test_liquidation_pools_become_magnets_scaled_by_the_largest():
-    snapshot = LevelSnapshot("BTCUSDT", NOW - timedelta(minutes=50), NOW - timedelta(minutes=48), 100_000.0, 100.0,
-                             [[96_000.0, 5e6, 0.0], [97_500.0, 4e6, 0.0], [98_000.0, 10e6, 0.0],
-                              [103_000.0, 0.0, 20e6], [104_500.0, 0.0, 2e6]])
-    items = by_id(extractors.liquidation_evidence(snapshot))
-    # longs below: 98,000 (10M) then 96,000 (5M); 97,500 is within 1 % (1,000) of 98,000 and is skipped
-    assert sorted(items) == ["liquidation.long.96000", "liquidation.long.98000", "liquidation.short.103000",
-                             "liquidation.short.104500"]
-    assert items["liquidation.long.98000"].strength == pytest.approx(0.5)      # 10M / 20M
-    assert items["liquidation.short.104500"].strength == pytest.approx(0.1)    # 2M / 20M
-    assert all(item.kind == "magnet" and item.direction is None and item.quality == pytest.approx(0.25)
-               for item in items.values())
-    assert items["liquidation.long.98000"].as_of == NOW - timedelta(minutes=50)
 
 
 def test_menthorq_levels_are_open_interest_price_levels_and_none_is_skipped():

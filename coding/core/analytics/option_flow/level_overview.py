@@ -17,11 +17,10 @@ FOREGROUND_COLOR = "#e6e9f2"
 GRID_COLOR = "#33406a"
 KIND_COLORS: Dict[str, str] = {
     "resistance": "#3ddc97", "support": "#ff6b6b", "flip": "#ffe14a", "buy": "#10c8ff", "sell": "#e08bd0",
-    "long_liquidation": "#ff9f43", "short_liquidation": "#a98bff",
 }
 KIND_LABELS: Dict[str, str] = {
     "resistance": "call wall / resistance", "support": "put wall / support", "flip": "gamma flip", "buy": "bought (taker)",
-    "sell": "sold (taker)", "long_liquidation": "long liquidations", "short_liquidation": "short liquidations",
+    "sell": "sold (taker)",
 }
 HEIGHT = 900
 PRICE_WINDOW = 0.15      # the chart shows prices within this share of the spot

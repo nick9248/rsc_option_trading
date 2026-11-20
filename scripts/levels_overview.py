@@ -1,6 +1,6 @@
 """
-All price levels of the different sources on one chart (MenthorQ replica, dealer GEX open-interest and flow-based, option flow,
-liquidation estimate), with bands where at least three sources agree.
+All price levels of the different sources on one chart (MenthorQ replica, dealer GEX open-interest and flow-based, option flow),
+with bands where at least three sources agree.
 
 Usage (from repo root; sync the local database first: scripts/sync_from_vps.py):
     .venv\\Scripts\\python -m scripts.levels_overview --currency BTC

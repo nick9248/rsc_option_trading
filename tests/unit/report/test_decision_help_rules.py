@@ -172,14 +172,14 @@ def test_taker_band_uses_the_sample_standard_deviation_and_the_stated_strengths(
 
 
 def test_selection_and_priors_are_stated():
-    assert config.FLOW_STRIKES_PER_SIDE == 2 and config.LIQUIDATION_LEVELS_PER_SIDE == 2
+    assert config.FLOW_STRIKES_PER_SIDE == 2
     text = term_of("Evidence and input groups", "Selection")
     for expected in ("nearest monthly expiry and the one with the most open interest", "call resistance, put support and HVL",
-                     "top 2 strikes", "2 pools per side", "24 hour taker ratio"):
+                     "top 2 strikes", "24 hour taker ratio"):
         assert expected in text, expected
     assert "selected signals of the other tabs" in help_module.SECTION_HELP["decision"].summary
     limits = " ".join(topic_of("decision", "Evidence and input groups").limits)
-    for expected in ("contrarian", "share one input group", "share the open interest"):
+    for expected in ("contrarian", "share the open interest"):
         assert expected in limits, expected
 
 

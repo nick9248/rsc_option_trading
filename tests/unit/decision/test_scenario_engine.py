@@ -193,7 +193,7 @@ def test_same_input_gives_identical_json_whatever_the_order():
 def test_the_report_survives_a_json_round_trip():
     items = three_group_range() + [directional("lean", "g4", "bearish", horizon_days=2.5), magnet("pool", "g5", 97_000),
                                    level("stale", "deribit_trades", 104_800, age_hours=4)]
-    report = report_of(items, not_computed=["liquidation estimate: none"])
+    report = report_of(items, not_computed=["futures taker ratio: none"])
     text = json.dumps(report.to_dict(), allow_nan=False)
     assert DecisionReport.from_dict(json.loads(text)) == report
 

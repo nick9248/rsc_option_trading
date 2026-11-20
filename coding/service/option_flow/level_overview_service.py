@@ -5,14 +5,13 @@ Collects the price levels of every source for one currency, so they can be compa
 2. Dealer gamma levels of one expiry, open-interest based and flow-based (``DealerFlowLevelsService``).
 3. Option flow: the strikes with the most taker buying and selling volume of calls and puts in the last hours
    (``OptionFlowService``; blocked and screen volume together, notional = contracts x strike).
-4. Liquidation estimate: the strongest estimated long and short liquidation levels of the newest stored snapshot.
 
 Every source that cannot be computed is skipped with a note (never drawn as a made-up level). Reads only.
 """
 
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Callable, List, Optional, Sequence
+from typing import Callable, List, Optional
 
 from coding.core.analytics.menthorq_replication_calculator import replicate_menthorq, select_drawn_levels
 from coding.core.analytics.option_flow.level_overview import LevelMark, LevelOverview
@@ -25,8 +24,6 @@ from coding.service.option_flow.option_flow_service import OptionFlowService
 logger = logging.getLogger(__name__)
 
 MENTHORQ_SOURCE = "MenthorQ replica (monthly expiries)"
-LIQUIDATION_SNAPSHOT_MAX_AGE_HOURS = 24
-LIQUIDATION_SYMBOLS = {"BTC": "BTCUSDT", "ETH": "ETHUSDT"}
 
 
 def top_strikes(flow: StrikeFlow, option_type: str, direction: str, count: int) -> List[tuple]:
@@ -38,22 +35,6 @@ def top_strikes(flow: StrikeFlow, option_type: str, direction: str, count: int) 
         if notional > 0:
             totals.append((strike, notional))
     return sorted(totals, key=lambda item: -item[1])[:count]
-
-
-def strongest_separated(levels: Sequence[Sequence[float]], column: int, minimum_gap: float, count: int) -> List[tuple]:
-    """
-    The ``count`` strongest ``[price, long_usd, short_usd]`` rows by ``column`` (1 = long, 2 = short), skipping a row that is
-    closer than ``minimum_gap`` to a stronger one already taken. Returns (price, usd) pairs.
-    """
-    chosen: List[tuple] = []
-    for row in sorted(levels, key=lambda item: -item[column]):
-        if row[column] <= 0:
-            break
-        if all(abs(row[0] - price) >= minimum_gap for price, _ in chosen):
-            chosen.append((row[0], row[column]))
-        if len(chosen) == count:
-            break
-    return chosen
 
 
 class LevelOverviewService:
@@ -106,7 +87,6 @@ class LevelOverviewService:
 
         self._add_dealer_levels(currency, dealer_expiry, marks, notes)
         self._add_flow_levels(currency, flow_hours, flow_levels_per_side, marks, notes)
-        self._add_liquidation_levels(currency, now, marks, notes)
         notes.append(f"chain snapshot {captured_at:%Y-%m-%d %H:%M} UTC, index {spot:,.0f}")
         return LevelOverview(currency, spot, dealer_expiry, marks, notes)
 
@@ -142,22 +122,3 @@ class LevelOverviewService:
                 marks.append(LevelMark(source, f"{label} {notional / 1e6:,.0f}M USD", strike, "buy" if direction == "buy" else "sell"))
         if report.newest_trade is not None and self.clock() - report.newest_trade > timedelta(hours=3):
             notes.append(f"option flow: newest stored trade is from {report.newest_trade:%Y-%m-%d %H:%M} UTC (sync the database)")
-
-    def _add_liquidation_levels(self, currency: str, now: datetime, marks: List[LevelMark], notes: List[str]) -> None:
-        """The strongest long (below spot) and short (above spot) liquidation levels of the newest stored snapshot."""
-        symbol = LIQUIDATION_SYMBOLS.get(currency)
-        snapshots = self.repository.get_liquidation_heatmap_snapshots_between(
-            symbol, now - timedelta(hours=LIQUIDATION_SNAPSHOT_MAX_AGE_HOURS), now + timedelta(minutes=1)) if symbol else []
-        if not snapshots:
-            notes.append(f"liquidation estimate: no snapshot of the last {LIQUIDATION_SNAPSHOT_MAX_AGE_HOURS} h (sync the database)")
-            return
-        snapshot = snapshots[-1]
-        source = "Liquidation estimate (Binance)"
-        gap = 0.01 * snapshot.reference_price
-        below = [row for row in snapshot.levels if row[0] < snapshot.reference_price]
-        above = [row for row in snapshot.levels if row[0] > snapshot.reference_price]
-        for price, usd in strongest_separated(below, 1, gap, 2):
-            marks.append(LevelMark(source, f"longs {usd / 1e6:,.0f}M USD", price, "long_liquidation"))
-        for price, usd in strongest_separated(above, 2, gap, 2):
-            marks.append(LevelMark(source, f"shorts {usd / 1e6:,.0f}M USD", price, "short_liquidation"))
-        notes.append(f"liquidation estimate computed {snapshot.computed_at:%Y-%m-%d %H:%M} UTC; research model, under forward test")

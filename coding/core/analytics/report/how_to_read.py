@@ -71,7 +71,6 @@ VIOLATION_GATE = 0.05                       # on_chain_analysis_service._DEALER_
 MAX_EXCLUSION_RATE = 0.20                   # on_chain_analysis_service._DEALER_INVENTORY_MAX_EXCLUSION_RATE
 CONFLUENCE_BAND_SHARE = 0.01                # the Levels page: band width = 1 % of the spot
 CONFLUENCE_MINIMUM_SOURCES = 3              # the Levels page: at least 3 different sources
-MAINTENANCE_MARGIN_RATE = 0.004             # HeatmapSettings.maintenance_margin_rate (default)
 
 
 # --------------------------------------------------------------------------
@@ -224,16 +223,6 @@ def confluence_width(spot: float) -> float:
 def zoom_window(spot: float, share: float) -> Tuple[float, float]:
     """The price range a zoom button shows: spot minus and plus ``share`` of the spot."""
     return spot * (1 - share), spot * (1 + share)
-
-
-def long_liquidation_price(entry: float, leverage: int) -> float:
-    """Model liquidation price of a long (liquidation_heatmap_model.py): entry times (1 - 1/leverage + 0.004)."""
-    return entry * (1 - 1 / leverage + MAINTENANCE_MARGIN_RATE)
-
-
-def short_liquidation_price(entry: float, leverage: int) -> float:
-    """Model liquidation price of a short: entry times (1 + 1/leverage - 0.004)."""
-    return entry * (1 + 1 / leverage - MAINTENANCE_MARGIN_RATE)
 
 
 def simple_average(values: Sequence[float]) -> float:
@@ -410,11 +399,9 @@ LEVELS_TOO_FAR_MARKS = (("MenthorQ replica", 75_000.0), ("Dealer GEX, open inter
                         ("Option flow", 76_000.0))
 LEVELS_SAME_SOURCE_MARKS = (("MenthorQ replica", 75_000.0), ("Option flow", 75_300.0), ("Option flow", 75_600.0))
 LEVELS_ZOOM_SHARE = 0.05
-LIQUIDATION_ENTRY = 70_000.0
-LIQUIDATION_LEVERAGE = 25
 STRATEGY_LONG_STRIKE = 70_000.0
 STRATEGY_SHORT_STRIKE = 75_000.0
-HEDGE_CLUSTER_PRICE = 66_000.0
+
 
 # Decision tab (spot: EXAMPLE_SPOT)
 DECISION_ITEM_QUALITY = 0.6
@@ -493,8 +480,6 @@ _CHECK_FAILING = violation_percent(CHECK_VIOLATIONS_FAILING, CHECK_OPTIONS_CHECK
 _CHECK_PASSING = violation_percent(CHECK_VIOLATIONS_PASSING, CHECK_OPTIONS_CHECKED)
 _BAND_WIDTH = confluence_width(EXAMPLE_SPOT)
 _ZOOM_LOW, _ZOOM_HIGH = zoom_window(EXAMPLE_SPOT, LEVELS_ZOOM_SHARE)
-_LONG_LIQUIDATION = long_liquidation_price(LIQUIDATION_ENTRY, LIQUIDATION_LEVERAGE)
-_SHORT_LIQUIDATION = short_liquidation_price(LIQUIDATION_ENTRY, LIQUIDATION_LEVERAGE)
 _DECISION_ONE_ITEM = group_contribution_value([(DECISION_ITEM_QUALITY, DECISION_ITEM_VALUE)])
 _DECISION_TWO_ITEMS_ONE_GROUP = group_contribution_value([(DECISION_ITEM_QUALITY, DECISION_ITEM_VALUE)] * 2)
 _DECISION_TWO_GROUPS = _DECISION_ONE_ITEM + _DECISION_ONE_ITEM
@@ -551,7 +536,7 @@ REPORT_HELP = SectionHelp(
                 "Levels (every source on one price line)."),
             terms=(
                 HelpTerm("Level", "A price where something is concentrated: open interest, estimated dealer hedging, "
-                                  "taker volume or estimated liquidations. It is a reference price, not a forecast."),
+                                  "or taker volume. It is a reference price, not a forecast."),
                 HelpTerm("Source", "One way of finding levels, for example the MenthorQ replica or the flow-based "
                                    "dealer view. The Levels tab draws one row (lane) per source."),
                 HelpTerm("Assumption", "Something the data cannot show, so the method takes it as given. The main one: "
@@ -559,8 +544,6 @@ REPORT_HELP = SectionHelp(
                                        "the other side of every taker (flow view). Deribit does not say who is who."),
                 HelpTerm("Replica", "A rebuild of a vendor's chart (MenthorQ). Its formulas are fitted to a few "
                                     "MenthorQ charts, on BTC only. It is not the vendor's own formula."),
-                HelpTerm("Forward test", "Testing a model on data that arrives after the model was fixed, so it cannot "
-                                         "have been tuned on it. The liquidation estimate is still in a forward test."),
                 HelpTerm("Not computed", "The value is missing: the data or the rule gave no answer. It never means "
                                          "zero."),
             ),
@@ -585,7 +568,7 @@ REPORT_HELP = SectionHelp(
                     "Several sources show a level at the same price",
                     "It is a coincidence of methods, not a proof. The sources are not independent: several read the "
                     "same open interest or the same trades, so some overlap is built in.",
-                    "Three of five lanes at 75,000 sounds strong. If two of those lanes use the same open interest, "
+                    "Three of four lanes at 75,000 sounds strong. If two of those lanes use the same open interest, "
                     "they were always going to be close."),
                 HelpCase(
                     "A value says not computed",
@@ -1419,7 +1402,7 @@ _LEVELS_HELP = SectionHelp(
         HelpTopic(
             title="The lanes (sources)",
             what_you_see=(
-                "Up to five rows. Each level is a diamond at its price, with its name and price next to it. A source that "
+                "Up to four rows. Each level is a diamond at its price, with its name and price next to it. A source that "
                 "cannot be computed is left out with a note, never drawn as a made-up level."),
             terms=(
                 HelpTerm("MenthorQ replica (monthly expiries)", "Call resistance, put support and HVL of the monthly expiries "
@@ -1436,13 +1419,9 @@ _LEVELS_HELP = SectionHelp(
                 HelpTerm("Option flow (top strikes)", "For each of calls bought, calls sold, puts bought and puts sold over the last "
                                                       "24 hours, the 2 strikes with the most notional (screen plus blocked, "
                                                       "contracts x strike)."),
-                HelpTerm("Liquidation estimate (Binance)", "A research model, not data. The 2 strongest estimated long liquidation "
-                                                           "levels below the reference price and the 2 strongest short levels above "
-                                                           "it from the newest stored snapshot, at least 1 % apart. Still in a forward test."),
                 HelpTerm("Shared inputs", "The MenthorQ replica and the OI-based dealer lane read the same open interest. The "
                                           "flow-based lane and the option flow lane read the same stored trades. So overlap "
-                                          "is partly built in. Only the liquidation estimate uses a different market "
-                                          "(Binance futures)."),
+                                          "is partly built in."),
                 HelpTerm("Diamond", "One level of one source, at its exact price."),
                 HelpTerm("Hollow mark", "That source failed its plausibility check. If the Dealer levels tab says the failing "
                                         "strikes carry a large share of the gamma, treat the flow-based lane as unreliable; "
@@ -1455,7 +1434,7 @@ _LEVELS_HELP = SectionHelp(
                 HelpCase(
                     "A source is missing",
                     "It could not be computed (no data, or the rule gave no answer). It is left out with a note. It is not drawn as zero.",
-                    "With the liquidation snapshot older than 24 hours, the liquidation lane is not drawn and a note says so."),
+                    "With no option trades in the last 24 hours, the option flow lane is not drawn and a note says so."),
                 HelpCase(
                     "Two levels of one source at the same price",
                     "Their labels are merged so they do not print over each other.",
@@ -1494,7 +1473,7 @@ _LEVELS_HELP = SectionHelp(
             terms=(
                 HelpTerm("Confluence band", "A price range of at most 1 % of the spot that holds levels from at least 3 "
                                             "different sources. Two levels of one source count once."),
-                HelpTerm("3 of 5", "Three of the five lanes have a level in that band. If a lane is missing, the second number is "
+                HelpTerm("3 of 4", "Three of the four lanes have a level in that band. If a lane is missing, the second number is "
                                    "lower."),
                 HelpTerm("Band width", "Measured from the lowest level of the band. A band closes when the next level is "
                                        "farther from its first level than the width. Every level is in at most one band."),
@@ -1532,53 +1511,6 @@ _LEVELS_HELP = SectionHelp(
             ),
         ),
         HelpTopic(
-            title="The liquidation estimate",
-            what_you_see=(
-                "Up to four diamonds in the liquidation lane: the strongest estimated long liquidation levels below the "
-                "reference price and the strongest short liquidation levels above it, with their size in millions of USD."),
-            terms=(
-                HelpTerm("Liquidation level", "A price where leveraged positions would be closed by force. No exchange "
-                                              "publishes them, so they are modelled."),
-                HelpTerm("The model", "Each 5-minute rise in Binance perpetual open interest is treated as new positions at "
-                                      "that price, spread over leverage tiers. A liquidation price is the entry price "
-                                      "adjusted by 1 / leverage and a maintenance margin of 0.4 %. A level is removed when price "
-                                      "reaches it. Every step is an assumption."),
-                HelpTerm("Long liquidation levels", "Below the price. A long that is liquidated is a forced sell."),
-                HelpTerm("Short liquidation levels", "Above the price. A short that is liquidated is a forced buy."),
-                HelpTerm("Reference price", "The price of the newest snapshot. It can differ slightly from the spot line."),
-            ),
-            cases=(
-                HelpCase(
-                    "A long liquidation level below the price",
-                    "If price falls to it, longs are forced to sell. That is forced selling, not a floor. If the model is "
-                    "right, forced selling there would add to a move through that price. Whether price is drawn to "
-                    "these levels is not shown by this report; the model is still in a forward test. It gives no direction.",
-                    f"A long at 25x opened at {_int(LIQUIDATION_ENTRY)}: {_int(LIQUIDATION_ENTRY)} x (1 - 1/25 + 0.004) = "
-                    f"{_int(_LONG_LIQUIDATION)}."),
-                HelpCase(
-                    "A short liquidation level above the price",
-                    "If price rises to it, shorts are forced to buy. That is forced buying, not a ceiling. If the model "
-                    "is right, forced buying there would add to a move through that price. Whether price is drawn to "
-                    "these levels is not shown by this report; the model is still in a forward test. It gives no direction.",
-                    f"A short at 25x opened at {_int(LIQUIDATION_ENTRY)}: {_int(LIQUIDATION_ENTRY)} x (1 + 1/25 - 0.004) = "
-                    f"{_int(_SHORT_LIQUIDATION)}."),
-                HelpCase(
-                    "Both sides have strong levels",
-                    "Price sits between two pools of forced orders. Neither side is favoured by the model.",
-                    f"Long levels near {_int(_LONG_LIQUIDATION)} and short levels near {_int(_SHORT_LIQUIDATION)} around spot {_int(LIQUIDATION_ENTRY)}."),
-                HelpCase(
-                    "The size label",
-                    "The size is the estimated USD at the level's price. It is a model's number, not a count of real positions.",
-                    "'longs 300M USD' means 300 million USD of estimated long positions with a liquidation price in that bin."),
-            ),
-            limits=(
-                "A research model with assumed leverage tiers and simplifications (no fees, no maintenance tiers). Still "
-                "in a forward test, so treat it as unproven.",
-                "A snapshot keeps the bins within 10 % of the reference price.",
-                "Whether price is drawn to liquidation levels is not shown by this report. Neither side gives direction.",
-            ),
-        ),
-        HelpTopic(
             title="Using the levels for a strategy or a hedge",
             what_you_see=(
                 "Nothing new on the page. This topic is about what to do with it."),
@@ -1596,13 +1528,6 @@ _LEVELS_HELP = SectionHelp(
                     f"with call resistance at {_int(STRATEGY_SHORT_STRIKE)}, is {_int(STRATEGY_SHORT_STRIKE - STRATEGY_LONG_STRIKE)} "
                     "points wide. The level only helped choose the short strike."),
                 HelpCase(
-                    "Hedging a long position",
-                    "A cluster of long liquidations below price shows where forced selling may sit. You may want a hedge "
-                    "that already works before it, not at it.",
-                    f"Long 1 coin at {_int(EXAMPLE_SPOT)} and a long-liquidation cluster at {_int(HEDGE_CLUSTER_PRICE)}, "
-                    f"{_one(abs(percent_from(HEDGE_CLUSTER_PRICE, EXAMPLE_SPOT)))} % below. A put struck above "
-                    f"{_int(HEDGE_CLUSTER_PRICE)} would already be in the money there."),
-                HelpCase(
                     "Placing a stop",
                     "Other traders may place orders at the same obvious levels. A stop exactly on a level shares the price with them. "
                     "Use a level as a reference and add your own margin.",
@@ -1610,7 +1535,7 @@ _LEVELS_HELP = SectionHelp(
                     f"{_int(EXAMPLE_PUT_SUPPORT * 0.99)}."),
                 HelpCase(
                     "Levels you do not trust",
-                    "Hollow marks, lanes under a forward test and single-source levels deserve less weight than a band of "
+                    "Hollow marks and single-source levels deserve less weight than a band of "
                     "several lanes. None of them is a target.",
                     "A band of 3 lanes with one hollow is weaker than a band of 3 lanes without one."),
             ),
@@ -1656,8 +1581,7 @@ _DECISION_HELP = SectionHelp(
                                       "expiry and the one with the most open interest (walls, gamma flip and the sign of the "
                                       "total GEX of each view). MenthorQ replica: call resistance, put support and HVL. Option "
                                       "flow: the top 2 strikes for each of calls bought, calls sold, puts bought and puts sold, "
-                                      "and the net flow of screen trades, single-leg blocks and multi-leg blocks. Liquidation "
-                                      "estimate: 2 pools per side. Futures: the 24 hour taker ratio."),
+                                      "and the net flow of screen trades, single-leg blocks and multi-leg blocks. Futures: the 24 hour taker ratio."),
                 HelpTerm("Kind: price_level", "A price where a source puts a level (MenthorQ replica levels, dealer walls and "
                                               "gamma flips, option-flow strikes). Only these shape the price map. Support or "
                                               "resistance follows only from the side of the spot the price is on."),
@@ -1665,8 +1589,8 @@ _DECISION_HELP = SectionHelp(
                                               "and the futures taker ratio."),
                 HelpTerm("Kind: range_regime", "Moves are damped (range-bound) or amplified (expansion). It has no direction. "
                                                "It comes from the sign of the total dealer GEX, a weak, assumption-based hint."),
-                HelpTerm("Kind: magnet", "A pool of forced orders at a price (the liquidation estimate). It has no direction "
-                                         "of its own."),
+                HelpTerm("Kind: magnet", "A pool of orders at a price. It has no direction of its own. No current source produces "
+                                         "one."),
                 HelpTerm("Input group", "The underlying data an item is derived from: deribit_open_interest, deribit_trades or "
                                         "binance_perpetual_candles. Items of one group are derived from the same data and are "
                                         "not independent, so the engine counts each group once."),
@@ -1714,8 +1638,8 @@ _DECISION_HELP = SectionHelp(
                     f"{DECISION_TAKER_POINTS_FOUND} it is listed as not computed."),
                 HelpCase(
                     "A source produces no items without an error",
-                    "A source can run without error and still have nothing to say: the replica draws no level, every dealer "
-                    "level is not computed, or the liquidation snapshot holds no pool. It is then neither in the evidence "
+                    "A source can run without error and still have nothing to say: the replica draws no level or every dealer "
+                    "level is not computed. It is then neither in the evidence "
                     "table nor under 'Sources not computed', because nothing failed. (No option trades at all in the last "
                     "24 hours is different: that is listed as not computed.)",
                     "A replica that draws no call resistance, put support or HVL adds no row and no line in the list of "
@@ -1736,8 +1660,6 @@ _DECISION_HELP = SectionHelp(
                 "There are at most three input groups today.",
                 "The taker ratio is read as aggressor pressure in its own direction (above its band is bullish), not as a "
                 "contrarian signal. It is known to revert to its mean within days.",
-                "The taker ratio and the liquidation estimate share one input group, because both come from the Binance "
-                "perpetual candles.",
                 "Two of the three dominant level sources (the MenthorQ replica and the open-interest dealer levels) share the "
                 "open interest, so they are counted as one group.",
             ),
@@ -1826,7 +1748,7 @@ _DECISION_HELP = SectionHelp(
                                                "A range-bound hint supports 'inside' and opposes each break at half strength. An "
                                                "expansion hint supports each break at half strength; it opposes 'inside' fully "
                                                "when both sides are mapped and at half strength on a one-sided map. A "
-                                               "liquidation pool beyond a bound supports the break toward it. A pool between the "
+                                               "pool beyond a bound supports the break toward it. A pool between the "
                                                "bounds, or toward the unmapped side, supports 'inside' at half strength. The "
                                                "nearer a pool, the more it weighs: proximity = 1 - distance / (10 % of the "
                                                "spot), and 0 at 10 % or further."),

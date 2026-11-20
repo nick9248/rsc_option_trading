@@ -2,19 +2,19 @@
 Builds a ``DecisionReport`` for one currency from the existing services (read-only) and optionally stores it.
 
 Each source is read through the service that already computes it (``ExpiryOpenInterestService``, the MenthorQ replica,
-``DealerFlowLevelsService``, ``OptionFlowService``, ``TakerFlowChartService``, the stored liquidation snapshots) with ONE
+``DealerFlowLevelsService``, ``OptionFlowService``, ``TakerFlowChartService``) with ONE
 fixed clock reading, so every source describes the same instant. A source that cannot be computed (a plain ``LookupError``
 or ``MissingIndexPriceError``: no stored data) is listed under "not computed" and the report is built without it;
 programming errors (``KeyError``, ``IndexError``, ...) are not caught.
 
-Point in time: the chain snapshot, index price, option flow window, taker ratio (only 24 h windows closed by the clock) and
-liquidation snapshot are all read at or before the clock. The spot's own time is in the context and an old spot is flagged. Two inputs are not yet bounded by it (so a replay of a past instant would see later data there):
+Point in time: the chain snapshot, index price, option flow window, and taker ratio (only 24 h windows closed by the clock) are
+all read at or before the clock. The spot's own time is in the context and an old spot is flagged. Two inputs are not yet bounded by it (so a replay of a past instant would see later data there):
 ``DealerFlowLevelsService`` sums the trades up to the newest stored one, and ``get_latest_trade_time`` is the newest trade
 overall (the extractor clamps it to the window end). For live use (clock = now) both are point in time.
 """
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Callable, List, Optional
 
 from coding.core.analytics.decision import decision_config as config
@@ -30,7 +30,6 @@ from coding.service.on_chain.expiry_open_interest_service import ExpiryOpenInter
 from coding.service.on_chain.menthorq_input_loader import MenthorqInputLoader
 from coding.service.on_chain.missing_data import is_missing_data
 from coding.service.option_flow.dealer_flow_levels_service import DealerFlowLevelsService
-from coding.service.option_flow.level_overview_service import LIQUIDATION_SYMBOLS
 from coding.service.option_flow.option_flow_service import OptionFlowService
 
 logger = logging.getLogger(__name__)
@@ -68,8 +67,7 @@ class DecisionMakerService:
                 ("MenthorQ replica", lambda: self._menthorq(currency, now)),
                 ("dealer GEX", lambda: self._dealer(currency, now, open_interest, fixed_clock, not_computed)),
                 ("option flow", lambda: self._option_flow(currency, now, fixed_clock)),
-                ("futures taker ratio", lambda: self._taker_ratio(currency, now, fixed_clock)),
-                ("liquidation estimate", lambda: self._liquidation(currency, now))):
+                ("futures taker ratio", lambda: self._taker_ratio(currency, now, fixed_clock))):
             try:
                 items = collect()
             except LookupError as error:
@@ -144,18 +142,6 @@ class DecisionMakerService:
         if item is None:
             raise LookupError(reason or "not computed")
         return [item]
-
-    def _liquidation(self, currency: str, now: datetime) -> List[EvidenceItem]:
-        """The newest liquidation estimate snapshot computed in the last 24 h, at or before the clock."""
-        symbol = LIQUIDATION_SYMBOLS.get(currency)
-        if symbol is None:
-            raise LookupError(f"no liquidation estimate for {currency}")
-        hours = config.LIQUIDATION_SNAPSHOT_MAXIMUM_AGE_HOURS
-        snapshots = self.repository.get_liquidation_heatmap_snapshots_between(
-            symbol, now - timedelta(hours=hours), now + timedelta(microseconds=1))
-        if not snapshots:
-            raise LookupError(f"no {symbol} snapshot computed in the last {hours} h")
-        return extractors.liquidation_evidence(snapshots[-1])
 
 
 def summary_lines(report: DecisionReport) -> List[str]:

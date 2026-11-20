@@ -64,7 +64,7 @@ class SyncAlreadyRunningError(RuntimeError):
 
 
 # The tables the market report reads.
-REPORT_SYNC_TABLES = ("historical_trades", "snapshots", "taker_flow_hourly", "liquidation_heatmap_snapshots")
+REPORT_SYNC_TABLES = ("historical_trades", "snapshots", "taker_flow_hourly")
 
 
 @dataclass
