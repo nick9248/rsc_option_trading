@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta, timezone
 
 from coding.core.analytics.decision.evidence import (
-    DIRECTIONAL, MAGNET, PRICE_LEVEL, RANGE_REGIME, EvidenceItem)
+    DIRECTIONAL, PRICE_LEVEL, RANGE_REGIME, EvidenceItem)
 
 NOW = datetime(2026, 11, 14, 12, 0, tzinfo=timezone.utc)
 SPOT = 100_000.0
@@ -27,6 +27,3 @@ def regime(item_id, group, regime_name, quality=0.5, strength=1.0):
                         regime=regime_name)
 
 
-def magnet(item_id, group, price, quality=0.5, strength=1.0):
-    """A magnet item."""
-    return EvidenceItem(item_id, f"source {item_id}", group, MAGNET, "a test pool", NOW, strength, quality, price=price)

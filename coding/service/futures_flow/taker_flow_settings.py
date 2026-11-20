@@ -40,8 +40,7 @@ class TakerFlowSettingsError(ValueError):
 
 def read_binance_futures_base_url(environment: Optional[Mapping[str, str]] = None) -> str:
     """
-    ``BINANCE_FUTURES_BASE_URL`` (default: Binance itself), validated; also used by the liquidation recorder so that an
-    unrelated setting of the taker flow cannot switch it off.
+    ``BINANCE_FUTURES_BASE_URL`` (default: Binance itself), validated.
 
     Raises:
         TakerFlowSettingsError: when the value is not ``http(s)://host[:port]``.

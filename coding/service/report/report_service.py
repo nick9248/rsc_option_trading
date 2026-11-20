@@ -3,7 +3,7 @@ Generates the market report of one currency: first brings the local database in 
 builds the sections and writes ONE self-contained HTML file to ``output/report/``.
 
 Sync rule (``VpsSyncService.sync_if_behind``): the newest watermark (the column the sync itself uses) of the tables the
-report reads -- historical_trades, snapshots, taker_flow_hourly, liquidation_heatmap_snapshots -- is compared between the
+report reads -- historical_trades, snapshots, taker_flow_hourly -- is compared between the
 VPS (read-only query) and the local database. When the VPS is ahead on any of them, or one cannot be compared, the normal
 incremental sync of all tables runs through the same tunnel. When the check itself fails (no SSH, VPS down), the report is
 still built from the local data and the header says so.

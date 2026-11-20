@@ -64,7 +64,7 @@ def make_report(**changes):
         decisions=[DecisionItem("notice", "These are decision-support items, not orders and not price targets."),
                    DecisionItem("reference_hedge", "Reference level for a hedge: 66,000 (nearest mapped level below)."),
                    DecisionItem("data_caveat", "Data caveat: Option flow & <b>strikes</b>: stale.")],
-        not_computed=["liquidation estimate: no BTCUSDT snapshot computed in the last 24 h <i>"],
+        not_computed=["futures taker ratio: no BTCUSDT taker ratio computed <i>"],
         context={"spot_time": (NOW - timedelta(minutes=30)).isoformat(), "chain_snapshot": (NOW - timedelta(minutes=40)).isoformat(),
                  "caveats": ["the index price is old & far"]})
     return replace(report, **changes) if changes else report
@@ -179,7 +179,7 @@ def test_what_would_change_lists_the_triggers_and_says_when_there_are_none():
 
 def test_caveats_and_freshness_list_not_computed_caveats_and_ages():
     html_text = fragments.caveats_fragment(make_report())
-    assert "liquidation estimate: no BTCUSDT snapshot computed in the last 24 h" in html_text
+    assert "futures taker ratio: no BTCUSDT taker ratio computed" in html_text
     assert "the index price is old &amp; far" in html_text
     assert "Index price (spot)" in html_text and "0.5 h" in html_text            # 30 minutes
     assert "Option chain snapshot" in html_text and "0.7 h" in html_text         # 40 minutes

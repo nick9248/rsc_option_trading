@@ -24,10 +24,6 @@ class FakeRepository:
         SEEN_INSTANTS.append(("block legs end", end_ms))
         return []
 
-    def get_liquidation_heatmap_snapshots_between(self, symbol, start, end):
-        SEEN_INSTANTS.append(("liquidation end", end))
-        return []
-
     def save_decision_snapshot(self, currency, computed_at, reference_price, report):
         self.saved.append((currency, computed_at, reference_price, report))
         return True
@@ -108,10 +104,9 @@ def test_report_is_built_from_every_source_that_can_be_computed_and_lists_the_ot
     assert not any(item_id.startswith("dealer.25DEC26") for item_id in ids)
     assert report.not_computed == [
         "dealer GEX 25DEC26: 25DEC26 is not in the chain snapshot",
-        "futures taker ratio: BTCUSDT taker ratio: only 1 rolling points in 30 days (at least 240 needed for the band)",
-        "liquidation estimate: no BTCUSDT snapshot computed in the last 24 h"]
+        "futures taker ratio: BTCUSDT taker ratio: only 1 rolling points in 30 days (at least 240 needed for the band)"]
     assert report.context["open_interest_by_expiry"][0]["expiry"] == "25DEC26"
-    assert any("Not computed: liquidation estimate" in item.text for item in report.decisions)
+    assert any("Not computed: futures taker ratio" in item.text for item in report.decisions)
 
 
 def test_every_source_sees_the_same_instant(service):
@@ -119,8 +114,6 @@ def test_every_source_sees_the_same_instant(service):
     instants = [value for name, value in SEEN_INSTANTS if name in ("open interest", "menthorq", "dealer", "option flow", "taker")]
     assert instants and all(value == NOW for value in instants)
     assert ("block legs end", int(NOW.timestamp() * 1000)) in SEEN_INSTANTS
-    liquidation_end = next(value for name, value in SEEN_INSTANTS if name == "liquidation end")
-    assert NOW < liquidation_end <= NOW + timedelta(milliseconds=1)
 
 
 def test_without_a_spot_there_is_no_report(service, monkeypatch):

@@ -18,8 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple
 PRICE_LEVEL = "price_level"
 DIRECTIONAL = "directional"
 RANGE_REGIME = "range_regime"
-MAGNET = "magnet"
-KINDS: Tuple[str, ...] = (PRICE_LEVEL, DIRECTIONAL, RANGE_REGIME, MAGNET)
+KINDS: Tuple[str, ...] = (PRICE_LEVEL, DIRECTIONAL, RANGE_REGIME)
 
 BULLISH = "bullish"
 BEARISH = "bearish"
@@ -41,15 +40,14 @@ class EvidenceItem:
         source: Human name of where it comes from, e.g. "MenthorQ replica (monthly expiries)".
         input_group: The underlying data it is derived from; items of one group are not independent.
         kind: One of ``KINDS``. price_level: a price where sources put a level (needs ``price``); directional: a lean up
-            or down (needs ``direction``); range_regime: moves damped or amplified (needs ``regime``); magnet: a pool of
-            forced orders at a price (needs ``price``; no direction of its own).
+            or down (needs ``direction``); range_regime: moves damped or amplified (needs ``regime``).
         statement: One plain sentence of what it says AND what it does not say.
         as_of: When the underlying data was observed (UTC-aware); the engine judges freshness from it.
         strength: 0..1, how strongly it says what it says.
         quality: 0..1, how much it can be trusted; ``quality_reasons`` lists what lowered it.
         direction: bullish / bearish / neutral where meaningful (directional items), else None.
         regime: range_bound / expansion for range_regime items, else None.
-        price: The price of a price_level or magnet item, else None.
+        price: The price of a price_level item, else None.
         horizon_days: The time the evidence speaks about (e.g. days to its expiry), None when it has none.
         quality_reasons: Why the quality is below 1 (stale data, failed plausibility check, assumption-based, ...).
         details: Numbers behind the item for the audit trail (JSON-serialisable values only).
@@ -82,7 +80,7 @@ class EvidenceItem:
             value = getattr(self, name)
             if not isinstance(value, (int, float)) or not math.isfinite(value) or not 0.0 <= value <= 1.0:
                 raise ValueError(f"{self.id}: {name} must be a finite number in 0..1, got {value!r}")
-        if self.kind in (PRICE_LEVEL, MAGNET) and (self.price is None or not math.isfinite(self.price) or self.price <= 0):
+        if self.kind == PRICE_LEVEL and (self.price is None or not math.isfinite(self.price) or self.price <= 0):
             raise ValueError(f"{self.id}: a {self.kind} item needs a positive price")
         if self.kind == DIRECTIONAL and self.direction not in DIRECTIONS:
             raise ValueError(f"{self.id}: a directional item needs a direction in {DIRECTIONS}")

@@ -11,7 +11,6 @@ import pytest
 
 from coding.core.analytics.futures_flow import taker_flow_figure
 from coding.core.analytics.futures_flow.taker_flow import taker_buy_sell_ratio
-from coding.core.analytics.liquidation_heatmap.liquidation_heatmap_model import HeatmapSettings
 from coding.core.analytics.menthorq_replication_calculator import (
     DEFAULT_LEVEL_CANDIDATES, GEX_PER_ONE_PERCENT_MOVE, strike_of_cumulative_minimum)
 from coding.core.analytics.dealer_inventory_calculator import DealerInventoryCalculator
@@ -21,8 +20,8 @@ from coding.core.analytics.report.section_fragments import UNRELIABLE_GAMMA_SHAR
 from coding.core.analytics.report.how_to_read import (
     REPORT_HELP, SECTION_HELP, HelpCase, HelpTopic, SectionHelp, all_help, confluence_width, cumulative_minimum_strike,
     days_left, example_ratio, flow_gex_per_one_percent_usd, flow_view_passes, gex_expiring_percent,
-    long_liquidation_price, net_dex_usd, net_gex_per_one_percent_usd, notional_usd, percent_from, share_by_part_percent,
-    share_percent, short_liquidation_price, sign_change_strike, strike_of_largest_positive, strike_of_most_negative,
+    net_dex_usd, net_gex_per_one_percent_usd, notional_usd, percent_from, share_by_part_percent,
+    share_percent, sign_change_strike, strike_of_largest_positive, strike_of_most_negative,
     violation_percent, zoom_window)
 from coding.service.on_chain.on_chain_analysis_service import (
     _DEALER_INVENTORY_COVERAGE_GATE, _DEALER_INVENTORY_MAX_EXCLUSION_RATE, _DEALER_INVENTORY_VIOLATION_GATE)
@@ -106,7 +105,6 @@ def test_expected_topics_exist():
     assert topic_of("menthorq", "Net DEX")
     assert topic_of("menthorq", "IV x OI per expiry")
     assert topic_of("dealer-levels", "The plausibility check")
-    assert topic_of("levels", "The liquidation estimate")
     assert topic_of("levels", "Using the levels")
     assert len(topics_of("decision")) == 4
 
@@ -193,7 +191,7 @@ def test_dealer_and_net_gex_topics_state_the_assumption():
 
 def test_report_help_states_the_basic_limits():
     text = " ".join(text for where, text in all_text() if where.startswith("report")).lower()
-    for phrase in ("not computed", "never mean", "ground truth", "not independent", "forward test", "as of"):
+    for phrase in ("not computed", "never mean", "ground truth", "not independent", "as of"):
         assert phrase in text or phrase.replace(" ", "") in text, phrase
     assert "zero" in text
 
@@ -217,7 +215,6 @@ def test_constants_match_the_code():
     assert help_module.COVERAGE_GATE == _DEALER_INVENTORY_COVERAGE_GATE
     assert help_module.VIOLATION_GATE == _DEALER_INVENTORY_VIOLATION_GATE
     assert help_module.MAX_EXCLUSION_RATE == _DEALER_INVENTORY_MAX_EXCLUSION_RATE
-    assert help_module.MAINTENANCE_MARGIN_RATE == HeatmapSettings().maintenance_margin_rate
 
 
 def test_level_rule_helpers_match_the_code():
@@ -232,14 +229,6 @@ def test_level_rule_helpers_match_the_code():
     assert sign_change_strike(never_negative) is None
     assert DealerInventoryCalculator._detect_key_levels(
         {strike: {"inferred_gex": value} for strike, value in never_negative.items()})["hvl"] is None
-
-
-def test_liquidation_helpers_match_the_model():
-    settings = HeatmapSettings()
-    assert long_liquidation_price(70_000, 25) == pytest.approx(settings.long_liquidation_price(70_000, 25))
-    assert short_liquidation_price(70_000, 25) == pytest.approx(settings.short_liquidation_price(70_000, 25))
-    assert round(long_liquidation_price(70_000, 25)) == 67_480
-    assert round(short_liquidation_price(70_000, 25)) == 72_520
 
 
 # ------------------------------------------------------------------ the arithmetic of the examples
@@ -452,33 +441,19 @@ def test_levels_zoom_and_ruler_examples():
 def test_strategy_and_hedge_examples():
     spread = case_of("levels", "Structuring a spread").example
     assert "5,000 points wide" in spread
-    hedge = case_of("levels", "Hedging a long position").example
-    assert f"{abs(percent_from(66_000, 70_000)):.1f} %" in hedge and "5.7 %" in hedge
     stop = case_of("levels", "Placing a stop").example
     assert f"{62_000 * 0.99:,.0f}" in stop and "61,380" in stop
-
-
-def test_liquidation_examples():
-    long_case = case_of("levels", "A long liquidation level").example
-    assert "67,480" in long_case and "0.004" in long_case
-    short_case = case_of("levels", "A short liquidation level").example
-    assert "72,520" in short_case
-    topic = topic_of("levels", "The liquidation estimate")
-    text = " ".join(case.reading for case in topic.cases) + " ".join(topic.limits)
-    assert "not a floor" in text and "not a ceiling" in text and "not shown by this report" in text and "no direction" in text
-    assert "forward test" in text
 
 
 def test_levels_help_names_every_lane_and_the_shared_inputs():
     topic = topic_of("levels", "The lanes")
     terms = " ".join(term.term for term in topic.terms)
-    for lane in ("MenthorQ replica", "Dealer GEX, open interest", "Dealer GEX, flow-based", "Option flow",
-                 "Liquidation estimate"):
+    for lane in ("MenthorQ replica", "Dealer GEX, open interest", "Dealer GEX, flow-based", "Option flow"):
         assert lane in terms
     shared = next(term for term in topic.terms if term.term == "Shared inputs").meaning
     assert "same open interest" in shared and "same stored trades" in shared
     confluence = topic_of("levels", "Where sources agree")
     meanings = " ".join(term.meaning for term in confluence.terms)
     assert "1 %" in meanings and "3" in meanings
-    assert "3 of 5" in " ".join(term.term for term in confluence.terms)
+    assert "3 of 4" in " ".join(term.term for term in confluence.terms)
     assert "coincidence of methods" in " ".join(case.reading for case in confluence.cases)
