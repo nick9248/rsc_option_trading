@@ -4,7 +4,9 @@ from typing import List
 
 from coding.core.health.models import CheckEnvironment, CheckResult, CheckStatus
 from coding.service.health.base import HealthCheck
-from coding.service.on_chain.on_chain_workflow_service import OnChainWorkflowService
+from coding.service.deribit.deribit_api_service import DeribitApiService
+from coding.service.morning_note.morning_note_service import MorningNoteService
+from coding.service.on_chain.on_chain_analysis_service import OnChainAnalysisService
 
 _CURRENCIES = ["BTC", "ETH"]
 
@@ -52,21 +54,10 @@ class MorningNoteSmokeTestCheck(HealthCheck):
     @staticmethod
     def _default_synthesis_runner(currency: str, repo) -> str:
         """
-        T9 (refactor_design_spec.md): one call into ``OnChainWorkflowService``
-        replaces the manual fetch_and_analyze + MorningNoteService
-        orchestration. ``repo`` (the framework-injected, environment-scoped
-        repository) is passed through explicitly so this check keeps
-        querying the exact repository instance the health-check framework
-        gave it -- the workflow service otherwise defaults to constructing
-        its own fresh ``DatabaseRepository()``, which is correct for the
-        GUI's fire-and-forget usage but would be wrong here.
-
-        Carried finding #3 (A6 review): ``save_bundle=False`` -- this is a
-        read-only synthesis smoke test, not a report-generation request.
-        Without it, every health-check invocation wrote a timestamped
-        report bundle to output/data/onchain_analysis/, an unflagged side
-        effect and failure surface for a check that only needs the
-        synthesis text.
+        Analyze ``currency`` and run the synthesis on the typed result. ``repo`` (the framework-injected,
+        environment-scoped repository) is used as given. Nothing is saved: this is a read-only smoke test.
         """
-        output = OnChainWorkflowService(currency, repository=repo).run(save_bundle=False)
-        return output.synthesis_text
+        with DeribitApiService(timeout=90) as api_service:
+            on_chain_service = OnChainAnalysisService(api_service, repository=repo)
+            _, result = on_chain_service.fetch_and_analyze(currency=currency, return_result=True)
+            return MorningNoteService(on_chain_service).generate(result)

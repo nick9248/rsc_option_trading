@@ -618,6 +618,11 @@ class OnChainAnalysisService:
                 logger.warning("get_metric_freshness(%s) failed for %s: %s", table, currency, exc)
                 ts = None
             if ts is not None:
+                # Tables mix `timestamp` (naive, UTC-valued) and `timestamptz`
+                # (dvol_history, returned aware in the DB session's offset).
+                # Normalize to naive UTC so they compare and display alike.
+                if ts.tzinfo is not None:
+                    ts = ts.astimezone(timezone.utc).replace(tzinfo=None)
                 timestamps.append(ts)
 
         if not timestamps:

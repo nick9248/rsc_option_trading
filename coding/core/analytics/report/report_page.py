@@ -88,6 +88,7 @@ class ReportHeader:
     generated_at: datetime
     facts: List[Tuple[str, str]] = field(default_factory=list)          # (label, value), e.g. ("Newest stored trade", "...")
     help: Optional[SectionHelp] = None          # "How to read this report"
+    kind: str = "market report"          # what the page is, shown after the currency in the title and the heading
 
 
 @dataclass
@@ -216,7 +217,7 @@ def _header_html(header: ReportHeader) -> str:
     """Title and the data-freshness facts."""
     facts = "".join(f"<div><dt>{html.escape(label)}</dt><dd>{html.escape(value)}</dd></div>" for label, value in header.facts)
     report_help = help_fragment(header.help, "How to read this report") if header.help is not None else ""
-    return (f'<h1><span class="currency">{html.escape(header.currency)}</span> market report</h1>'
+    return (f'<h1><span class="currency">{html.escape(header.currency)}</span> {html.escape(header.kind)}</h1>'
             f'<dl class="facts"><div><dt>Generated</dt><dd>{html.escape(format_utc(header.generated_at))}</dd></div>{facts}</dl>'
             f'{report_help}')
 
@@ -287,7 +288,7 @@ def build_report_page(header: ReportHeader, sections: Sequence[ReportSection], p
         raise ValueError("the report has figures but no plotly.js to draw them")
     plotly_html = f"<script>{plotly_javascript}</script>" if figures and plotly_javascript else ""
     replacements = {
-        "TITLE": html.escape(f"{header.currency} market report {format_utc(header.generated_at)}"),
+        "TITLE": html.escape(f"{header.currency} {header.kind} {format_utc(header.generated_at)}"),
         "HEADER": _header_html(header),
         "TABS": _tabs_html(sections),
         "PANELS": "".join(_section_html(section, index) for index, section in enumerate(sections)),

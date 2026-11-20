@@ -100,3 +100,29 @@ def test_staleness_threshold_still_fires_for_genuinely_stale_data():
         )
 
     assert result == four_hours_stale
+
+
+def test_mixed_naive_and_aware_timestamps_do_not_crash():
+    """
+    dvol_history is `timestamp with time zone` (returned aware, here in a
+    UTC+1 session offset) while the other tables are naive UTC. min() over
+    both used to raise "can't compare offset-naive and offset-aware".
+    The aware value 2026-08-19 07:00+01:00 is 06:00 UTC, i.e. the stalest.
+    """
+    naive_utc = datetime(2026, 8, 19, 11, 0)
+    aware_plus_one = datetime(2026, 8, 19, 7, 0, tzinfo=timezone(timedelta(hours=1)))
+    repo = MagicMock()
+    repo.get_metric_freshness.side_effect = [naive_utc, aware_plus_one]
+
+    service = _make_service(repo)
+
+    with patch(
+        "coding.service.on_chain.on_chain_analysis_service.datetime", _FrozenDateTime
+    ):
+        result = service._compute_historical_context_staleness(
+            currency="BTC",
+            front_month="8AUG26",
+            tables_used=[("onchain_analysis_snapshots", "8AUG26"), ("dvol_history", None)],
+        )
+
+    assert result == datetime(2026, 8, 19, 6, 0)

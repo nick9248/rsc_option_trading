@@ -27,31 +27,23 @@ def test_fail_when_synthesis_raises():
     assert "no data" in results[0].message
 
 
-def test_default_synthesis_runner_uses_one_call_workflow_service_with_injected_repo():
+def test_default_synthesis_runner_analyzes_then_synthesizes_with_the_injected_repo():
     """
-    T9 (refactor_design_spec.md): _default_synthesis_runner delegates to
-    OnChainWorkflowService.run(currency) -> .synthesis_text, and passes
-    through the framework-injected repo (not a fresh one) -- this check
-    must keep querying the exact repository instance the health-check
-    framework gave it.
-
-    Carried finding #3 (A6 review): run() must be called with
-    save_bundle=False -- this is a read-only synthesis smoke test; it must
-    not write a timestamped report bundle to disk on every invocation.
+    The health check still proves the synthesis engine runs: analyze with the framework-injected repository (not a fresh
+    one), then ``MorningNoteService.generate`` on the typed result. Nothing is saved.
     """
     from coding.service.health.checkers import morning_note_checker as checker_module
 
-    fake_output = MagicMock()
-    fake_output.synthesis_text = "BTC synthesis text"
     injected_repo = MagicMock(name="injected_repo")
+    fake_result = MagicMock(name="result")
 
-    with patch.object(checker_module, "OnChainWorkflowService") as mock_workflow_cls:
-        mock_workflow_cls.return_value.run.return_value = fake_output
+    with patch.object(checker_module, "DeribitApiService"),             patch.object(checker_module, "OnChainAnalysisService") as mock_service_cls,             patch.object(checker_module, "MorningNoteService") as mock_morning_cls:
+        mock_service_cls.return_value.fetch_and_analyze.return_value = ("REPORT", fake_result)
+        mock_morning_cls.return_value.generate.return_value = "BTC synthesis text"
 
-        result = checker_module.MorningNoteSmokeTestCheck._default_synthesis_runner(
-            "BTC", injected_repo
-        )
+        text = checker_module.MorningNoteSmokeTestCheck._default_synthesis_runner("BTC", injected_repo)
 
-    assert result == "BTC synthesis text"
-    mock_workflow_cls.assert_called_once_with("BTC", repository=injected_repo)
-    mock_workflow_cls.return_value.run.assert_called_once_with(save_bundle=False)
+    assert text == "BTC synthesis text"
+    _, kwargs = mock_service_cls.call_args
+    assert kwargs["repository"] is injected_repo
+    mock_morning_cls.return_value.generate.assert_called_once_with(fake_result)
