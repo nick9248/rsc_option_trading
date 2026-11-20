@@ -269,7 +269,9 @@ def build_overview(A, B, currency):
     scen = rows_as_dicts(find(ta, cls="scenarios"))
     ages = rows_as_dicts(find(ta, "Data ages"))
 
-    spot = num(mm.get("Spot")) or num(dict(B["facts"]).get("Spot")) or 0.0
+    spot = num(mm.get("Spot")) or num(dict(B["facts"]).get("Spot"))
+    if spot is None:
+        raise ValueError("the spot price is not in the on-chain dashboard (Market metrics table); the overview cannot be built")
 
     # ---- KPI values
     dvol = mm.get("DVOL", vol.get("DVOL", "—"))
@@ -278,11 +280,14 @@ def build_overview(A, B, currency):
     dvol_reg = dvol_row[5].lower() if dvol_row else ""
     ivp = num(mm.get("IV percentile (365 days)"))
     ivr = mm.get("IV rank (365 days)", "—").split(" (")[0]
-    net_gex = sum(num(r.get("Net GEX (signed)")) or 0 for r in roll)
-    short_n = sum(1 for r in roll if (num(r.get("Net GEX (signed)")) or 0) < 0)
-    tk = [num(r.get("Buy/sell ratio")) for r in reversed(taker)]
-    tk_days = [r.get("Day (UTC)", "") for r in reversed(taker)]
-    tk_net = [r.get("Net", "") for r in reversed(taker)]
+    gex_values = [value for value in (num(r.get("Net GEX (signed)")) for r in roll) if value is not None]          # a missing value is not 0
+    net_gex = sum(gex_values) if gex_values else None
+    short_n = sum(1 for value in gex_values if value < 0)
+    taker_days = [(num(r.get("Buy/sell ratio")), r.get("Day (UTC)", ""), r.get("Net", "")) for r in reversed(taker)]
+    taker_days = [day for day in taker_days if day[0] is not None]          # days without a ratio are left out, not drawn as 0
+    tk = [ratio for ratio, _, _ in taker_days]
+    tk_days = [day for _, day, _ in taker_days]
+    tk_net = [net for _, _, net in taker_days]
     perp = num(vol.get("Perpetual open interest"))
     basis_vals = sorted(v for v in (num(r.get("Annualized premium")) for r in basis) if v is not None and v > 0)
     basis_med = basis_vals[len(basis_vals) // 2] if basis_vals else None
@@ -298,7 +303,7 @@ def build_overview(A, B, currency):
     tiles = [
         tile("DVOL", dvol, f"p{dvol_p:.0f} · 30d · {dvol_reg}" if dvol_p is not None else "30d percentile not computed", "warn" if (dvol_p or 0) >= 90 else "", meter_mini((dvol_p or 0) / 100)),
         tile("IV rank 365d", ivr, f"IV percentile {mm.get('IV percentile (365 days)', '—')}", "", meter_mini((num(ivr) or 0) / 100)),
-        tile("Net GEX · all expiries", fmt_usd_short(net_gex), f"USD · {short_n} of {len(roll)} expiries short gamma", "neg" if net_gex < 0 else "pos"),
+        tile("Net GEX · all expiries", fmt_usd_short(net_gex), f"USD · {short_n} of {len(gex_values)} expiries short gamma", "neg" if net_gex < 0 else "pos") if net_gex is not None else tile("Net GEX · all expiries", "not computed", ""),
         tile("Taker buy/sell", f"{tk[-1]:.3f}" if tk else "—", f"{tk_days[-1]} · {'sellers' if tk and tk[-1] < 1 else 'buyers'} lead" if tk else "", "neg" if tk and tk[-1] < 1 else "pos",
              spark(tk, 92, 30, "neg" if tk and tk[-1] < 1 else "pos", "tsp", [f"{d}: {v:.3f}, net {n}" for d, v, n in zip(tk_days, tk, tk_net)]) if tk else ""),
         tile("Perpetual OI", fmt_usd_short(perp) if perp else "—", "USD · Binance"),
@@ -364,11 +369,11 @@ def build_overview(A, B, currency):
                   f'<span class="gx-e">{esc(r.get("Expiry"))}</span><span class="gx-track"><span class="gx-zero"></span><span class="gx-bar {side}" style="{pos}"></span></span>'
                   f'<span class="gx-v">{fmt_usd_short(g)}</span></div>')
     gamma = (f'<div class="gamma">{grows}</div><div class="axis-note"><span>◀ short gamma</span><span>USD, assumed dealer</span><span>long gamma ▶</span></div>'
-             f'<p class="note-s">{short_n} of {len(roll)} expiries short gamma · {esc(top.get("Expiry", ""))} carries {esc(top.get("Share of gross gamma", ""))} of gross gamma.</p>')
+             f'<p class="note-s">{short_n} of {len(gex_values)} expiries short gamma · {esc(top.get("Expiry", ""))} carries {esc(top.get("Share of gross gamma", ""))} of gross gamma.</p>')
 
     # ---- IV term structure (log days on x)
     W, Hh, pad = 420, 150, 10
-    pts = [(num(r.get("Days")), num(r.get("ATM IV")), r) for r in skew if num(r.get("ATM IV")) is not None]
+    pts = [(num(r.get("Days")), num(r.get("ATM IV")), r) for r in skew if num(r.get("Days")) is not None and num(r.get("ATM IV")) is not None]
     ivsvg = ""
     if pts:
         lo = math.floor(min(v for _, v, _ in pts) / 5) * 5
@@ -481,7 +486,9 @@ def build_overview(A, B, currency):
     # ---- hero
     sup = support or (max((p for p in cands if p < spot), default=None))
     chips = [f'<span class="chip chip-live">● Chain {esc(dict(A["facts"]).get("Chain snapshot", "")[11:16])} UTC</span>',
-             f'<span class="chip chip-{"neg" if net_gex < 0 else "pos"}">{"Short" if net_gex < 0 else "Long"} gamma</span>']
+             ]
+    if net_gex is not None:
+        chips.append(f'<span class="chip chip-{"neg" if net_gex < 0 else "pos"}">{"Short" if net_gex < 0 else "Long"} gamma</span>')
     if upside_unmapped:
         chips.append('<span class="chip chip-warn">Upside unmapped</span>')
     if conf:
@@ -490,7 +497,7 @@ def build_overview(A, B, currency):
     if sup:
         line.append(f"Support {fmt_int(sup)} · {pct_from(sup, spot).lstrip('−+')} below")
     if zg:
-        line.append(f"zero gamma {fmt_int(zg)} · {pct_from(zg, spot).lstrip('+')} {'above' if zg > spot else 'below'}")
+        line.append(f"zero gamma {fmt_int(zg)} · {pct_from(zg, spot).lstrip('−+')} {'above' if zg > spot else 'below'}")
     whole, frac = f"{spot:,.2f}".split(".")
     hero = (f'<section class="hero"><div class="hero-sheen"></div><div class="hero-chrome"></div><div class="hero-in">'
             f'<div class="hero-main"><div class="chips">{"".join(chips)}</div><span class="hero-k">Spot · Deribit index · USD</span>'
