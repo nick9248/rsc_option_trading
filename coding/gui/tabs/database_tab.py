@@ -13,9 +13,6 @@ reuses scripts/sync_from_vps.py's mechanics rather than duplicating them.
 """
 
 import logging
-import os
-import subprocess
-from pathlib import Path
 from typing import Optional
 
 from PySide6.QtWidgets import (
@@ -111,23 +108,6 @@ class DatabaseTab(QWidget):
 
         controls_layout.addStretch()
 
-        # Open charts button (browse historical chart artifacts on disk)
-        self.open_charts_btn = QPushButton("Open Charts Folder")
-        self.open_charts_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {Colors.BUTTON_SECONDARY};
-                color: {Colors.TEXT_PRIMARY};
-                border: 1px solid {Colors.BORDER};
-                padding: 6px 12px;
-                border-radius: 6px;
-            }}
-            QPushButton:hover {{
-                background-color: {Colors.BUTTON_SECONDARY_HOVER};
-            }}
-        """)
-        self.open_charts_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        controls_layout.addWidget(self.open_charts_btn)
-
         # Sync from VPS button
         self.sync_vps_btn = QPushButton("Sync from VPS")
         self.sync_vps_btn.setStyleSheet(f"""
@@ -174,20 +154,7 @@ class DatabaseTab(QWidget):
 
     def _connect_signals(self) -> None:
         """Connect widget signals."""
-        self.open_charts_btn.clicked.connect(self._on_open_charts_folder)
         self.sync_vps_btn.clicked.connect(self._on_sync_vps)
-
-    def _on_open_charts_folder(self) -> None:
-        """Open charts folder."""
-        charts_dir = Path(__file__).parent.parent.parent.parent / "output" / "charts"
-        charts_dir.mkdir(parents=True, exist_ok=True)
-
-        if os.name == "nt":
-            os.startfile(str(charts_dir))
-        else:
-            subprocess.run(["xdg-open", str(charts_dir)])
-
-        self.log_viewer.log_info(f"Opened charts folder: {charts_dir}")
 
     def _on_sync_vps(self) -> None:
         """Start VPS sync in background."""
