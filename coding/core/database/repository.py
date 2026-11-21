@@ -1387,6 +1387,42 @@ class DatabaseRepository:
                 (currency, computed_at, reference_price, text))
             return cursor.fetchone() is not None
 
+    def save_strategy_suggestion(self, row: Dict[str, Any]) -> int:
+        """
+        Store one answer of the model (migration 038); rows are only added.
+
+        Args:
+            row: currency, expiration, computed_at (timezone-aware UTC), reference_price, model, status, facts, response,
+                net_premium_usd (None allowed), input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd,
+                request_id (None allowed).
+
+        Returns:
+            The id of the new row.
+
+        Raises:
+            ValueError: for a naive ``computed_at``.
+        """
+        if row["computed_at"].tzinfo is None:
+            raise ValueError("computed_at must be timezone-aware (UTC)")
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO strategy_suggestions (
+                    currency, expiration, computed_at, reference_price, model, status, facts, response, net_premium_usd,
+                    input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, request_id)
+                VALUES (%(currency)s, %(expiration)s, %(computed_at)s, %(reference_price)s, %(model)s, %(status)s, %(facts)s,
+                        %(response)s, %(net_premium_usd)s, %(input_tokens)s, %(output_tokens)s, %(cache_read_tokens)s,
+                        %(cache_write_tokens)s, %(cost_usd)s, %(request_id)s)
+                RETURNING id
+                """, row)
+            return cursor.fetchone()[0]
+
+    def get_strategy_suggestion_total_cost(self) -> float:
+        """What all stored strategy suggestion calls cost, in USD (0.0 when there are none)."""
+        with self._db_cursor() as cursor:
+            cursor.execute("SELECT COALESCE(SUM(cost_usd), 0) FROM strategy_suggestions")
+            return float(cursor.fetchone()[0])
+
     def get_decision_snapshot_at_or_before(self, currency: str, instant: datetime) -> Optional[DecisionSnapshotRecord]:
         """The newest stored report with ``computed_at <= instant``, or None."""
         with self._db_cursor() as cursor:
