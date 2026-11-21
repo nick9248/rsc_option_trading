@@ -106,7 +106,7 @@ def test_expected_topics_exist():
     assert topic_of("menthorq", "IV x OI per expiry")
     assert topic_of("dealer-levels", "The plausibility check")
     assert topic_of("levels", "Using the levels")
-    assert len(topics_of("decision")) == 4
+    assert len(topics_of("decision")) == 3
 
 
 # ------------------------------------------------------------------ wording rules

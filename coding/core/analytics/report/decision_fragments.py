@@ -1,7 +1,8 @@
 """
-HTML fragments of the "Decision" tab of the market report (pure; all text is escaped).
+HTML fragments of the "Evidence" tab (key "decision") of the market report (pure; all text is escaped): the price map, the reference lines, the
+evidence and the caveats. There are no scenarios, scores or confidence labels (removed 2026-11-21: never calibrated).
 
-They only render what the decision engine returned (``DecisionReport``): nothing is scored a second time here. A missing
+They only render what the evidence report returned (``DecisionReport``): nothing is computed a second time here. A missing
 value is written as "not computed", never as zero. Amounts are written in USD, never with a dollar sign.
 """
 
@@ -10,19 +11,16 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from coding.core.analytics.decision import decision_config
-from coding.core.analytics.decision.decision_report import (
-    BREAK_DOWN, BREAK_UP, INSIDE, ChangeTrigger, DecisionReport, ScenarioAssessment)
+from coding.core.analytics.decision.decision_report import DecisionReport
 from coding.core.analytics.decision.evidence import EvidenceItem
 from coding.core.analytics.decision.price_map import MapLevel
 from coding.core.analytics.report.report_page import format_utc, paragraph_fragment, table_fragment
 from coding.core.analytics.report.section_fragments import NOT_COMPUTED
 
-UNCALIBRATED_WORDS = "uncalibrated, not a probability"
-DECISIONS_NOTE = "Decision support, not orders, not targets."
-GROUP_NOTE = ("Items of one input group are derived from the same data, so the engine counts a group once, however many "
-              "items it holds.")
-SCENARIO_WORDS = {INSIDE: "stays inside", BREAK_UP: "breaks above", BREAK_DOWN: "breaks below"}
-NO_TOP_SCENARIO_WORDS = "no scenario with net support"
+DECISIONS_NOTE = "Reference levels and conditions, not orders, not targets, not a ranking of scenarios."
+GROUP_NOTE = ("Items of one input group are derived from the same data, so the price map counts a group once, however many "
+              "items it holds. Only price levels shape the map; directional and regime items are shown for reference and feed "
+              "nothing.")
 
 
 def _cell(text: str, css_class: str = "") -> str:
@@ -34,10 +32,6 @@ def _list_fragment(entries: Sequence[str]) -> str:
     return "<ul>" + "".join(f"<li>{html.escape(entry)}</li>" for entry in entries) + "</ul>"
 
 
-def _ids_text(identifiers: Sequence[str]) -> str:
-    return ", ".join(identifiers) if identifiers else "none"
-
-
 def _small_value_text(value: float) -> str:
     """Two decimals; a positive value that would round to 0.00 is written "<0.01" (0.00 only for an exact 0)."""
     return "<0.01" if 0 < value < 0.005 else f"{value:.2f}"
@@ -47,25 +41,23 @@ def _price_text(price: Optional[float]) -> str:
     return f"{price:,.0f}" if price is not None else NOT_COMPUTED
 
 
-def _scenario_of_top(report: DecisionReport) -> Optional[ScenarioAssessment]:
-    return report.scenario(report.top_scenario) if report.top_scenario is not None else None
-
-
 # ---------------------------------------------------------------- (1) header line
 
 def decision_header_fragment(report: DecisionReport) -> str:
-    """
-    One line: the top scenario (the only highlighted word group of the tab), its confidence label and its evidence score,
-    with the words that say the score is uncalibrated. Without a top scenario the line says so and gives the reason.
-    """
-    top = _scenario_of_top(report)
-    if top is None:
-        reason = "; ".join(report.confidence_reasons) or NOT_COMPUTED
-        return ('<p class="verdict"><mark>No scenario has net support</mark>. '
-                f'Confidence: {html.escape(report.confidence)}. Reason: {html.escape(reason)}.</p>')
-    return (f'<p class="verdict">Best-supported scenario: <mark>{html.escape(top.title)}</mark>. '
-            f'Confidence: {html.escape(top.confidence)} (an ordinal label, built from the reasons below). '
-            f'Evidence score {top.evidence_score:.1f} of 100 ({html.escape(UNCALIBRATED_WORDS)}).</p>')
+    """One line: the spot, the reference range when both sides are mapped (else which side is unmapped) and the evidence counts."""
+    price_map = report.price_map
+    if price_map.support is not None and price_map.resistance is not None:
+        where = (f"Reference range {_price_text(price_map.support.price)} to {_price_text(price_map.resistance.price)} "
+                 f"around the spot {_price_text(report.reference_price)}")
+    elif price_map.support is not None:
+        where = f"Support {_price_text(price_map.support.price)}; the upside is unmapped (spot {_price_text(report.reference_price)})"
+    elif price_map.resistance is not None:
+        where = f"Resistance {_price_text(price_map.resistance.price)}; the downside is unmapped (spot {_price_text(report.reference_price)})"
+    else:
+        where = f"No level is mapped on either side of the spot {_price_text(report.reference_price)}"
+    groups = {item.input_group for item in report.evidence}
+    return (f'<p class="verdict"><mark>{html.escape(where)}</mark>. {len(report.evidence)} evidence items from {len(groups)} input '
+            f'groups, {len(report.not_computed)} sources not computed. Levels, not a forecast and not a ranking of scenarios.</p>')
 
 
 # ---------------------------------------------------------------- (2) price map
@@ -105,56 +97,29 @@ def price_map_fragment(report: DecisionReport) -> str:
              f'on each side of the spot</caption><thead><tr>{head}</tr></thead><tbody>{"".join(rows)}</tbody></table></div>')
     sentences = []
     if price_map.support is None and price_map.resistance is None:
-        sentences.append(f"Neither side is mapped: no meaningful level within {distance} of the spot, so no scenario can be built.")
+        sentences.append(f"Neither side is mapped: no meaningful level within {distance} of the spot.")
     elif price_map.resistance is None:
         sentences.append(f"One-sided map: the upside is unmapped (no meaningful level above the spot within {distance}); "
-                         "only the support bounds the scenarios.")
+                         "only the support is mapped.")
     elif price_map.support is None:
         sentences.append(f"One-sided map: the downside is unmapped (no meaningful level below the spot within {distance}); "
-                         "only the resistance bounds the scenarios.")
+                         "only the resistance is mapped.")
     meaningful = sum(1 for level in price_map.levels if level.meaningful)
     counts = (f"{len(price_map.levels)} bands within {distance} of the spot, {meaningful} meaningful (weight at least "
               f"{decision_config.MINIMUM_LEVEL_WEIGHT:g}); {len(price_map.left_out)} price levels beyond that distance are left out.")
     return table + "".join(paragraph_fragment(text, "verdict-failed") for text in sentences) + paragraph_fragment(counts, "note")
 
 
-# ---------------------------------------------------------------- (3) scenarios
-
-def _contributions_text(contributions: Dict[str, float]) -> str:
-    return "; ".join(f"{group} {value:+.2f}" for group, value in contributions.items()) or "none"
-
-
-def scenarios_fragment(report: DecisionReport) -> str:
-    """One row per scenario, best score first: score, label, supporting and opposing evidence ids, reasons for the label."""
-    if not report.scenarios:
-        return paragraph_fragment("No scenario: there is no mapped level on either side of the spot.")
-    headers = ["Scenario", "Evidence score", "Confidence", "Supporting evidence", "Opposing evidence",
-               "Input group contributions", "Reasons for the label"]
-    head = "".join(f'<th scope="col"{" class=\"num\"" if index == 1 else ""}>{html.escape(text)}</th>'
-                   for index, text in enumerate(headers))
-    body = "".join(
-        f'<tr><th scope="row" class="wrap">{html.escape(scenario.title)}</th>'
-        + _cell(f"{scenario.evidence_score:.1f}", "num") + _cell(scenario.confidence)
-        + _cell(_ids_text(scenario.supporting_evidence_ids), "wrap") + _cell(_ids_text(scenario.opposing_evidence_ids), "wrap")
-        + _cell(_contributions_text(scenario.group_contributions), "wrap")
-        + f'<td class="wrap">{_list_fragment(scenario.confidence_reasons)}</td></tr>'
-        for scenario in report.scenarios)
-    table = ('<div class="table-wrap"><table class="scenarios"><caption>'
-             f'Evidence score: {html.escape(report.score_scale)}; the scores of different scenarios do not add up to 100'
-             f'</caption><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>')
-    return table
-
-
-# ---------------------------------------------------------------- (4) decisions
+# ---------------------------------------------------------------- (3) reference lines
 
 def decisions_fragment(report: DecisionReport) -> str:
-    """The decision-support lines exactly as the engine produced them, under the note that they are not orders or targets."""
+    """The reference lines exactly as the report builder produced them, under the note that they are not orders or targets."""
     lines = "".join(f"<li><strong>{html.escape(item.kind.replace('_', ' '))}</strong> {html.escape(item.text)}</li>"
                     for item in report.decisions)
     return paragraph_fragment(DECISIONS_NOTE, "note") + f'<ul class="decision-lines">{lines}</ul>'
 
 
-# ---------------------------------------------------------------- (5) evidence
+# ---------------------------------------------------------------- (4) evidence
 
 def _lean_text(item: EvidenceItem) -> str:
     return item.direction or (item.regime.replace("_", "-") if item.regime else None) or "not applicable"
@@ -195,24 +160,7 @@ def evidence_fragment(report: DecisionReport) -> str:
               f'group</caption><thead><tr>{head}</tr></thead><tbody>{"".join(body)}</tbody></table></div>')
 
 
-# ---------------------------------------------------------------- (6) what would change this
-
-def change_triggers_fragment(report: DecisionReport) -> str:
-    """The items whose flip or removal alone would change the top scenario, and what would then lead."""
-    if not report.what_would_change:
-        return paragraph_fragment("No single item's flip or removal changes the top scenario.")
-    rows = [[trigger.evidence_id, trigger.change, _new_top_text(trigger)] for trigger in report.what_would_change]
-    return table_fragment(["Item", "Change", "Top scenario then"], rows,
-                          caption="Each item is changed alone and the whole report is recomputed")
-
-
-def _new_top_text(trigger: ChangeTrigger) -> str:
-    if trigger.new_top_scenario is None:
-        return NO_TOP_SCENARIO_WORDS
-    return SCENARIO_WORDS.get(trigger.new_top_scenario, trigger.new_top_scenario)
-
-
-# ---------------------------------------------------------------- (7) caveats and freshness
+# ---------------------------------------------------------------- (5) caveats and freshness
 
 def _context_time(report: DecisionReport, key: str) -> Optional[datetime]:
     """A time stored in ``report.context`` as ISO 8601 text; None when absent, unreadable or without a time zone."""
@@ -261,11 +209,9 @@ def caveats_fragment(report: DecisionReport) -> str:
 # ---------------------------------------------------------------- the whole tab
 
 def decision_body_fragment(report: DecisionReport) -> str:
-    """The seven parts of the Decision tab in reading order, each under its own heading (the first is the header line)."""
+    """The parts of the Evidence tab in reading order, each under its own heading (the first is the header line)."""
     return (decision_header_fragment(report)
             + "<h3>Price map</h3>" + price_map_fragment(report)
-            + "<h3>Scenarios</h3>" + scenarios_fragment(report)
-            + "<h3>Decisions</h3>" + decisions_fragment(report)
+            + "<h3>Reference lines</h3>" + decisions_fragment(report)
             + "<h3>Evidence</h3>" + evidence_fragment(report)
-            + "<h3>What would change this</h3>" + change_triggers_fragment(report)
             + "<h3>Data caveats and freshness</h3>" + caveats_fragment(report))

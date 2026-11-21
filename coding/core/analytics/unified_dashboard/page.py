@@ -17,7 +17,7 @@ LOGOS = {"BTC": "₿", "ETH": "Ξ"}
 TABS = [  # (key, label, source, source panel id)
     ("home", "Overview", None, None),
     ("levels", "Levels", "A", "levels"),
-    ("decision", "Decision", "A", "decision"),
+    ("decision", "Evidence", "A", "decision"),
     ("expiries", "Expiries", "B", "expiries"),
     ("menthorq", "MenthorQ", "A", "menthorq"),
     ("dealer-levels", "Dealer levels", "A", "dealer-levels"),

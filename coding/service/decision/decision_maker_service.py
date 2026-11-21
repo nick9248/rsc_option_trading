@@ -20,7 +20,7 @@ from typing import Callable, List, Optional
 from coding.core.analytics.decision import decision_config as config
 from coding.core.analytics.decision.decision_report import DecisionReport
 from coding.core.analytics.decision.evidence import EvidenceItem
-from coding.core.analytics.decision.scenario_engine import build_decision_report
+from coding.core.analytics.decision.evidence_report import build_decision_report
 from coding.core.analytics.menthorq_replication_calculator import replicate_menthorq, select_drawn_levels
 from coding.core.database.repository import DatabaseRepository
 from coding.service.decision import evidence_extractors as extractors
@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 
 class DecisionMakerService:
-    """Collects the evidence of every source and runs the scenario engine."""
+    """Collects the evidence of every source and builds the evidence report (freshness check and price map)."""
 
     def __init__(self, repository: Optional[DatabaseRepository] = None,
                  clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc)):
@@ -146,19 +146,14 @@ class DecisionMakerService:
 
 def summary_lines(report: DecisionReport) -> List[str]:
     """A readable summary of a report, one line per entry (for logging)."""
-    lines = [f"{report.currency} decision report as of {report.as_of:%Y-%m-%d %H:%M} UTC, spot {report.reference_price:,.2f}",
-             f"Score scale: {report.score_scale}"]
+    lines = [f"{report.currency} evidence report as of {report.as_of:%Y-%m-%d %H:%M} UTC, spot {report.reference_price:,.2f}"]
     price_map = report.price_map
     for name, level in (("support", price_map.support), ("resistance", price_map.resistance),
                         ("next below", price_map.next_below), ("next above", price_map.next_above)):
         lines.append(f"  {name}: " + ("unmapped" if level is None else
                                        f"{level.price:,.0f} [{level.low:,.0f}-{level.high:,.0f}] weight {level.weight:.2f} "
                                        f"groups {', '.join(level.input_groups)}"))
-    for scenario in report.scenarios:
-        lines.append(f"Scenario '{scenario.title}': score {scenario.evidence_score:.1f}, confidence {scenario.confidence} "
-                     f"(support {scenario.support:.3f}, opposition {scenario.opposition:.3f})")
-        lines.extend(f"    {reason}" for reason in scenario.confidence_reasons)
-    lines.append("Decisions:")
+    lines.append("Reference lines:")
     lines.extend(f"  - [{item.kind}] {item.text}" for item in report.decisions)
     lines.append(f"Evidence ({len(report.evidence)} items):")
     for item in report.evidence:

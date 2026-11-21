@@ -1,12 +1,13 @@
 """
-Decision maker: the evidence of every source, the price map, scored scenarios and decision-support lines for one currency.
+Evidence report: the evidence of every source, the price map, reference lines and caveats for one currency. (Until 2026-11-21 it also
+scored scenarios and labelled confidence; that was removed because the scores were never calibrated.)
 
 Usage (from repo root; sync the local database first for current data: scripts/sync_from_vps.py):
     .venv\\Scripts\\python -m scripts.decision_maker --currency BTC
     .venv\\Scripts\\python -m scripts.decision_maker --currency ETH --save --json output/decision_maker/eth.json
 
 Reads the local database and logs a readable summary. ``--save`` stores the report in ``decision_snapshots`` (migration
-036; never rewritten). ``--json`` writes the full report. Places no orders; the output is decision support, not a forecast.
+036; never rewritten). ``--json`` writes the full report. Places no orders; the output is reference material, not a forecast.
 """
 
 import argparse
@@ -23,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Build the report, log its summary and optionally store it or write it as JSON."""
-    parser = argparse.ArgumentParser(description="Decision maker: scenarios with evidence and an ordinal confidence")
+    parser = argparse.ArgumentParser(description="Evidence report: levels, evidence and caveats (no scoring)")
     parser.add_argument("--currency", default="BTC", choices=["BTC", "ETH"])
     parser.add_argument("--save", action="store_true", help="store the report in decision_snapshots")
     parser.add_argument("--json", type=Path, default=None, help="write the full report to this JSON file")

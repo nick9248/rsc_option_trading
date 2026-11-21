@@ -170,14 +170,6 @@ main{margin-top:18px}
 .verdict-s{margin:0;font-size:13px;line-height:1.55}
 .verdict-s mark,.verdict mark{background:linear-gradient(transparent 50%,var(--mark) 50%);color:inherit;font-weight:650;padding:0 2px}
 .warn-line{margin:0;font-size:12px;color:var(--warn);padding:8px 10px;border-radius:10px;border:1px solid color-mix(in srgb,var(--warn) 45%,transparent);background:color-mix(in srgb,var(--warn) 7%,transparent)}
-.scens{display:flex;flex-direction:column;gap:10px}
-.sc-top{display:flex;justify-content:space-between;gap:10px;font-size:12px}
-.sc-n{min-width:0}
-.sc-c{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);flex:none;height:fit-content}
-.conf-low{color:var(--warn);border-color:var(--warn)}.conf-high{color:var(--pos);border-color:var(--pos)}
-.sc-bar{height:7px;border-radius:999px;background:var(--line);overflow:hidden;margin-top:5px}
-.sc-bar span{display:block;height:100%;background:var(--bar);border-radius:999px}
-.sc-v{font:10.5px var(--mono);color:var(--muted)}
 .pmap{display:flex;flex-direction:column;border-top:1px solid var(--line)}
 .pm{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,auto) 56px;gap:10px;padding:6px 0;border-bottom:1px solid var(--line);font-size:12px}
 .pm b{font-family:var(--mono);text-align:right;max-width:24ch;white-space:normal}.pm span:last-child{font-family:var(--mono);text-align:right;color:var(--muted)}
@@ -270,10 +262,8 @@ button.jump{background:none;border:0;border-bottom:1px dashed var(--accent);padd
 .verdict{margin:6px 0 10px;font-size:16px;max-width:90ch}
 .verdict-failed{font-weight:600;color:var(--warn)}
 tr.group-row th{background:var(--faint);color:var(--muted);font-weight:600;font-size:12px;white-space:normal}
-table.scenarios th.wrap{white-space:normal;min-width:22ch;max-width:40ch}
 table.evidence tbody th[scope="row"],table.price-map td.wrap{white-space:normal;overflow-wrap:anywhere;min-width:16ch;max-width:32ch}
 table.evidence td.wrap,table.price-map td.wrap{overflow-wrap:anywhere}
-table.scenarios ul{margin:0;padding-left:16px}
 .decision-lines{padding-left:18px}.decision-lines li{margin:0 0 4px}
 .share-cell{white-space:nowrap}
 .share-track{display:inline-block;width:120px;height:6px;margin-right:8px;vertical-align:middle;background:var(--line);border-radius:999px;overflow:hidden}

@@ -11,7 +11,7 @@ from coding.core.analytics.unified_dashboard.glossary import TOOLTIPS, tooltip_t
 from coding.core.analytics.unified_dashboard.overview import CARD_TOOLTIPS, GAUGE_TOOLTIPS, TILE_TOOLTIPS, card, gauge, tile
 from tests.unit.onchain_dashboard.test_unified_dashboard import PLOTLY_STAND_IN, make_report_page
 
-CHIP_KEYS = {"chip_chain", "chip_gamma", "chip_upside", "chip_confidence"}
+CHIP_KEYS = {"chip_chain", "chip_gamma", "chip_upside"}
 
 
 def test_every_tooltip_has_the_three_parts_and_no_placeholder_text():

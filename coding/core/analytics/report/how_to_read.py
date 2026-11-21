@@ -236,8 +236,6 @@ def population_standard_deviation(values: Sequence[float]) -> float:
 
 
 # Decision tab: constants copied from coding/core/analytics/decision/decision_config.py (the tests check them against it)
-DECISION_SCORE_HALF_POINT = 1.0
-DECISION_CONFLICT_PENALTY = 1.0
 DECISION_GROUP_CONTRIBUTION_CAP = 1.0
 DECISION_MINIMUM_LEVEL_WEIGHT = 0.3
 DECISION_MAXIMUM_LEVEL_DISTANCE_SHARE = 0.15
@@ -247,17 +245,6 @@ DECISION_STALE_QUALITY_FACTOR = 0.5
 DECISION_VERY_STALE_MULTIPLE = 4.0
 DECISION_VERY_STALE_QUALITY_FACTOR = 0.1
 DECISION_FAILED_CHECK_QUALITY_FACTOR = 0.2
-DECISION_MINIMUM_AGREEING_CONTRIBUTION = 0.05
-DECISION_HIGH_MINIMUM_GROUPS = 3
-DECISION_LOW_MAXIMUM_GROUPS = 1
-DECISION_HIGH_CONFLICT_SHARE = 0.35
-DECISION_LOW_CONFLICT_SHARE = 0.10
-DECISION_GOOD_MEAN_QUALITY = 0.6
-DECISION_POOR_MEAN_QUALITY = 0.35
-DECISION_WIDE_MARGIN_POINTS = 20.0
-DECISION_NARROW_MARGIN_POINTS = 10.0
-DECISION_HIGH_MINIMUM_POINTS = 2
-DECISION_LOW_MAXIMUM_POINTS = -1
 DECISION_TAKER_MINIMUM_POINTS = 240
 
 
@@ -272,12 +259,6 @@ def group_contribution_value(quality_and_value: Sequence[Tuple[float, float]]) -
     return max(-DECISION_GROUP_CONTRIBUTION_CAP, min(DECISION_GROUP_CONTRIBUTION_CAP, mean_value * mean_quality))
 
 
-def evidence_score(support: float, opposition: float) -> float:
-    """The evidence score (scenario_engine.py): net = support minus opposition (not below 0), score = 100 x net / (net + 1)."""
-    net = max(0.0, support - DECISION_CONFLICT_PENALTY * opposition)
-    return 100.0 * net / (net + DECISION_SCORE_HALF_POINT)
-
-
 def quality_after_age(quality: float, age_hours: float) -> float:
     """Quality of an item of age ``age_hours`` (freshness limit 3 h): times 0.5 when older, times 0.1 when older than 4 limits."""
     if age_hours > DECISION_FRESHNESS_LIMIT_HOURS * DECISION_VERY_STALE_MULTIPLE:
@@ -285,44 +266,6 @@ def quality_after_age(quality: float, age_hours: float) -> float:
     if age_hours > DECISION_FRESHNESS_LIMIT_HOURS:
         return quality * DECISION_STALE_QUALITY_FACTOR
     return quality
-
-
-def confidence_points(agreeing_groups: int, conflict_share: float, mean_quality: float, stale_count: int,
-                      margin: float) -> int:
-    """
-    The points of the five confidence criteria of the top scenario (scenario_engine._confidence), each +1, 0 or -1:
-    agreeing input groups, conflict share, mean quality of the supporting items, stale supporting items, margin to the
-    next scenario in score points.
-    """
-    points = 0
-    if agreeing_groups >= DECISION_HIGH_MINIMUM_GROUPS:
-        points += 1
-    elif agreeing_groups <= DECISION_LOW_MAXIMUM_GROUPS:
-        points -= 1
-    if conflict_share > DECISION_HIGH_CONFLICT_SHARE:
-        points -= 1
-    elif conflict_share < DECISION_LOW_CONFLICT_SHARE:
-        points += 1
-    if mean_quality >= DECISION_GOOD_MEAN_QUALITY:
-        points += 1
-    elif mean_quality < DECISION_POOR_MEAN_QUALITY:
-        points -= 1
-    if stale_count:
-        points -= 1
-    if margin >= DECISION_WIDE_MARGIN_POINTS:
-        points += 1
-    elif margin < DECISION_NARROW_MARGIN_POINTS:
-        points -= 1
-    return points
-
-
-def confidence_label(agreeing_groups: int, points: int, score: float, stale_count: int) -> str:
-    """The label (scenario_engine._confidence): low, high or medium."""
-    if agreeing_groups <= DECISION_LOW_MAXIMUM_GROUPS or points <= DECISION_LOW_MAXIMUM_POINTS or score <= 0:
-        return "low"
-    if agreeing_groups >= DECISION_HIGH_MINIMUM_GROUPS and points >= DECISION_HIGH_MINIMUM_POINTS and not stale_count:
-        return "high"
-    return "medium"
 
 
 # --------------------------------------------------------------------------
@@ -405,12 +348,8 @@ DECISION_HVL_STRENGTH = 0.5
 DECISION_HVL_QUALITY = 0.7
 DECISION_WEAK_FLIP_STRENGTH = 0.05
 DECISION_WEAK_FLIP_QUALITY = 0.6
-DECISION_HIGH_EXAMPLE = (3, 0.08, 0.55, 0, 25.0)       # agreeing groups, conflict share, mean quality, stale items, margin
 DECISION_FLOW_STRIKE_QUALITY = 0.35         # an option-flow strike as a level (strength 1.0 for the top strike)
 DECISION_DEALER_FLIP_STRENGTH = 0.5         # a dealer gamma flip at full open-interest share
-DECISION_CAPPED_EXAMPLE = (3, 0.05, 0.55, 1, 25.0)
-DECISION_CONFLICT_EXAMPLE = (3, 0.40, 0.60, 0, 12.0)
-DECISION_ONE_GROUP_EXAMPLE = (1, 0.0, 0.70, 0, 30.0)
 DECISION_TAKER_POINTS_FOUND = 120
 
 
@@ -470,15 +409,6 @@ _ZOOM_LOW, _ZOOM_HIGH = zoom_window(EXAMPLE_SPOT, LEVELS_ZOOM_SHARE)
 _DECISION_ONE_ITEM = group_contribution_value([(DECISION_ITEM_QUALITY, DECISION_ITEM_VALUE)])
 _DECISION_TWO_ITEMS_ONE_GROUP = group_contribution_value([(DECISION_ITEM_QUALITY, DECISION_ITEM_VALUE)] * 2)
 _DECISION_TWO_GROUPS = _DECISION_ONE_ITEM + _DECISION_ONE_ITEM
-_DECISION_WALL = group_contribution_value([(DECISION_WALL_QUALITY, DECISION_WALL_STRENGTH)])
-_DECISION_INSIDE_SUPPORT = _DECISION_WALL + _DECISION_WALL            # one wall of each of two groups
-_DECISION_INSIDE_SCORE = evidence_score(_DECISION_INSIDE_SUPPORT, 0.0)
-_DECISION_BREAK_UP_SCORE = evidence_score(0.0, _DECISION_WALL)        # the call wall is the obstacle: all opposition
-_DECISION_MEDIUM_POINTS = confidence_points(2, 0.0, DECISION_WALL_QUALITY, 0, _DECISION_INSIDE_SCORE - _DECISION_BREAK_UP_SCORE)
-_DECISION_HIGH_POINTS = confidence_points(*DECISION_HIGH_EXAMPLE)
-_DECISION_CAPPED_POINTS = confidence_points(*DECISION_CAPPED_EXAMPLE)
-_DECISION_CONFLICT_POINTS = confidence_points(*DECISION_CONFLICT_EXAMPLE)
-_DECISION_ONE_GROUP_POINTS = confidence_points(*DECISION_ONE_GROUP_EXAMPLE)
 _DECISION_STALE_QUALITY = quality_after_age(DECISION_ITEM_QUALITY, DECISION_STALE_AGE_HOURS)
 _DECISION_VERY_STALE_QUALITY = quality_after_age(DECISION_ITEM_QUALITY, DECISION_VERY_STALE_AGE_HOURS)
 _DECISION_HVL_WEIGHT = group_contribution_value([(DECISION_HVL_QUALITY, DECISION_HVL_STRENGTH)])
@@ -1536,21 +1466,14 @@ _LEVELS_HELP = SectionHelp(
 # Decision
 # --------------------------------------------------------------------------
 
-def _points_text(example: Tuple[int, float, float, int, float]) -> str:
-    """The five inputs of a confidence example in words."""
-    groups, conflict, quality, stale, margin = example
-    return (f"{groups} agreeing input groups, {conflict * 100:.0f} % conflict, mean quality {_two(quality)}, "
-            f"{stale} stale supporting items, {margin:.0f} points ahead of the next scenario")
-
-
 _DECISION_HELP = SectionHelp(
     section_key="decision",
     summary=(
-        "The decision maker turns selected signals of the other tabs (listed in the evidence table) into evidence items, "
-        "builds a price map around the spot "
-        "and scores the scenarios that map allows. It says which scenario the evidence supports most, with an uncalibrated "
-        "evidence score and an ordinal confidence label that comes with its reasons. It is decision support: not a "
-        "forecast, not an order, not a price target. Nothing on this tab is recorded; the report only shows it."),
+        "This tab turns selected signals of the other tabs (listed in the evidence table) into evidence items and builds a "
+        "price map of the levels around the spot. It lists the evidence with its strength, quality and caveats. It does not "
+        "score scenarios or say how confident it is: that was removed because the scores were never calibrated. It is "
+        "reference material, not a forecast, not an order, not a price target. Nothing on this tab is recorded; the report only "
+        "shows it."),
     topics=(
         HelpTopic(
             title="Evidence and input groups",
@@ -1560,7 +1483,7 @@ _DECISION_HELP = SectionHelp(
                 "of its data, and one sentence of what it says and does not say."),
             terms=(
                 HelpTerm("Evidence item", "One piece of evidence produced from one of the other tabs' services. Every source "
-                                          "is converted into the same form, so the engine treats them alike."),
+                                          "is converted into the same form, so the report treats them alike."),
                 HelpTerm("Selection", "Not every signal of the other tabs becomes an item. Dealer levels: the nearest monthly "
                                       "expiry and the one with the most open interest (walls, gamma flip and the sign of the "
                                       "total GEX of each view). MenthorQ replica: call resistance, put support and HVL. Option "
@@ -1575,7 +1498,7 @@ _DECISION_HELP = SectionHelp(
                                                "It comes from the sign of the total dealer GEX, a weak, assumption-based hint."),
                 HelpTerm("Input group", "The underlying data an item is derived from: deribit_open_interest, deribit_trades or "
                                         "binance_perpetual_candles. Items of one group are derived from the same data and are "
-                                        "not independent, so the engine counts each group once."),
+                                        "not independent, so the price map counts each group once."),
                 HelpTerm("Strength", "0 to 1: how strongly the item says what it says. A dealer level is scaled by the share "
                                      "of all open interest its expiry holds (full strength at 25 % or more)."),
                 HelpTerm("Quality", "0 to 1: how much the item can be trusted. The quality reasons name what lowered it "
@@ -1593,7 +1516,7 @@ _DECISION_HELP = SectionHelp(
             cases=(
                 HelpCase(
                     "Two items from one input group",
-                    "They count once: the engine takes the quality-weighted mean of their values and multiplies it by the "
+                    "They count once: the price map takes the quality-weighted mean of their values and multiplies it by the "
                     "quality-weighted mean of their quality. A second item of the same data does not add on top. It moves the "
                     "group's mean (quality-weighted) up or down, and supporting and opposing items of one group cancel inside it.",
                     f"Two items, each with quality {_two(DECISION_ITEM_QUALITY)} and value {_two(DECISION_ITEM_VALUE)}: "
@@ -1614,7 +1537,7 @@ _DECISION_HELP = SectionHelp(
                     f"{_two(DECISION_ITEM_QUALITY)} x {DECISION_VERY_STALE_QUALITY_FACTOR:g} = {_two(_DECISION_VERY_STALE_QUALITY)}."),
                 HelpCase(
                     "A source is not computed",
-                    "The engine runs without it and lists it under 'Sources not computed' with the reason (no stored data, "
+                    "The report runs without it and lists it under 'Sources not computed' with the reason (no stored data, "
                     "too few points for a band). Its items are simply absent; nothing is filled in for them.",
                     f"The taker ratio needs at least {DECISION_TAKER_MINIMUM_POINTS} hourly points in 30 days; with "
                     f"{DECISION_TAKER_POINTS_FOUND} it is listed as not computed."),
@@ -1677,15 +1600,13 @@ _DECISION_HELP = SectionHelp(
             cases=(
                 HelpCase(
                     "One side is unmapped",
-                    "The map is one-sided. The scenarios become 'stays above the support' (or 'below the resistance') and the "
-                    "break through the mapped side. The unmapped side has no scenario.",
+                    "The map is one-sided: only the mapped side has a level. The unmapped side is said so and nothing is invented there.",
                     f"Spot {_int(EXAMPLE_SPOT)}: levels count within {_int(_DECISION_WINDOW_LOW)} to {_int(_DECISION_WINDOW_HIGH)}. "
                     f"A meaningful support at {_int(DECISION_PUT_WALL)} and nothing meaningful up to "
-                    f"{_int(_DECISION_WINDOW_HIGH)}: 'stays above {_int(DECISION_PUT_WALL)}' and 'breaks below "
-                    f"{_int(DECISION_PUT_WALL)}'; no break above."),
+                    f"{_int(_DECISION_WINDOW_HIGH)}: the support is mapped, the upside is unmapped."),
                 HelpCase(
                     "Neither side is mapped",
-                    "No scenario can be built. The top line says that no scenario has net support and the confidence is low.",
+                    "No reference range can be given. The top line says that no level is mapped on either side of the spot.",
                     f"No meaningful band between {_int(_DECISION_WINDOW_LOW)} and {_int(_DECISION_WINDOW_HIGH)} around spot "
                     f"{_int(EXAMPLE_SPOT)}."),
                 HelpCase(
@@ -1705,7 +1626,7 @@ _DECISION_HELP = SectionHelp(
                 HelpCase(
                     "The spot is inside a band",
                     "The price is at a mapped level now. That band is listed 'at the spot' and is neither support nor resistance. "
-                    "When it is the only meaningful band, both sides are unmapped and there is no scenario.",
+                    "When it is the only meaningful band, both sides are unmapped and there is no reference range.",
                     f"A band from {_int(EXAMPLE_SPOT - 200)} to {_int(EXAMPLE_SPOT + 200)} at spot {_int(EXAMPLE_SPOT)}."),
             ),
             limits=(
@@ -1715,123 +1636,20 @@ _DECISION_HELP = SectionHelp(
             ),
         ),
         HelpTopic(
-            title="Scenarios, evidence score and confidence label",
+            title="Reference lines and data problems",
             what_you_see=(
-                "The line at the top (the best-supported scenario, its label and its score) and a table of every scenario the "
-                "map allows with its score, label, supporting and opposing evidence, and the reasons for the label."),
+                "The reference lines exactly as the report builder wrote them, the sources that were not computed, the "
+                "caveats and the age of every input."),
             terms=(
-                HelpTerm("Scenario", "Generated from the map: stays between support and resistance (or above the support, or "
-                                     "below the resistance when one side is unmapped), breaks above the resistance, breaks below "
-                                     "the support. No level on either side gives no scenario."),
-                HelpTerm("How an item counts", "Levels in the support or resistance band support 'inside' and oppose the break "
-                                               "through them. A bullish lean supports the break up and opposes the break down "
-                                               "(a bearish lean the other way round). It also opposes 'inside' at half strength, "
-                                               "unless it points toward the unmapped side. Balanced evidence supports 'inside'. "
-                                               "A range-bound hint supports 'inside' and opposes each break at half strength. An "
-                                               "expansion hint supports each break at half strength; it opposes 'inside' fully "
-                                               "when both sides are mapped and at half strength on a one-sided map. A"),
-                HelpTerm("Evidence score", "0 to 100. Within each input group the supporting and opposing items net into one "
-                                           "contribution (at most plus or minus 1). Support is the sum of the positive group "
-                                           "contributions, opposition the sum of the negative ones. Net = support minus "
-                                           "opposition (not below 0); score = 100 x net / (net + 1). With three groups net is at "
-                                           "most 3, so the score is at most 75 today. Uncalibrated relative support on a stated "
-                                           "scale. It is not a probability, and the scores of different scenarios do not add up "
-                                           "to 100."),
-                HelpTerm("Agreeing groups", "Distinct input groups whose contribution to the scenario is above 0.05. Three or "
-                                            "more: +1 point. One or none: -1. Two: 0."),
-                HelpTerm("Conflict", "Quality x size of the opposing items over that of all items speaking to the scenario, per "
-                                     "item. Above 35 %: -1. Below 10 %: +1. No evidence speaking to it: -1."),
-                HelpTerm("Mean quality", "Of the supporting items. At least 0.6: +1. Below 0.35: -1. A scenario with no "
-                                         "supporting items skips this criterion and the stale one."),
-                HelpTerm("Stale support", "Any supporting item older than its freshness limit: -1."),
-                HelpTerm("Margin", "For the top scenario, its score minus the next one: at least 20 points +1, below 10: -1. A "
-                                   "scenario that is not on top gets -1. A top scenario with no other scenario: 0."),
-                HelpTerm("Confidence label", "Low when at most one input group agrees, the points are -1 or less, or the score "
-                                             "is 0. High when at least three groups agree, the points are 2 or more and no "
-                                             "supporting item is stale. Otherwise medium. The reasons are listed with the label."),
-            ),
-            cases=(
-                HelpCase(
-                    "Two groups agree, wide margin",
-                    "The label is medium: high needs three agreeing groups however good the rest looks. With both bounds "
-                    "mapped, 'inside' is favoured because the bounding levels support it and oppose each break.",
-                    f"Spot {_int(EXAMPLE_SPOT)}, put wall {_int(DECISION_PUT_WALL)} (open interest) and call wall "
-                    f"{_int(DECISION_CALL_WALL)} (trades), each strength {_two(DECISION_WALL_STRENGTH)} and quality "
-                    f"{_two(DECISION_WALL_QUALITY)}: each contributes {_two(_DECISION_WALL)}, 'inside' has support "
-                    f"{_two(_DECISION_INSIDE_SUPPORT)}, score 100 x {_two(_DECISION_INSIDE_SUPPORT)} / "
-                    f"({_two(_DECISION_INSIDE_SUPPORT)} + 1) = {_one(_DECISION_INSIDE_SCORE)}. The break up has only opposition "
-                    f"({_two(_DECISION_WALL)}), net 0, score {_one(_DECISION_BREAK_UP_SCORE)}. Points: 0 groups (2 of 3), +1 "
-                    f"conflict, +1 quality, 0 stale, +1 margin = {_DECISION_MEDIUM_POINTS:+d}: medium."),
-                HelpCase(
-                    "Three groups agree",
-                    "High needs three agreeing groups, 2 points or more and fresh supporting items.",
-                    f"{_points_text(DECISION_HIGH_EXAMPLE)}: +1, +1, 0, 0, +1 = {_DECISION_HIGH_POINTS:+d}: "
-                    f"{confidence_label(DECISION_HIGH_EXAMPLE[0], _DECISION_HIGH_POINTS, 50.0, DECISION_HIGH_EXAMPLE[3])}."),
-                HelpCase(
-                    "A supporting item is stale",
-                    "The label is capped at medium and the reasons say so: high should not rest on old data.",
-                    f"{_points_text(DECISION_CAPPED_EXAMPLE)}: +1, +1, 0, -1, +1 = {_DECISION_CAPPED_POINTS:+d}, but one stale "
-                    f"item: "
-                    f"{confidence_label(DECISION_CAPPED_EXAMPLE[0], _DECISION_CAPPED_POINTS, 50.0, DECISION_CAPPED_EXAMPLE[3])}."),
-                HelpCase(
-                    "The evidence conflicts",
-                    "A large opposing share costs one point. Here that leaves +1: medium. If every other criterion earns its "
-                    "point, high is still possible.",
-                    f"{_points_text(DECISION_CONFLICT_EXAMPLE)}: +1, -1, +1, 0, 0 = {_DECISION_CONFLICT_POINTS:+d}: "
-                    f"{confidence_label(DECISION_CONFLICT_EXAMPLE[0], _DECISION_CONFLICT_POINTS, 50.0, DECISION_CONFLICT_EXAMPLE[3])}."),
-                HelpCase(
-                    "Only one input group supports the scenario",
-                    "The label is low whatever else holds: one data source is one opinion.",
-                    f"{_points_text(DECISION_ONE_GROUP_EXAMPLE)}: {_DECISION_ONE_GROUP_POINTS:+d} points, but only one group: "
-                    f"{confidence_label(DECISION_ONE_GROUP_EXAMPLE[0], _DECISION_ONE_GROUP_POINTS, 50.0, DECISION_ONE_GROUP_EXAMPLE[3])}."),
-                HelpCase(
-                    "No scenario has net support",
-                    "The top line says so, the label is low, and no reference decision follows from this evidence. The "
-                    "reference range and hedge level, if mapped, are still listed; they describe the map.",
-                    "Every scenario has at least as much opposition as support: net 0, score 0."),
-                HelpCase(
-                    "Two scenarios have the same score",
-                    "Equal scores are ordered: inside, then break up, then break down. A tied top scenario has a margin of 0, "
-                    "which costs a point (below 10 points).",
-                    "Two scenarios at score 40.0: the one listed first is the top scenario, its margin is 0.0 points and the "
-                    "margin criterion gives -1."),
-            ),
-            limits=(
-                "Not a forecast: the top scenario is the one the current evidence supports most, not what happens next.",
-                "Not calibrated: no recorded decision has been scored against the price path, so the score is not a "
-                "probability and the label is ordinal only.",
-                "In a quiet market the absence of a signal counts as agreement: balanced flow and a taker ratio inside its "
-                "band support 'inside', and can supply the third group for a high label.",
-                "With a mapped range, 'inside' is favoured unless directional evidence is strong.",
-                "Distinct groups are not independent, so 'three groups agree' is weaker than it sounds.",
-            ),
-        ),
-        HelpTopic(
-            title="Decisions, what would change this, and data problems",
-            what_you_see=(
-                "The decision-support lines exactly as the engine wrote them, the items whose change would change the top "
-                "scenario, and the sources that were not computed, the caveats and the age of every input."),
-            terms=(
-                HelpTerm("Decision line", "A reference range for a strategy, a reference level for a hedge, a condition to "
-                                          "watch, or a caveat. It is not an order and not a price target."),
-                HelpTerm("What would change this", "Each item is reversed (bullish or bearish items, range hints) or removed "
-                                                   "(balanced items, levels) alone and the whole report is recomputed. The items that change the top "
-                                                   "scenario are listed with what would then lead."),
-                HelpTerm("Sources not computed", "Sources that could not be computed, with the reason. They are left out of the "
-                                                 "scores."),
+                HelpTerm("Reference line", "A reference range between the support and the resistance, a reference level for a "
+                                           "hedge (the nearest mapped level below), a band the spot is inside, a side that is "
+                                           "unmapped, or a caveat. It is not an order, not a price target and not a ranking of "
+                                           "scenarios."),
+                HelpTerm("Sources not computed", "Sources that could not be computed, with the reason. Their items are simply absent."),
                 HelpTerm("Data ages", "The time of the spot, the chain snapshot and the newest item of each source, and their "
                                       "age at the report time."),
             ),
             cases=(
-                HelpCase(
-                    "One item would change the top scenario",
-                    "The top scenario rests on that item. Check its quality reasons and its age before relying on it.",
-                    "A row 'if futures.taker_ratio_24h turned bearish' with 'breaks below' as the top scenario then: with that "
-                    "one item reversed, another scenario would lead."),
-                HelpCase(
-                    "No single item changes the top scenario",
-                    "The result does not hang on one item. It can still change if several items change together.",
-                    "The tab says: no single item's flip or removal changes the top scenario."),
                 HelpCase(
                     "The spot is old",
                     "Every distance is measured from the spot the map was built around. An old spot is listed as a data caveat "
@@ -1840,11 +1658,11 @@ _DECISION_HELP = SectionHelp(
                     "price."),
             ),
             limits=(
-                "The tab shows one run at one instant. This report does not record the decision; scripts/decision_maker.py "
+                "The tab shows one run at one instant. This report does not record the evidence; scripts/decision_maker.py "
                 "with --save stores a snapshot in decision_snapshots.",
-                "Changing one item at a time does not show what several changes together would do.",
-                "The reference range and the hedge level are listed whatever the top scenario is: they describe the map, not "
-                "a recommendation.",
+                "The reference range and the hedge level describe the map, not a recommendation.",
+                "Since 2026-11-21 there is no scoring of scenarios and no confidence label: the scores were never calibrated "
+                "against what the price did.",
             ),
         ),
     ),

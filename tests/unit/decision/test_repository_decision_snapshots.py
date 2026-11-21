@@ -13,7 +13,7 @@ import psycopg2
 import pytest
 
 from coding.core.analytics.decision.decision_report import DecisionReport
-from coding.core.analytics.decision.scenario_engine import build_decision_report
+from coding.core.analytics.decision.evidence_report import build_decision_report
 from coding.core.database.config import ConnectionPool, DatabaseConfig
 from coding.core.database.repository import DatabaseRepository
 from tests.unit.decision.evidence_builders import NOW, SPOT, directional, level
