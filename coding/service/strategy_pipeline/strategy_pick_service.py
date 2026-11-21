@@ -31,6 +31,9 @@ from coding.service.strategy_pipeline.facts_service import FactsAsOfService
 
 logger = logging.getLogger(__name__)
 
+METHOD_VERSION = "pipeline-2"
+"""pipeline-1: the shortlist showed a flat-volatility "implied view" that ignored skew (the model read it as fair value and leaned to put structures);
+pipeline-2: the market view is exact (minus costs)."""
 MODE_LIVE = "live"
 MODE_REPLAY = "replay"
 DEFAULT_RESEARCH_CAPITAL_USD = 10_000.0
@@ -129,8 +132,10 @@ class StrategyPickService:
             logger.info("%s %s: not usable (%s)", currency, as_of.isoformat(), reason)
             return None
         # Never pay twice: a replay instant is stored once; a live pick is not repeated within an hour for the same expiry and chain.
-        stored = (self.repository.get_strategy_picks(currency, mode=mode, expiration=entry.expiration, as_of=as_of) if mode == MODE_REPLAY else
-                  self.repository.get_strategy_picks(currency, mode=mode, expiration=entry.expiration, as_of_since=as_of - timedelta(hours=1)))
+        stored = (self.repository.get_strategy_picks(currency, mode=mode, expiration=entry.expiration, as_of=as_of, method_version=METHOD_VERSION)
+                  if mode == MODE_REPLAY else
+                  self.repository.get_strategy_picks(currency, mode=mode, expiration=entry.expiration, as_of_since=as_of - timedelta(hours=1),
+                                                     method_version=METHOD_VERSION))
         if stored:
             row = stored[-1]
             return PickResult(row["id"], row["status"], row["choice"], None, [], row["quantity"], 0.0, True)
@@ -197,7 +202,7 @@ class StrategyPickService:
     def _save(self, currency, expiration, mode, as_of, now, spot, status, facts_text, record, choice, ranking, text, quantity, max_loss,
               input_tokens, output_tokens, cache_read, cache_write, cost, request_id, baseline) -> Optional[int]:
         return self.repository.save_strategy_pick({
-            "currency": currency, "expiration": expiration, "mode": mode, "as_of": as_of, "computed_at": now, "spot": spot, "model": self.model,
+            "currency": currency, "expiration": expiration, "mode": mode, "method_version": METHOD_VERSION, "as_of": as_of, "computed_at": now, "spot": spot, "model": self.model,
             "status": status, "facts": facts_text, "candidates": record, "choice": choice, "ranking": ranking, "response": text,
             "quantity": quantity, "max_loss_usd": max_loss, "risk_per_trade_usd": self.risk_budget.risk_per_trade_usd,
             "input_tokens": input_tokens, "output_tokens": output_tokens, "cache_read_tokens": cache_read, "cache_write_tokens": cache_write,

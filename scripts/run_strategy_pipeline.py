@@ -29,7 +29,7 @@ from coding.core.database.repository import DatabaseRepository
 from coding.core.logging.logging_setup import init_logging
 from coding.service.strategy.strategy_suggestion_service import BudgetExceeded, DEFAULT_MODEL
 from coding.service.strategy_pipeline.strategy_pick_service import (
-    DEFAULT_RESEARCH_CAPITAL_USD, MODE_LIVE, MODE_REPLAY, StrategyPickService)
+    DEFAULT_RESEARCH_CAPITAL_USD, METHOD_VERSION, MODE_LIVE, MODE_REPLAY, StrategyPickService)
 
 logger = logging.getLogger(__name__)
 ENTRY_HOUR_UTC = 9
@@ -40,11 +40,11 @@ def _number(value: Optional[float], digits: int = 3) -> str:
     return "n/a" if value is None else f"{value:.{digits}f}"
 
 
-def log_report(currency: str, repository: DatabaseRepository, mode: str) -> None:
-    """Log the comparison of the model with the baselines over the evaluated picks."""
-    report = summarize_picks(repository.get_strategy_picks(currency, mode=mode))
-    logger.info("%d evaluated %s picks (no trade in %s); %d refused or unusable answers and %d picks waiting for their expiry are not in the comparison",
-                report.picks, mode, "n/a" if report.no_trade_share is None else f"{report.no_trade_share:.0%}", report.unusable_answers,
+def log_report(currency: str, repository: DatabaseRepository, mode: str, method_version: str) -> None:
+    """Log the comparison of the model with the baselines over the picks of one method version."""
+    report = summarize_picks(repository.get_strategy_picks(currency, mode=mode, method_version=method_version))
+    logger.info("%s: %d evaluated %s picks (no trade in %s); %d refused or unusable answers and %d picks waiting for their expiry are not in the comparison",
+                method_version, report.picks, mode, "n/a" if report.no_trade_share is None else f"{report.no_trade_share:.0%}", report.unusable_answers,
                 report.not_yet_evaluated)
     logger.info("mean R (result in units of the maximum loss): model %s | baseline top-1 %s | shortlist average %s | all candidates average %s",
                 _number(report.mean_model_r), _number(report.mean_baseline_r), _number(report.mean_shortlist_r), _number(report.mean_all_r))
@@ -57,7 +57,7 @@ def log_report(currency: str, repository: DatabaseRepository, mode: str) -> None
 def evaluate_all(service: StrategyPickService, currency: str, mode: Optional[str] = None) -> int:
     """Evaluate every stored pick that can be; one failing row is logged and does not stop the others. Returns how many were stored."""
     stored = 0
-    for row in service.repository.get_strategy_picks(currency, mode=mode, evaluated=False):
+    for row in service.repository.get_strategy_picks(currency, mode=mode, evaluated=False, method_version=METHOD_VERSION):
         try:
             stored += bool(service.evaluate(row))
         except Exception:
@@ -78,13 +78,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--capital", type=float, default=DEFAULT_RESEARCH_CAPITAL_USD, help="notional account in USD (research results are in R)")
     parser.add_argument("--max-drawdown", type=float, default=0.20)
     parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--method-version", action="append", help="report: the method version(s) to show (default: pipeline-1 and the current one)")
     parser.add_argument("--yes", action="store_true", help="needed for a replay (many paid calls)")
     arguments = parser.parse_args(argv)
     init_logging(task_name="run_strategy_pipeline", log_to_file=False)
     repository = DatabaseRepository()
     if arguments.command == "report":
-        log_report(arguments.currency, repository, MODE_REPLAY)
-        log_report(arguments.currency, repository, MODE_LIVE)
+        for version in arguments.method_version or ["pipeline-1", METHOD_VERSION]:
+            log_report(arguments.currency, repository, MODE_REPLAY, version)
+            log_report(arguments.currency, repository, MODE_LIVE, version)
         return 0
 
     load_dotenv(dotenv_path=Path(__file__).parents[1] / ".env")
@@ -134,7 +136,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             logger.info("%s: %s, choice %s, cost %.4f USD%s", day, result.status, result.choice, result.cost_usd,
                         " (already stored)" if result.stored_before else "")
     logger.info("%d picks evaluated", evaluate_all(service, arguments.currency, MODE_REPLAY))
-    log_report(arguments.currency, repository, MODE_REPLAY)
+    log_report(arguments.currency, repository, MODE_REPLAY, METHOD_VERSION)
     return 0
 
 

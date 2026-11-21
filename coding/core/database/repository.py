@@ -1548,12 +1548,12 @@ class DatabaseRepository:
         Store one pick (migration 040).
 
         Args:
-            row: currency, expiration, mode ("live" or "replay"), as_of and computed_at (timezone-aware UTC), spot, model, status, facts,
+            row: currency, expiration, mode ("live" or "replay"), method_version, as_of and computed_at (timezone-aware UTC), spot, model, status, facts,
                 candidates (a list of plain data), choice, ranking, response, quantity, max_loss_usd, risk_per_trade_usd, input_tokens,
                 output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, request_id, baseline_id.
 
         Returns:
-            The id of the new row, or None when the same (currency, expiration, as_of, mode) is already stored (nothing is changed).
+            The id of the new row, or None when the same (currency, expiration, as_of, mode, method_version) is already stored (nothing is changed).
 
         Raises:
             ValueError: for a naive time or a value that is not valid JSON (NaN, infinity).
@@ -1566,29 +1566,29 @@ class DatabaseRepository:
             cursor.execute(
                 """
                 INSERT INTO strategy_picks (
-                    currency, expiration, mode, as_of, computed_at, spot, model, status, facts, candidates, choice, ranking, response,
-                    quantity, max_loss_usd, risk_per_trade_usd, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-                    cost_usd, request_id, baseline_id)
-                VALUES (%(currency)s, %(expiration)s, %(mode)s, %(as_of)s, %(computed_at)s, %(spot)s, %(model)s, %(status)s, %(facts)s,
-                        %(candidates)s::jsonb, %(choice)s, %(ranking)s::jsonb, %(response)s, %(quantity)s, %(max_loss_usd)s,
+                    currency, expiration, mode, method_version, as_of, computed_at, spot, model, status, facts, candidates, choice,
+                    ranking, response, quantity, max_loss_usd, risk_per_trade_usd, input_tokens, output_tokens, cache_read_tokens,
+                    cache_write_tokens, cost_usd, request_id, baseline_id)
+                VALUES (%(currency)s, %(expiration)s, %(mode)s, %(method_version)s, %(as_of)s, %(computed_at)s, %(spot)s, %(model)s,
+                        %(status)s, %(facts)s, %(candidates)s::jsonb, %(choice)s, %(ranking)s::jsonb, %(response)s, %(quantity)s, %(max_loss_usd)s,
                         %(risk_per_trade_usd)s, %(input_tokens)s, %(output_tokens)s, %(cache_read_tokens)s, %(cache_write_tokens)s,
                         %(cost_usd)s, %(request_id)s, %(baseline_id)s)
-                ON CONFLICT ON CONSTRAINT unique_strategy_pick DO NOTHING
+                ON CONFLICT ON CONSTRAINT unique_strategy_pick_version DO NOTHING
                 RETURNING id
                 """, parameters)
             fetched = cursor.fetchone()
         return None if fetched is None else fetched[0]
 
-    _PICK_COLUMNS = ("id", "currency", "expiration", "mode", "as_of", "computed_at", "spot", "model", "status", "facts", "candidates", "choice",
+    _PICK_COLUMNS = ("id", "currency", "expiration", "mode", "method_version", "as_of", "computed_at", "spot", "model", "status", "facts", "candidates", "choice",
                      "ranking", "response", "quantity", "max_loss_usd", "risk_per_trade_usd", "cost_usd", "baseline_id", "evaluated_at",
                      "settlement_price", "outcomes")
 
     def get_strategy_picks(self, currency: str, mode: Optional[str] = None, evaluated: Optional[bool] = None,
                            expiration: Optional[str] = None, as_of: Optional[datetime] = None,
-                           as_of_since: Optional[datetime] = None) -> List[Dict[str, Any]]:
+                           as_of_since: Optional[datetime] = None, method_version: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Stored picks of a currency, oldest instant first, optionally of one mode, only evaluated or only not yet evaluated ones, of one
-        expiry, of one instant, or of an instant at or after ``as_of_since``. Times are UTC-aware, numbers floats, JSON columns as Python data.
+        expiry, of one instant, or of an instant at or after ``as_of_since``, or of one method version. Times are UTC-aware, numbers floats, JSON columns as Python data.
         """
         conditions, parameters = ["currency = %s"], [currency]
         if mode is not None:
@@ -1605,6 +1605,9 @@ class DatabaseRepository:
         if as_of_since is not None:
             conditions.append("as_of >= %s")
             parameters.append(as_of_since)
+        if method_version is not None:
+            conditions.append("method_version = %s")
+            parameters.append(method_version)
         with self._db_cursor() as cursor:
             cursor.execute(f"SELECT {', '.join(self._PICK_COLUMNS)} FROM strategy_picks WHERE {' AND '.join(conditions)} ORDER BY as_of, expiration",
                            parameters)

@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from coding.core.analytics.candidates.generator import Candidate
 from coding.core.analytics.candidates.metrics import CandidateMetrics
-from coding.core.analytics.candidates.scoring import IMPLIED, REALISED, RULES
+from coding.core.analytics.candidates.scoring import REALISED, RULES
 
 BASELINE_RULE = "expected_pnl_per_risk_realised_vol"
 """The deterministic rule that orders the shortlist and defines the baseline pick the model is compared with."""
@@ -47,10 +47,10 @@ Rules:
 - You may only choose an id that is on the shortlist. Never propose another structure or other strikes.
 - All candidate numbers are for one coin per leg. A buy fills at the ask, a sell at the bid; the costs shown are real. Code sizes the position \
 from a loss budget, so do not discuss size.
-- Two price distributions are given for each candidate: a flat-volatility view with the market's at-the-money implied volatility, and a view with \
-the recent realised volatility. Both are lognormal, with no skew or fat tails, so they flatter short-premium structures. At the market's own prices \
-a structure is worth about minus its costs: under the implied view the expected PnL is that, plus or minus what the skew of the chain (which the flat \
-view ignores) explains. A clearly positive expected PnL under the realised view is a hypothesis that implied volatility is too high, not a fact.
+- Each candidate has two views. The market view is exact: at the chain's own prices a structure is worth minus its costs (the spread paid against
+the mid and the fees), so its expected PnL there is that, for every structure; it carries no opinion. The realised-volatility view is a lognormal with the
+recent realised volatility: it ignores skew and fat tails and flatters short-premium structures. A clearly positive expected PnL under it is a hypothesis
+that implied volatility is too high, not a fact; it is the only place a candidate can look better than its costs.
 - Use the facts to decide whether the situation favours a structure: say which facts you rely on, by label and value. Several facts are \
 conventions, not measurements (assumed dealer positioning, GEX signs). A fact marked "not recorded" is unknown; do not guess it.
 - "ranking" lists every shortlisted id in your order of preference, best first. "choice" must equal the first entry of the ranking, or be \
@@ -112,12 +112,11 @@ def render_shortlist(shortlist: Sequence[ShortlistItem]) -> str:
         entry = f"credit {_usd(metrics.entry_cash_usd)}" if metrics.entry_cash_usd >= 0 else f"debit {_usd(-metrics.entry_cash_usd)}"
         profit = "unlimited" if metrics.max_profit_usd is None else _usd(metrics.max_profit_usd)
         breakevens = ", ".join(_usd(value) for value in metrics.breakevens) or "none"
-        views = []
-        for label, name in (("realised-vol view", REALISED), ("implied-vol view", IMPLIED)):
-            result = metrics.by_distribution.get(name)
-            if result is not None:
-                views.append(f"{label}: P(profit) {result.probability_of_profit:.0%}, expected PnL {result.expected_pnl_usd:+,.0f}, "
-                             f"tail loss {_usd(result.tail_loss_usd)}")
+        views = [f"market view: expected PnL {-(metrics.spread_cost_usd + metrics.trading_fees_usd):+,.0f} (minus its costs)"]
+        result = metrics.by_distribution.get(REALISED)
+        if result is not None:
+            views.append(f"realised-vol view: P(profit) {result.probability_of_profit:.0%}, expected PnL {result.expected_pnl_usd:+,.0f}, "
+                         f"tail loss {_usd(result.tail_loss_usd)}")
         lines.append(f"{item.candidate_id} {candidate.family}: {legs} | {entry} | max loss {_usd(metrics.max_loss_usd)}, max profit {profit}, "
                      f"breakeven {breakevens} | costs: spread {_usd(metrics.spread_cost_usd)} + fees {_usd(metrics.trading_fees_usd)} | "
                      + " | ".join(views))
@@ -138,7 +137,7 @@ def candidate_record(item: ShortlistItem) -> Dict[str, Any]:
             "entry_cash_usd": _finite(metrics.entry_cash_usd), "mid_cash_usd": _finite(item.candidate.mid_cash_usd),
             "max_loss_usd": _finite(metrics.max_loss_usd), "max_profit_usd": _finite(metrics.max_profit_usd),
             "breakevens": [_finite(value) for value in metrics.breakevens], "spread_cost_usd": _finite(metrics.spread_cost_usd),
-            "trading_fees_usd": _finite(metrics.trading_fees_usd), "baseline_score": _finite(item.score),
+            "trading_fees_usd": _finite(metrics.trading_fees_usd), "baseline_score": _finite(item.score), "market_expected_pnl_usd": _finite(-(metrics.spread_cost_usd + metrics.trading_fees_usd)),
             "distributions": {name: {"probability_of_profit": _finite(result.probability_of_profit),
                                      "expected_pnl_usd": _finite(result.expected_pnl_usd), "tail_loss_usd": _finite(result.tail_loss_usd)}
                               for name, result in metrics.by_distribution.items()}}
