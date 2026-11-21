@@ -53,6 +53,7 @@ class PickResult:
     cost_usd: float
     stored_before: bool
     """True when the instant had been picked already: nothing was paid and the stored row was returned."""
+    expiration: Optional[str] = None
 
 
 class StrategyPickService:
@@ -138,7 +139,7 @@ class StrategyPickService:
                                                      method_version=METHOD_VERSION))
         if stored:
             row = stored[-1]
-            return PickResult(row["id"], row["status"], row["choice"], None, [], row["quantity"], 0.0, True)
+            return PickResult(row["id"], row["status"], row["choice"], None, [], row["quantity"], 0.0, True, entry.expiration)
         facts, shortlist = self._shortlist_for(currency, as_of, entry, now)
         if shortlist is None:
             logger.info("%s %s: not usable (%s)", currency, as_of.isoformat(), facts)
@@ -148,7 +149,7 @@ class StrategyPickService:
         if not shortlist:
             row_id = self._save(currency, entry.expiration, mode, as_of, now, entry.spot, "no_candidates", facts_text, record, None, None, "",
                                 None, None, 0, 0, 0, 0, 0.0, None, None)
-            return PickResult(row_id, "no_candidates", None, None, [], None, 0.0, False)
+            return PickResult(row_id, "no_candidates", None, None, [], None, 0.0, False, entry.expiration)
 
         spent = self.repository.get_total_model_spend()
         if spent + WORST_CASE_CALL_USD > self.budget_usd:
@@ -197,7 +198,7 @@ class StrategyPickService:
             logger.error("The paid answer could not be stored (cost %.4f USD, request %s): %s", cost, getattr(response, "_request_id", None), text)
             raise
         logger.info("Pick %s stored: %s %s, cost %.4f USD", row_id, status, None if parsed is None else parsed.choice, cost)
-        return PickResult(row_id, status, None if parsed is None else parsed.choice, parsed, shortlist, quantity, cost, False)
+        return PickResult(row_id, status, None if parsed is None else parsed.choice, parsed, shortlist, quantity, cost, False, entry.expiration)
 
     def _save(self, currency, expiration, mode, as_of, now, spot, status, facts_text, record, choice, ranking, text, quantity, max_loss,
               input_tokens, output_tokens, cache_read, cache_write, cost, request_id, baseline) -> Optional[int]:

@@ -258,3 +258,46 @@ def test_the_default_workflow_gets_the_chain_source_of_the_service():
     assert AnalysisRunService(chain_source_mode="live").workflow_factory("ETH")._chain_source_mode == "live"
     with pytest.raises(ValueError):
         AnalysisRunService(chain_source_mode="cache")
+
+
+
+class FakeStrategyRunner:
+    def __init__(self, recorder, error=None):
+        self.recorder, self.error = recorder, error
+
+    def run(self, currency, progress):
+        self.recorder.calls.append(f"strategy:{currency}")
+        progress(f"{currency}: picked")
+        if self.error:
+            raise self.error
+        return "2 expiries, 2 new picks, 0.090 USD"
+
+
+def test_without_the_checkbox_there_is_no_strategy_step_and_the_runner_is_never_built(recorder):
+    service = recorder.service()
+
+    def never():
+        raise AssertionError("the runner must not be built")
+    service.strategy_runner_factory = never
+    result = service.run(["BTC"], lambda line: None)
+    assert all(step.name != "strategy picks" for step in result.steps) and not any(call.startswith("strategy") for call in recorder.calls)
+
+
+def test_with_the_checkbox_the_strategy_step_runs_per_currency_before_the_unified_dashboard(recorder):
+    service = recorder.service()
+    service.ask_model = True
+    service.strategy_runner_factory = lambda: FakeStrategyRunner(recorder)
+    result = service.run(["BTC", "ETH"], lambda line: None)
+    assert recorder.calls.index("strategy:BTC") < recorder.calls.index("unified:BTC") and "strategy:ETH" in recorder.calls
+    step = next(step for step in result.steps if step.name == "strategy picks")
+    assert step.status == "succeeded" and "2 new picks" in step.message
+
+
+def test_a_failing_strategy_step_is_recorded_and_the_dashboard_is_still_built(recorder):
+    service = recorder.service()
+    service.ask_model = True
+    service.strategy_runner_factory = lambda: FakeStrategyRunner(recorder, RuntimeError("claude_api_key is not set in .env"))
+    result = service.run(["BTC"], lambda line: None)
+    step = next(step for step in result.steps if step.name == "strategy picks")
+    assert step.status == "failed" and "claude_api_key" in step.message
+    assert any(step.name == "unified dashboard" and step.status == "succeeded" for step in result.steps)

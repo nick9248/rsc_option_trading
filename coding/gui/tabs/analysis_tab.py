@@ -14,7 +14,7 @@ from typing import Callable, List, Optional
 
 from PySide6.QtCore import Qt, QThread, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QApplication, QComboBox, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget
 
 from coding.gui.components.log_viewer import GuiLogHandler, LogViewer
 from coding.gui.components.menthorq_widgets import panel_frame, secondary_button
@@ -103,7 +103,8 @@ class AnalysisTab(QWidget):
         if self.service_factory is not None:
             return self.service_factory
         mode = self.chain_source_combo.currentData()
-        return lambda: AnalysisRunService(chain_source_mode=mode)
+        ask_model = self.ask_model_checkbox.isChecked()
+        return lambda: AnalysisRunService(chain_source_mode=mode, ask_model=ask_model)
 
     def _setup_ui(self) -> None:
         """Build the widgets."""
@@ -136,6 +137,10 @@ class AnalysisTab(QWidget):
         self.chain_source_combo.setToolTip("Stored: the newest snapshot of the local database (the run syncs it first); live from Deribit when it is "
                                            "older than the limit. Live: always fetch from Deribit.")
         controls.addWidget(self.chain_source_combo)
+        self.ask_model_checkbox = QCheckBox("Ask Claude for strategies (about 0.2 USD per currency)")
+        self.ask_model_checkbox.setToolTip("The model picks among candidate structures that code built and priced, for a few expiries; the picks appear in the "
+                                           "Strategy tab. Costs money (about 0.05 USD per expiry); off by default. Needs claude_api_key in .env.")
+        controls.addWidget(self.ask_model_checkbox)
         self.start_button = QPushButton("Start Analysis")
         self.start_button.setCursor(Qt.CursorShape.PointingHandCursor)
         controls.addWidget(self.start_button)

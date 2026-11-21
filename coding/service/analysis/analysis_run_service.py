@@ -2,7 +2,7 @@
 One "Start Analysis" run: a thin orchestration of services that already exist. It owns no analysis logic.
 
 Order: ONE database sync for the whole run, then for each currency (in the order given) the on-chain analysis, the on-chain
-dashboard, the market report and the unified dashboard (the one page the user opens: report and on-chain dashboard merged).
+dashboard, the market report, the strategy picks (only when asked: they cost money) and the unified dashboard (the one page the user opens: report and on-chain dashboard merged).
 The dashboard needs the analysis result, so when the analysis failed the dashboard is "skipped"; the report does not depend
 on the analysis and still runs. The unified dashboard needs both files, so it is "skipped" when either is missing. When it is written, the two files are
 deleted (it contains all of both); when it fails, they stay for inspection.
@@ -25,6 +25,7 @@ STEP_SYNC = "database sync"
 STEP_ANALYSIS = "on-chain analysis"
 STEP_DASHBOARD = "on-chain dashboard"
 STEP_REPORT = "report"
+STEP_STRATEGY = "strategy picks"
 STEP_UNIFIED = "unified dashboard"
 
 STATUS_SUCCEEDED = "succeeded"
@@ -49,6 +50,14 @@ class DashboardWriter(Protocol):
         ...
 
 
+class StrategyRunner(Protocol):
+    """What this service needs from the live pick runner."""
+
+    def run(self, currency: str, progress: Callable[[str], None]) -> str:
+        """Ask the model about a few expiries of the currency; returns one summary line."""
+        ...
+
+
 class UnifiedDashboardWriter(Protocol):
     """What this service needs from ``UnifiedDashboardService``."""
 
@@ -61,6 +70,12 @@ def _default_workflow_factory(currency: str, chain_source_mode: str) -> Workflow
     """The real on-chain workflow of one currency (imported lazily: it pulls in the API and database code)."""
     from coding.service.on_chain.on_chain_workflow_service import OnChainWorkflowService
     return OnChainWorkflowService(currency, chain_source_mode=chain_source_mode)
+
+
+def _default_strategy_runner_factory() -> StrategyRunner:
+    """The real live pick runner (imported lazily; raises when the key is missing)."""
+    from coding.service.strategy_pipeline.live_pick_runner import build_live_pick_runner
+    return build_live_pick_runner()
 
 
 def _default_unified_dashboard_service_factory() -> UnifiedDashboardWriter:
@@ -149,7 +164,8 @@ class AnalysisRunService:
                  workflow_factory: Optional[Callable[[str], WorkflowRunner]] = None,
                  dashboard_service_factory: Callable[[], DashboardWriter] = _default_dashboard_service_factory,
                  unified_dashboard_service_factory: Callable[[], UnifiedDashboardWriter] = _default_unified_dashboard_service_factory,
-                 chain_source_mode: str = CHAIN_SOURCE_STORED):
+                 chain_source_mode: str = CHAIN_SOURCE_STORED, ask_model: bool = False,
+                 strategy_runner_factory: Callable[[], StrategyRunner] = _default_strategy_runner_factory):
         """
         Args:
             report_service_factory: Builds the report service (sync check and report).
@@ -158,6 +174,9 @@ class AnalysisRunService:
             dashboard_service_factory: Builds the object with ``write(result, folder) -> Path``.
             unified_dashboard_service_factory: Builds the object with
                 ``write(currency, market_report_path, onchain_dashboard_path, folder) -> Path``.
+            ask_model: True adds a strategy step per currency: the model picks among code-built candidates of a few expiries (paid, about 0.05 USD
+                per expiry); the Strategy tab shows the picks. False (default): no model call, the tab shows the picks already stored.
+            strategy_runner_factory: Builds the object with ``run(currency, progress) -> str`` (a fake in tests).
             chain_source_mode: Where the analysis reads its option chain: ``CHAIN_SOURCE_STORED`` (the newest stored snapshot, live
                 when it is too old) or ``CHAIN_SOURCE_LIVE`` (always from Deribit).
         """
@@ -165,6 +184,8 @@ class AnalysisRunService:
             raise ValueError(f"unknown chain source {chain_source_mode!r}; choose from {CHAIN_SOURCES}")
         self.report_service_factory = report_service_factory
         self.chain_source_mode = chain_source_mode
+        self.ask_model = ask_model
+        self.strategy_runner_factory = strategy_runner_factory
         self.workflow_factory = workflow_factory or (lambda currency: _default_workflow_factory(currency, chain_source_mode))
         self.dashboard_service_factory = dashboard_service_factory
         self.unified_dashboard_service_factory = unified_dashboard_service_factory
@@ -194,7 +215,10 @@ class AnalysisRunService:
         stop_requested = should_stop or (lambda: False)
         plan = [(STEP_SYNC, None)]
         for currency in currency_list:
-            plan += [(STEP_ANALYSIS, currency), (STEP_DASHBOARD, currency), (STEP_REPORT, currency), (STEP_UNIFIED, currency)]
+            plan += [(STEP_ANALYSIS, currency), (STEP_DASHBOARD, currency), (STEP_REPORT, currency)]
+            if self.ask_model:
+                plan.append((STEP_STRATEGY, currency))
+            plan.append((STEP_UNIFIED, currency))
         total = len(plan)
 
         run_result = AnalysisRunResult()
@@ -227,6 +251,9 @@ class AnalysisRunService:
                     output = self.workflow_factory(currency).run(progress)
                     analysis_outputs[currency] = output
                     outcome = StepOutcome(name, currency, STATUS_SUCCEEDED, "done", output.bundle_path)
+                elif name == STEP_STRATEGY:
+                    message = self.strategy_runner_factory().run(currency, progress)
+                    outcome = StepOutcome(name, currency, STATUS_SUCCEEDED, message)
                 elif name == STEP_DASHBOARD:
                     output = analysis_outputs[currency]
                     path = self.dashboard_service_factory().write(output.result, output.bundle_path)

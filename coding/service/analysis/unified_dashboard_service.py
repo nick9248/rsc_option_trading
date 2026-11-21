@@ -8,12 +8,15 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from coding.core.analytics.unified_dashboard import build_unified_dashboard_page
-from coding.core.analytics.unified_dashboard.strategy_panel import StoredSuggestion, StrategyPanel, build_strategy_panel
+from coding.core.analytics.unified_dashboard.strategy_panel import StoredPick, StrategyPanel, build_strategy_panel
 from coding.core.database.repository import DatabaseRepository
+from coding.service.strategy_pipeline.strategy_pick_service import METHOD_VERSION, MODE_LIVE
 
 logger = logging.getLogger(__name__)
 
 UNIFIED_DASHBOARD_FILE_NAME = "unified_dashboard.html"
+PICK_FIELDS = ("expiration", "as_of", "spot", "model", "status", "candidates", "choice", "ranking", "response", "quantity", "max_loss_usd",
+               "risk_per_trade_usd", "baseline_id", "cost_usd")
 
 
 class UnifiedDashboardService:
@@ -59,8 +62,8 @@ class UnifiedDashboardService:
             return None
         now = datetime.now(timezone.utc)
         try:
-            rows = self.repository_factory().get_latest_strategy_suggestions(currency)
-            return build_strategy_panel([StoredSuggestion(**row) for row in rows], now, currency)
+            rows = self.repository_factory().get_strategy_picks(currency, mode=MODE_LIVE, method_version=METHOD_VERSION)
+            return build_strategy_panel([StoredPick(**{name: row[name] for name in PICK_FIELDS}) for row in rows], now, currency)
         except Exception as error:
             logger.exception("Reading the stored strategy suggestions failed")
             return build_strategy_panel([], now, currency, read_error=f"{type(error).__name__}: {error}")
