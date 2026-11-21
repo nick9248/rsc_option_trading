@@ -184,7 +184,6 @@ def pipeline_result(fixture_dir, meta, module_monkeypatch, module_tmp_path):
     """
     import coding.service.on_chain.on_chain_analysis_service as oc_service_module
 
-
     fake_module_file = module_tmp_path / "coding" / "service" / "on_chain" / "on_chain_analysis_service.py"
     module_monkeypatch.setattr(oc_service_module, "__file__", str(fake_module_file))
 
