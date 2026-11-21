@@ -27,7 +27,7 @@ def make_service(real_result, reply, spent=0.0, budget=15.0):
     client = MagicMock()
     client.messages.create.return_value = reply
     repository = MagicMock()
-    repository.get_strategy_suggestion_total_cost.return_value = spent
+    repository.get_total_model_spend.return_value = spent
     repository.save_strategy_suggestion.return_value = 7
     return StrategySuggestionService(repository, client, budget_usd=budget), client, repository
 

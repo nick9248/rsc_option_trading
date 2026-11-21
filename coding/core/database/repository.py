@@ -1458,7 +1458,7 @@ class DatabaseRepository:
         for column, value in zip(columns, row):
             if isinstance(value, datetime):
                 value = value.replace(tzinfo=timezone.utc)
-            elif value is not None and not isinstance(value, (str, int, float)):
+            elif value is not None and not isinstance(value, (str, int, float, bool, dict, list)):
                 value = float(value)
             converted[column] = value
         return converted
@@ -1542,6 +1542,93 @@ class DatabaseRepository:
                 """, (currency, end_ms - window_minutes * 60_000, end_ms))
             mean, count = cursor.fetchone()
         return None if not count else (float(mean), int(count))
+
+    def save_strategy_pick(self, row: Dict[str, Any]) -> Optional[int]:
+        """
+        Store one pick (migration 040).
+
+        Args:
+            row: currency, expiration, mode ("live" or "replay"), as_of and computed_at (timezone-aware UTC), spot, model, status, facts,
+                candidates (a list of plain data), choice, ranking, response, quantity, max_loss_usd, risk_per_trade_usd, input_tokens,
+                output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, request_id, baseline_id.
+
+        Returns:
+            The id of the new row, or None when the same (currency, expiration, as_of, mode) is already stored (nothing is changed).
+
+        Raises:
+            ValueError: for a naive time or a value that is not valid JSON (NaN, infinity).
+        """
+        if row["as_of"].tzinfo is None or row["computed_at"].tzinfo is None:
+            raise ValueError("as_of and computed_at must be timezone-aware (UTC)")
+        parameters = dict(row, candidates=json.dumps(row["candidates"], allow_nan=False),
+                          ranking=None if row["ranking"] is None else json.dumps(row["ranking"], allow_nan=False))
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO strategy_picks (
+                    currency, expiration, mode, as_of, computed_at, spot, model, status, facts, candidates, choice, ranking, response,
+                    quantity, max_loss_usd, risk_per_trade_usd, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+                    cost_usd, request_id, baseline_id)
+                VALUES (%(currency)s, %(expiration)s, %(mode)s, %(as_of)s, %(computed_at)s, %(spot)s, %(model)s, %(status)s, %(facts)s,
+                        %(candidates)s::jsonb, %(choice)s, %(ranking)s::jsonb, %(response)s, %(quantity)s, %(max_loss_usd)s,
+                        %(risk_per_trade_usd)s, %(input_tokens)s, %(output_tokens)s, %(cache_read_tokens)s, %(cache_write_tokens)s,
+                        %(cost_usd)s, %(request_id)s, %(baseline_id)s)
+                ON CONFLICT ON CONSTRAINT unique_strategy_pick DO NOTHING
+                RETURNING id
+                """, parameters)
+            fetched = cursor.fetchone()
+        return None if fetched is None else fetched[0]
+
+    _PICK_COLUMNS = ("id", "currency", "expiration", "mode", "as_of", "computed_at", "spot", "model", "status", "facts", "candidates", "choice",
+                     "ranking", "response", "quantity", "max_loss_usd", "risk_per_trade_usd", "cost_usd", "baseline_id", "evaluated_at",
+                     "settlement_price", "outcomes")
+
+    def get_strategy_picks(self, currency: str, mode: Optional[str] = None, evaluated: Optional[bool] = None,
+                           expiration: Optional[str] = None, as_of: Optional[datetime] = None,
+                           as_of_since: Optional[datetime] = None) -> List[Dict[str, Any]]:
+        """
+        Stored picks of a currency, oldest instant first, optionally of one mode, only evaluated or only not yet evaluated ones, of one
+        expiry, of one instant, or of an instant at or after ``as_of_since``. Times are UTC-aware, numbers floats, JSON columns as Python data.
+        """
+        conditions, parameters = ["currency = %s"], [currency]
+        if mode is not None:
+            conditions.append("mode = %s")
+            parameters.append(mode)
+        if evaluated is not None:
+            conditions.append("evaluated_at IS NOT NULL" if evaluated else "evaluated_at IS NULL")
+        if expiration is not None:
+            conditions.append("expiration = %s")
+            parameters.append(expiration)
+        if as_of is not None:
+            conditions.append("as_of = %s")
+            parameters.append(as_of)
+        if as_of_since is not None:
+            conditions.append("as_of >= %s")
+            parameters.append(as_of_since)
+        with self._db_cursor() as cursor:
+            cursor.execute(f"SELECT {', '.join(self._PICK_COLUMNS)} FROM strategy_picks WHERE {' AND '.join(conditions)} ORDER BY as_of, expiration",
+                           parameters)
+            rows = cursor.fetchall()
+        return [self._row_dict(self._PICK_COLUMNS, row) for row in rows]
+
+    def save_strategy_pick_evaluation(self, pick_id: int, evaluated_at: datetime, settlement_price: float, baseline_id: Optional[str],
+                                      outcomes: Dict[str, Any]) -> bool:
+        """Store what the pick's candidates really earned (once, after settlement); an evaluation is never overwritten. True when stored."""
+        if evaluated_at.tzinfo is None:
+            raise ValueError("evaluated_at must be timezone-aware (UTC)")
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                "UPDATE strategy_picks SET evaluated_at = %s, settlement_price = %s, baseline_id = %s, outcomes = %s::jsonb "
+                "WHERE id = %s AND evaluated_at IS NULL",
+                (evaluated_at, settlement_price, baseline_id, json.dumps(outcomes, allow_nan=False), pick_id))
+            return cursor.rowcount > 0
+
+    def get_total_model_spend(self) -> float:
+        """What all stored model calls of the strategy features cost, in USD: free-form suggestions and picks together."""
+        with self._db_cursor() as cursor:
+            cursor.execute("SELECT (SELECT COALESCE(SUM(cost_usd), 0) FROM strategy_suggestions) + "
+                           "(SELECT COALESCE(SUM(cost_usd), 0) FROM strategy_picks)")
+            return float(cursor.fetchone()[0])
 
     def get_strategy_suggestion_total_cost(self) -> float:
         """What all stored strategy suggestion calls cost, in USD (0.0 when there are none)."""

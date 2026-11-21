@@ -120,7 +120,7 @@ class StrategySuggestionService:
         if facts_as_of.tzinfo is None:
             raise ValueError("facts_as_of must be timezone-aware (UTC)")
         facts = build_expiry_facts(result, expiration)
-        spent = self.repository.get_strategy_suggestion_total_cost()
+        spent = self.repository.get_total_model_spend()                      # suggestions and picks together
         if spent + WORST_CASE_CALL_USD > self.budget_usd:
             raise BudgetExceeded(f"stored calls cost {spent:.2f} USD; budget {self.budget_usd:.2f} USD, "
                                  f"{WORST_CASE_CALL_USD:.2f} USD reserved per call")
