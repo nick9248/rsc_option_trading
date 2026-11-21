@@ -1437,6 +1437,26 @@ class DatabaseRepository:
                  "model": row[4], "status": row[5], "response": row[6],
                  "net_premium_usd": None if row[7] is None else float(row[7])} for row in rows]
 
+    def get_settlement_index_price(self, currency: str, settlement_at: datetime, window_minutes: int = 30
+                                   ) -> Optional[Tuple[float, int]]:
+        """
+        An estimate of the delivery price of an expiry: the mean of the index prices stamped on the option trades of the
+        ``window_minutes`` before ``settlement_at`` (Deribit settles on the average of the index over the last 30 minutes).
+        It is a trade-weighted estimate, not the exchange's own figure.
+
+        Returns:
+            (mean index price, number of trades behind it), or None when no trade is in the window.
+        """
+        end_ms = int(settlement_at.timestamp() * 1000)
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT AVG(index_price), COUNT(*) FROM historical_trades
+                WHERE currency = %s AND index_price IS NOT NULL AND trade_timestamp > %s AND trade_timestamp <= %s
+                """, (currency, end_ms - window_minutes * 60_000, end_ms))
+            mean, count = cursor.fetchone()
+        return None if not count else (float(mean), int(count))
+
     def get_strategy_suggestion_total_cost(self) -> float:
         """What all stored strategy suggestion calls cost, in USD (0.0 when there are none)."""
         with self._db_cursor() as cursor:
