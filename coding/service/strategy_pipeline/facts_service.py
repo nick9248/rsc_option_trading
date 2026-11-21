@@ -7,7 +7,7 @@ after the sync) and a replay of any past instant.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 from coding.core.analytics.realised_volatility import realised_volatility
@@ -52,9 +52,12 @@ class FactsAsOfService:
         analysis = self._fresh(self.repository.get_onchain_analysis_snapshot_at_or_before(currency, expiration, as_of), as_of)
         volatility = self._fresh(self.repository.get_onchain_volatility_snapshot_at_or_before(currency, expiration, as_of), as_of)
         flow = self.repository.get_flow_delta_window(currency, expiration, as_of)
+        if flow["newest_hour"] is None or as_of - flow["newest_hour"] > timedelta(hours=MAX_SNAPSHOT_AGE_HOURS + 1):
+            flow = {**flow, "hours_present": 0, "hiro_usd": None, "premium_usd": None, "gross_delta_usd": None, "trade_count": None}  # stale
         dvol, dvol_percentile = self._dvol(currency, as_of)
-        analysis = self._without_empty_zeros(analysis or {}, ("total_net_gex",))
-        volatility = self._without_empty_zeros(volatility or {}, ("pc_atm_ratio", "pc_near_otm_ratio", "pc_far_otm_ratio"))
+        analysis = self._clean_analysis(analysis or {})
+        volatility = self._without_empty_zeros(volatility or {}, ("pc_atm_ratio", "pc_near_otm_ratio", "pc_far_otm_ratio", "net_vanna",
+                                                                  "net_charm", "expected_daily_move", "expected_weekly_move"))
         return FactsV1(
             currency=currency, expiration=expiration, as_of=as_of, spot=spot, days_to_expiry=days, forward=forward,
             dvol=dvol, dvol_percentile_365d=dvol_percentile,
@@ -67,6 +70,8 @@ class FactsAsOfService:
             hvl_level=analysis.get("hvl_level"), itm_call_oi_pct=analysis.get("itm_call_oi_pct"), itm_put_oi_pct=analysis.get("itm_put_oi_pct"),
             volatility_hour=volatility.get("snapshot_hour"), atm_iv_pct=volatility.get("atm_iv"), skew_25d=volatility.get("skew_25d"),
             put_25d_iv_pct=volatility.get("put_25d_iv"), call_25d_iv_pct=volatility.get("call_25d_iv"),
+            # stored as a fraction: on 2026-10-20 08:00 the 30OCT26 row has vrp_absolute 0.0455 and vrp_percentage 14.70, and
+            # 0.0455 / realized_vol 0.3097 = 14.7%, so 0.0455 is 4.55 vol points
             vrp_absolute_points=None if volatility.get("vrp_absolute") is None else volatility["vrp_absolute"] * 100.0,
             iv_percentile_365d=volatility.get("iv_percentile_365d"),
             expected_daily_move_usd=volatility.get("expected_daily_move"), expected_weekly_move_usd=volatility.get("expected_weekly_move"),
@@ -74,6 +79,21 @@ class FactsAsOfService:
             pc_far_otm_ratio=volatility.get("pc_far_otm_ratio"), net_vanna=volatility.get("net_vanna"), net_charm=volatility.get("net_charm"),
             flow_hours=flow["hours_present"], flow_hiro_usd=flow["hiro_usd"], flow_premium_usd=flow["premium_usd"],
             flow_gross_delta_usd=flow["gross_delta_usd"], flow_trade_count=flow["trade_count"])
+
+    @classmethod
+    def _clean_analysis(cls, row: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        The analysis row without the numbers the collector fills with 0 when there was nothing to compute: everything derived from open
+        interest when the expiry has none, the volume ratio when nothing traded, and a net GEX of exactly 0.
+        """
+        cleaned = cls._without_empty_zeros(row, ("total_net_gex",))
+        if (row.get("total_call_oi") or 0.0) + (row.get("total_put_oi") or 0.0) == 0.0:
+            for column in ("put_call_ratio_oi", "total_net_gex", "total_net_dex", "max_pain_strike", "call_resistance_strike",
+                           "put_support_strike", "hvl_level", "itm_call_oi_pct", "itm_put_oi_pct"):
+                cleaned[column] = None
+        if (row.get("total_volume") or 0.0) == 0.0:
+            cleaned["put_call_ratio_volume"] = None
+        return cleaned
 
     @staticmethod
     def _without_empty_zeros(row: Dict[str, Any], columns) -> Dict[str, Any]:
@@ -95,6 +115,9 @@ class FactsAsOfService:
 
     def _dvol(self, currency: str, as_of: datetime):
         """(DVOL, its percentile over the last 365 days of closed hourly candles) at ``as_of``; None for both when there is no history."""
+        newest = self.repository.get_latest_dvol_candle_start_before(currency, as_of)
+        if newest is None or as_of - newest > timedelta(hours=MAX_SNAPSHOT_AGE_HOURS):
+            return None, None                                        # no DVOL, or a stale one: never shown as current
         closes = self.repository.get_dvol_history_before(currency, as_of, days=365)
         if not closes:
             return None, None
@@ -103,6 +126,6 @@ class FactsAsOfService:
 
     def _realised(self, currency: str, as_of: datetime, days: int) -> Optional[float]:
         """Realised volatility of the last ``days`` daily returns that had finished before the day of ``as_of``."""
-        day_start = datetime.combine(as_of.date(), datetime.min.time())                # naive UTC: the repository takes naive UTC
+        day_start = datetime.combine(as_of.astimezone(timezone.utc).date(), datetime.min.time())     # the UTC day; naive: the repository takes naive UTC
         candles = self.repository.get_ohlcv_by_date_range(currency, day_start - timedelta(days=days + 15), day_start - timedelta(seconds=1))
         return realised_volatility(candles, days)

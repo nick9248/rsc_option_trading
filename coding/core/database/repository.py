@@ -1466,7 +1466,8 @@ class DatabaseRepository:
     def get_onchain_analysis_snapshot_at_or_before(self, currency: str, expiration: str, as_of: datetime) -> Optional[Dict[str, Any]]:
         """
         The newest stored hourly analysis of one expiry that was WRITTEN at or before ``as_of`` (its ``created_at``, about 20 minutes
-        after the hour it describes): max pain, put/call ratios, GEX and DEX totals, key levels, open-interest shares.
+        after the hour it describes; the database default stamps it in UTC: on the stored data it is 2 to 58 minutes after the hour, never
+        negative and never an hour more): max pain, put/call ratios, GEX and DEX totals, key levels, open-interest shares.
 
         Returns:
             A dict of the columns (numbers as floats, NULL as None, ``snapshot_hour`` and ``created_at`` UTC-aware), or None.
@@ -1495,22 +1496,30 @@ class DatabaseRepository:
             row = cursor.fetchone()
         return None if row is None else self._row_dict(self._VOLATILITY_COLUMNS, row)
 
+    def get_latest_dvol_candle_start_before(self, asset: str, before_time: datetime) -> Optional[datetime]:
+        """Start of the newest hourly DVOL candle that had closed by ``before_time`` (None when there is none): its age tells how stale the DVOL is."""
+        with self._db_cursor() as cursor:
+            cursor.execute("SELECT MAX(timestamp) FROM dvol_history WHERE asset = %s AND timestamp + interval '1 hour' <= %s",
+                           (asset, before_time))
+            newest = cursor.fetchone()[0]
+        return None if newest is None else newest.astimezone(timezone.utc)
+
     def get_flow_delta_window(self, currency: str, expiration: str, as_of: datetime, hours: int = 24) -> Dict[str, Any]:
         """
         The delta-adjusted option flow of one expiry over the ``hours`` hours that had ended at or before ``as_of``: sums of the
-        hourly rows (HIRO, premium, gross delta, trades) and the number of hourly rows present.
+        hourly rows (HIRO, premium, gross delta, trades), the number of hourly rows present and the newest hour among them.
         """
         as_of_naive = as_of.astimezone(timezone.utc).replace(tzinfo=None)
         newest_hour = as_of_naive - timedelta(hours=1)                  # an hour is known one hour after it starts
         with self._db_cursor() as cursor:
             cursor.execute(
                 """
-                SELECT COUNT(*), SUM(hiro_usd), SUM(premium_usd), SUM(gross_delta_usd), SUM(trade_count)
+                SELECT COUNT(*), SUM(hiro_usd), SUM(premium_usd), SUM(gross_delta_usd), SUM(trade_count), MAX(snapshot_hour)
                 FROM flow_delta_hourly
                 WHERE currency = %s AND expiration = %s AND snapshot_hour <= %s AND snapshot_hour > %s
                 """, (currency, expiration, newest_hour, newest_hour - timedelta(hours=hours)))
-            count, hiro, premium, gross, trades = cursor.fetchone()
-        return {"hours_present": int(count), "hiro_usd": None if hiro is None else float(hiro),
+            count, hiro, premium, gross, trades, newest = cursor.fetchone()
+        return {"hours_present": int(count), "newest_hour": None if newest is None else newest.replace(tzinfo=timezone.utc), "hiro_usd": None if hiro is None else float(hiro),
                 "premium_usd": None if premium is None else float(premium),
                 "gross_delta_usd": None if gross is None else float(gross), "trade_count": None if trades is None else int(trades)}
 

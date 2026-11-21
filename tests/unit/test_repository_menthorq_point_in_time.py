@@ -52,6 +52,7 @@ CREATE TABLE onchain_volatility_snapshots (
 CREATE TABLE flow_delta_hourly (
     id serial PRIMARY KEY, snapshot_hour timestamp NOT NULL, currency varchar(10) NOT NULL, expiration varchar(20) NOT NULL, hiro_usd numeric,
     premium_usd numeric, gross_delta_usd numeric, net_contracts numeric, gross_contracts numeric, trade_count integer);
+CREATE TABLE dvol_history (id serial PRIMARY KEY, asset varchar(10) NOT NULL, timestamp timestamptz NOT NULL, dvol_value numeric);   -- timestamptz, as in the real table
 CREATE TABLE historical_trades (
     id               SERIAL PRIMARY KEY,
     trade_id         VARCHAR(50)    NOT NULL,
@@ -275,6 +276,17 @@ def test_flow_window_sums_only_the_24_hours_that_had_ended(repo):
     _execute(scratch_connection, "INSERT INTO flow_delta_hourly (snapshot_hour, currency, expiration, hiro_usd, premium_usd, gross_delta_usd, trade_count) "
              "VALUES (%s, 'BTC', '27NOV26', 10, 1, 100, 2)", [(start + timedelta(hours=hour),) for hour in range(0, 48)])
     window = repository.get_flow_delta_window("BTC", "27NOV26", datetime(2026, 11, 6, 12, tzinfo=timezone.utc))     # hours 11:00 back to 12:00 the day before
-    assert window == {"hours_present": 24, "hiro_usd": 240.0, "premium_usd": 24.0, "gross_delta_usd": 2400.0, "trade_count": 48}
+    assert window == {"hours_present": 24, "newest_hour": datetime(2026, 11, 6, 11, tzinfo=timezone.utc), "hiro_usd": 240.0, "premium_usd": 24.0, "gross_delta_usd": 2400.0, "trade_count": 48}
     empty = repository.get_flow_delta_window("ETH", "27NOV26", datetime(2026, 11, 6, 12, tzinfo=timezone.utc))
     assert empty["hours_present"] == 0 and empty["hiro_usd"] is None
+
+
+def test_the_newest_dvol_candle_must_have_closed_by_the_instant(repo):
+    repository, scratch_connection = repo
+    hour = datetime(2026, 11, 6, 8, tzinfo=timezone.utc)
+    _execute(scratch_connection, "INSERT INTO dvol_history (asset, timestamp, dvol_value) VALUES ('BTC', %s, 50)",
+             [(hour + timedelta(hours=offset),) for offset in (0, 1, 2)])
+    assert repository.get_latest_dvol_candle_start_before("BTC", hour + timedelta(hours=2)) == hour + timedelta(hours=1)    # the 10:00 candle has not closed
+    assert repository.get_latest_dvol_candle_start_before("BTC", hour + timedelta(hours=3)) == hour + timedelta(hours=2)
+    assert repository.get_latest_dvol_candle_start_before("BTC", hour + timedelta(minutes=30)) is None
+    assert repository.get_latest_dvol_candle_start_before("ETH", hour + timedelta(hours=3)) is None

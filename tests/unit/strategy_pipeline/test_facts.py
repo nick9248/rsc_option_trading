@@ -38,9 +38,10 @@ def make_service(analysis=None, volatility=None, flow=None, dvol=None):
     repository = MagicMock()
     repository.get_onchain_analysis_snapshot_at_or_before.return_value = analysis_row() if analysis is None else analysis or None
     repository.get_onchain_volatility_snapshot_at_or_before.return_value = volatility_row() if volatility is None else volatility or None
-    repository.get_flow_delta_window.return_value = flow or {"hours_present": 24, "hiro_usd": -33770066.0, "premium_usd": -291084.0,
-                                                             "gross_delta_usd": 116458260.0, "trade_count": 1432}
+    repository.get_flow_delta_window.return_value = flow or {"hours_present": 24, "newest_hour": AS_OF - timedelta(hours=1), "hiro_usd": -33770066.0,
+                                                             "premium_usd": -291084.0, "gross_delta_usd": 116458260.0, "trade_count": 1432}
     repository.get_dvol_history_before.return_value = [30.0, 35.0, 40.0, 38.0] if dvol is None else dvol
+    repository.get_latest_dvol_candle_start_before.return_value = AS_OF - timedelta(hours=1)
     repository.get_ohlcv_by_date_range.return_value = daily_closes()
     return FactsAsOfService(repository), repository
 
@@ -92,6 +93,31 @@ def test_the_stored_variance_risk_premium_is_shown_in_vol_points():
     assert build(service).vrp_absolute_points == pytest.approx(4.55)
 
 
+def test_other_zero_filled_columns_are_not_recorded_either():
+    service, _ = make_service(analysis=analysis_row(total_call_oi=0.0, total_put_oi=0.0, put_call_ratio_oi=0.0, total_net_dex=0.0, total_volume=0.0,
+                                                    put_call_ratio_volume=0.0, max_pain_strike=51000.0, itm_call_oi_pct=0.0),
+                              volatility=volatility_row(net_vanna=0.0, expected_daily_move=0.0))
+    facts = build(service)
+    assert facts.put_call_ratio_oi is None and facts.put_call_ratio_volume is None and facts.max_pain_strike is None
+    assert facts.itm_call_oi_pct is None and facts.total_net_dex is None and facts.net_vanna is None and facts.expected_daily_move_usd is None
+
+
+def test_a_stale_dvol_and_a_stale_flow_are_not_shown_as_current():
+    service, repository = make_service()
+    repository.get_latest_dvol_candle_start_before.return_value = AS_OF - timedelta(days=5)
+    repository.get_flow_delta_window.return_value = {"hours_present": 24, "newest_hour": AS_OF - timedelta(hours=14), "hiro_usd": 5.0,
+                                                     "premium_usd": 1.0, "gross_delta_usd": 1.0, "trade_count": 3}
+    facts = build(service)
+    assert facts.dvol is None and facts.dvol_percentile_365d is None and facts.flow_hours == 0 and facts.flow_hiro_usd is None
+
+
+def test_the_utc_day_is_used_for_candles_whatever_the_zone_of_the_instant():
+    service, repository = make_service()
+    plus_three = timezone(timedelta(hours=3))
+    service.build("BTC", EXPIRY, datetime(2026, 10, 20, 1, 0, tzinfo=plus_three), 1.0)          # 19 Oct 22:00 UTC
+    assert repository.get_ohlcv_by_date_range.call_args.args[2] < datetime(2026, 10, 19, 0, 0)
+
+
 def test_a_naive_instant_and_a_closed_expiry_are_refused():
     service, _ = make_service()
     with pytest.raises(ValueError):
@@ -103,7 +129,7 @@ def test_a_naive_instant_and_a_closed_expiry_are_refused():
 
 
 def test_the_text_says_what_was_not_recorded_and_shows_what_was():
-    service, _ = make_service(volatility=False, flow={"hours_present": 3, "hiro_usd": 1.0, "premium_usd": 1.0, "gross_delta_usd": 1.0, "trade_count": 5})
+    service, _ = make_service(volatility=False, flow={"hours_present": 3, "newest_hour": AS_OF - timedelta(hours=1), "hiro_usd": 1.0, "premium_usd": 1.0, "gross_delta_usd": 1.0, "trade_count": 5})
     text = render_facts(build(service))
     assert "expiry 30OCT26, facts as of 2026-10-20 09:00 UTC" in text and "Max pain strike: 78,000" in text
     assert "ATM implied volatility: not recorded" in text and "not available" in text
