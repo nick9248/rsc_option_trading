@@ -144,12 +144,12 @@ def test_realised_volatility_ignores_gaps_in_the_candles():
     assert realised_volatility(gapped, 30) is None
 
 
-def test_a_candle_is_used_only_when_its_day_is_over():
+def test_a_candle_is_used_only_when_its_day_is_over_and_settled():
     from coding.core.analytics.realised_volatility import last_completed_candle_start
-    # the candle starting 2026-10-19 08:00 UTC finishes at 2026-10-20 08:00: it is the newest complete one from that instant on, not before
-    assert last_completed_candle_start(datetime(2026, 10, 20, 8, tzinfo=timezone.utc)) == datetime(2026, 10, 19, 8)
-    assert last_completed_candle_start(datetime(2026, 10, 20, 7, 59, tzinfo=timezone.utc)) == datetime(2026, 10, 19, 7, 59)     # one minute earlier the bound is 19 Oct 07:59: the candle of 18 Oct 08:00 is the newest complete one
-    assert last_completed_candle_start(datetime(2026, 10, 20, 9, tzinfo=timezone(timedelta(hours=1)))) == datetime(2026, 10, 19, 8)
+    # the candle starting 2026-10-19 08:00 UTC finishes at 2026-10-20 08:00; the collector's last refresh is certainly in by 09:00
+    assert last_completed_candle_start(datetime(2026, 10, 20, 9, tzinfo=timezone.utc)) == datetime(2026, 10, 19, 8)
+    assert last_completed_candle_start(datetime(2026, 10, 20, 8, 59, tzinfo=timezone.utc)) == datetime(2026, 10, 19, 7, 59)       # a minute earlier: the candle of 18 Oct is the newest
+    assert last_completed_candle_start(datetime(2026, 10, 20, 10, tzinfo=timezone(timedelta(hours=1)))) == datetime(2026, 10, 19, 8)
     with pytest.raises(ValueError):
         last_completed_candle_start(datetime(2026, 10, 20, 8))
 
@@ -158,4 +158,4 @@ def test_the_facts_read_candles_up_to_the_last_complete_one_and_not_the_running_
     service, repository = make_service()
     build(service)
     start, end = repository.get_ohlcv_by_date_range.call_args.args[1:3]
-    assert end == AS_OF.replace(tzinfo=None) - timedelta(days=1) and start < end
+    assert end == AS_OF.replace(tzinfo=None) - timedelta(days=1, hours=1) and start < end

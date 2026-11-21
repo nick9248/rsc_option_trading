@@ -1285,8 +1285,9 @@ class ProspectiveCollector:
         """
         Fetch and save the last 2 days of daily OHLCV candles.
 
-        Runs on every 30-min cycle. ON CONFLICT DO NOTHING in save_ohlcv
-        makes this idempotent — duplicate candles are silently skipped.
+        Runs on every 30-min cycle. save_ohlcv overwrites a candle already stored for the same start, so the candle of the running day is
+        refreshed every cycle and holds its final values once the day is over. A candle for which any of the five series has no value is skipped
+        (never stored with a 0.0, which would also overwrite a good stored candle).
 
         Args:
             currency: Currency symbol (e.g., "BTC", "ETH").
@@ -1316,6 +1317,9 @@ class ProspectiveCollector:
 
             processed = 0
             for i, ts_ms in enumerate(ticks):
+                if any(i >= len(series) or series[i] is None for series in (opens, highs, lows, closes, volumes)):
+                    logger.warning(f"Incomplete OHLCV candle for {instrument} at {ts_ms}: skipped")
+                    continue
                 try:
                     dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).replace(tzinfo=None)
                     self.repo.save_ohlcv(
@@ -1323,11 +1327,11 @@ class ProspectiveCollector:
                         instrument_name=instrument,
                         timestamp=ts_ms,
                         date=dt,
-                        open_price=float(opens[i]) if i < len(opens) else 0.0,
-                        high=float(highs[i]) if i < len(highs) else 0.0,
-                        low=float(lows[i]) if i < len(lows) else 0.0,
-                        close=float(closes[i]) if i < len(closes) else 0.0,
-                        volume=float(volumes[i]) if i < len(volumes) else 0.0
+                        open_price=float(opens[i]),
+                        high=float(highs[i]),
+                        low=float(lows[i]),
+                        close=float(closes[i]),
+                        volume=float(volumes[i])
                     )
                     processed += 1
                 except Exception as e:

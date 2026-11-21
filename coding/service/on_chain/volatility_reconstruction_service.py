@@ -335,9 +335,9 @@ class VolatilityReconstructionService:
         (table starts 2026-03-14 — TASKS.md Track B verified facts) or when
         IV/RV inputs are unusable, rather than persisting a misleading 0.
         """
-        window_start = snapshot_hour - timedelta(days=self.VRP_LOOKBACK_DAYS + 5)
         # only candles that were complete at the snapshot hour: the candle of a running day holds the price of that moment, a later one's close is the future
         newest_complete = last_completed_candle_start(snapshot_hour.replace(tzinfo=timezone.utc) if snapshot_hour.tzinfo is None else snapshot_hour)
+        window_start = newest_complete - timedelta(days=self.VRP_LOOKBACK_DAYS + 5)
         ohlcv_rows = self.repo.get_ohlcv_by_date_range(currency, window_start, newest_complete)
         price_history = [
             {"timestamp": row["date"].replace(tzinfo=timezone.utc).timestamp(), "close": row["close"]}

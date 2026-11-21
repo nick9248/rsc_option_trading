@@ -43,7 +43,7 @@ def test_realised_volatility_only_uses_candles_that_were_complete_at_the_entry_t
     lab, repository = make_lab()
     lab.realised_volatility("BTC", date(2026, 6, 1))
     start, end = repository.get_ohlcv_by_date_range.call_args.args[1:3]
-    assert end == datetime(2026, 5, 31, 9, 0) and start < end                       # the candle that finished at 08:00 UTC of 31 May is the newest one a 09:00 entry on 1 June may use
+    assert end == datetime(2026, 5, 31, 8, 0) and start < end                       # the candle that started 08:00 UTC of 31 May finished at 08:00 of 1 June: usable at a 09:00 entry
 
 
 def test_a_gap_in_the_daily_candles_is_not_stretched_into_one_return():

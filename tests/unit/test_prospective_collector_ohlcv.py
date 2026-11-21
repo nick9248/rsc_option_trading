@@ -71,3 +71,19 @@ def test_collect_currency_calls_fetch_ohlcv():
     collector._collect_currency("BTC", datetime(2026, 3, 14))
 
     collector._fetch_ohlcv.assert_called_once_with("BTC")
+
+
+def test_a_candle_with_a_missing_value_is_skipped_never_stored_with_a_zero():
+    """A short series would otherwise store (and now OVERWRITE a good candle with) 0.0."""
+    collector = _make_collector()
+    collector.api.get_tradingview_chart_data.return_value = {
+        "ticks": [1700000000000, 1700086400000, 1700172800000],
+        "open": [37000.0, 37500.0, 37900.0], "high": [38000.0, 38200.0, 38300.0], "low": [36500.0, 37100.0, 37600.0],
+        "close": [37500.0, 37900.0, None], "volume": [100.0, 120.0],                           # the third close is None, the third volume is missing
+        "status": "ok"}
+
+    collector._fetch_ohlcv("BTC")
+
+    saved = [call[1]["timestamp"] for call in collector.repo.save_ohlcv.call_args_list]
+    assert saved == [1700000000000, 1700086400000]
+    assert all(call[1]["volume"] > 0 for call in collector.repo.save_ohlcv.call_args_list)

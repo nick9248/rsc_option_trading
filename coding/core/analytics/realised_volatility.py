@@ -8,6 +8,8 @@ import numpy as np
 
 CANDLE_LENGTH = timedelta(days=1)
 """Deribit daily candles start at 08:00 UTC and last one day."""
+CANDLE_SETTLE_MARGIN = timedelta(hours=1)
+"""The collector refreshes the candle every 30 minutes: one hour after its end the stored version is certainly the final one."""
 MINIMUM_RETURNS = 20
 """Fewer daily returns than this give no volatility."""
 
@@ -38,11 +40,12 @@ def last_completed_candle_start(as_of: datetime) -> datetime:
     The start (naive UTC, as the repository expects) of the newest daily candle that is complete at ``as_of``.
 
     A candle starting at 08:00 UTC of day D ends at 08:00 UTC of D + 1, and only then is its close final: at any earlier instant its close is
-    the price of that moment. A reader at ``as_of`` may use the candles that start at or before ``as_of`` minus one day, never the running one.
+    the price of that moment. The collector stores it every 30 minutes, so one more hour is allowed before it counts as final. A reader at
+    ``as_of`` may use the candles that start at or before ``as_of`` minus one day and one hour, never the running one.
 
     Raises:
         ValueError: for a naive ``as_of``.
     """
     if as_of.tzinfo is None:
         raise ValueError("as_of must be timezone-aware (UTC)")
-    return as_of.astimezone(timezone.utc).replace(tzinfo=None) - CANDLE_LENGTH
+    return as_of.astimezone(timezone.utc).replace(tzinfo=None) - CANDLE_LENGTH - CANDLE_SETTLE_MARGIN
