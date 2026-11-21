@@ -92,8 +92,8 @@ def test_order_and_single_sync_for_both_currencies(recorder):
 
 def test_accessors_return_paths(recorder, tmp_path):
     result = recorder.service().run(["ETH"], lambda line: None)
-    assert result.dashboard_path("ETH") == tmp_path / "ETH" / "dashboard.html"
-    assert result.report_path("ETH") == tmp_path / "ETH_report.html"
+    assert result.dashboard_path("ETH") is None                         # merged into the unified page and deleted
+    assert result.report_path("ETH") is None
     assert result.unified_dashboard_path("ETH") == tmp_path / "ETH" / "unified_dashboard.html"
     assert result.report_text_folder("ETH") == tmp_path / "ETH"
     assert result.dashboard_path("BTC") is None
@@ -127,7 +127,7 @@ def test_report_failure_does_not_affect_others(recorder):
     assert [s.label for s in result.failed_steps] == ["BTC report"]
     assert result.dashboard_path("BTC") is not None
     assert result.report_path("BTC") is None
-    assert result.report_path("ETH") is not None
+    assert result.report_path("ETH") is None                           # merged and deleted
     assert result.unified_dashboard_path("BTC") is None
     assert result.unified_dashboard_path("ETH") is not None
 
@@ -138,7 +138,7 @@ def test_dashboard_failure_is_isolated(recorder):
     assert [s.label for s in result.failed_steps] == ["BTC on-chain dashboard"]
     assert "report:BTC" in recorder.calls
     assert "unified:BTC" not in recorder.calls                              # the merge needs both files
-    assert result.report_path("ETH") is not None
+    assert result.report_path("BTC") is not None                           # no merge, so the report stays
     assert result.unified_dashboard_path("ETH") is not None
 
 
@@ -244,7 +244,10 @@ def test_a_page_that_cannot_be_deleted_is_logged_and_does_not_fail_the_run(recor
         raise PermissionError("file is open in the browser")
 
     monkeypatch.setattr(Path, "unlink", refuse)
+    lines = []
     with caplog.at_level("WARNING"):
-        result = recorder.service().run(["BTC"], lambda line: None)
+        result = recorder.service().run(["BTC"], lines.append)
     assert result.all_succeeded
+    assert any("Could not remove" in line and "file is open in the browser" in line for line in lines)   # shown, not only logged
+    assert result.dashboard_path("BTC") is not None and result.report_path("BTC") is not None            # still on disk
     assert "Could not remove" in caplog.text and "file is open in the browser" in caplog.text

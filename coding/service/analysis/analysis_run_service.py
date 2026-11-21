@@ -103,11 +103,11 @@ class AnalysisRunResult:
         return None
 
     def dashboard_path(self, currency: str) -> Optional[Path]:
-        """``dashboard.html`` of the currency, or None when it was not written. It is deleted once the unified dashboard holds it."""
+        """``dashboard.html`` of the currency, or None when it was not written or was deleted after the merge into the unified dashboard."""
         return self._path(STEP_DASHBOARD, currency)
 
     def report_path(self, currency: str) -> Optional[Path]:
-        """The market report HTML file of the currency, or None when it was not written. It is deleted once the unified dashboard holds it."""
+        """The market report HTML file of the currency, or None when it was not written or was deleted after the merge into the unified dashboard."""
         return self._path(STEP_REPORT, currency)
 
     def unified_dashboard_path(self, currency: str) -> Optional[Path]:
@@ -227,7 +227,7 @@ class AnalysisRunService:
                     dashboard_file = run_result.dashboard_path(currency)
                     path = self.unified_dashboard_service_factory().write(currency, report_file, dashboard_file, dashboard_file.parent)
                     outcome = StepOutcome(name, currency, STATUS_SUCCEEDED, "done", path)
-                    self._remove_merged_pages(report_file, dashboard_file)
+                    self._remove_merged_pages(run_result, currency, progress)
                 else:
                     report_service = self._report_service(report_service)
                     report: ReportResult = report_service.generate(currency, progress, skip_sync=True,
@@ -254,17 +254,23 @@ class AnalysisRunService:
         return run_result
 
     @staticmethod
-    def _remove_merged_pages(*pages: Path) -> None:
+    def _remove_merged_pages(run_result: AnalysisRunResult, currency: str, progress: Callable[[str], None]) -> None:
         """
-        Delete the pages that were merged into the unified dashboard (it holds all of their content). A file that cannot be
-        deleted is logged; it never fails the run.
+        Delete the dashboard and report pages of ``currency`` that were merged into the unified dashboard (it holds all of their
+        content) and forget their paths in ``run_result``. A file that cannot be deleted (for example open in a browser) is
+        logged and shown in the progress output; it never fails the run, and its path stays in the result.
         """
-        for page in pages:
+        for step in run_result.steps:
+            if step.currency != currency or step.name not in (STEP_DASHBOARD, STEP_REPORT) or step.path is None:
+                continue
             try:
-                page.unlink(missing_ok=True)
-                logger.info("Removed %s (merged into the unified dashboard)", page)
+                step.path.unlink(missing_ok=True)
             except OSError as error:
-                logger.warning("Could not remove %s: %s", page, error)
+                logger.warning("Could not remove %s: %s", step.path, error)
+                progress(f"Could not remove {step.path.name}: {error}")
+                continue
+            logger.info("Removed %s (merged into the unified dashboard)", step.path)
+            step.path = None
 
     def _report_service(self, existing: Optional[ReportService]) -> ReportService:
         """The one report service of this run (built on first use)."""
