@@ -56,7 +56,7 @@ def test_two_expiries_equally_far_from_the_target_pick_the_earlier_one_every_tim
     captured_at = datetime(2026, 6, 1, 8, tzinfo=timezone.utc)                # 4JUN26 is exactly 3 days away, 6JUN26 exactly 5
     chain = rows("6JUN26") + rows("4JUN26")
     for _ in range(3):
-        expiration, _ = BacktestService._choose_expiry(chain, captured_at, 4.0, 2.0)
+        expiration, _ = BacktestService.choose_expiry(chain, captured_at, 4.0, 2.0)
         assert expiration == "4JUN26"
 
 
