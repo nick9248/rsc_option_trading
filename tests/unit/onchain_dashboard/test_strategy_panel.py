@@ -108,7 +108,7 @@ def test_the_service_reads_the_rows_and_survives_a_database_error():
          "response": answer(), "net_premium_usd": -290.0}]
     assert "Iron condor" in UnifiedDashboardService(lambda: repository)._strategy_panel("BTC")
     repository.get_latest_strategy_suggestions.side_effect = RuntimeError("down")
-    assert "could not be read: RuntimeError: down" in UnifiedDashboardService(repository)._strategy_panel("BTC")
+    assert "could not be read: RuntimeError: down" in UnifiedDashboardService(lambda: repository)._strategy_panel("BTC")
     assert UnifiedDashboardService()._strategy_panel("BTC") is None
 
     def cannot_connect():
