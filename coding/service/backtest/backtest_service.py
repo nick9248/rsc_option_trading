@@ -38,7 +38,8 @@ class EntryData:
     """Median forward of the chosen expiry's options."""
     expiration: str
     settlement_at: datetime
-    settlement_price: float
+    settlement_price: Optional[float]
+    """None for an entry whose expiry has not settled (a live entry)."""
     quotes: List[Quote]
     atm_implied_volatility: Optional[float]
     """As a fraction (0.55 for 55%)."""
@@ -110,14 +111,21 @@ class BacktestService:
         legs, reason = select_legs(structure, entry.quotes, entry.spot, parameters)
         if legs is None:
             return None, reason
+        if entry.settlement_price is None:
+            raise RuntimeError("a backtest entry needs its settlement price")
         return simulate_trade(structure, entry.expiration, entry_time, entry.settlement_at, entry.spot, legs, entry.settlement_price), ""
 
     def load_entry(self, currency: str, entry_time: datetime, target_days: float, minimum_days: float,
-                   now: datetime) -> Tuple[Optional[EntryData], str]:
+                   now: datetime, settled: bool = True, expiration: Optional[str] = None) -> Tuple[Optional[EntryData], str]:
         """
         Everything known at the entry instant and the outcome: the chain of the expiry nearest the target as USD quotes, the spot and the
         forward, the implied volatility, and the delivery price estimate. Point in time: the chain and the spot are of the entry; the
         settlement price is of the expiry (used only to settle, never to choose).
+
+        Args:
+            settled: True (a backtest or a replay) requires the expiry to have settled and its delivery price to be known; False (a live
+                entry) does not look at the settlement at all.
+            expiration: Use this expiry instead of the one nearest the target days.
 
         Returns:
             (entry data, "") or (None, reason) for a day that cannot be traded.
@@ -133,21 +141,29 @@ class BacktestService:
             return None, "no index price at the snapshot"
         spot = index[0]
 
-        expiration, settlement_at = self.choose_expiry(rows, captured_at, target_days, minimum_days)
+        if expiration is None:
+            expiration, settlement_at = self.choose_expiry(rows, captured_at, target_days, minimum_days)
+        else:
+            settlement_at = parse_expiry_settlement(expiration)
+            if settlement_at is None or settlement_at <= captured_at or not any(row["expiration"] == expiration for row in rows):
+                return None, "expiry not in the snapshot"
         if expiration is None or settlement_at is None:
             return None, "no expiry in range"
-        if settlement_at > now:
-            return None, "expiry not settled yet"
-        settlement = self.repository.get_settlement_index_price(currency, settlement_at)
-        if settlement is None or settlement[1] < MIN_SETTLEMENT_TRADES:
-            return None, "no settlement price"                    # counted in the summary; a share of skipped days is visible there
+        settlement_price: Optional[float] = None
+        if settled:
+            if settlement_at > now:
+                return None, "expiry not settled yet"
+            settlement = self.repository.get_settlement_index_price(currency, settlement_at)
+            if settlement is None or settlement[1] < MIN_SETTLEMENT_TRADES:
+                return None, "no settlement price"                # counted in the summary; a share of skipped days is visible there
+            settlement_price = settlement[0]
 
         # Snapshots before about August carry no mark IV: it is rebuilt from the mark price and the forward (Black-76), as in the
         # MenthorQ replay; a row that still has none gets no delta and is not used.
         rows, _ = fill_missing_implied_volatility([row for row in rows if row["expiration"] == expiration], captured_at)
         forwards = sorted(row["underlying_price"] for row in rows if row.get("underlying_price"))
         forward = forwards[len(forwards) // 2] if forwards else spot
-        return EntryData(captured_at, spot, forward, expiration, settlement_at, settlement[0], self.quotes_from_rows(rows, spot, captured_at),
+        return EntryData(captured_at, spot, forward, expiration, settlement_at, settlement_price, self.quotes_from_rows(rows, spot, captured_at),
                          self._atm_implied_volatility(rows, forward)), ""
 
     @staticmethod
