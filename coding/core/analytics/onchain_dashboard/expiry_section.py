@@ -16,11 +16,13 @@ from coding.core.analytics.onchain_dashboard.formatting import (
     number_text, percent_text, ratio_text, strike_text, text_or_missing, usd_text)
 from coding.core.analytics.report.figure_style import figure_json
 from coding.core.analytics.report.report_page import (
-    ReportSection, SwitcherControl, paragraph_fragment, switcher_configuration, switcher_fragment, table_fragment,
+    ReportSection, SwitcherControl, format_utc, paragraph_fragment, switcher_configuration, switcher_fragment, table_fragment,
     view_key)
 from coding.core.analytics.report.section_fragments import NOT_COMPUTED
 from coding.core.analytics.results.analysis_result import ExpirationBundle, OnChainAnalysisResult
 from coding.core.analytics.results.delta_flow_results import FlowBucket
+from coding.core.analytics.results.vol_surface_results import MoneynessBucket
+from coding.core.analytics.thresholds import OI_CHANGE_SIGNIFICANT_ABS_THRESHOLD, OI_CHANGE_SIGNIFICANT_PCT_THRESHOLD
 from coding.core.analytics.results.levels_table_results import LevelsTable, LevelsTableRow
 
 CHARTS: List[Tuple[str, str]] = [
@@ -274,20 +276,21 @@ def key_level_rows(bundle: ExpirationBundle, spot: float) -> List[List[str]]:
     return rows
 
 
-def _moneyness_bucket_text(bucket) -> str:
+def _moneyness_bucket_text(bucket: MoneynessBucket) -> str:
     """Put/call open interest ratio of one moneyness bucket; an empty bucket is said to be empty, never 0."""
     if bucket.ratio is None:
         return "no instruments in this range"
     return f"{ratio_text(bucket.ratio)} (calls {count_text(bucket.call_oi)}, puts {count_text(bucket.put_oi)})"
 
 
-def statistic_rows(bundle: ExpirationBundle, delta_flow_bucket: Optional[FlowBucket] = None) -> List[List[str]]:
+def statistic_rows(bundle: ExpirationBundle, delta_flow_bucket: Optional[FlowBucket] = None, delta_flow_window: str = "") -> List[List[str]]:
     """
     Rows [metric, value] with the totals and ratios of one expiry.
 
     Args:
         bundle: The expiry.
         delta_flow_bucket: The delta-adjusted flow of this expiry in the report window (None when there is none).
+        delta_flow_window: Plain text on the window behind it (hours, rows present, stale since); see ``delta_flow_window_text``.
     """
     analysis = bundle.analysis
     ratio, volume = analysis.put_call_ratio, analysis.volume_stats
@@ -321,7 +324,7 @@ def statistic_rows(bundle: ExpirationBundle, delta_flow_bucket: Optional[FlowBuc
                  ["Delta exposure, holder side", number_text(gex.delta_exposure_holder_total, 2, " coins", True)],
                  ["Delta exposure, assumed dealer", number_text(gex.dealer_delta_exposure_total, 2, " coins", True)]]
     money = bundle.analysis.moneyness
-    rows.append(["In the money, share of open interest",
+    rows.append(["In the money, share of open interest value (notional)",
                  f"calls {percent_text(money.calls.itm_pct)}, puts {percent_text(money.puts.itm_pct)}"])
     if delta_flow_bucket is None:
         rows.append(["Delta-adjusted flow, report window", f"{NOT_COMPUTED}: no hourly flow rows for this expiry"])
@@ -330,6 +333,8 @@ def statistic_rows(bundle: ExpirationBundle, delta_flow_bucket: Optional[FlowBuc
                  ["Delta-adjusted flow, signed premium", usd_text(delta_flow_bucket.premium_usd)],
                  ["Delta-adjusted flow, gross |delta| notional", usd_text(delta_flow_bucket.gross_delta_usd, False)],
                  ["Trades behind the delta-adjusted flow", f"{delta_flow_bucket.trade_count:,} (skipped {delta_flow_bucket.skipped_count})"]]
+        if delta_flow_window:
+            rows.append(["Window of the delta-adjusted flow", delta_flow_window])
     exposure = bundle.exposure_profile
     rows.append(["Vanna / charm, holder side", NOT_COMPUTED if exposure is None else
                  f"vanna {number_text(exposure.total_vex_holder, 0, ' USD per vol point', True)}, charm "
@@ -383,20 +388,31 @@ def oi_change_table(bundle: ExpirationBundle) -> str:
     if not changes.has_previous_snapshot:
         return paragraph_fragment("Large open interest changes: no previous snapshot to compare with.", "note")
     if not changes.rows:
-        return paragraph_fragment("Large open interest changes: none above 20% since the previous snapshot.", "note")
+        return paragraph_fragment(f"Large open interest changes: none of at least {OI_CHANGE_SIGNIFICANT_PCT_THRESHOLD:g}% and "
+                                  f"{OI_CHANGE_SIGNIFICANT_ABS_THRESHOLD:g} coins since the previous snapshot.", "note")
     rows = [[strike_text(row.strike), "Call" if row.option_type == "C" else "Put", count_text(row.previous_oi), count_text(row.current_oi),
              number_text(row.change, 0, signed=True), number_text(row.change_pct, 1, "%", signed=True)] for row in changes.rows]
     return table_fragment(["Strike", "Type", "Previous OI", "Current OI", "Change", "Change %"], rows,
-                          caption=f"Large open interest changes since the previous snapshot ({changes.total_significant} above 20%)",
+                          caption=f"Large open interest changes since the previous snapshot ({changes.total_significant} of at least "
+                                  f"{OI_CHANGE_SIGNIFICANT_PCT_THRESHOLD:g}% and {OI_CHANGE_SIGNIFICANT_ABS_THRESHOLD:g} coins)",
                           numeric_columns=(2, 3, 4, 5))
 
 
-def view_caption(bundle: ExpirationBundle, chart_key: str, spot: float, delta_flow_bucket: Optional[FlowBucket] = None) -> str:
+def delta_flow_window_text(result: OnChainAnalysisResult) -> str:
+    """The window behind the delta-adjusted flow: its length, how many hourly rows exist, and since when it is stale."""
+    text = f"{result.delta_flow_lookback_hours:g} h, {result.delta_flow_hours_present} hourly rows persisted"
+    if result.delta_flow_stale_since is not None:
+        text += f"; STALE: the newest row is from {format_utc(result.delta_flow_stale_since)}"
+    return text
+
+
+def view_caption(bundle: ExpirationBundle, chart_key: str, spot: float, delta_flow_bucket: Optional[FlowBucket] = None,
+                 delta_flow_window: str = "") -> str:
     """The HTML above a chart: evidence line, note on the chart, key levels, statistics, top strikes and OI changes. All text is escaped."""
     return (paragraph_fragment(f"{bundle.expiration}: {evidence_text(bundle)}.", "note")
             + paragraph_fragment(CHART_NOTES[chart_key], "note")
             + table_fragment(["Level", "Strike", "Detail"], key_level_rows(bundle, spot))
-            + table_fragment(["Metric", "Value"], statistic_rows(bundle, delta_flow_bucket))
+            + table_fragment(["Metric", "Value"], statistic_rows(bundle, delta_flow_bucket, delta_flow_window))
             + strike_pressure_tables(bundle)
             + oi_change_table(bundle))
 
@@ -414,13 +430,14 @@ def build_expiries_section(result: OnChainAnalysisResult) -> ReportSection:
                 SwitcherControl("chart", "Chart", list(CHARTS), CHARTS[0][0])]
     views: Dict[str, Dict[str, Any]] = {}
     delta_flow_by_expiry = {bucket.expiration: bucket for bucket in result.delta_flow_buckets if bucket.expiration != "ALL"}
+    delta_window = delta_flow_window_text(result)
     for bundle in bundles:
         table = build_levels_table(bundle)
         for chart_key, _ in CHARTS:
             figure_id = f"expiry-{bundle.expiration}-{chart_key}"
             section.figures[figure_id] = figure_json(FIGURE_BUILDERS[chart_key](bundle, table, result.underlying_price))
             views[view_key([bundle.expiration, chart_key])] = {"figure": figure_id, "caption": view_caption(
-                bundle, chart_key, result.underlying_price, delta_flow_by_expiry.get(bundle.expiration))}
+                bundle, chart_key, result.underlying_price, delta_flow_by_expiry.get(bundle.expiration), delta_window)}
     section.body_html = switcher_fragment(SWITCHER_ID, controls)
     section.switchers[SWITCHER_ID] = switcher_configuration(controls, views)
     return section
