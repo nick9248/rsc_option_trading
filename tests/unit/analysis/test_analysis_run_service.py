@@ -36,7 +36,9 @@ class Recorder:
                     raise ReportStopped("stopped")
                 if f"report:{currency}" in recorder.fail:
                     raise OSError("disk full")
-                return SimpleNamespace(path=recorder.tmp_path / f"{currency}_report.html")
+                path = recorder.tmp_path / f"{currency}_report.html"
+                path.write_text("report page", encoding="utf-8")
+                return SimpleNamespace(path=path)
 
         class FakeWorkflow:
             def __init__(self, currency):
@@ -56,6 +58,8 @@ class Recorder:
                 assert folder == recorder.tmp_path / currency
                 if f"dashboard:{currency}" in recorder.fail:
                     raise RuntimeError("template broken")
+                folder.mkdir(parents=True, exist_ok=True)
+                (folder / "dashboard.html").write_text("dashboard page", encoding="utf-8")
                 return folder / "dashboard.html"
 
         class FakeUnifiedDashboard:
@@ -66,6 +70,7 @@ class Recorder:
                 assert folder == recorder.tmp_path / currency
                 if f"unified:{currency}" in recorder.fail:
                     raise RuntimeError("page structure changed")
+                (folder / "unified_dashboard.html").write_text("unified page", encoding="utf-8")
                 return folder / "unified_dashboard.html"
 
         return AnalysisRunService(FakeReportService, FakeWorkflow, FakeDashboard, FakeUnifiedDashboard)
@@ -87,8 +92,8 @@ def test_order_and_single_sync_for_both_currencies(recorder):
 
 def test_accessors_return_paths(recorder, tmp_path):
     result = recorder.service().run(["ETH"], lambda line: None)
-    assert result.dashboard_path("ETH") == tmp_path / "ETH" / "dashboard.html"
-    assert result.report_path("ETH") == tmp_path / "ETH_report.html"
+    assert result.dashboard_path("ETH") is None                         # merged into the unified page and deleted
+    assert result.report_path("ETH") is None
     assert result.unified_dashboard_path("ETH") == tmp_path / "ETH" / "unified_dashboard.html"
     assert result.report_text_folder("ETH") == tmp_path / "ETH"
     assert result.dashboard_path("BTC") is None
@@ -122,7 +127,7 @@ def test_report_failure_does_not_affect_others(recorder):
     assert [s.label for s in result.failed_steps] == ["BTC report"]
     assert result.dashboard_path("BTC") is not None
     assert result.report_path("BTC") is None
-    assert result.report_path("ETH") is not None
+    assert result.report_path("ETH") is None                           # merged and deleted
     assert result.unified_dashboard_path("BTC") is None
     assert result.unified_dashboard_path("ETH") is not None
 
@@ -133,7 +138,7 @@ def test_dashboard_failure_is_isolated(recorder):
     assert [s.label for s in result.failed_steps] == ["BTC on-chain dashboard"]
     assert "report:BTC" in recorder.calls
     assert "unified:BTC" not in recorder.calls                              # the merge needs both files
-    assert result.report_path("ETH") is not None
+    assert result.report_path("BTC") is not None                           # no merge, so the report stays
     assert result.unified_dashboard_path("ETH") is not None
 
 
@@ -217,3 +222,32 @@ def test_invalid_currencies(recorder, currencies):
     with pytest.raises(ValueError):
         recorder.service().run(currencies, lambda line: None)
     assert recorder.calls == []
+
+
+def test_pages_merged_into_the_unified_dashboard_are_deleted_and_the_unified_page_stays(recorder, tmp_path):
+    result = recorder.service().run(["BTC", "ETH"], lambda line: None)
+    for currency in ("BTC", "ETH"):
+        assert not (tmp_path / currency / "dashboard.html").exists()
+        assert not (tmp_path / f"{currency}_report.html").exists()
+        assert result.unified_dashboard_path(currency).read_text(encoding="utf-8") == "unified page"
+
+
+def test_when_the_unified_dashboard_fails_its_two_inputs_are_kept(recorder, tmp_path):
+    recorder.fail.add("unified:BTC")
+    recorder.service().run(["BTC", "ETH"], lambda line: None)
+    assert (tmp_path / "BTC" / "dashboard.html").exists() and (tmp_path / "BTC_report.html").exists()
+    assert not (tmp_path / "ETH" / "dashboard.html").exists()           # ETH merged fine
+
+
+def test_a_page_that_cannot_be_deleted_is_logged_and_does_not_fail_the_run(recorder, monkeypatch, caplog):
+    def refuse(self, missing_ok=False):
+        raise PermissionError("file is open in the browser")
+
+    monkeypatch.setattr(Path, "unlink", refuse)
+    lines = []
+    with caplog.at_level("WARNING"):
+        result = recorder.service().run(["BTC"], lines.append)
+    assert result.all_succeeded
+    assert any("Could not remove" in line and "file is open in the browser" in line for line in lines)   # shown, not only logged
+    assert result.dashboard_path("BTC") is not None and result.report_path("BTC") is not None            # still on disk
+    assert "Could not remove" in caplog.text and "file is open in the browser" in caplog.text
