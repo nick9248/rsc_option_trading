@@ -67,7 +67,7 @@ def _default_unified_dashboard_service_factory() -> UnifiedDashboardWriter:
     """The real unified dashboard writer (imported lazily)."""
     from coding.service.analysis.unified_dashboard_service import UnifiedDashboardService
     from coding.core.database.repository import DatabaseRepository
-    return UnifiedDashboardService(DatabaseRepository())
+    return UnifiedDashboardService(DatabaseRepository)
 
 
 def _default_dashboard_service_factory() -> DashboardWriter:

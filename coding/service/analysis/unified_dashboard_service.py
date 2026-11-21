@@ -5,7 +5,7 @@ Writes the unified dashboard (market report + on-chain dashboard of one run as O
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from coding.core.analytics.unified_dashboard import build_unified_dashboard_page
 from coding.core.analytics.unified_dashboard.strategy_panel import StoredSuggestion, build_strategy_panel
@@ -19,13 +19,14 @@ UNIFIED_DASHBOARD_FILE_NAME = "unified_dashboard.html"
 class UnifiedDashboardService:
     """Reads the two pages of a run, merges them and saves ``unified_dashboard.html``."""
 
-    def __init__(self, repository: Optional[DatabaseRepository] = None):
+    def __init__(self, repository_factory: Optional[Callable[[], DatabaseRepository]] = None):
         """
         Args:
-            repository: Where the stored strategy suggestions are read (read only) for the Strategy tab; without it the page has
-                no Strategy tab.
+            repository_factory: Builds the database access (read only) for the stored strategy suggestions of the Strategy tab. It is
+                called when the page is built, inside the error handling, so a database that cannot be reached shows in the tab and
+                does not stop the dashboard. Without it the page has no Strategy tab.
         """
-        self.repository = repository
+        self.repository_factory = repository_factory
 
     def write(self, currency: str, market_report_path: Path, onchain_dashboard_path: Path, folder: Path) -> Path:
         """
@@ -54,12 +55,12 @@ class UnifiedDashboardService:
 
     def _strategy_panel(self, currency: str) -> Optional[str]:
         """The Strategy tab, or None without a repository. A database error is shown in the tab, it does not stop the dashboard."""
-        if self.repository is None:
+        if self.repository_factory is None:
             return None
         now = datetime.now(timezone.utc)
         try:
-            return build_strategy_panel(
-                [StoredSuggestion(**row) for row in self.repository.get_latest_strategy_suggestions(currency)], now, currency)
+            rows = self.repository_factory().get_latest_strategy_suggestions(currency)
+            return build_strategy_panel([StoredSuggestion(**row) for row in rows], now, currency)
         except Exception as error:
             logger.exception("Reading the stored strategy suggestions failed")
             return build_strategy_panel([], now, currency, read_error=f"{type(error).__name__}: {error}")

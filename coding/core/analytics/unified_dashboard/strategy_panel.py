@@ -15,7 +15,7 @@ from coding.core.analytics.market_wide_calculator import MarketWideCalculator
 from coding.core.analytics.report.report_page import format_utc, paragraph_fragment, table_fragment
 
 STALE_AFTER_HOURS = 4.0
-"""Facts older than this are marked: the market has moved."""
+"""Facts older than this are marked: the market has moved. The check is by time only; the spot of the facts is shown next to the age."""
 RAW_TEXT_LIMIT = 600
 """Characters of an unusable answer that are shown."""
 
@@ -71,19 +71,21 @@ def _card(suggestion: StoredSuggestion, now_utc: datetime) -> str:
     body = ""
     if suggestion.status in ("ok", "legs_rejected"):
         try:
+            parsed = ""
             data = json.loads(suggestion.response)
             view = VIEW_LABELS.get(data["view"], data["view"])
             legs = data["legs"]
             title = view if data["strategy_name"].strip().lower() == view.lower() else f"{view}: {data['strategy_name']}"
-            body += f"<h4>{_e(title)}</h4>" + paragraph_fragment(data["summary"])
+            parsed += f"<h4>{_e(title)}</h4>" + paragraph_fragment(data["summary"])
             if legs:
-                body += table_fragment(["Action", "Type", "Strike", "Quantity (coins)"],
-                                       [[leg["action"], leg["option_type"], f"{leg['strike']:,.0f}", f"{leg['quantity']:g}"] for leg in legs],
-                                       numeric_columns=(2, 3))
-                body += paragraph_fragment("Net at the quotes of that moment (buys at the ask, sells at the bid): "
-                                           + _premium_text(suggestion.net_premium_usd), "note-s")
-            body += ("<h4>Why</h4>" + _list(data["reasons"]) + "<h4>Risks</h4>" + _list(data["risks"])
-                     + "<h4>What would make it wrong</h4>" + paragraph_fragment(data["invalidation"]))
+                parsed += table_fragment(["Action", "Type", "Strike", "Quantity (coins)"],
+                                         [[leg["action"], leg["option_type"], f"{leg['strike']:,.0f}", f"{leg['quantity']:g}"] for leg in legs],
+                                         numeric_columns=(2, 3))
+                parsed += paragraph_fragment("Net at the quotes of that moment (buys at the ask, sells at the bid): "
+                                             + _premium_text(suggestion.net_premium_usd), "note-s")
+            parsed += ("<h4>Why</h4>" + _list(data["reasons"]) + "<h4>Risks</h4>" + _list(data["risks"])
+                       + "<h4>What would make it wrong</h4>" + paragraph_fragment(data["invalidation"]))
+            body += parsed                                  # only a fully read answer is shown
         except (ValueError, KeyError, TypeError):
             warnings.append("The stored answer could not be read.")
             body += paragraph_fragment(suggestion.response[:RAW_TEXT_LIMIT], "note-s")
@@ -126,12 +128,14 @@ def build_strategy_panel(suggestions: Sequence[StoredSuggestion], now_utc: datet
     if read_error:
         return intro + paragraph_fragment(f"The stored suggestions could not be read: {read_error}", "note-s")
     open_suggestions: Dict[str, StoredSuggestion] = {}
+    days_left: Dict[str, float] = {}
     for suggestion in suggestions:
-        days = MarketWideCalculator.calculate_dte(suggestion.expiration, now)
+        days = MarketWideCalculator.calculate_dte(suggestion.expiration, now)          # fractional days to the 08:00 UTC settlement
         if days is not None and days > 0 and (suggestion.expiration not in open_suggestions
                                               or suggestion.computed_at > open_suggestions[suggestion.expiration].computed_at):
             open_suggestions[suggestion.expiration] = suggestion
+            days_left[suggestion.expiration] = days
     if not open_suggestions:
         return intro + paragraph_fragment("No stored suggestion for an expiry that is still open.", "note-s")
-    ordered = sorted(open_suggestions.values(), key=lambda s: MarketWideCalculator.calculate_dte(s.expiration, now) or 0.0)
+    ordered = sorted(open_suggestions.values(), key=lambda s: days_left[s.expiration])
     return intro + '<div class="cards">' + "".join(_card(suggestion, now) for suggestion in ordered) + "</div>"
