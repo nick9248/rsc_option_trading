@@ -71,9 +71,6 @@ class FlowResult:
     def to_dict(self) -> Dict[str, Any]:
         """
         Reproduce the legacy ``BuySellFlowAnalyzer.calculate()`` dict shape.
-        ``flow_data`` is consumed by
-        ``chart_generator.generate_flow_distribution_chart`` /
-        ``generate_net_flow_chart``.
         """
         flow_data: Dict[float, Dict[str, Dict[str, Any]]] = {
             strike: {

@@ -821,7 +821,7 @@ def _make_expiration_bundle(expiration: str) -> ExpirationBundle:
         oi_changes=None,
         iv_percentile=None,
         trend=None,
-        flow_chart_paths={},
+        
         enriched_instruments=(),
     )
 

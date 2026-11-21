@@ -110,31 +110,3 @@ class TestProspectiveCollectorFetchBookSummaryCapturedAtUTC:
             f"expected UTC-valued naive captured_at, got {kwargs.get('captured_at')} -- "
             "call site is using the host-local clock, not UTC"
         )
-
-
-class TestChartGeneratorFlowTrendWindowUTC:
-    def test_flow_window_uses_utc_not_host_local_clock(self):
-        from coding.core.analytics.chart_generator import generate_flow_trend_chart
-
-        repo = MagicMock()
-        repo.get_hourly_flow_volumes.return_value = []
-
-        with patch("coding.core.analytics.chart_generator.datetime", _HostOffsetDateTime):
-            try:
-                generate_flow_trend_chart(repo, currency="BTC", expiration=None, lookback_days=7)
-            except Exception:
-                # A downstream plotting/empty-data error past the window
-                # computation is fine here -- only the window actually
-                # passed to the repository call matters for this test.
-                pass
-
-        assert repo.get_hourly_flow_volumes.called, (
-            "generate_flow_trend_chart never reached its repository call -- "
-            "update this test if the function's internals changed"
-        )
-        _, kwargs = repo.get_hourly_flow_volumes.call_args
-        expected_end_ts = int(_FIXED_UTC.timestamp() * 1000)
-        assert kwargs.get("end_ts") == expected_end_ts, (
-            f"expected UTC-anchored end_ts {expected_end_ts}, got {kwargs.get('end_ts')} -- "
-            "the lookback window is using the host-local clock, not UTC"
-        )

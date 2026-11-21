@@ -14,6 +14,5 @@ max pain, put/call ratios, support/resistance levels, and GEX/DEX exposure.
 # janitorial scope.
 from coding.core.analytics.on_chain_analyzer import OnChainAnalyzer, OnChainMetricsCalculator
 from coding.core.analytics.gex_dex_calculator import GexDexCalculator
-from coding.core.analytics import chart_generator
 
-__all__ = ["OnChainAnalyzer", "OnChainMetricsCalculator", "GexDexCalculator", "chart_generator"]
+__all__ = ["OnChainAnalyzer", "OnChainMetricsCalculator", "GexDexCalculator"]

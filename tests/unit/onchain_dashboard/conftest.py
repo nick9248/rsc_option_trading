@@ -32,10 +32,6 @@ def real_result(tmp_path_factory):
     scratch = tmp_path_factory.mktemp("onchain_dashboard_pipeline")
     patch = MonkeyPatch()
     try:
-        for name in ("generate_flow_distribution_chart", "generate_net_flow_chart", "generate_flow_trend_chart"):
-            patch.setattr(service_module, name, lambda **kwargs: None)
-        patch.setattr(service_module, "save_chart", lambda *args, **kwargs: "")
-        patch.setattr(service_module, "inject_hover_js", lambda *args, **kwargs: None)
         patch.setattr(service_module, "__file__", str(scratch / "coding" / "service" / "on_chain" / "on_chain_analysis_service.py"))
         apply_frozen_clock(patch, meta["recorded_at_epoch"])
         service = OnChainAnalysisService(api_service=FakeDeribitApiService(fixture_dir), repository=FakeDatabaseRepository(fixture_dir))

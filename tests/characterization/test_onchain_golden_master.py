@@ -174,13 +174,6 @@ def pipeline_result(fixture_dir, meta, module_monkeypatch, module_tmp_path):
 
     Isolation measures beyond the spec's 6 listed determinism sources
     (documented in the A2 report):
-      - Chart generation (Plotly HTML/PNG writes under output/charts/, plus
-        the repository.get_hourly_flow_volumes call inside
-        generate_flow_trend_chart) is monkeypatched to no-ops. Charts are not
-        part of the asserted golden output, and running the real chart
-        pipeline would (a) write real files into the project's output/
-        directory as an uncontrolled side effect and (b) require a DB method
-        this fixture does not record.
       - _save_reports_per_expiration hardcodes
         ``project_root = Path(__file__).parent.parent.parent.parent`` — to
         avoid writing into the real project's output/ directory, the
@@ -191,11 +184,6 @@ def pipeline_result(fixture_dir, meta, module_monkeypatch, module_tmp_path):
     """
     import coding.service.on_chain.on_chain_analysis_service as oc_service_module
 
-    module_monkeypatch.setattr(oc_service_module, "generate_flow_distribution_chart", lambda **kw: None)
-    module_monkeypatch.setattr(oc_service_module, "generate_net_flow_chart", lambda **kw: None)
-    module_monkeypatch.setattr(oc_service_module, "generate_flow_trend_chart", lambda **kw: None)
-    module_monkeypatch.setattr(oc_service_module, "save_chart", lambda *a, **kw: "")
-    module_monkeypatch.setattr(oc_service_module, "inject_hover_js", lambda *a, **kw: None)
 
     fake_module_file = module_tmp_path / "coding" / "service" / "on_chain" / "on_chain_analysis_service.py"
     module_monkeypatch.setattr(oc_service_module, "__file__", str(fake_module_file))
