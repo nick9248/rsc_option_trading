@@ -170,14 +170,14 @@ class TestCalculateFuturesBasis:
 
     def test_no_futures_returns_none(self):
         orchestrator = MarketWideOrchestrator(api=MagicMock())
-        assert orchestrator._calculate_futures_basis(_FakeAnalyzer(), _calc(), []) is None
-        assert orchestrator._calculate_futures_basis(_FakeAnalyzer(), _calc(), None) is None
+        assert orchestrator._calculate_futures_basis("BTC", _FakeAnalyzer(), _calc(), []) is None
+        assert orchestrator._calculate_futures_basis("BTC", _FakeAnalyzer(), _calc(), None) is None
 
     def test_dated_future_produces_basis_result_and_the_perpetual_is_skipped(self):
         orchestrator = MarketWideOrchestrator(api=MagicMock())
 
         result = orchestrator._calculate_futures_basis(
-            _FakeAnalyzer(), _calc(), [_future("BTC-27MAR26"), _future("BTC-PERPETUAL", 90500.0, 90000.0)])
+            "BTC", _FakeAnalyzer(), _calc(), [_future("BTC-27MAR26"), _future("BTC-PERPETUAL", 90500.0, 90000.0)])
 
         assert result is not None
         assert [entry.instrument_name for entry in result.entries] == ["BTC-27MAR26"]
@@ -188,15 +188,23 @@ class TestCalculateFuturesBasis:
         orchestrator = MarketWideOrchestrator(api=MagicMock())
 
         result = orchestrator._calculate_futures_basis(
-            _FakeAnalyzer(), _calc(), [_future("BTC-26DEC26"), _future("BTC-27MAR26"), _future("BTC-bad"), _future("BTC-26JUN26")])
+            "BTC", _FakeAnalyzer(), _calc(), [_future("BTC-26DEC26"), _future("BTC-27MAR26"), _future("BTC-bad"), _future("BTC-26JUN26")])
 
         assert [entry.instrument_name for entry in result.entries] == ["BTC-27MAR26", "BTC-26JUN26", "BTC-26DEC26", "BTC-bad"]
+
+    def test_only_the_futures_of_the_currency_are_used(self):
+        orchestrator = MarketWideOrchestrator(api=MagicMock())
+
+        result = orchestrator._calculate_futures_basis(
+            "BTC", _FakeAnalyzer(), _calc(), [_future("BTC-27MAR26"), _future("BTC_USDC-27MAR26", 91_000.0), _future("ETH-27MAR26")])
+
+        assert [entry.instrument_name for entry in result.entries] == ["BTC-27MAR26"]
 
     def test_a_future_without_a_mark_price_is_left_out_not_priced_as_zero(self):
         orchestrator = MarketWideOrchestrator(api=MagicMock())
 
         result = orchestrator._calculate_futures_basis(
-            _FakeAnalyzer(), _calc(), [_future("BTC-27MAR26"), _future("BTC-26JUN26", mark_price=None)])
+            "BTC", _FakeAnalyzer(), _calc(), [_future("BTC-27MAR26"), _future("BTC-26JUN26", mark_price=None)])
 
         assert [entry.instrument_name for entry in result.entries] == ["BTC-27MAR26"]
 
@@ -204,7 +212,7 @@ class TestCalculateFuturesBasis:
         orchestrator = MarketWideOrchestrator(api=MagicMock())
 
         result = orchestrator._calculate_futures_basis(
-            _FakeAnalyzer(underlying_price=90000.0), _calc(), [_future("BTC-27MAR26", estimated_delivery_price=None)])
+            "BTC", _FakeAnalyzer(underlying_price=90000.0), _calc(), [_future("BTC-27MAR26", estimated_delivery_price=None)])
 
         assert len(result.entries) == 1 and result.entries[0].index_price == 90000.0
 

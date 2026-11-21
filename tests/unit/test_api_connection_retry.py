@@ -15,9 +15,10 @@ def make_endpoint():
     return EndpointDefinition(path="/public/ticker", description="ticker", method=HttpMethod.GET)
 
 
-def response(status_code, payload=None):
+def response(status_code, payload=None, headers=None):
     reply = MagicMock()
     reply.status_code = status_code
+    reply.headers = headers or {}
     reply.json.return_value = payload or {"result": 1}
     if status_code >= 400:
         reply.raise_for_status.side_effect = requests.exceptions.HTTPError(f"{status_code} error", response=reply)
@@ -56,3 +57,15 @@ def test_other_http_errors_are_retried_without_waiting(waits):
     connection = make_connection([response(503), response(200)])
     assert connection.fetch(make_endpoint()) == {"result": 1}
     assert waits == []
+
+
+def test_retry_after_of_the_server_is_honoured_and_capped(waits):
+    connection = make_connection([response(429, headers={"Retry-After": "4"}), response(429, headers={"Retry-After": "600"}), response(200)])
+    connection.fetch(make_endpoint())
+    assert waits == [4.0, 10.0]                      # the second request asked for 600 s: capped at 10 s
+
+
+def test_an_unreadable_retry_after_falls_back_to_the_growing_wait(waits):
+    connection = make_connection([response(429, headers={"Retry-After": "soon"}), response(200)])
+    connection.fetch(make_endpoint())
+    assert waits == [1.0]

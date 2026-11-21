@@ -153,7 +153,7 @@ class MarketWideOrchestrator:
         futures_summary = self._fetch_futures_summary(currency, progress_callback, failed)
 
         term_structure_result = self._calculate_term_structure(analyzer, calc, progress_callback)
-        basis_result = self._calculate_futures_basis(analyzer, calc, futures_summary)
+        basis_result = self._calculate_futures_basis(currency, analyzer, calc, futures_summary)
 
         price_history = self._fetch_price_history(currency, progress_callback, failed)
         realized_volatility_result, rv_values = self._calculate_realized_volatility(calc, price_history, failed)
@@ -258,7 +258,7 @@ class MarketWideOrchestrator:
             return None
 
     def _calculate_futures_basis(
-        self, analyzer: OnChainMetricsCalculator, calc: MarketWideCalculator,
+        self, currency: str, analyzer: OnChainMetricsCalculator, calc: MarketWideCalculator,
         futures_summary: Optional[List[Dict[str, Any]]],
     ):
         """
@@ -280,7 +280,7 @@ class MarketWideOrchestrator:
         futures_data = []
         for future in ordered:
             name = future.get("instrument_name", "")
-            if not name or "PERPETUAL" in name or not future.get("mark_price"):
+            if not name.startswith(f"{currency}-") or "PERPETUAL" in name or not future.get("mark_price"):        # inverse futures only
                 continue
             futures_data.append({
                 "instrument_name": name,
@@ -430,7 +430,7 @@ class MarketWideOrchestrator:
         futures_summary: Optional[List[Dict[str, Any]]],
     ) -> Optional[PerpetualFundingResult]:
         """
-        Reads the ticker's raw Optional funding values directly and gates
+        Reads the perpetual's raw Optional funding values directly and gates
         construction on their presence, so an unavailable reading produces
         ``funding_8h=None`` instead of the calculator's own dict pre-seed of
         0.0 (which the typed result must not inherit -- A5-review finding).
@@ -449,17 +449,17 @@ class MarketWideOrchestrator:
             # bugfix_spec.md Item 4 (F4.3): "1m" is expected to return hourly
             # points; assert that resolution rather than assuming it.
             _warn_if_funding_resolution_unexpected(funding_data)
-            perp_ticker = next((future for future in futures_summary
+            perpetual = next((future for future in futures_summary
                                 if future.get("instrument_name") == f"{currency}-PERPETUAL"), None)
-            if perp_ticker is None:
+            if perpetual is None:
                 raise LookupError(f"{currency}-PERPETUAL is not in the futures book summary")
 
             _, funding_data_struct = calc.calculate_perpetual_funding_trend(
-                funding_data, perp_ticker
+                funding_data, perpetual
             )
 
-            ticker_funding_8h = perp_ticker.get("funding_8h")
-            ticker_current_funding = perp_ticker.get("current_funding")
+            ticker_funding_8h = perpetual.get("funding_8h")
+            ticker_current_funding = perpetual.get("current_funding")
             if ticker_funding_8h is None and ticker_current_funding is None:
                 return None
 
