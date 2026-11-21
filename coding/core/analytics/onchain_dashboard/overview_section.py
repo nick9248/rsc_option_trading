@@ -57,6 +57,11 @@ def normalized_metric_rows(result: OnChainAnalysisResult) -> List[List[str]]:
     return rows
 
 
+def has_open_interest(ratio) -> bool:
+    """False for an expiry nobody has opened a position in (new listing): its put/call ratio is then undefined, not 0."""
+    return (ratio.total_call_oi + ratio.total_put_oi) > 0
+
+
 def expiry_comparison_rows(result: OnChainAnalysisResult) -> List[List[str]]:
     """One row per expiry: the headline numbers side by side."""
     rows = []
@@ -68,7 +73,7 @@ def expiry_comparison_rows(result: OnChainAnalysisResult) -> List[List[str]]:
             strike_text(levels.call_resistance.strike) if levels is not None and levels.call_resistance else NOT_COMPUTED,
             strike_text(levels.put_support.strike) if levels is not None and levels.put_support else NOT_COMPUTED,
             text_or_missing(levels.gamma_regime) if levels is not None else NOT_COMPUTED,
-            ratio_text(analysis.put_call_ratio.ratio),
+            ratio_text(analysis.put_call_ratio.ratio) if has_open_interest(analysis.put_call_ratio) else NOT_COMPUTED,
             count_text(analysis.put_call_ratio.total_call_oi + analysis.put_call_ratio.total_put_oi),
             percent_text(surface.atm_iv) if surface is not None else NOT_COMPUTED,
         ])

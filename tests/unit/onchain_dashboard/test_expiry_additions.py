@@ -102,6 +102,14 @@ def test_the_bucket_of_an_expiry_reaches_its_captions_by_the_same_expiry_label(r
     assert others and not any("-8,596,074 USD" in caption for caption in others)      # no row of another expiry, and "ALL" is not used
 
 
+def test_an_expiry_without_open_interest_shows_no_put_call_ratio_instead_of_zero(bundle_with_surface):
+    ratio = dataclasses.replace(bundle_with_surface.analysis.put_call_ratio, total_call_oi=0.0, total_put_oi=0.0, ratio=0.0)
+    empty = dataclasses.replace(bundle_with_surface, analysis=dataclasses.replace(bundle_with_surface.analysis, put_call_ratio=ratio))
+
+    assert rows_of(empty)["Put/call ratio (open interest)"].startswith("not computed")
+    assert not rows_of(bundle_with_surface)["Put/call ratio (open interest)"].startswith("not computed")
+
+
 def test_a_missing_delta_flow_is_not_computed_and_not_zero(bundle_with_surface):
     rows = rows_of(bundle_with_surface, None)
     assert rows["Delta-adjusted flow, report window"].startswith("not computed")

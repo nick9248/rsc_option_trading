@@ -298,7 +298,7 @@ def statistic_rows(bundle: ExpirationBundle, delta_flow_bucket: Optional[FlowBuc
                   if ratio.percentile_90d is not None else ", percentile not computed")
     rows = [
         ["Instruments", f"{analysis.total_instruments} ({analysis.call_count} calls, {analysis.put_count} puts)"],
-        ["Put/call ratio (open interest)", f"{ratio_text(ratio.ratio)} (calls {count_text(ratio.total_call_oi)}, puts "
+        ["Put/call ratio (open interest)", f"{ratio_text(ratio.ratio) if ratio.total_call_oi + ratio.total_put_oi > 0 else NOT_COMPUTED} (calls {count_text(ratio.total_call_oi)}, puts "
                                            f"{count_text(ratio.total_put_oi)}{percentile})"],
         ["Volume", f"{number_text(volume.total_volume, 1)} coins, put/call {ratio_text(volume.volume_ratio)}"],
     ]
