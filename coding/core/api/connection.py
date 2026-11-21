@@ -5,6 +5,7 @@ Provides base methods for connecting to APIs, making requests, and handling resp
 """
 
 import logging
+import time
 from typing import Any, Dict, Optional
 
 import requests
@@ -19,6 +20,13 @@ from coding.core.endpoints.endpoint_definition import EndpointDefinition, HttpMe
 
 
 logger = logging.getLogger(__name__)
+
+RATE_LIMIT_STATUS = 429
+RATE_LIMIT_BACKOFF_SECONDS = 1.0
+RATE_LIMIT_MAXIMUM_WAIT_SECONDS = 10.0
+"""Waited after a 429 (Too Many Requests) before the next attempt, times the attempt number: 1 s, then 2 s (the server's Retry-After
+when it sends one, at most 10 s). Retrying within milliseconds (as before) cannot succeed, the limit has not recovered. The wait
+blocks the calling thread: the analysis runs in a worker thread, never in the GUI thread."""
 
 
 class ApiConnection:
@@ -46,6 +54,16 @@ class ApiConnection:
         self.timeout = timeout
         self.max_retries = max_retries
         self.session = requests.Session()
+
+    @staticmethod
+    def _rate_limit_wait(reply: Any, attempt: int) -> float:
+        """Seconds to wait after a 429: the server's Retry-After when it is a number, else the growing default; at most the maximum."""
+        header = getattr(reply, "headers", None) or {}
+        try:
+            requested = float(header.get("Retry-After"))
+        except (TypeError, ValueError):
+            requested = RATE_LIMIT_BACKOFF_SECONDS * attempt
+        return min(max(requested, 0.0), RATE_LIMIT_MAXIMUM_WAIT_SECONDS)
 
     def check_connectivity(self, test_endpoint: EndpointDefinition) -> bool:
         """
@@ -130,8 +148,11 @@ class ApiConnection:
 
             except RequestException as error:
                 logger.warning(f"Request failed (attempt {attempt}/{self.max_retries}): {error}")
+                reply = getattr(error, "response", None)
+                status_code = getattr(reply, "status_code", None)
+                if status_code == RATE_LIMIT_STATUS and attempt < self.max_retries:
+                    time.sleep(self._rate_limit_wait(reply, attempt))
                 if attempt == self.max_retries:
-                    status_code = getattr(error.response, "status_code", None) if hasattr(error, "response") else None
                     raise RequestError(
                         f"Request failed: {error}",
                         status_code=status_code,

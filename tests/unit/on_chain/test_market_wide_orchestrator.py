@@ -135,54 +135,86 @@ class TestCalculateTermStructure:
         assert messages == []
 
 
+def _future(name, mark_price=91000.0, estimated_delivery_price=90000.0, **extra):
+    """One entry of the futures book summary."""
+    return {"instrument_name": name, "mark_price": mark_price, "estimated_delivery_price": estimated_delivery_price, **extra}
+
+
+class TestFetchFuturesSummary:
+    """The one call that feeds the basis and the funding."""
+
+    def test_one_call_for_every_future_of_the_currency(self):
+        api = MagicMock()
+        api.get_book_summary.return_value = [_future("BTC-27MAR26")]
+        orchestrator = MarketWideOrchestrator(api=api)
+        failed = []
+
+        summary = orchestrator._fetch_futures_summary("BTC", progress_callback=lambda m: None, failed=failed)
+
+        assert summary == [_future("BTC-27MAR26")] and failed == []
+        api.get_book_summary.assert_called_once_with(currency="BTC", kind="future")
+        api.get_ticker.assert_not_called()                       # no request per future: those were rate limited
+
+    def test_an_api_error_marks_both_phases_as_failed_and_returns_none(self):
+        api = MagicMock()
+        api.get_book_summary.side_effect = RuntimeError("api down")
+        failed = []
+
+        summary = MarketWideOrchestrator(api=api)._fetch_futures_summary("BTC", progress_callback=lambda m: None, failed=failed)
+
+        assert summary is None and failed == ["futures_basis", "perpetual_funding"]
+
+
 class TestCalculateFuturesBasis:
     """Phase 2."""
 
-    def test_no_futures_instruments_returns_none(self):
-        api = MagicMock()
-        api.get_instruments.return_value = []
-        orchestrator = MarketWideOrchestrator(api=api)
+    def test_no_futures_returns_none(self):
+        orchestrator = MarketWideOrchestrator(api=MagicMock())
+        assert orchestrator._calculate_futures_basis("BTC", _FakeAnalyzer(), _calc(), []) is None
+        assert orchestrator._calculate_futures_basis("BTC", _FakeAnalyzer(), _calc(), None) is None
+
+    def test_dated_future_produces_basis_result_and_the_perpetual_is_skipped(self):
+        orchestrator = MarketWideOrchestrator(api=MagicMock())
 
         result = orchestrator._calculate_futures_basis(
-            "BTC", _FakeAnalyzer(), _calc(), progress_callback=lambda m: None, failed=[])
-        assert result is None
+            "BTC", _FakeAnalyzer(), _calc(), [_future("BTC-27MAR26"), _future("BTC-PERPETUAL", 90500.0, 90000.0)])
 
-    def test_dated_future_produces_basis_result(self):
-        api = MagicMock()
-        api.get_instruments.return_value = [{"instrument_name": "BTC-27MAR26"}]
-        api.get_ticker.return_value = {"mark_price": 91000.0, "index_price": 90000.0}
-        orchestrator = MarketWideOrchestrator(api=api)
-
-        result = orchestrator._calculate_futures_basis(
-            "BTC", _FakeAnalyzer(), _calc(), progress_callback=lambda m: None, failed=[])
         assert result is not None
-        assert len(result.entries) == 1
+        assert [entry.instrument_name for entry in result.entries] == ["BTC-27MAR26"]
+        assert (result.entries[0].mark_price, result.entries[0].index_price) == (91000.0, 90000.0)
 
-    def test_api_error_is_caught_and_returns_none(self):
-        api = MagicMock()
-        api.get_instruments.side_effect = RuntimeError("api down")
-        orchestrator = MarketWideOrchestrator(api=api)
-
-        result = orchestrator._calculate_futures_basis(
-            "BTC", _FakeAnalyzer(), _calc(), progress_callback=lambda m: None, failed=[])
-        assert result is None
-
-    def test_null_ticker_index_price_falls_back_to_analyzer_index_price(self):
-        """Independent review round 4 sweep: index_price is nullable per
-        deribit_schemas.py's TICKER schema. Benign only because
-        calculate_futures_basis's own extraction (Important #5) already
-        absorbs a None -- fixed here too for consistency, verified it
-        still produces the correct fallback end-to-end."""
-        api = MagicMock()
-        api.get_instruments.return_value = [{"instrument_name": "BTC-27MAR26"}]
-        api.get_ticker.return_value = {"mark_price": 91000.0, "index_price": None}
-        orchestrator = MarketWideOrchestrator(api=api)
+    def test_futures_are_listed_nearest_expiry_first_whatever_the_order_of_the_summary(self, frozen_clock):
+        frozen_clock(1_767_225_600.0)                                   # 2026-01-01 00:00 UTC
+        orchestrator = MarketWideOrchestrator(api=MagicMock())
 
         result = orchestrator._calculate_futures_basis(
-            "BTC", _FakeAnalyzer(underlying_price=90000.0), _calc(), progress_callback=lambda m: None, failed=[])
-        assert result is not None
-        assert len(result.entries) == 1
-        assert result.entries[0].index_price == 90000.0
+            "BTC", _FakeAnalyzer(), _calc(), [_future("BTC-26DEC26"), _future("BTC-27MAR26"), _future("BTC-bad"), _future("BTC-26JUN26")])
+
+        assert [entry.instrument_name for entry in result.entries] == ["BTC-27MAR26", "BTC-26JUN26", "BTC-26DEC26", "BTC-bad"]
+
+    def test_only_the_futures_of_the_currency_are_used(self):
+        orchestrator = MarketWideOrchestrator(api=MagicMock())
+
+        result = orchestrator._calculate_futures_basis(
+            "BTC", _FakeAnalyzer(), _calc(), [_future("BTC-27MAR26"), _future("BTC_USDC-27MAR26", 91_000.0), _future("ETH-27MAR26")])
+
+        assert [entry.instrument_name for entry in result.entries] == ["BTC-27MAR26"]
+
+    def test_a_future_without_a_mark_price_is_left_out_not_priced_as_zero(self):
+        orchestrator = MarketWideOrchestrator(api=MagicMock())
+
+        result = orchestrator._calculate_futures_basis(
+            "BTC", _FakeAnalyzer(), _calc(), [_future("BTC-27MAR26"), _future("BTC-26JUN26", mark_price=None)])
+
+        assert [entry.instrument_name for entry in result.entries] == ["BTC-27MAR26"]
+
+    def test_missing_estimated_delivery_price_falls_back_to_analyzer_index_price(self):
+        orchestrator = MarketWideOrchestrator(api=MagicMock())
+
+        result = orchestrator._calculate_futures_basis(
+            "BTC", _FakeAnalyzer(underlying_price=90000.0), _calc(), [_future("BTC-27MAR26", estimated_delivery_price=None)])
+
+        assert len(result.entries) == 1 and result.entries[0].index_price == 90000.0
 
 
 class TestFetchPriceHistory:
@@ -278,19 +310,32 @@ class TestCalculatePerpetualFunding:
     def test_no_funding_data_returns_none(self):
         api = MagicMock()
         api.get_funding_chart_data.return_value = {"data": []}
-        api.get_ticker.return_value = {"open_interest": 1000.0, "current_funding": None, "funding_8h": None}
         orchestrator = MarketWideOrchestrator(api=api)
+        summary = [_future("BTC-PERPETUAL", open_interest=1000.0, current_funding=None, funding_8h=None)]
 
-        result = orchestrator._calculate_perpetual_funding("BTC", _calc(), progress_callback=lambda m: None, failed=[])
+        result = orchestrator._calculate_perpetual_funding("BTC", _calc(), lambda m: None, [], summary)
         assert result is None
+
+    def test_a_failed_futures_summary_gives_no_funding_and_no_second_failure_entry(self):
+        failed = []
+        result = MarketWideOrchestrator(api=MagicMock())._calculate_perpetual_funding("BTC", _calc(), lambda m: None, failed, None)
+        assert result is None and failed == []                    # the failure was recorded when the summary was fetched
+
+    def test_a_summary_without_the_perpetual_is_a_failed_section(self):
+        api = MagicMock()
+        api.get_funding_chart_data.return_value = {"data": []}
+        failed = []
+        result = MarketWideOrchestrator(api=api)._calculate_perpetual_funding(
+            "BTC", _calc(), lambda m: None, failed, [_future("BTC-27MAR26")])
+        assert result is None and failed == ["perpetual_funding"]
 
     def test_funding_available_produces_result(self):
         api = MagicMock()
         api.get_funding_chart_data.return_value = {"data": []}
-        api.get_ticker.return_value = {"open_interest": 1000.0, "current_funding": 0.0002, "funding_8h": 0.0001}
         orchestrator = MarketWideOrchestrator(api=api)
+        summary = [_future("BTC-PERPETUAL", open_interest=1000.0, current_funding=0.0002, funding_8h=0.0001)]
 
-        result = orchestrator._calculate_perpetual_funding("BTC", _calc(), progress_callback=lambda m: None, failed=[])
+        result = orchestrator._calculate_perpetual_funding("BTC", _calc(), lambda m: None, [], summary)
         assert result is not None
         assert result.funding_8h == 0.0001
         assert result.funding_rate == 0.0002
@@ -400,13 +445,9 @@ class TestRunIntegration:
 
         api = MagicMock()
 
-        def get_ticker(name):
-            if "PERPETUAL" in name:
-                return {"open_interest": 1000.0, "current_funding": 0.0002, "funding_8h": 0.0001}
-            return {"mark_price": 91000.0, "index_price": 90000.0}
-
-        def get_instruments(currency, kind, expired):
-            return [{"instrument_name": f"{currency}-27MAR26"}]
+        def get_book_summary(currency, kind):
+            return [_future(f"{currency}-27MAR26"),
+                    _future(f"{currency}-PERPETUAL", open_interest=1000.0, current_funding=0.0002, funding_8h=0.0001)]
 
         def get_tradingview_chart_data(instrument_name, resolution, start_timestamp, end_timestamp):
             return _price_points(200, now_ms)
@@ -417,8 +458,7 @@ class TestRunIntegration:
         def get_volatility_index_data(currency, resolution, start_timestamp, end_timestamp):
             return _dvol_points(30)
 
-        api.get_ticker.side_effect = get_ticker
-        api.get_instruments.side_effect = get_instruments
+        api.get_book_summary.side_effect = get_book_summary
         api.get_tradingview_chart_data.side_effect = get_tradingview_chart_data
         api.get_funding_chart_data.side_effect = get_funding_chart_data
         api.get_volatility_index_data.side_effect = get_volatility_index_data
@@ -442,3 +482,4 @@ class TestRunIntegration:
         assert result.perpetual_funding is not None
         assert result.cross_asset_correlation is not None
         assert result.failed_sections == ()
+        api.get_ticker.assert_not_called()                       # futures and funding come from one book summary call

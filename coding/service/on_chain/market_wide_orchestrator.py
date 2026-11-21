@@ -147,15 +147,20 @@ class MarketWideOrchestrator:
             currency=currency, spot_price=analyzer.index_price, dvol=dvol,
         )
 
+        # ONE call for every dated future and the perpetual: the basis and the funding read it. (One ticker call per future plus
+        # one for the perpetual was answered with HTTP 429 for most of them, which left the basis table half empty and the
+        # funding "not computed".)
+        futures_summary = self._fetch_futures_summary(currency, progress_callback, failed)
+
         term_structure_result = self._calculate_term_structure(analyzer, calc, progress_callback)
-        basis_result = self._calculate_futures_basis(currency, analyzer, calc, progress_callback, failed)
+        basis_result = self._calculate_futures_basis(currency, analyzer, calc, futures_summary)
 
         price_history = self._fetch_price_history(currency, progress_callback, failed)
         realized_volatility_result, rv_values = self._calculate_realized_volatility(calc, price_history, failed)
         vrp_result = self._calculate_vrp(calc, dvol, rv_values, failed)
         volatility_cone_result = self._calculate_volatility_cone(calc, price_history, failed)
 
-        funding_result = self._calculate_perpetual_funding(currency, calc, progress_callback, failed)
+        funding_result = self._calculate_perpetual_funding(currency, calc, progress_callback, failed, futures_summary)
         block_trades_result = self._calculate_block_trades(analyzer, calc, progress_callback, failed)
         correlation_result = self._calculate_cross_asset_correlation(
             currency, calc, price_history, progress_callback, failed
@@ -233,52 +238,58 @@ class MarketWideOrchestrator:
 
     # -- Phase 2: futures basis --------------------------------------------
 
+    def _fetch_futures_summary(
+        self, currency: str, progress_callback, failed: List[str],
+    ) -> Optional[List[Dict[str, Any]]]:
+        """
+        The book summary of every future of the currency (the dated futures and the perpetual) in one call: mark price,
+        estimated delivery price (the index at the same instant), open interest and, for the perpetual, the funding.
+
+        Returns:
+            The entries, or None when the call failed (the basis and the funding are then not computed and listed as
+            failed; nothing is made up).
+        """
+        try:
+            progress_callback("Fetching futures for basis and funding...")
+            return self.api.get_book_summary(currency=currency, kind="future")
+        except Exception as e:
+            logger.warning(f"Failed to fetch the futures book summary: {e}")
+            failed.extend(["futures_basis", "perpetual_funding"])
+            return None
+
     def _calculate_futures_basis(
         self, currency: str, analyzer: OnChainMetricsCalculator, calc: MarketWideCalculator,
-        progress_callback, failed: List[str],
+        futures_summary: Optional[List[Dict[str, Any]]],
     ):
-        """Fetch dated futures and compute annualized basis."""
-        try:
-            progress_callback("Fetching futures for basis calculation...")
-            futures_instruments = self.api.get_instruments(
-                currency=currency, kind="future", expired=False
-            )
+        """
+        Annualized basis of the dated futures from the futures book summary.
 
-            futures_data = []
-            for fut in futures_instruments:
-                name = fut.get("instrument_name", "")
-                if "PERPETUAL" in name:
-                    continue
-                try:
-                    ticker = self.api.get_ticker(name)
-                    futures_data.append({
-                        "instrument_name": name,
-                        "mark_price": ticker.get("mark_price", 0),
-                        # independent review round 4 sweep: index_price is
-                        # nullable per deribit_schemas.py's TICKER schema
-                        # -- .get(key, default) only applies the fallback
-                        # when the key is ABSENT. Currently benign only
-                        # because calculate_futures_basis's own extraction
-                        # (Important #5) already applies `or self.spot_price`
-                        # downstream -- fixed here too for consistency/
-                        # defense-in-depth, not because it's exploitable
-                        # today.
-                        "index_price": ticker.get("index_price") or analyzer.index_price,
-                    })
-                except Exception as e:
-                    logger.warning(f"Failed to fetch future ticker {name}: {e}")
+        A future without a mark price is left out (never priced as 0). The index is the summary's own estimated delivery
+        price (the index at the same instant as the mark price), else the index price of this analysis.
+        """
+        now = datetime.now(timezone.utc)
 
-            if futures_data:
-                # calculate_futures_basis returns the typed FuturesBasisResult;
-                # market_wide_formatter's format_futures_basis_section renders
-                # it directly from render_market_wide_from_result.
-                return calc.calculate_futures_basis(futures_data)
-            return None
+        def days_left(future: Dict[str, Any]) -> float:
+            parts = future.get("instrument_name", "").split("-")
+            dte = MarketWideCalculator.calculate_dte(parts[1], now) if len(parts) == 2 else None
+            return float("inf") if dte is None else dte           # unparseable names go last
 
-        except Exception as e:
-            logger.warning(f"Failed to calculate futures basis: {e}")
-            failed.append("futures_basis")
-            return None
+        # The one-call summary comes in no particular order: nearest expiry first, as the table is read (a list that is
+        # already in order stays as it is).
+        ordered = sorted(futures_summary or [], key=days_left)
+        futures_data = []
+        for future in ordered:
+            name = future.get("instrument_name", "")
+            if not name.startswith(f"{currency}-") or "PERPETUAL" in name or not future.get("mark_price"):        # inverse futures only
+                continue
+            futures_data.append({
+                "instrument_name": name,
+                "mark_price": future["mark_price"],
+                "index_price": future.get("estimated_delivery_price") or analyzer.index_price,
+            })
+        # calculate_futures_basis returns the typed FuturesBasisResult; market_wide_formatter's format_futures_basis_section
+        # renders it directly from render_market_wide_from_result.
+        return calc.calculate_futures_basis(futures_data) if futures_data else None
 
     # -- Shared fetch for phases 3/4/5/8: daily price history --------------
 
@@ -416,13 +427,20 @@ class MarketWideOrchestrator:
 
     def _calculate_perpetual_funding(
         self, currency: str, calc: MarketWideCalculator, progress_callback, failed: List[str],
+        futures_summary: Optional[List[Dict[str, Any]]],
     ) -> Optional[PerpetualFundingResult]:
         """
-        Reads the ticker's raw Optional funding values directly and gates
+        Reads the perpetual's raw Optional funding values directly and gates
         construction on their presence, so an unavailable reading produces
         ``funding_8h=None`` instead of the calculator's own dict pre-seed of
         0.0 (which the typed result must not inherit -- A5-review finding).
+
+        The perpetual's open interest and funding come from the futures book summary (one call for all futures, see
+        ``_fetch_futures_summary``); only the funding history is fetched here. When that summary could not be fetched the
+        failure is already recorded and this returns None.
         """
+        if futures_summary is None:
+            return None
         try:
             progress_callback("Fetching perpetual funding trend...")
             funding_data = self.api.get_funding_chart_data(
@@ -431,14 +449,17 @@ class MarketWideOrchestrator:
             # bugfix_spec.md Item 4 (F4.3): "1m" is expected to return hourly
             # points; assert that resolution rather than assuming it.
             _warn_if_funding_resolution_unexpected(funding_data)
-            perp_ticker = self.api.get_ticker(f"{currency}-PERPETUAL")
+            perpetual = next((future for future in futures_summary
+                                if future.get("instrument_name") == f"{currency}-PERPETUAL"), None)
+            if perpetual is None:
+                raise LookupError(f"{currency}-PERPETUAL is not in the futures book summary")
 
             _, funding_data_struct = calc.calculate_perpetual_funding_trend(
-                funding_data, perp_ticker
+                funding_data, perpetual
             )
 
-            ticker_funding_8h = perp_ticker.get("funding_8h")
-            ticker_current_funding = perp_ticker.get("current_funding")
+            ticker_funding_8h = perpetual.get("funding_8h")
+            ticker_current_funding = perpetual.get("current_funding")
             if ticker_funding_8h is None and ticker_current_funding is None:
                 return None
 

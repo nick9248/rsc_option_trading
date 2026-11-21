@@ -96,13 +96,10 @@ def _make_api(
 ):
     api = MagicMock()
 
-    def get_ticker(name):
-        if "PERPETUAL" in name:
-            return {"open_interest": 1000.0, "current_funding": current_funding, "funding_8h": funding_8h}
-        return {"mark_price": 0, "index_price": 0}
-
-    def get_instruments(currency, kind, expired):
-        return []  # no dated futures -> futures basis phase skipped, irrelevant here
+    def get_book_summary(currency, kind):
+        # the perpetual only: no dated futures -> futures basis phase skipped, irrelevant here
+        return [{"instrument_name": f"{currency}-PERPETUAL", "open_interest": 1000.0, "current_funding": current_funding,
+                 "funding_8h": funding_8h, "mark_price": 90_000.0}]
 
     def get_tradingview_chart_data(instrument_name, resolution, start_timestamp, end_timestamp):
         if instrument_name == "BTC-PERPETUAL":
@@ -115,8 +112,7 @@ def _make_api(
     def get_volatility_index_data(currency, resolution, start_timestamp, end_timestamp):
         return _dvol_points(own_dvol_len if currency == "BTC" else other_dvol_len)
 
-    api.get_ticker.side_effect = get_ticker
-    api.get_instruments.side_effect = get_instruments
+    api.get_book_summary.side_effect = get_book_summary
     api.get_tradingview_chart_data.side_effect = get_tradingview_chart_data
     api.get_funding_chart_data.side_effect = get_funding_chart_data
     api.get_volatility_index_data.side_effect = get_volatility_index_data
