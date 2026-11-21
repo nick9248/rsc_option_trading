@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from coding.core.analytics.unified_dashboard.overview import build_overview, esc, extract
+from coding.core.analytics.unified_dashboard.strategy_panel import StrategyPanel
 
 PACKAGE_DIRECTORY = Path(__file__).parent
 ASSET_NAMES = {"BTC": "Bitcoin", "ETH": "Ethereum"}
@@ -33,7 +34,7 @@ TABS = [  # (key, label, source, source panel id)
 
 
 def build_unified_dashboard_page(market_report_html: str, onchain_dashboard_html: str, currency: str,
-                                 strategy_panel_html: Optional[str] = None) -> str:
+                                 strategy_panel: Optional[StrategyPanel] = None) -> str:
     """
     Merge the two pages of one run into the unified dashboard page.
 
@@ -41,7 +42,7 @@ def build_unified_dashboard_page(market_report_html: str, onchain_dashboard_html
         market_report_html: The market report page (``ReportService`` output).
         onchain_dashboard_html: The on-chain dashboard page (``dashboard.html``).
         currency: "BTC" or "ETH"; used for titles and to shorten instrument names.
-        strategy_panel_html: The inner HTML of the Strategy tab (``build_strategy_panel``); the tab is left out when None.
+        strategy_panel: The Strategy tab (``build_strategy_panel``): its HTML and figures; the tab is left out when None.
 
     Returns:
         The complete, self-contained HTML page.
@@ -55,7 +56,7 @@ def build_unified_dashboard_page(market_report_html: str, onchain_dashboard_html
         raise ValueError('an input page has no embedded report data (script id="report-data"): it is not a market report '
                          'or on-chain dashboard page') from error
     plotly = A["plotly"] or B["plotly"] or ""
-    data = {"figures": {**A["figures"], **B["figures"]}, "pages": {**A["pages"], **B["pages"]}, "switchers": {**A["switchers"], **B["switchers"]}}
+    data = {"figures": {**A["figures"], **B["figures"], **(strategy_panel.figures if strategy_panel is not None else {})}, "pages": {**A["pages"], **B["pages"]}, "switchers": {**A["switchers"], **B["switchers"]}}
     pa, pb = dict(A["panels"]), dict(B["panels"])
     overview = build_overview(A, B, currency)
     nav, panels = [], []
@@ -65,7 +66,7 @@ def build_unified_dashboard_page(market_report_html: str, onchain_dashboard_html
         elif src == "B":
             inner = pb.get(pid)
         elif src == "C":
-            inner = strategy_panel_html
+            inner = strategy_panel.html if strategy_panel is not None else None
         else:
             inner = overview
         if inner is None:

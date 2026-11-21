@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from coding.core.analytics.unified_dashboard import build_unified_dashboard_page
-from coding.core.analytics.unified_dashboard.strategy_panel import StoredSuggestion, build_strategy_panel
+from coding.core.analytics.unified_dashboard.strategy_panel import StoredSuggestion, StrategyPanel, build_strategy_panel
 from coding.core.database.repository import DatabaseRepository
 
 logger = logging.getLogger(__name__)
@@ -47,13 +47,13 @@ class UnifiedDashboardService:
         """
         page = build_unified_dashboard_page(Path(market_report_path).read_text(encoding="utf-8"),
                                             Path(onchain_dashboard_path).read_text(encoding="utf-8"), currency,
-                                            strategy_panel_html=self._strategy_panel(currency))
+                                            strategy_panel=self._strategy_panel(currency))
         path = Path(folder) / UNIFIED_DASHBOARD_FILE_NAME
         path.write_text(page, encoding="utf-8")
         logger.info("unified dashboard written: %s (%d bytes)", path, len(page.encode("utf-8")))
         return path
 
-    def _strategy_panel(self, currency: str) -> Optional[str]:
+    def _strategy_panel(self, currency: str) -> Optional[StrategyPanel]:
         """The Strategy tab, or None without a repository. A database error is shown in the tab, it does not stop the dashboard."""
         if self.repository_factory is None:
             return None

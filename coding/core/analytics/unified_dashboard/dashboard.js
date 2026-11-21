@@ -156,12 +156,13 @@
   const tabs = Array.from(document.querySelectorAll('[role="tab"]'));
   const shown = new Set();
   function showPanel(panel) {
+    // charts that sit in a panel by themselves (not in a switcher, like the payoff charts of the Strategy tab): drawn whenever they are stale, the first time too
+    panel.querySelectorAll(".switcher-plot[data-stale]").forEach((el) => { const k = el.dataset.stale; delete el.dataset.stale; plot(el, k); });
     if (!shown.has(panel.id)) {
       shown.add(panel.id);
       panel.querySelectorAll(".switcher").forEach(drawSwitcher);
       panel.querySelectorAll("iframe[data-page]").forEach((f) => showPage(f, f.dataset.page));
     } else {
-      panel.querySelectorAll(".switcher-plot[data-stale]").forEach((el) => { const k = el.dataset.stale; delete el.dataset.stale; plot(el, k); });
       panel.querySelectorAll("iframe[data-stale]").forEach((f) => { delete f.dataset.stale; showPage(f, f.dataset.shownPage, true); });
       if (window.Plotly) panel.querySelectorAll(".js-plotly-plot").forEach((p) => window.Plotly.Plots.resize(p));
     }
