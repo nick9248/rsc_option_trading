@@ -55,7 +55,7 @@ def with_expected(pick, expected, expiration):
 
 def test_at_most_two_picks_are_selected_best_expected_pnl_per_risk_first_and_the_rest_are_alternatives():
     picks = [with_expected(stored(), expected, expiration) for expected, expiration in ((100.0, "24NOV26"), (400.0, "27NOV26"), (250.0, "4DEC26"))]
-    assert [pick.expiration for pick in select_trades(picks)] == ["27NOV26", "4DEC26"] and MAX_SELECTED_TRADES == 2
+    assert [pick.expiration for pick in select_trades(picks, NOW)] == ["27NOV26", "4DEC26"] and MAX_SELECTED_TRADES == 2
     html_text = build_strategy_panel(picks, NOW, "BTC").html
     assert html_text.count("SELECTED TRADE") == 2 and html_text.count("alternative, not selected") == 1
     assert "Selected trades" in html_text and "27NOV26 (max loss 710 USD), 4DEC26 (max loss 710 USD)" in html_text and "1,420 USD is lost" in html_text
@@ -65,7 +65,7 @@ def test_at_most_two_picks_are_selected_best_expected_pnl_per_risk_first_and_the
 def test_a_pick_with_a_non_positive_expectation_or_no_choice_is_never_selected():
     losing = with_expected(stored(), -5.0, "27NOV26")
     no_choice = stored("4DEC26", status="no_trade", choice="no_trade", quantity=None, response=answer(choice="no_trade", view="no_trade"))
-    assert select_trades([losing, no_choice]) == []
+    assert select_trades([losing, no_choice], NOW) == []
     assert "No pick is selected as a trade" in build_strategy_panel([losing, no_choice], NOW, "BTC").html
 
 
@@ -159,3 +159,31 @@ def test_the_service_reads_the_live_picks_of_the_current_method_and_survives_a_d
     def cannot_connect():
         raise ConnectionError("database down")
     assert "ConnectionError: database down" in UnifiedDashboardService(cannot_connect)._strategy_panel("BTC").html
+
+
+def test_a_stale_pick_is_never_selected_and_does_not_push_out_a_fresh_one():
+    stale = with_expected(stored(hours_old=10.0), 900.0, "24NOV26")
+    fresh = with_expected(stored(), 100.0, "27NOV26")
+    assert select_trades([stale, fresh], NOW) == [fresh]
+    assert build_strategy_panel([stale], NOW, "BTC").html.count("SELECTED TRADE") == 0
+
+
+def test_a_missing_maximum_loss_makes_the_total_not_computed_instead_of_smaller():
+    unknown = StoredPick(**{**with_expected(stored(), 100.0, "27NOV26").__dict__, "max_loss_usd": None})
+    html_text = build_strategy_panel([unknown, with_expected(stored(), 90.0, "4DEC26")], NOW, "BTC").html
+    assert "not computed is lost" in html_text and "710 USD is lost" not in html_text
+
+
+def test_unknown_structures_are_not_called_one_bet_and_no_trade_picks_are_labelled_so():
+    no_family = [StoredPick(**{**with_expected(stored(), 100.0, e).__dict__, "choice": "C1"}) for e in ("27NOV26", "4DEC26")]
+    for pick in no_family:                                                  # remove the family of the chosen candidate
+        pick.candidates[0].pop("family")
+    assert "one bet" not in build_strategy_panel(no_family, NOW, "BTC").html
+    html_text = build_strategy_panel([stored(status="no_trade", choice="no_trade", quantity=None, response=answer(choice="no_trade", view="no_trade"))], NOW, "BTC").html
+    assert "27NOV26 - no trade" in html_text and "alternative" not in html_text.split("Asked in this view")[1]
+
+
+def test_the_asked_note_names_the_same_targets_as_the_runner():
+    from coding.service.strategy_pipeline.live_pick_runner import LIVE_TARGET_DAYS
+    numbers = [f"{day:g}" for day in LIVE_TARGET_DAYS]
+    assert f"nearest {', '.join(numbers[:-1])} and {numbers[-1]} days" in build_strategy_panel([stored()], NOW, "BTC").html

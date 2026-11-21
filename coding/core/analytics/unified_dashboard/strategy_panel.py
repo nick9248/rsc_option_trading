@@ -23,6 +23,7 @@ MAX_SELECTED_TRADES = 2
 """At most this many picks are marked as the trades to take: the expiries share one view of the market, so more of them is the same bet again."""
 ASKED_NOTE = ("The model is asked about the expiries nearest 3, 7, 14 and 30 days only (each ask costs about 0.05 USD); every other expiry is not asked, "
               "which is not a no-trade answer.")
+NO_TRADE = "no_trade"
 RAW_TEXT_LIMIT = 600
 """Characters of an unusable answer that are shown."""
 
@@ -128,9 +129,13 @@ def _score(pick: StoredPick) -> Optional[float]:
     return None if expected is None else expected / chosen["max_loss_usd"]
 
 
-def select_trades(picks: Sequence[StoredPick]) -> List[StoredPick]:
-    """The picks to take: the best ones by expected PnL per risk, at most ``MAX_SELECTED_TRADES`` (a pick without a usable choice never)."""
-    scored = [(score, pick) for pick in picks for score in [_score(pick)] if score is not None and score > 0]
+def select_trades(picks: Sequence[StoredPick], now_utc: datetime) -> List[StoredPick]:
+    """
+    The picks to take: the best ones by expected PnL per risk, at most ``MAX_SELECTED_TRADES``. Never a pick without a usable choice, with a
+    non-positive expectation, or older than ``STALE_AFTER_HOURS`` (the market has moved).
+    """
+    fresh = [pick for pick in picks if (now_utc - pick.as_of).total_seconds() <= STALE_AFTER_HOURS * 3600.0]
+    scored = [(score, pick) for pick in fresh for score in [_score(pick)] if score is not None and score > 0]
     scored.sort(key=lambda item: item[0], reverse=True)
     return [pick for _, pick in scored[:MAX_SELECTED_TRADES]]
 
@@ -138,13 +143,14 @@ def select_trades(picks: Sequence[StoredPick]) -> List[StoredPick]:
 def _selection_text(selected: Sequence[StoredPick]) -> str:
     """The plain statement of what to trade and how much is at risk."""
     if not selected:
-        return paragraph_fragment("No pick is selected as a trade: none has a positive expected PnL under the realised-volatility view.", "note-s")
+        return paragraph_fragment("No pick is selected as a trade: none that is fresh has a usable choice and a positive expected PnL under the realised-volatility view.", "note-s")
     names = ", ".join(f"{pick.expiration} (max loss {_usd(pick.max_loss_usd)} USD)" for pick in selected)
-    total = sum(pick.max_loss_usd or 0.0 for pick in selected)
-    families = {next((c["family"] for c in pick.candidates if c["id"] == pick.choice), "?") for pick in selected}
-    text = (f"Selected trades (best expected PnL per risk, at most {MAX_SELECTED_TRADES}): {names}. If all of them lose the whole maximum, "
-            f"{_usd(total)} USD is lost. Other expiries' picks are alternatives, not additional trades.")
-    if len(selected) > 1 and len(families) == 1:
+    total = None if any(pick.max_loss_usd is None for pick in selected) else sum(pick.max_loss_usd for pick in selected)
+    families = [next((c.get("family") for c in pick.candidates if c["id"] == pick.choice), None) for pick in selected]
+    text = (f"Selected trades (best expected PnL per risk among picks younger than {STALE_AFTER_HOURS:g} h, at most {MAX_SELECTED_TRADES}): {names}. "
+            f"If all of them lose the whole maximum, {'not computed' if total is None else _usd(total) + ' USD'} is lost. "
+            "The other picks are not additional trades.")
+    if len(selected) > 1 and None not in families and len(set(families)) == 1:
         text += " The selected trades are the same structure on the same view of the market: treat them as one bet, not as diversification."
     return paragraph_fragment(text)
 
@@ -236,9 +242,15 @@ def build_strategy_panel(picks: Sequence[StoredPick], now_utc: datetime, currenc
     if not open_picks:
         return StrategyPanel(intro + paragraph_fragment("No stored pick for an expiry that is still open.", "note-s"))
     ordered = sorted(open_picks.values(), key=lambda stored: days_left[stored.expiration])
-    selected = select_trades(ordered)
+    selected = select_trades(ordered, now)
     chosen_ids = {id(pick) for pick in selected}
-    cards = [_card(pick, now, "SELECTED TRADE" if id(pick) in chosen_ids else "alternative, not selected") for pick in ordered]
+
+    def role(pick: StoredPick) -> str:
+        if id(pick) in chosen_ids:
+            return "SELECTED TRADE"
+        return "alternative, not selected" if pick.status == "ok" and pick.choice != NO_TRADE else "no trade"
+
+    cards = [_card(pick, now, role(pick)) for pick in ordered]
     figures: Dict[str, Dict[str, Any]] = {}
     for _, card_figures in cards:
         figures.update(card_figures)
