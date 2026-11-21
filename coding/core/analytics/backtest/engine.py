@@ -12,7 +12,7 @@ import statistics
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, Optional, Sequence, Tuple
+from typing import Callable, Dict, Optional, Sequence, Tuple
 
 from coding.core.analytics.backtest.fees import delivery_fee_usd, trading_fee_usd
 from coding.core.analytics.backtest.structures import Leg
@@ -44,13 +44,18 @@ def intrinsic_value_usd(option_type: str, strike: float, settlement_price: float
 
 
 def simulate_trade(structure: str, expiration: str, entry_time: datetime, settlement_at: datetime, spot_at_entry: float,
-                   legs: Sequence[Leg], settlement_price: float) -> Trade:
-    """Hold the legs to expiry and settle them at ``settlement_price``."""
+                   legs: Sequence[Leg], settlement_price: float, leg_fee: Optional[Callable[[float], float]] = None) -> Trade:
+    """
+    Hold the legs to expiry and settle them at ``settlement_price``.
+
+    Args:
+        leg_fee: Trading fee per coin of a leg as a function of its entry price (a venue's schedule at the position size); None: Deribit's.
+    """
     premium = payoff = trading_fees = delivery_fees = 0.0
     for leg in legs:
         sign = 1.0 if leg.action == "sell" else -1.0                      # a sell brings cash in, a buy pays it out
         premium += sign * leg.entry_price_usd
-        trading_fees += trading_fee_usd(spot_at_entry, leg.entry_price_usd)
+        trading_fees += leg_fee(leg.entry_price_usd) if leg_fee else trading_fee_usd(spot_at_entry, leg.entry_price_usd)
         intrinsic = intrinsic_value_usd(leg.option_type, leg.strike, settlement_price)
         payoff += -sign * intrinsic                                       # the buyer receives it, the seller pays it
         delivery_fees += delivery_fee_usd(settlement_price, intrinsic)

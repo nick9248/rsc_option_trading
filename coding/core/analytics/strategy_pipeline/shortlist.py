@@ -105,7 +105,7 @@ def _usd(value: float) -> str:
 
 def render_shortlist(shortlist: Sequence[ShortlistItem]) -> str:
     """The shortlist as text for the model."""
-    lines = ["## Shortlist (one coin per leg; USD)"]
+    lines = ["## Shortlist (USD; numbers are per coin of each leg; where a size is given, the fees and the maximum loss of that whole position are given too)"]
     for item in shortlist:
         metrics, candidate = item.metrics, item.candidate
         legs = ", ".join(f"{leg.action} {leg.strike:,.0f} {leg.option_type} @ {_usd(leg.entry_price_usd)}" for leg in candidate.legs)
@@ -119,7 +119,10 @@ def render_shortlist(shortlist: Sequence[ShortlistItem]) -> str:
                          f"tail loss {_usd(result.tail_loss_usd)}")
         lines.append(f"{item.candidate_id} {candidate.family}: {legs} | {entry} | max loss {_usd(metrics.max_loss_usd)}, max profit {profit}, "
                      f"breakeven {breakevens} | costs: spread {_usd(metrics.spread_cost_usd)} + fees {_usd(metrics.trading_fees_usd)} | "
-                     + " | ".join(views))
+                     + " | ".join(views)
+                     + ("" if metrics.quantity is None else
+                        f" | size {metrics.quantity:g} coins: max loss {metrics.quantity * metrics.max_loss_usd:,.2f} USD, "
+                        f"fees {metrics.quantity * metrics.trading_fees_usd:,.2f} USD"))
     return "\n".join(lines)
 
 
@@ -137,7 +140,7 @@ def candidate_record(item: ShortlistItem) -> Dict[str, Any]:
             "entry_cash_usd": _finite(metrics.entry_cash_usd), "mid_cash_usd": _finite(item.candidate.mid_cash_usd),
             "max_loss_usd": _finite(metrics.max_loss_usd), "max_profit_usd": _finite(metrics.max_profit_usd),
             "breakevens": [_finite(value) for value in metrics.breakevens], "spread_cost_usd": _finite(metrics.spread_cost_usd),
-            "trading_fees_usd": _finite(metrics.trading_fees_usd), "baseline_score": _finite(item.score),
+            "trading_fees_usd": _finite(metrics.trading_fees_usd), "baseline_score": _finite(item.score), "quantity": _finite(metrics.quantity),
             "market_expected_pnl_usd": _finite(metrics.market_expected_pnl_usd),
             "distributions": {name: {"probability_of_profit": _finite(result.probability_of_profit),
                                      "expected_pnl_usd": _finite(result.expected_pnl_usd), "tail_loss_usd": _finite(result.tail_loss_usd)}

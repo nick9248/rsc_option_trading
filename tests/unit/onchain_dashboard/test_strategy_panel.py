@@ -95,7 +95,7 @@ def test_no_trade_has_no_chart_and_still_shows_the_shortlist():
     assert "chose no trade" in panel.html and "Shortlist in the model" in panel.html and panel.figures == {}
 
 
-@pytest.mark.parametrize("status, text", [("refused", "declined"), ("invalid_response", "not usable"), ("no_candidates", "no usable candidate")])
+@pytest.mark.parametrize("status, text", [("refused", "declined"), ("invalid_response", "not usable"), ("no_candidates", "No candidate fits this expiry")])
 def test_a_refused_unusable_or_empty_pick_is_stated(status, text):
     panel = build_strategy_panel([stored(status=status, choice=None, quantity=None, response="raw words <i>here</i>")], NOW, "BTC")
     assert text in panel.html and "<i>here</i>" not in panel.html and panel.figures == {}
@@ -151,7 +151,7 @@ def test_the_service_reads_the_live_picks_of_the_current_method_and_survives_a_d
     panel = UnifiedDashboardService(lambda: repository)._strategy_panel("BTC")
     assert "Chosen: C1" in panel.html
     kwargs = repository.get_strategy_picks.call_args.kwargs
-    assert kwargs["mode"] == "live" and kwargs["method_version"] == "pipeline-2"
+    assert kwargs["mode"] == "live" and kwargs["method_version"] == "pipeline-3"
     repository.get_strategy_picks.side_effect = RuntimeError("down")
     assert "could not be read: RuntimeError: down" in UnifiedDashboardService(lambda: repository)._strategy_panel("BTC").html
     assert UnifiedDashboardService()._strategy_panel("BTC") is None

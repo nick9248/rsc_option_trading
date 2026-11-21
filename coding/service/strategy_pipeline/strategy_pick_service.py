@@ -10,16 +10,17 @@ the total cost of all stored model calls is checked against a budget before each
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from coding.core.analytics.backtest.engine import simulate_trade
 from coding.core.analytics.backtest.structures import Leg
 from coding.core.analytics.candidates.distribution import LognormalDistribution
-from coding.core.analytics.candidates.generator import generate_candidates
-from coding.core.analytics.candidates.metrics import compute_metrics
+from coding.core.analytics.candidates.generator import CandidateLimits, generate_candidates
+from coding.core.analytics.candidates.metrics import compute_metrics, metrics_at_venue_size
 from coding.core.analytics.candidates.scoring import IMPLIED, REALISED
 from coding.core.analytics.menthorq_replication_calculator import parse_expiry_settlement
 from coding.core.analytics.risk.budget import RiskBudget, size_position
+from coding.core.analytics.risk.venue import DERIVE_TAKER_FEES, Venue
 from coding.core.analytics.strategy_pipeline.facts import render_facts
 from coding.core.analytics.strategy_pipeline.shortlist import (
     MAX_COST_FRACTION_OF_RISK, NO_TRADE, PICK_SCHEMA, SYSTEM_PROMPT, ShortlistItem, Pick, baseline_id, build_shortlist, candidate_record, parse_pick, render_shortlist)
@@ -31,9 +32,13 @@ from coding.service.strategy_pipeline.facts_service import FactsAsOfService
 
 logger = logging.getLogger(__name__)
 
-METHOD_VERSION = "pipeline-2"
+METHOD_VERSION = "pipeline-3"
 """pipeline-1: the shortlist showed a flat-volatility "implied view" that ignored skew (the model read it as fair value and leaned to put structures);
-pipeline-2: the market view is exact (minus costs)."""
+pipeline-2: the market view is exact (minus costs);
+pipeline-3: live picks are built for a venue (Derive: minimum order size, fees with the base fee per order, narrow spreads tried, size shown in the prompt)."""
+VENUE_CANDIDATE_LIMITS = CandidateLimits(short_delta_range=(0.02, 0.60), long_delta_range=(0.02, 0.70),
+                                         width_fractions=(0.004, 0.006, 0.008, 0.01, 0.015, 0.02, 0.03, 0.04, 0.06, 0.10))
+"""With a venue the loss budget of a small account is a few USD: spreads from 0.4% of spot wide are tried too (the research default starts at 2%)."""
 MODE_LIVE = "live"
 MODE_REPLAY = "replay"
 DEFAULT_RESEARCH_CAPITAL_USD = 10_000.0
@@ -60,7 +65,7 @@ class StrategyPickService:
     """Builds the shortlist for one expiry at one instant, asks the model, stores the answer, and later evaluates it."""
 
     def __init__(self, repository: DatabaseRepository, client: Any, risk_budget: RiskBudget = RiskBudget(DEFAULT_RESEARCH_CAPITAL_USD),
-                 model: str = DEFAULT_MODEL, budget_usd: float = DEFAULT_BUDGET_USD):
+                 model: str = DEFAULT_MODEL, budget_usd: float = DEFAULT_BUDGET_USD, venues: Optional[Mapping[str, Venue]] = None):
         """
         Args:
             repository: Local database (picks and the running cost are stored there).
@@ -68,6 +73,8 @@ class StrategyPickService:
             risk_budget: The account the position is sized for; any fraction of a coin is allowed (Derive trades fractions).
             model: Model id; must have a price in ``PRICES_USD_PER_MILLION_TOKENS``.
             budget_usd: Stop when the stored model calls have cost this much.
+            venues: Per currency, where positions are placed. Used for LIVE picks only: candidates the venue cannot place within the loss budget
+                are dropped, fees are the venue's, and the size is the venue's allowed one. None (and every replay): fractions of a coin, Deribit fees.
 
         Raises:
             ValueError: for a model without a known price.
@@ -79,6 +86,7 @@ class StrategyPickService:
         self.risk_budget = risk_budget
         self.model = model
         self.budget_usd = budget_usd
+        self.venues = dict(venues or {})
         self.backtest = BacktestService(repository)
         self.facts_service = FactsAsOfService(repository)
 
@@ -87,7 +95,7 @@ class StrategyPickService:
         """(entry, "") or (None, reason): the chain of the expiry at the instant (the cheap part: no facts, no candidates yet)."""
         return self.backtest.load_entry(currency, as_of, target_days, minimum_days, now, settled=(mode == MODE_REPLAY), expiration=expiration)
 
-    def _shortlist_for(self, currency: str, as_of: datetime, entry, now: datetime):
+    def _shortlist_for(self, currency: str, as_of: datetime, entry, now: datetime, mode: str = MODE_REPLAY):
         """(facts, shortlist), or (reason, None) when the volatility needed for the view is missing."""
         facts = self.facts_service.build(currency, entry.expiration, as_of, entry.spot, entry.forward)
         days = (entry.settlement_at - entry.captured_at).total_seconds() / 86400.0
@@ -98,8 +106,17 @@ class StrategyPickService:
             distributions[IMPLIED] = LognormalDistribution(entry.forward, entry.atm_implied_volatility, days)
         if REALISED not in distributions:
             return "no realised volatility", None
-        scored = [(candidate, compute_metrics(candidate, entry.spot, distributions))
-                  for candidate in generate_candidates(entry.quotes, entry.spot)]
+        venue = self.venues.get(currency) if mode == MODE_LIVE else None
+        if mode == MODE_LIVE and venue is None:
+            logger.warning("No venue is configured for %s: the live pick uses the research rules (Deribit fees, fractions of a coin)", currency)
+        if venue is None:
+            scored = [(candidate, compute_metrics(candidate, entry.spot, distributions)) for candidate in generate_candidates(entry.quotes, entry.spot)]
+        else:
+            scored = []
+            for candidate in generate_candidates(entry.quotes, entry.spot, VENUE_CANDIDATE_LIMITS):
+                metrics = metrics_at_venue_size(candidate, entry.spot, distributions, venue, self.risk_budget.risk_per_trade_usd)
+                if metrics is not None and metrics.by_distribution[REALISED].expected_pnl_usd > 0:     # nothing worth asking the model about otherwise
+                    scored.append((candidate, metrics))
         return facts, build_shortlist(scored)
 
     def pick(self, currency: str, as_of: datetime, mode: str = MODE_REPLAY, target_days_to_expiry: float = 7.0, minimum_days_to_expiry: float = 2.0,
@@ -140,7 +157,7 @@ class StrategyPickService:
         if stored:
             row = stored[-1]
             return PickResult(row["id"], row["status"], row["choice"], None, [], row["quantity"], 0.0, True, entry.expiration)
-        facts, shortlist = self._shortlist_for(currency, as_of, entry, now)
+        facts, shortlist = self._shortlist_for(currency, as_of, entry, now, mode)
         if shortlist is None:
             logger.info("%s %s: not usable (%s)", currency, as_of.isoformat(), facts)
             return None
@@ -180,8 +197,11 @@ class StrategyPickService:
                 status = "no_trade" if parsed.choice == NO_TRADE else "ok"
                 if parsed.choice != NO_TRADE:
                     chosen = next(item for item in shortlist if item.candidate_id == parsed.choice)
-                    sized = size_position(chosen.metrics.max_loss_usd, self.risk_budget)
-                    quantity, max_loss = sized.quantity, sized.max_loss_usd
+                    if chosen.metrics.quantity is not None:          # sized for the venue already (its minimum, step and fees)
+                        quantity, max_loss = chosen.metrics.quantity, chosen.metrics.quantity * chosen.metrics.max_loss_usd
+                    else:
+                        sized = size_position(chosen.metrics.max_loss_usd, self.risk_budget)
+                        quantity, max_loss = sized.quantity, sized.max_loss_usd
         except ValueError as error:
             status = "invalid_response"
             logger.warning("The answer of the model is not usable: %s", error)
@@ -232,7 +252,8 @@ class StrategyPickService:
         outcomes: Dict[str, Any] = {}
         for item in row["candidates"]:
             legs = [Leg(leg["action"], leg["option_type"], leg["strike"], leg["instrument"], leg["entry_price_usd"]) for leg in item["legs"]]
-            trade = simulate_trade(item["family"], row["expiration"], row["as_of"], settlement_at, row["spot"], legs, settlement[0])
+            trade = simulate_trade(item["family"], row["expiration"], row["as_of"], settlement_at, row["spot"], legs, settlement[0],
+                                   self._leg_fee(item, row["spot"]))
             outcomes[item["id"]] = {"pnl_usd": trade.pnl_usd, "r": trade.pnl_usd / item["max_loss_usd"]}
         outcomes["_shortlist_mean_r"] = sum(value["r"] for value in outcomes.values()) / len(row["candidates"])
         outcomes["_all_mean_r"] = self._all_candidates_mean_r(row, settlement_at, settlement[0])
@@ -240,9 +261,18 @@ class StrategyPickService:
             return False
         return self.repository.save_strategy_pick_evaluation(row["id"], now, settlement[0], row["baseline_id"], outcomes)
 
+    @staticmethod
+    def _leg_fee(item: Dict[str, Any], spot: float):
+        """The trading fee function of a stored candidate: the venue's schedule at its stored size, or None (Deribit's, one coin) for a research one."""
+        quantity = item.get("quantity")
+        if not quantity:
+            return None
+        return lambda price: DERIVE_TAKER_FEES.fee_per_coin_usd(spot, price, quantity)
+
     def _all_candidates_mean_r(self, row: Dict[str, Any], settlement_at: datetime, settlement_price: float) -> Optional[float]:
         """
-        Mean R of every candidate the chain of that instant offered that passes the same cost filter as the shortlist (regenerated from the
+        Mean R of every candidate the chain of that instant offered that passes the same cost filter as the shortlist, in the research setting (Deribit fees,
+        fractions of a coin, also for a venue-sized live pick: the comparison set is the research one) (regenerated from the
         stored snapshot at the stored instant, priced at the stored spot).
         """
         entry, reason = self.backtest.load_entry(row["currency"], row["as_of"], 7.0, 2.0, datetime.now(timezone.utc), settled=False,
