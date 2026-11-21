@@ -30,3 +30,15 @@ Total cost of all stored model calls (suggestions and picks) must stay within 15
 The chain, facts and volatilities are those of the instant. The delivery price is used only to evaluate. Dates without a fresh snapshot, an index price
 or a delivery price are skipped. The model knows the market up to its training date and may recognise a famous date; the facts carry no date of
 the event, but the instants are labelled. Take the replay as a test of consistency, not as proof; the forward test is the proof.
+
+## In the Analysis tab
+"Ask Claude for strategies" (off by default, about 0.2 USD per currency): after the report, a strategy step asks the model about the expiries nearest 3, 7, 14 and
+30 days (one pick each, an expiry met twice once; a pick of the same expiry within the hour is not repeated), on the newest stored chain (the run has just
+synced). The Strategy tab of the unified dashboard shows the newest live pick of each open expiry: the choice, its size, the PnL-at-expiry chart, the reasons,
+risks and invalidation, and the shortlist in the model's order with the baseline marked. Without the tick the tab shows the picks already stored and nothing is
+paid. A missing key, an exhausted budget or an API error fails only that step; the dashboard is still built.
+
+## Method versions
+pipeline-1: the shortlist showed a flat-volatility "implied view" that ignored skew (the model read it as fair value). pipeline-2: the market view is exact
+(minus costs). Replay of 30 instants (2026-08-30 to 10-27): pipeline-1 model -0.27 R, pipeline-2 -0.36 R, average candidate -0.04, baseline top-1 -0.54 to -0.59:
+no evidence yet that the model beats the average candidate.

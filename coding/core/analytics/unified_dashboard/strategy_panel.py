@@ -1,9 +1,9 @@
 """
-The Strategy tab of the unified dashboard: the stored suggestions of the model, one card per expiry (pure: no files, no network).
+The Strategy tab of the unified dashboard: the newest stored live pick of each expiry, one card per expiry (pure: no files, no network).
 
-A suggestion is research output of a language model, built from the facts of an analysis at ``facts_as_of``; it is checked and priced
-by code but not scored against what happened. The panel says so, shows how old its facts are and marks old or rejected ones. A priced
-suggestion also gets its PnL-at-expiry chart.
+A pick is the answer of a language model that could only choose among candidate structures built and priced by code, from facts of an analysis at
+``as_of``. It is sized by code from a loss budget and not yet scored against what happens. The card shows what was chosen, why, how it pays at
+expiry, and the whole shortlist in the model's own order, so the choice can be judged against the alternatives.
 """
 
 import html
@@ -18,7 +18,7 @@ from coding.core.analytics.report.figure_style import figure_json
 from coding.core.analytics.report.report_page import format_utc, paragraph_fragment, table_fragment
 
 STALE_AFTER_HOURS = 4.0
-"""Facts older than this are marked: the market has moved. The check is by time only; the spot of the facts is shown next to the age."""
+"""A pick older than this is marked: the market has moved. The check is by time only; the spot of the pick is shown next to the age."""
 RAW_TEXT_LIMIT = 600
 """Characters of an unusable answer that are shown."""
 
@@ -27,17 +27,23 @@ VIEW_LABELS = {"bullish": "Bullish", "bearish": "Bearish", "range_bound": "Range
 
 
 @dataclass(frozen=True)
-class StoredSuggestion:
-    """One stored answer of the model, as read from ``strategy_suggestions``."""
+class StoredPick:
+    """One stored live pick, as read from ``strategy_picks``."""
 
     expiration: str
-    computed_at: datetime
-    facts_as_of: Optional[datetime]
-    reference_price: float
+    as_of: datetime
+    spot: float
     model: str
     status: str
+    candidates: List[Dict[str, Any]]
+    choice: Optional[str]
+    ranking: Optional[List[str]]
     response: str
-    net_premium_usd: Optional[float]
+    quantity: Optional[float]
+    max_loss_usd: Optional[float]
+    risk_per_trade_usd: Optional[float]
+    baseline_id: Optional[str]
+    cost_usd: float
 
 
 @dataclass(frozen=True)
@@ -56,93 +62,119 @@ def _age_text(hours: float) -> str:
     return f"{hours * 60:.0f} min" if hours < 1 else f"{hours:.1f} h"
 
 
-def _premium_text(net_premium_usd: Optional[float]) -> str:
-    if net_premium_usd is None:
-        return "not priceable"
-    return (f"{abs(net_premium_usd):,.0f} USD paid" if net_premium_usd > 0 else
-            f"{abs(net_premium_usd):,.0f} USD received" if net_premium_usd < 0 else "0 USD")
+def _usd(value: Optional[float]) -> str:
+    return "n/a" if value is None else f"{value:,.0f}"
+
+
+def _legs_text(candidate: Dict[str, Any]) -> str:
+    return " / ".join(f"{leg['action']} {leg['strike']:,.0f} {leg['option_type']}" for leg in candidate["legs"])
 
 
 def _list(items: Sequence[str]) -> str:
     return "<ul>" + "".join(f"<li>{_e(item)}</li>" for item in items) + "</ul>" if items else ""
 
 
-def _payoff(suggestion: StoredSuggestion, legs: Sequence[Dict[str, Any]]) -> Tuple[str, Dict[str, Dict[str, Any]]]:
-    """The chart and the numbers under it for a priced suggestion: (html, figures); nothing when there are no legs or no price."""
-    if not legs or suggestion.net_premium_usd is None:
-        return "", {}
-    payoff_legs = [PayoffLeg(leg["action"], leg["option_type"], float(leg["strike"]), float(leg["quantity"])) for leg in legs]
-    entry_cash = -suggestion.net_premium_usd                                  # stored: positive = paid
-    summary = summarize_payoff(payoff_legs, entry_cash)
-    figure_id = f"strategy-{suggestion.expiration}"
+def _entry_text(entry_cash_usd: float, quantity: float) -> str:
+    cash = entry_cash_usd * quantity
+    return f"credit {_usd(cash)} USD" if cash >= 0 else f"debit {_usd(-cash)} USD"
+
+
+def _shortlist_table(pick: StoredPick) -> str:
+    """The shortlist in the model's own order (best first), with the numbers the model was shown."""
+    by_id = {candidate["id"]: candidate for candidate in pick.candidates}
+    order = [identifier for identifier in (pick.ranking or []) if identifier in by_id] or list(by_id)
+    rows = []
+    for rank, identifier in enumerate(order, start=1):
+        candidate = by_id[identifier]
+        realised = candidate.get("distributions", {}).get("realised", {})
+        probability = realised.get("probability_of_profit")
+        expected = realised.get("expected_pnl_usd")
+        marks = " (chosen)" if identifier == pick.choice else " (baseline)" if identifier == pick.baseline_id else ""
+        rows.append([str(rank), identifier + marks, candidate["family"].replace("_", " "), _legs_text(candidate), _usd(candidate["entry_cash_usd"]),
+                     _usd(candidate["max_loss_usd"]), "n/a" if probability is None else f"{probability:.0%}",
+                     "n/a" if expected is None else f"{expected:+,.0f}"])
+    return table_fragment(["Rank", "Candidate", "Structure", "Legs", "Entry cash", "Max loss", "P(profit), realised view", "Expected PnL, realised view"],
+                          rows, numeric_columns=(0, 4, 5, 6, 7), caption="Shortlist in the model's order, one coin per leg, USD")
+
+
+def _chart(pick: StoredPick, chosen: Dict[str, Any]) -> Tuple[str, Dict[str, Dict[str, Any]]]:
+    """The PnL-at-expiry chart of the chosen candidate at the stored size, and the numbers under it."""
+    quantity = pick.quantity or 0.0
+    legs = [PayoffLeg(leg["action"], leg["option_type"], float(leg["strike"]), quantity) for leg in chosen["legs"]]
+    entry_cash = chosen["entry_cash_usd"] * quantity
+    summary = summarize_payoff(legs, entry_cash)
+    figure_id = f"strategy-{pick.expiration}"
     profit = "unlimited" if summary.max_profit_usd is None else f"{summary.max_profit_usd:,.0f} USD"
     loss = "unlimited" if summary.max_loss_usd is None else f"{summary.max_loss_usd:,.0f} USD"
     breakevens = ", ".join(f"{value:,.0f}" for value in summary.breakevens) or "none"
-    text = (f"At expiry, before fees: maximum profit {profit}, maximum loss {loss}, breakeven {breakevens}. "
-            "Entry at the quotes of that moment.")
+    text = (f"At expiry, before fees, at this size: maximum profit {profit}, maximum loss {loss}, breakeven {breakevens}. "
+            "Entry at the quotes of that moment (buys at the ask, sells at the bid).")
     chart_html = f'<div class="switcher-plot" data-stale="{_e(figure_id)}"></div>' + paragraph_fragment(text, "note-s")
-    return chart_html, {figure_id: figure_json(payoff_figure(payoff_legs, entry_cash, suggestion.reference_price))}
+    return chart_html, {figure_id: figure_json(payoff_figure(legs, entry_cash, pick.spot))}
 
 
-def _card(suggestion: StoredSuggestion, now_utc: datetime) -> Tuple[str, Dict[str, Dict[str, Any]]]:
-    facts_time = suggestion.facts_as_of or suggestion.computed_at
-    age_hours = max((now_utc - facts_time).total_seconds() / 3600.0, 0.0)
+def _card(pick: StoredPick, now_utc: datetime) -> Tuple[str, Dict[str, Dict[str, Any]]]:
+    age_hours = max((now_utc - pick.as_of).total_seconds() / 3600.0, 0.0)
     warnings: List[str] = []
     if age_hours > STALE_AFTER_HOURS:
-        warnings.append(f"The facts are {_age_text(age_hours)} old: the market has moved since. Ask again before relying on this.")
-    if suggestion.facts_as_of is None:
-        warnings.append("The time of the facts was not recorded; the time of the call is shown.")
-    header = (f'<div class="card-head"><div class="card-title"><h3>{_e(suggestion.expiration)}</h3></div><div class="card-meta">'
-              f'<span class="card-sub">facts of {_e(format_utc(facts_time))} ({_e(_age_text(age_hours))} old), spot '
-              f'{suggestion.reference_price:,.0f}</span></div></div>')
-
+        warnings.append(f"This pick is {_age_text(age_hours)} old: the market has moved since. Ask again before relying on it.")
+    header = (f'<div class="card-head"><div class="card-title"><h3>{_e(pick.expiration)}</h3></div><div class="card-meta">'
+              f'<span class="card-sub">facts of {_e(format_utc(pick.as_of))} ({_e(_age_text(age_hours))} old), spot {pick.spot:,.0f}</span></div></div>')
     body = ""
     figures: Dict[str, Dict[str, Any]] = {}
-    if suggestion.status in ("ok", "legs_rejected"):
+    chosen = next((candidate for candidate in pick.candidates if candidate["id"] == pick.choice), None)
+    if pick.status in ("ok", "no_trade"):
         try:
-            parsed = ""
-            data = json.loads(suggestion.response)
+            data = json.loads(pick.response)
             view = VIEW_LABELS.get(data["view"], data["view"])
-            legs = data["legs"]
-            title = view if data["strategy_name"].strip().lower() == view.lower() else f"{view}: {data['strategy_name']}"
-            parsed += f"<h4>{_e(title)}</h4>" + paragraph_fragment(data["summary"])
-            chart_html, chart_figures = _payoff(suggestion, legs) if suggestion.status == "ok" else ("", {})
-            if legs:
-                parsed += table_fragment(["Action", "Type", "Strike", "Quantity (coins)"],
-                                         [[leg["action"], leg["option_type"], f"{leg['strike']:,.0f}", f"{leg['quantity']:g}"] for leg in legs],
-                                         numeric_columns=(2, 3))
-                parsed += paragraph_fragment("Net at the quotes of that moment (buys at the ask, sells at the bid): "
-                                             + _premium_text(suggestion.net_premium_usd), "note-s") + chart_html
+            parsed = f"<h4>{_e(view)}</h4>" + paragraph_fragment(data["summary"])
+            chart_figures: Dict[str, Dict[str, Any]] = {}
+            if pick.status == "no_trade":
+                parsed += paragraph_fragment("The model chose no trade for this expiry.", "note-s")
+            elif chosen is not None and pick.quantity:
+                parsed += (f"<h4>Chosen: {_e(pick.choice)}, {_e(chosen['family'].replace('_', ' '))}</h4>"
+                           + table_fragment(["Action", "Type", "Strike", "Fill price (USD per coin)"],
+                                            [[leg["action"], leg["option_type"], f"{leg['strike']:,.0f}", f"{leg['entry_price_usd']:,.0f}"]
+                                             for leg in chosen["legs"]], numeric_columns=(2, 3)))
+                parsed += paragraph_fragment(f"Size from the loss budget: {pick.quantity:.4f} coins per leg; entry {_entry_text(chosen['entry_cash_usd'], pick.quantity)}; "
+                                             f"maximum loss {_usd(pick.max_loss_usd)} USD (risk per trade {_usd(pick.risk_per_trade_usd)} USD).", "note-s")
+                chart_html, chart_figures = _chart(pick, chosen)
+                parsed += chart_html
+                if pick.baseline_id:
+                    same = pick.baseline_id == pick.choice
+                    parsed += paragraph_fragment("The deterministic baseline (best expected PnL per risk under the realised volatility) " +
+                                                 ("chose the same candidate." if same else f"preferred {pick.baseline_id}."), "note-s")
+            else:
+                raise ValueError("the chosen candidate is missing")
             parsed += ("<h4>Why</h4>" + _list(data["reasons"]) + "<h4>Risks</h4>" + _list(data["risks"])
-                       + "<h4>What would make it wrong</h4>" + paragraph_fragment(data["invalidation"]))
-            body += parsed                                  # only a fully read answer is shown
+                       + "<h4>What would make it wrong</h4>" + paragraph_fragment(data["invalidation"]) + _shortlist_table(pick))
+            body += parsed                                  # only a fully read pick is shown
             figures = chart_figures
         except (ValueError, KeyError, TypeError):
-            warnings.append("The stored answer could not be read.")
-            body += paragraph_fragment(suggestion.response[:RAW_TEXT_LIMIT], "note-s")
-        if suggestion.status == "legs_rejected":
-            warnings.insert(0, "REJECTED by the check: a leg is not among the quoted strikes or has no quote for its fill. Do not use.")
-    elif suggestion.status == "refused":
+            warnings.append("The stored pick could not be read.")
+            body += paragraph_fragment(pick.response[:RAW_TEXT_LIMIT], "note-s")
+    elif pick.status == "refused":
         warnings.insert(0, "The model declined to answer this request.")
-        body += paragraph_fragment(suggestion.response[:RAW_TEXT_LIMIT], "note-s")
+        body += paragraph_fragment(pick.response[:RAW_TEXT_LIMIT], "note-s")
+    elif pick.status == "no_candidates":
+        warnings.insert(0, "The chain offered no usable candidate for this expiry.")
     else:
-        warnings.insert(0, "The answer of the model was not usable (not in the expected form).")
-        body += paragraph_fragment(suggestion.response[:RAW_TEXT_LIMIT], "note-s")
-
+        warnings.insert(0, "The answer of the model was not usable (not in the expected form, or not a candidate of the shortlist).")
+        body += paragraph_fragment(pick.response[:RAW_TEXT_LIMIT], "note-s")
     warning_html = "".join(f'<p class="note-s" style="color:var(--warn)"><strong>{_e(text)}</strong></p>' for text in warnings)
-    return (f'<article class="card">{header}{warning_html}{body}<p class="note-s">Model {_e(suggestion.model)}.</p></article>', figures)
+    return (f'<article class="card">{header}{warning_html}{body}<p class="note-s">Model {_e(pick.model)}, cost {pick.cost_usd:.3f} USD.</p></article>',
+            figures)
 
 
-def build_strategy_panel(suggestions: Sequence[StoredSuggestion], now_utc: datetime, currency: str,
-                         read_error: Optional[str] = None) -> StrategyPanel:
+def build_strategy_panel(picks: Sequence[StoredPick], now_utc: datetime, currency: str, read_error: Optional[str] = None) -> StrategyPanel:
     """
     The Strategy tab: inner HTML and figures.
 
     Args:
-        suggestions: The newest stored suggestion of each expiry (any order); expired expiries are left out.
+        picks: The newest stored live pick of each expiry (any order); expired expiries are left out.
         now_utc: The current instant, timezone-aware UTC (ages are measured against it).
         currency: "BTC" or "ETH".
-        read_error: Text when the stored suggestions could not be read (shown instead of an empty list).
+        read_error: Text when the stored picks could not be read (shown instead of an empty list).
 
     Raises:
         ValueError: for a naive ``now_utc``.
@@ -150,26 +182,25 @@ def build_strategy_panel(suggestions: Sequence[StoredSuggestion], now_utc: datet
     if now_utc.tzinfo is None:
         raise ValueError("now_utc must be timezone-aware (UTC)")
     now = now_utc.astimezone(timezone.utc)
-    intro = (f'<div class="panel-head"><h2>Strategy suggestions, {_e(currency)}</h2></div>'
-             + paragraph_fragment("Research output of a language model, written from the facts of an analysis and checked by code: every leg must be "
-                                  "a quoted strike, and the price is the cost at the bid and ask of that moment. They are not scored against what "
-                                  "happened yet, some inputs are conventions (assumed dealer positioning), and nothing here places an order. "
-                                  "A new suggestion is made on request (scripts/suggest_strategies.py, about 0.06 USD per expiry); it is never "
-                                  "made automatically.", "note-s"))
+    intro = (f'<div class="panel-head"><h2>Strategy picks, {_e(currency)}</h2></div>'
+             + paragraph_fragment("The answer of a language model that could only choose among candidate structures built and priced by code (a buy at the "
+                                  "ask, a sell at the bid), from the facts of an analysis. The position is sized by code from a loss budget. These picks are "
+                                  "not scored against what happened yet, some inputs are conventions (assumed dealer positioning), and nothing here "
+                                  "places an order. Picks are made when 'Ask Claude for strategies' is ticked in the Analysis tab (about 0.05 USD per "
+                                  "expiry); never otherwise.", "note-s"))
     if read_error:
-        return StrategyPanel(intro + paragraph_fragment(f"The stored suggestions could not be read: {read_error}", "note-s"))
-    open_suggestions: Dict[str, StoredSuggestion] = {}
+        return StrategyPanel(intro + paragraph_fragment(f"The stored picks could not be read: {read_error}", "note-s"))
+    open_picks: Dict[str, StoredPick] = {}
     days_left: Dict[str, float] = {}
-    for suggestion in suggestions:
-        days = MarketWideCalculator.calculate_dte(suggestion.expiration, now)          # fractional days to the 08:00 UTC settlement
-        if days is not None and days > 0 and (suggestion.expiration not in open_suggestions
-                                              or suggestion.computed_at > open_suggestions[suggestion.expiration].computed_at):
-            open_suggestions[suggestion.expiration] = suggestion
-            days_left[suggestion.expiration] = days
-    if not open_suggestions:
-        return StrategyPanel(intro + paragraph_fragment("No stored suggestion for an expiry that is still open.", "note-s"))
-    ordered = sorted(open_suggestions.values(), key=lambda stored: days_left[stored.expiration])
-    cards = [_card(suggestion, now) for suggestion in ordered]
+    for pick in picks:
+        days = MarketWideCalculator.calculate_dte(pick.expiration, now)          # fractional days to the 08:00 UTC settlement
+        if days is not None and days > 0 and (pick.expiration not in open_picks or pick.as_of > open_picks[pick.expiration].as_of):
+            open_picks[pick.expiration] = pick
+            days_left[pick.expiration] = days
+    if not open_picks:
+        return StrategyPanel(intro + paragraph_fragment("No stored pick for an expiry that is still open.", "note-s"))
+    ordered = sorted(open_picks.values(), key=lambda stored: days_left[stored.expiration])
+    cards = [_card(pick, now) for pick in ordered]
     figures: Dict[str, Dict[str, Any]] = {}
     for _, card_figures in cards:
         figures.update(card_figures)

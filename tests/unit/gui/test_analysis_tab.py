@@ -209,3 +209,12 @@ def test_the_real_service_gets_the_chosen_option_chain_source(qapp):
     service = tab._service_factory_for_run()()
     assert service.workflow_factory("BTC")._chain_source_mode == "live"
     tab.close()
+
+
+def test_the_ask_claude_checkbox_is_off_by_default_and_reaches_the_service(qapp):
+    tab = AnalysisTab()
+    assert not tab.ask_model_checkbox.isChecked() and "Ask Claude" in tab.ask_model_checkbox.text()
+    assert tab._service_factory_for_run()().ask_model is False
+    tab.ask_model_checkbox.setChecked(True)
+    assert tab._service_factory_for_run()().ask_model is True
+    tab.close()

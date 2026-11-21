@@ -1,4 +1,4 @@
-"""Strategy tab: cards of the stored suggestions, ages, warnings, escaping; and the tab in the page."""
+"""Strategy tab: cards of the stored live picks, size and chart, shortlist, warnings, escaping; and the tab in the page."""
 
 import json
 from datetime import datetime, timedelta, timezone
@@ -6,121 +6,96 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from coding.core.analytics.unified_dashboard.strategy_panel import StoredSuggestion, build_strategy_panel
+from coding.core.analytics.unified_dashboard.strategy_panel import StoredPick, build_strategy_panel
 from coding.service.analysis.unified_dashboard_service import UnifiedDashboardService
 
 NOW = datetime(2026, 11, 21, 12, 0, tzinfo=timezone.utc)
 
 
+def candidate(identifier, family, legs, entry_cash, max_loss, probability=0.6, expected=25.0):
+    return {"id": identifier, "family": family, "legs": [{"action": a, "option_type": t, "strike": k, "instrument": f"X-{k}", "entry_price_usd": p}
+                                                       for a, t, k, p in legs],
+            "entry_cash_usd": entry_cash, "max_loss_usd": max_loss, "distributions": {"realised": {"probability_of_profit": probability,
+                                                                                                   "expected_pnl_usd": expected}}}
+
+
+CONDOR = candidate("C1", "iron_condor", [("buy", "put", 53000, 523), ("sell", "put", 55000, 813), ("sell", "call", 61000, 610),
+                                         ("buy", "call", 63000, 320)], 580.0, 1420.0)
+SPREAD = candidate("C2", "put_credit_spread", [("sell", "put", 55000, 813), ("buy", "put", 53000, 523)], 290.0, 1710.0, 0.8, 40.0)
+LONG_PUT = candidate("C3", "long_put", [("buy", "put", 57000, 1400)], -1400.0, 1400.0, 0.35, -90.0)
+
+
 def answer(**overrides):
-    return json.dumps({"view": "range_bound", "strategy_name": "Iron condor <b>x</b>", "summary": "Sell rich wings.",
-                       "legs": [{"action": "sell", "option_type": "put", "strike": 55000, "quantity": 1},
-                                {"action": "buy", "option_type": "put", "strike": 53000, "quantity": 1}],
+    return json.dumps({"choice": "C1", "ranking": ["C1", "C2", "C3"], "view": "range_bound", "summary": "Sell the rich wings <b>x</b>.",
                        "reasons": ["VRP +14 vol points"], "risks": ["gap below 53,000"], "invalidation": "below 55,000", **overrides})
 
 
-def stored(expiration="27NOV26", status="ok", response=None, hours_old=1.0, net=-290.0, facts_as_of=True, computed_offset=0.0):
-    as_of = NOW - timedelta(hours=hours_old)
-    return StoredSuggestion(expiration, as_of + timedelta(hours=computed_offset), as_of if facts_as_of else None, 58000.0,
-                            "claude-opus-5-5", status, answer() if response is None else response, net)
+def stored(expiration="27NOV26", status="ok", choice="C1", response=None, hours_old=1.0, quantity=0.5, baseline="C2", as_of=None):
+    return StoredPick(expiration, as_of or NOW - timedelta(hours=hours_old), 58000.0, "claude-opus-5-5", status, [CONDOR, SPREAD, LONG_PUT], choice,
+                      ["C1", "C2", "C3"], answer() if response is None else response, quantity, 710.0, 500.0, baseline, 0.045)
 
 
-def test_a_good_suggestion_shows_its_legs_net_premium_reasons_and_risks():
-    page = build_strategy_panel([stored()], NOW, "BTC").html
-    for text in ("27NOV26", "Range-bound", "55,000", "53,000", "290 USD received", "VRP +14 vol points", "gap below 53,000", "below 55,000",
-                 "1.0 h old", "not scored", "never made automatically"):
-        assert text in page
+def test_a_pick_shows_the_choice_size_chart_reasons_and_the_shortlist_in_the_models_order():
+    panel = build_strategy_panel([stored()], NOW, "BTC")
+    for text in ("27NOV26", "Range-bound", "Chosen: C1", "iron condor", "53,000", "Size from the loss budget: 0.5000 coins", "credit 290 USD",
+                 "maximum loss 710 USD", "VRP +14 vol points", "gap below 53,000", "below 55,000", "1.0 h old", "not scored", "(chosen)", "(baseline)",
+                 "Shortlist in the model"):
+        assert text in panel.html
+    assert panel.html.index("C1 (chosen)") < panel.html.index("C2 (baseline)") < panel.html.index("C3")
+    assert 'data-stale="strategy-27NOV26"' in panel.html and set(panel.figures) == {"strategy-27NOV26"}
+    assert "maximum profit 290 USD, maximum loss 710 USD, breakeven 54,420, 61,580" in panel.html   # credit 580 x 0.5 coins; breakevens are the short strikes -/+ 580
 
 
 def test_model_text_is_escaped():
-    page = build_strategy_panel([stored()], NOW, "BTC").html
-    assert "<b>x</b>" not in page and "&lt;b&gt;x&lt;/b&gt;" in page
+    html_text = build_strategy_panel([stored()], NOW, "BTC").html
+    assert "<b>x</b>" not in html_text and "&lt;b&gt;x&lt;/b&gt;" in html_text
 
 
-def test_old_facts_are_marked_and_a_missing_facts_time_is_said():
-    old = build_strategy_panel([stored(hours_old=7.0)], NOW, "BTC").html
-    assert "7.0 h old" in old and "Ask again before relying on this" in old
-    assert "time of the facts was not recorded" in build_strategy_panel([stored(facts_as_of=False)], NOW, "BTC").html
+def test_the_baseline_note_says_when_the_model_agreed_with_it():
+    assert "chose the same candidate" in build_strategy_panel([stored(baseline="C1")], NOW, "BTC").html
+    assert "preferred C2" in build_strategy_panel([stored(baseline="C2")], NOW, "BTC").html
 
 
-def test_a_rejected_suggestion_says_do_not_use():
-    assert "Do not use" in build_strategy_panel([stored(status="legs_rejected", net=None)], NOW, "BTC").html
+def test_an_old_pick_is_marked():
+    html_text = build_strategy_panel([stored(hours_old=7.0)], NOW, "BTC").html
+    assert "7.0 h old" in html_text and "Ask again before relying on it" in html_text
 
 
-@pytest.mark.parametrize("status, text", [("refused", "declined"), ("invalid_response", "not usable")])
-def test_a_refused_or_unusable_answer_is_stated_with_the_raw_text(status, text):
-    page = build_strategy_panel([stored(status=status, response="raw words <i>here</i>")], NOW, "BTC").html
-    assert text in page and "raw words &lt;i&gt;here&lt;/i&gt;" in page
+def test_no_trade_has_no_chart_and_still_shows_the_shortlist():
+    panel = build_strategy_panel([stored(status="no_trade", choice="no_trade", quantity=None, response=answer(choice="no_trade", view="no_trade"))],
+                                 NOW, "BTC")
+    assert "chose no trade" in panel.html and "Shortlist in the model" in panel.html and panel.figures == {}
 
 
-def test_no_trade_has_no_legs_table_or_premium():
-    page = build_strategy_panel([stored(response=answer(view="no_trade", strategy_name="No trade", legs=[]), net=None)], NOW, "BTC").html
-    assert "No trade" in page and "No trade: No trade" not in page and "<table" not in page and "Net at the quotes" not in page
+@pytest.mark.parametrize("status, text", [("refused", "declined"), ("invalid_response", "not usable"), ("no_candidates", "no usable candidate")])
+def test_a_refused_unusable_or_empty_pick_is_stated(status, text):
+    panel = build_strategy_panel([stored(status=status, choice=None, quantity=None, response="raw words <i>here</i>")], NOW, "BTC")
+    assert text in panel.html and "<i>here</i>" not in panel.html and panel.figures == {}
 
 
-def test_expired_expiries_are_left_out_and_the_nearest_comes_first():
+def test_a_pick_whose_chosen_candidate_is_missing_is_not_half_shown():
+    panel = build_strategy_panel([stored(choice="C9")], NOW, "BTC")
+    assert "could not be read" in panel.html and "<table" not in panel.html and panel.figures == {}
+
+
+def test_expired_expiries_are_left_out_the_nearest_comes_first_and_the_newest_pick_of_an_expiry_wins():
     page = build_strategy_panel([stored("25DEC26"), stored("20NOV26"), stored("27NOV26")], NOW, "BTC").html
     assert "20NOV26" not in page and page.index("27NOV26") < page.index("25DEC26")
-
-
-def test_the_newest_of_two_answers_for_an_expiry_is_shown():
-    older = stored(response=answer(strategy_name="OLDER"), computed_offset=-1.0)
-    newer = stored(response=answer(strategy_name="NEWER"))
+    older = stored(response=answer(summary="OLDER"), as_of=NOW - timedelta(hours=3))
+    newer = stored(response=answer(summary="NEWER"), as_of=NOW - timedelta(hours=1))
     page = build_strategy_panel([older, newer], NOW, "BTC").html
     assert "NEWER" in page and "OLDER" not in page
 
 
-def test_nothing_stored_and_a_read_error_are_both_said():
-    assert "No stored suggestion" in build_strategy_panel([], NOW, "BTC").html
+def test_nothing_stored_a_read_error_and_a_naive_time_are_handled():
+    assert "No stored pick" in build_strategy_panel([], NOW, "BTC").html
     assert "could not be read" in build_strategy_panel([], NOW, "BTC", read_error="connection refused").html
-
-
-def test_a_half_readable_answer_shows_no_half_card():
-    partial = json.dumps({"view": "bullish", "strategy_name": "x", "summary": "s", "legs": [{"action": "buy", "option_type": "call", "strike": 60000, "quantity": 1}]})
-    page = build_strategy_panel([stored(response=partial)], NOW, "BTC").html
-    assert "could not be read" in page and "<table" not in page
-
-
-def condor(**overrides):
-    legs = [{"action": "buy", "option_type": "put", "strike": 53000, "quantity": 1}, {"action": "sell", "option_type": "put", "strike": 55000, "quantity": 1},
-            {"action": "sell", "option_type": "call", "strike": 61000, "quantity": 1}, {"action": "buy", "option_type": "call", "strike": 63000, "quantity": 1}]
-    return answer(legs=legs, strategy_name="Iron condor", **overrides)
-
-
-def test_a_priced_suggestion_gets_its_payoff_chart_and_numbers():
-    panel = build_strategy_panel([stored(response=condor(), net=-581.0)], NOW, "BTC")
-    assert 'data-stale="strategy-27NOV26"' in panel.html and set(panel.figures) == {"strategy-27NOV26"}
-    assert "maximum profit 581 USD, maximum loss 1,419 USD, breakeven 54,419, 61,581" in panel.html
-    figure = panel.figures["strategy-27NOV26"]
-    assert figure["data"] and "PnL at expiry" in figure["layout"]["yaxis"]["title"]["text"]
-
-
-def test_no_chart_without_legs_a_price_or_an_accepted_check():
-    assert build_strategy_panel([stored(response=answer(view="no_trade", legs=[]), net=None)], NOW, "BTC").figures == {}
-    assert build_strategy_panel([stored(response=condor(), net=None)], NOW, "BTC").figures == {}
-    assert build_strategy_panel([stored(response=condor(), net=-581.0, status="legs_rejected")], NOW, "BTC").figures == {}
-
-
-def test_the_figures_reach_the_page_data(real_result):
-    import json as json_module
-    import re
-    from tests.unit.onchain_dashboard.test_unified_dashboard import PLOTLY_STAND_IN, make_report_page
-    from coding.core.analytics.onchain_dashboard import build_onchain_dashboard_page
-    from coding.core.analytics.unified_dashboard import build_unified_dashboard_page
-
-    onchain = build_onchain_dashboard_page(real_result, PLOTLY_STAND_IN)
-    page = build_unified_dashboard_page(make_report_page(), onchain, "BTC",
-                                        strategy_panel=build_strategy_panel([stored(response=condor(), net=-581.0)], NOW, "BTC"))
-    data = json_module.loads(re.search(r'<script type="application/json" id="report-data">(.*?)</script>', page, re.DOTALL).group(1))
-    assert "strategy-27NOV26" in data["figures"]
-
-
-def test_a_naive_time_is_refused():
     with pytest.raises(ValueError):
         build_strategy_panel([], datetime(2026, 11, 21, 12, 0), "BTC")
 
 
-def test_the_page_has_a_strategy_tab_only_when_a_panel_is_given(real_result):
+def test_the_page_has_a_strategy_tab_only_when_a_panel_is_given_and_its_figures_reach_the_page_data(real_result):
+    import re
     from tests.unit.onchain_dashboard.test_unified_dashboard import PLOTLY_STAND_IN, make_report_page, tab_labels
     from coding.core.analytics.onchain_dashboard import build_onchain_dashboard_page
     from coding.core.analytics.unified_dashboard import build_unified_dashboard_page
@@ -128,23 +103,31 @@ def test_the_page_has_a_strategy_tab_only_when_a_panel_is_given(real_result):
     onchain = build_onchain_dashboard_page(real_result, PLOTLY_STAND_IN)
     without = build_unified_dashboard_page(make_report_page(), onchain, "BTC")
     with_panel = build_unified_dashboard_page(make_report_page(), onchain, "BTC", strategy_panel=build_strategy_panel([stored()], NOW, "BTC"))
-
     assert "Strategy" not in tab_labels(without)
     labels = tab_labels(with_panel)
-    assert labels[labels.index("Strategy") + 1] == "Expiries"          # between the market report tabs and the on-chain tabs
-    assert "Iron condor" in with_panel and "%%" not in with_panel
+    assert labels[labels.index("Strategy") + 1] == "Expiries" and "Chosen: C1" in with_panel and "%%" not in with_panel
+    data = json.loads(re.search(r'<script type="application/json" id="report-data">(.*?)</script>', with_panel, re.DOTALL).group(1))
+    assert "strategy-27NOV26" in data["figures"]
 
 
-def test_the_service_reads_the_rows_and_survives_a_database_error():
+def pick_row(**overrides):
+    pick = stored(expiration="25DEC27")
+    row = {name: getattr(pick, name) for name in ("expiration", "as_of", "spot", "model", "status", "candidates", "choice", "ranking", "response",
+                                                  "quantity", "max_loss_usd", "risk_per_trade_usd", "baseline_id", "cost_usd")}
+    return {**row, "as_of": NOW, "mode": "live", **overrides}
+
+
+def test_the_service_reads_the_live_picks_of_the_current_method_and_survives_a_database_error():
     repository = MagicMock()
-    repository.get_latest_strategy_suggestions.return_value = [
-        {"expiration": "25DEC27", "computed_at": NOW, "facts_as_of": NOW, "reference_price": 58000.0, "model": "m", "status": "ok",
-         "response": answer(), "net_premium_usd": -290.0}]
-    assert "Iron condor" in UnifiedDashboardService(lambda: repository)._strategy_panel("BTC").html
-    repository.get_latest_strategy_suggestions.side_effect = RuntimeError("down")
+    repository.get_strategy_picks.return_value = [pick_row()]
+    panel = UnifiedDashboardService(lambda: repository)._strategy_panel("BTC")
+    assert "Chosen: C1" in panel.html
+    kwargs = repository.get_strategy_picks.call_args.kwargs
+    assert kwargs["mode"] == "live" and kwargs["method_version"] == "pipeline-2"
+    repository.get_strategy_picks.side_effect = RuntimeError("down")
     assert "could not be read: RuntimeError: down" in UnifiedDashboardService(lambda: repository)._strategy_panel("BTC").html
     assert UnifiedDashboardService()._strategy_panel("BTC") is None
 
     def cannot_connect():
         raise ConnectionError("database down")
-    assert "ConnectionError: database down" in UnifiedDashboardService(cannot_connect)._strategy_panel("BTC").html     # a failing factory too
+    assert "ConnectionError: database down" in UnifiedDashboardService(cannot_connect)._strategy_panel("BTC").html
