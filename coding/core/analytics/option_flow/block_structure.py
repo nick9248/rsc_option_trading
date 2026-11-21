@@ -34,11 +34,12 @@ class BlockTradeLeg:
     amount: float                           # contracts (BTC)
     block_trade_leg_count: Optional[int]    # legs of the whole block as Deribit declares it; None when not stored
     combo_id: Optional[str]                 # None when not stored
+    index_price: float                      # USD index price at the trade (stored with every trade)
 
     @property
     def notional_usd(self) -> float:
-        """Contracts times the strike."""
-        return self.amount * self.strike
+        """Contracts times the index price at the trade."""
+        return self.amount * self.index_price
 
 
 @dataclass(frozen=True)

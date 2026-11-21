@@ -4,7 +4,7 @@ Collects the price levels of every source for one currency, so they can be compa
 1. MenthorQ replica: call resistance, put support and HVL of all monthly expiries (open-interest based, ``replicate_menthorq``).
 2. Dealer gamma levels of one expiry, open-interest based and flow-based (``DealerFlowLevelsService``).
 3. Option flow: the strikes with the most taker buying and selling volume of calls and puts in the last hours
-   (``OptionFlowService``; blocked and screen volume together, notional = contracts x strike).
+   (``OptionFlowService``; blocked and screen volume together, notional = contracts x index price).
 
 Every source that cannot be computed is skipped with a note (never drawn as a made-up level). Reads only.
 """

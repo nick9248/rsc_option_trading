@@ -55,15 +55,16 @@ def repo():
 
 
 def insert_trade(connection, trade_id, offset_ms, block_trade_id=None, leg_count=None, combo_id=None,
-                 currency="BTC", expiration="25DEC26", strike=100000, option_type="C", direction="buy", amount=2.5):
+                 currency="BTC", expiration="25DEC26", strike=100000, option_type="C", direction="buy", amount=2.5,
+                 index_price=71000.0):
     with psycopg2.connect(**connection) as raw:
         with raw.cursor() as cursor:
             cursor.execute(
                 "INSERT INTO historical_trades (trade_id, trade_timestamp, instrument_name, currency, expiration, strike,"
-                " option_type, price, amount, direction, block_trade_id, block_trade_leg_count, combo_id)"
-                " VALUES (%s, %s, %s, %s, %s, %s, %s, 0.1, %s, %s, %s, %s, %s)",
+                " option_type, price, amount, direction, block_trade_id, block_trade_leg_count, combo_id, index_price)"
+                " VALUES (%s, %s, %s, %s, %s, %s, %s, 0.1, %s, %s, %s, %s, %s, %s)",
                 (trade_id, BASE_MS + offset_ms, f"{currency}-{expiration}-{strike}-{option_type}", currency, expiration,
-                 strike, option_type, amount, direction, block_trade_id, leg_count, combo_id))
+                 strike, option_type, amount, direction, block_trade_id, leg_count, combo_id, index_price))
 
 
 def test_returns_only_block_legs_of_the_currency_in_the_window_with_every_field(repo):
@@ -82,6 +83,7 @@ def test_returns_only_block_legs_of_the_currency_in_the_window_with_every_field(
         "BLOCK-1", "25DEC26", 90000.0, "P", "sell", 2.5)
     assert late.trade_timestamp == datetime.fromtimestamp((BASE_MS + 2000) / 1000, tz=timezone.utc)
     assert late.trade_timestamp.tzinfo is not None
+    assert late.index_price == 71000.0 and late.notional_usd == 2.5 * 71000.0       # contracts x the index at the trade
 
 
 def test_window_start_is_inclusive_and_end_exclusive(repo):
@@ -90,3 +92,11 @@ def test_window_start_is_inclusive_and_end_exclusive(repo):
     insert_trade(connection, "t-end", 1000, "BLOCK-1", 2)
     legs = repository.get_block_trade_legs_between("BTC", BASE_MS, BASE_MS + 1000)
     assert [leg.trade_id for leg in legs] == ["t-start"]
+
+
+def test_a_leg_without_an_index_price_is_not_returned_because_it_cannot_be_valued(repo):
+    repository, connection = repo
+    insert_trade(connection, "t-priced", 1000, "BLOCK-1", 2)
+    insert_trade(connection, "t-unpriced", 1500, "BLOCK-1", 2, index_price=None)
+    legs = repository.get_block_trade_legs_between("BTC", BASE_MS, BASE_MS + 3000)
+    assert [leg.trade_id for leg in legs] == ["t-priced"]

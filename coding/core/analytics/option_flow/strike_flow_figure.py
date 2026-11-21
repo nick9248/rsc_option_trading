@@ -25,7 +25,7 @@ SERIES_COLORS: Dict[str, str] = {
 }
 # unit -> (axis title, divisor, number format of a value, axis tick suffix)
 UNITS: Dict[str, Tuple[str, float, str, str]] = {
-    "notional": ("Volume (notional = contracts x strike, USD)", 1e6, "$%{customdata:,.2f}M", "M"),
+    "notional": ("Volume (notional = contracts x index price, USD)", 1e6, "$%{customdata:,.2f}M", "M"),
     "contracts": ("Volume (contracts = coins of the underlying)", 1.0, "%{customdata:,.1f} contracts", ""),
     "trades": ("Number of trades", 1.0, "%{customdata:,.0f} trades", ""),
 }

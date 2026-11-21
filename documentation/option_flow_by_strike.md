@@ -16,8 +16,11 @@ expirations or one.
 - **Blocked** is `block_trade_id` set (a block trade, 25 BTC or more per leg in practice, median 25 BTC; in the last
   24 hours blocks were 74 % of the notional). Blocks average 3.8 legs and more than half the legs belong to a combo, so a
   single leg is not necessarily a directional view.
-- **Notional = contracts x strike.** This is Laevitas's definition (see the validation below). Contracts x index price,
-  the usual spot notional, would give about 4 % less at 77,000 and 35 % less at 108,000.
+- **Notional = contracts x the index price at the trade** (changed 2026-11-21; before that contracts x strike). It is the USD value
+  of the coins that changed hands, the same definition as `report.txt` and the Flow section of the on-chain analysis, so the same word
+  now means one number in the whole product. **Laevitas uses contracts x strike**, so their bars are longer for strikes above the
+  index (35 % at 108,000 with the index at 70,000) and shorter below; the validation below was made with their definition and its
+  figures are kept as a record, not as a target. Contracts, trades and buy/sell are unchanged and still match Laevitas.
 - One contract = 1 BTC. Chart: calls to the left, puts to the right, strikes that traded only. Each side has TWO thin bars
   per strike, Buy and Sell, and each bar is the blocked part next to the axis followed by the screen part, so a bar's
   length is blocked plus screen volume of that type and side. (Found from the picture: at 70,000 Laevitas's longest put bar
@@ -51,9 +54,7 @@ warns when the newest stored trade is older than 3 hours (sync first). Code: fig
 Data: the collector on the VPS already stores every Deribit option trade (table `historical_trades`, every 60 s, since
 2026-03-15), including direction and block flag; nothing new is captured. The PC reads its local mirror.
 
-Relation to the older Flow Charts window (`BuySellFlowAnalyzer`, untouched): that one uses notional = amount x index price,
-calls a trade "block" when its notional is at least $100k (not Deribit's flag), shows one filter at a time, and its
-"All Expirations" sums only expirations that are still active. The new tab does none of these; the two give different numbers.
+Relation to the older flow code (`BuySellFlowAnalyzer`, which feeds `report.txt`): since 2026-11-21 both use notional = amount x index price, and on the same trades and window their contracts per strike, option type and side are identical (checked on 6 expiries). The older code still calls a trade "block" when its notional is at least $100k instead of using Deribit's flag (3,873 "blocks" against 408 real ones in one 24 h window), so its block split differs.
 
 ## Data checks
 
@@ -64,7 +65,7 @@ calls a trade "block" when its notional is at least $100k (not Deribit's flag), 
 - The whole validation window (24 h to 2026-11-12 14:49:30 UTC) was checked against the history server: 6,367 trades on both
   sides, 0 missing, 0 extra, and all 263 strike/series cells equal to within $1.
 
-## Validation against Laevitas (2026-11-13)
+## Validation against Laevitas (2026-11-13; made when the notional was still contracts x strike)
 
 Tooltips read from a Laevitas video (BTC, Deribit, last 24H; stamp "14:19:51 12Nov2026"). With notional = contracts x
 strike and a 24-hour window:
@@ -87,3 +88,10 @@ sizes, one window).
 The flow-based dealer-positioning levels on top of these trades, reusing
 `DealerInventoryCalculator` (taker-flow, Glassnode method), and reconciling it with the older per-expiry
 `BuySellFlowAnalyzer` (which defines a block as notional of at least $100k instead of the real block flag).
+
+## Check of the index-based notional (2026-11-21)
+
+Real trades of 27NOV26 (local database, 24 hours to 23:42 UTC): the service equals a direct SQL sum of `amount * index_price` for the three
+cells compared, to the dollar: 60,000 calls sold 47.3 contracts, 2,820,420 USD; 56,000 puts sold 1,117.3 contracts, 66,785,317 USD; 62,000 puts
+bought 45.1 contracts, 2,778,184 USD. With the old definition (contracts x strike) the same cells were 2,838,000, 62,568,800 and 2,796,200 USD.
+A trade without a stored index price (none among 3.29 million stored trades) cannot be valued: it is skipped and counted, never given a notional.

@@ -263,28 +263,21 @@ def test_band_example_uses_the_population_standard_deviation():
     assert "pstdev" in inspect.getsource(taker_flow_figure)
 
 
-def test_index_versus_strike_notional_example():
-    assert help_module.index_notional_difference_percent(77_000, 70_000) == pytest.approx(7_000 / 77_000 * 100)
-    assert round(7_000 / 77_000 * 100, 1) == 9.1
-    assert round(38_000 / 108_000 * 100, 1) == 35.2
-    # contracts x index against contracts x strike, recomputed directly
-    assert round((1 - (10 * 70_000) / (10 * 77_000)) * 100) == 9
-    assert round((1 - (10 * 70_000) / (10 * 108_000)) * 100) == 35
-    assert help_module.index_notional_difference_percent(60_000, 70_000) < 0
-    term = next(term.meaning for term in topic_of("option-flow", "Buy and sell bars").terms if term.term == "Notional")
-    assert "9 % less" in term and "35 % less" in term and "17 % more" in term
-    assert "4 %" not in term
+def test_notional_is_contracts_times_the_index_and_the_help_says_how_laevitas_differs():
+    assert notional_usd(10, 70_000) == 700_000
+    term = next(term.meaning for term in topic_of("option-flow", "Buy and sell bars").terms if term.term == "Notional").replace("\n", " ")
+    assert "index price at the trade" in term and "Laevitas uses contracts times the strike" in term
+    assert not hasattr(help_module, "index_notional_difference_percent")
+    # what the old strike-based definition would have given for 10 contracts at a 77,000 strike, index 70,000: 10 % more
+    assert notional_usd(10, 77_000) / notional_usd(10, 70_000) == pytest.approx(1.1)
 
 
 def test_option_flow_examples():
-    assert notional_usd(10, 80_000) == 800_000
-    assert "800,000 USD" in case_of("option-flow", "Calls bought").example
-    assert "800,000 USD" in case_of("option-flow", "Calls sold").example
-    assert notional_usd(10, 65_000) == 650_000
-    assert "650,000 USD" in case_of("option-flow", "Puts bought").example
-    assert "650,000 USD" in case_of("option-flow", "Puts sold").example
+    assert notional_usd(10, 70_000) == 700_000
+    for name in ("Calls bought", "Calls sold", "Puts bought", "Puts sold"):
+        assert "700,000 USD" in case_of("option-flow", name).example       # 10 contracts x the index 70,000, whatever the strike
     mixed = case_of("option-flow", "Notional, contracts and trades").example
-    assert "800,000" in mixed and f"{notional_usd(10, 140_000):,.0f}" in mixed and "1,400,000" in mixed
+    assert "700,000 USD at any strike" in mixed and "1 trade" in mixed and "100 trades" in mixed
     assert "4M USD long" in case_of("option-flow", "A bar has a blocked").example
     far = case_of("option-flow", "Large flow far").example
     assert f"{percent_from(140_000, 70_000):,.0f} %" in far and "100 %" in far

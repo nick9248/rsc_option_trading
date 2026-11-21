@@ -70,12 +70,14 @@ def test_dealer_evidence_with_a_passed_check_and_unknown_share():
 
 
 def trade(option_type, direction, amount, strike=65_000.0, block=False):
-    return OptionTrade("27NOV26", strike, option_type, direction, amount, block)
+    # index price = strike, so strikes with the same contracts rank by notional as these tests expect (the definition is tested
+    # in tests/unit/option_flow/test_strike_flow.py)
+    return OptionTrade("27NOV26", strike, option_type, direction, amount, block, strike)
 
 
 def leg(block_id, option_type, direction, amount, declared=None, strike=65_000.0):
     return BlockTradeLeg(block_id, f"{block_id}-{option_type}{direction}{amount}", NOW - timedelta(hours=1), "27NOV26", strike,
-                         option_type, direction, amount, declared, None)
+                         option_type, direction, amount, declared, None, strike)
 
 
 def test_option_flow_splits_screen_single_leg_and_multi_leg_blocks():
@@ -121,7 +123,7 @@ def test_flow_time_is_clamped_to_the_window_end_and_no_trades_give_no_items():
 def test_flow_strikes_are_weak_levels_scaled_by_the_largest():
     flow = aggregate_by_strike([trade("P", "buy", 2, strike=60_000.0), trade("C", "sell", 1, strike=70_000.0)])
     items = by_id(extractors.flow_strike_evidence(flow, NOW, NOW, hours=24, per_side=2))
-    # notional = contracts x strike: 120,000 and 70,000 -> strengths 1 and 70/120
+    # notional = contracts x index price (index price = strike in this helper): 120,000 and 70,000 -> strengths 1 and 70/120
     assert items["option_flow.strike.P_buy.60000"].strength == pytest.approx(1.0)
     assert items["option_flow.strike.C_sell.70000"].strength == pytest.approx(70_000 / 120_000)
     assert all(item.kind == "price_level" and item.quality == pytest.approx(0.35) for item in items.values())

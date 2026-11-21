@@ -14,7 +14,7 @@ Writes `output/levels_overview/<currency>_levels_overview.png` and `.html` and l
 1. **MenthorQ replica**: call resistance, put support and HVL of all monthly expiries (open interest based, the levels the MenthorQ charts draw).
 2. **Dealer GEX, open interest**: call wall, put wall, gamma flip of one expiry (default: nearest monthly), dealers long calls and short puts.
 3. **Dealer GEX, flow-based**: the same levels from the taker flow (see `dealer_flow_levels.md`); the lane says "check failed" when its plausibility check fails.
-4. **Option flow**: the 2 strikes per type and side (calls/puts bought/sold, last 24 h) with the most notional (screen + blocked, contracts x strike).
+4. **Option flow**: the 2 strikes per type and side (calls/puts bought/sold, last 24 h) with the most notional (screen + blocked, contracts x index price).
 
 A source that cannot be computed is left out with a note, never drawn as a made-up level. Only prices within 15 % of the spot are drawn (the footer names the others).
 

@@ -169,7 +169,7 @@ def flow_strike_evidence(flow: StrikeFlow, newest_trade: Optional[datetime], win
     return [EvidenceItem(
         id=f"option_flow.strike.{option_type}_{direction}.{strike:g}", source=OPTION_FLOW_SOURCE, input_group=TRADES_GROUP,
         kind=PRICE_LEVEL,
-        statement=(f"{notional / 1e6:,.0f}M USD (contracts x strike) of {label} by takers at the {strike:,.0f} strike in "
+        statement=(f"{notional / 1e6:,.0f}M USD (contracts x index price) of {label} by takers at the {strike:,.0f} strike in "
                    f"{hours} h. It shows where interest is; it does not say whether positions were opened or closed, nor "
                    "that the price will react there."),
         as_of=as_of, strength=notional / largest, quality=config.FLOW_STRIKE_LEVEL_QUALITY, price=strike,
