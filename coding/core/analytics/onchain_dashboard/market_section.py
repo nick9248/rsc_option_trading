@@ -275,14 +275,18 @@ def basis_table(market: MarketWideResult) -> str:
 def block_structure_text(block) -> str:
     """
     What a block is: the exchange's combo name when the legs were sent as a registered combo, else the legs themselves ("single leg"
-    or "custom") -- a custom block has no combo name, which does not mean the structure is unknown.
+    or "custom") -- a custom block has no combo name, which does not mean the structure is unknown. The block lists one instrument per
+    trade row, so a leg filled in several prints is shown once; a block cut by the fetch window says "legs seen".
     """
     if block.combo_id:
         return block.combo_id
-    legs = [name.split("-", 1)[1] if "-" in name else name for name in block.instruments]       # 27NOV26-58000-C
+    names = list(dict.fromkeys(name for name in block.instruments if name))
+    legs = [name.split("-", 1)[1] if name.count("-") >= 3 else name for name in names]       # option: 27NOV26-58000-C; else the full name
     if not legs:
         return NOT_COMPUTED
     shown = ", ".join(legs[:4]) + (f" and {len(legs) - 4} more" if len(legs) > 4 else "")
+    if block.observed_leg_count != block.leg_count:
+        return f"legs seen: {shown}"
     return f"{'single leg' if block.leg_count == 1 else 'custom'}: {shown}"
 
 
