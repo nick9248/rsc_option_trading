@@ -121,3 +121,38 @@ class TestGetFilteredInstrumentsInjectsIndexPrice:
 
         assert len(result) == 1
         assert result[0].get("index_price") is None
+
+
+class TestLocalGreeks:
+    """Greeks of the snapshot are computed from mark IV, with no request per instrument (those were rate limited)."""
+
+    def _service(self, items):
+        api = MagicMock()
+        api.get_book_summary.return_value = items
+        api.get_index_price.return_value = 64000.0
+        return SnapshotService(api_service=api), api
+
+    def test_greeks_come_from_mark_iv_and_no_ticker_is_requested(self):
+        call = {**_instrument("BTC-28AUG27-64000-C"), "mark_iv": 55.0}
+        put = {**_instrument("BTC-28AUG27-64000-P"), "mark_iv": 55.0}
+        service, api = self._service([call, put])
+
+        result = service.get_filtered_instruments("BTC", ["28AUG27"], fetch_greeks=True)
+
+        api.get_ticker.assert_not_called()
+        by_name = {item["instrument_name"]: item for item in result}
+        assert 0.0 < by_name["BTC-28AUG27-64000-C"]["delta"] < 1.0
+        assert -1.0 < by_name["BTC-28AUG27-64000-P"]["delta"] < 0.0
+        assert by_name["BTC-28AUG27-64000-C"]["gamma"] > 0 and by_name["BTC-28AUG27-64000-C"]["vega"] > 0
+
+    def test_an_instrument_without_mark_iv_gets_none_not_zero(self):
+        item = {**_instrument("BTC-28AUG27-64000-C"), "mark_iv": None}
+        service, _ = self._service([item])
+
+        result = service.get_filtered_instruments("BTC", ["28AUG27"], fetch_greeks=True)
+
+        assert [result[0][name] for name in ("delta", "gamma", "vega", "theta", "rho")] == [None] * 5
+
+    def test_without_the_option_no_greek_keys_are_added(self):
+        service, _ = self._service([{**_instrument("BTC-28AUG27-64000-C"), "mark_iv": 55.0}])
+        assert "delta" not in service.get_filtered_instruments("BTC", ["28AUG27"])[0]

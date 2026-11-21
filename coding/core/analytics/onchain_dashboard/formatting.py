@@ -70,11 +70,6 @@ def ratio_text(value: Optional[float], infinite_text: str = NO_CALLS_TEXT) -> st
     return number_text(value, 2)
 
 
-def has_open_interest(ratio) -> bool:
-    """False for an expiry nobody has opened a position in (new listing): its put/call ratio is then undefined, not 0."""
-    return (ratio.total_call_oi + ratio.total_put_oi) > 0
-
-
 def count_text(value: Optional[float]) -> str:
     """A whole number; "not computed" when missing."""
     return number_text(value, 0)

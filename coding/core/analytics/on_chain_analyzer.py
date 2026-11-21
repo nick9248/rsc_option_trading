@@ -496,8 +496,10 @@ class OnChainMetricsCalculator:
 
         if total_call_oi > 0:
             ratio = total_put_oi / total_call_oi
+        elif total_put_oi > 0:
+            ratio = float("inf")
         else:
-            ratio = float("inf") if total_put_oi > 0 else 0
+            ratio = None                                  # no open interest at all: undefined, not 0
 
         # M4 (code_quality_review.md): shared interpreter, unifying this
         # method's vocabulary with VolatilitySurfaceCalculator's per-bucket
@@ -615,16 +617,22 @@ class OnChainMetricsCalculator:
         total_notional = total_itm_notional + total_otm_notional
 
         # Calculate percentages (based on notional value like Deribit)
-        call_itm_pct = (call_itm_notional / total_call_notional * 100) if total_call_notional > 0 else 0
-        call_otm_pct = (call_otm_notional / total_call_notional * 100) if total_call_notional > 0 else 0
-        put_itm_pct = (put_itm_notional / total_put_notional * 100) if total_put_notional > 0 else 0
-        put_otm_pct = (put_otm_notional / total_put_notional * 100) if total_put_notional > 0 else 0
+        # A leg with no open interest has no share to report: None, never 0 %.
+        def share(part: float, whole: float) -> Optional[float]:
+            return part / whole * 100 if whole > 0 else None
 
-        total_itm_pct = (total_itm_notional / total_notional * 100) if total_notional > 0 else 0
-        total_otm_pct = (total_otm_notional / total_notional * 100) if total_notional > 0 else 0
+        call_itm_pct = share(call_itm_notional, total_call_notional)
+        call_otm_pct = share(call_otm_notional, total_call_notional)
+        put_itm_pct = share(put_itm_notional, total_put_notional)
+        put_otm_pct = share(put_otm_notional, total_put_notional)
+
+        total_itm_pct = share(total_itm_notional, total_notional)
+        total_otm_pct = share(total_otm_notional, total_notional)
 
         # Determine OI skew interpretation
-        if total_otm_pct > OI_SKEW_OTM_HEAVY_THRESHOLD_PCT:
+        if total_otm_pct is None or total_itm_pct is None:
+            oi_skew = "N/A"
+        elif total_otm_pct > OI_SKEW_OTM_HEAVY_THRESHOLD_PCT:
             oi_skew = "Heavy OTM (Speculative)"
         elif total_itm_pct > OI_SKEW_ITM_HEAVY_THRESHOLD_PCT:
             oi_skew = "Heavy ITM (Hedging)"

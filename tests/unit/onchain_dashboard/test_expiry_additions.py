@@ -103,7 +103,7 @@ def test_the_bucket_of_an_expiry_reaches_its_captions_by_the_same_expiry_label(r
 
 
 def test_an_expiry_without_open_interest_shows_no_put_call_ratio_instead_of_zero(bundle_with_surface):
-    ratio = dataclasses.replace(bundle_with_surface.analysis.put_call_ratio, total_call_oi=0.0, total_put_oi=0.0, ratio=0.0)
+    ratio = dataclasses.replace(bundle_with_surface.analysis.put_call_ratio, total_call_oi=0.0, total_put_oi=0.0, ratio=None)
     empty = dataclasses.replace(bundle_with_surface, analysis=dataclasses.replace(bundle_with_surface.analysis, put_call_ratio=ratio))
 
     assert rows_of(empty)["Put/call ratio (open interest)"].startswith("not computed")

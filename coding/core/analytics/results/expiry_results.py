@@ -57,7 +57,7 @@ class PutCallRatioResult:
 
     total_call_oi: float
     total_put_oi: float
-    ratio: float  # float("inf") when call OI == 0 (unchanged legacy semantics)
+    ratio: Optional[float]  # float("inf") when call OI == 0; None when there is no open interest at all
     bias: str
     percentile_90d: Optional[float] = None
     history_n_90d: int = 0
@@ -83,8 +83,8 @@ class MoneynessLeg:
     itm_notional: float
     otm_notional: float
     total_notional: float
-    itm_pct: float
-    otm_pct: float
+    itm_pct: Optional[float]   # None when the leg has no open interest
+    otm_pct: Optional[float]
 
 
 @dataclass(frozen=True)
@@ -147,7 +147,7 @@ class ExpirationAnalysisResult:
             for row in self.strike_rows
         }
 
-        def _leg_dict(leg: MoneynessLeg) -> Dict[str, float]:
+        def _leg_dict(leg: MoneynessLeg) -> Dict[str, Optional[float]]:
             return {
                 "itm_oi": leg.itm_oi,
                 "otm_oi": leg.otm_oi,

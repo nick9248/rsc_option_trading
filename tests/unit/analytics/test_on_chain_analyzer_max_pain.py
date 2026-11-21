@@ -139,3 +139,15 @@ class TestNoOpenInterestAtAll:
 
         assert result["max_pain_strike"] is None
         assert result["pain_by_strike"] == {}
+
+
+class TestNoOpenInterestRatios:
+    def test_put_call_ratio_is_none_not_zero_without_open_interest(self):
+        calculator = OnChainMetricsCalculator(data=[], currency="BTC")
+        result = calculator.calculate_put_call_ratio({51_000.0: {"call_oi": 0.0, "put_oi": 0.0}})
+        assert result["ratio"] is None
+
+    def test_put_call_ratio_is_infinite_with_puts_only_and_normal_otherwise(self):
+        calculator = OnChainMetricsCalculator(data=[], currency="BTC")
+        assert calculator.calculate_put_call_ratio({1.0: {"call_oi": 0.0, "put_oi": 5.0}})["ratio"] == float("inf")
+        assert calculator.calculate_put_call_ratio({1.0: {"call_oi": 4.0, "put_oi": 2.0}})["ratio"] == 0.5
