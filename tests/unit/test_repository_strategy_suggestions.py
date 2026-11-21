@@ -65,3 +65,19 @@ def test_a_naive_time_is_refused(repo):
         repo.save_strategy_suggestion(row(computed_at=datetime(2026, 11, 21, 12, 0)))
     with pytest.raises(ValueError):
         repo.save_strategy_suggestion(row(facts_as_of=datetime(2026, 11, 21, 11, 30)))
+
+
+def test_the_newest_suggestion_of_each_expiry_is_read_with_its_times_and_types(repo):
+    from datetime import timedelta
+    older = row()["computed_at"]
+    repo.save_strategy_suggestion(row(computed_at=older, response="old"))
+    repo.save_strategy_suggestion(row(computed_at=older + timedelta(hours=1), response="new", net_premium_usd=None))
+    repo.save_strategy_suggestion(row(expiration="25DEC26", response="other"))
+    repo.save_strategy_suggestion(row(currency="ETH", response="eth"))
+
+    rows = {r["expiration"]: r for r in repo.get_latest_strategy_suggestions("BTC")}
+
+    assert set(rows) == {"27NOV26", "25DEC26"} and rows["27NOV26"]["response"] == "new"
+    assert rows["27NOV26"]["net_premium_usd"] is None and rows["25DEC26"]["net_premium_usd"] == -581.0
+    assert rows["27NOV26"]["computed_at"].tzinfo is not None and rows["27NOV26"]["facts_as_of"].tzinfo is not None
+    assert isinstance(rows["27NOV26"]["reference_price"], float)
