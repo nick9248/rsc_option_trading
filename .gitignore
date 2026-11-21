@@ -54,8 +54,6 @@ output/log/*
 output/data/*
 output/charts/*
 !output/log/.gitkeep
-!output/data/.gitkeep
-!output/charts/.gitkeep
 
 # Environment variables
 .env
@@ -92,7 +90,6 @@ report_*.txt
 # One folder for everything generated or collected locally: output/ (logs, data, charts, reports, reference material).
 # Only the hand-transcribed MenthorQ reference numbers are tracked.
 output/menthorq_replicate/*
-!output/menthorq_replicate/menthorq_reference_*.json
 output/option_flow/
 output/dealer_flow_levels/
 output/levels_overview/
