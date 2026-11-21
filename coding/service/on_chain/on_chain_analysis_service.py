@@ -71,7 +71,7 @@ from coding.core.analytics.thresholds import (
 from coding.core.analytics.volatility_surface_calculator import VolatilitySurfaceCalculator
 from coding.core.database.repository import DatabaseRepository
 from coding.service.deribit.deribit_api_service import DeribitApiService
-from coding.service.on_chain.chain_source import CHAIN_SOURCE_LIVE, ChainSourceService
+from coding.service.on_chain.chain_source import CHAIN_SOURCE_LIVE, ChainInput, ChainSourceService
 from coding.service.on_chain.analysis_builder import OnChainAnalysisBuilder
 from coding.service.on_chain.market_wide_orchestrator import MarketWideOrchestrator
 
@@ -173,6 +173,7 @@ class OnChainAnalysisService:
         self.api = api_service
         self.repository = repository
         self.chain_source = ChainSourceService(api_service, repository, chain_source_mode)
+        self.last_chain: Optional[ChainInput] = None            # the chain of the latest run: where it came from and when it was captured
 
     def fetch_and_analyze(
         self,
@@ -218,6 +219,7 @@ class OnChainAnalysisService:
 
         progress(f"Loading the option chain of {currency}...")
         chain = self.chain_source.load(currency)
+        self.last_chain = chain
         all_data = chain.instruments
         progress(f"Option chain: {chain.description}")
 
