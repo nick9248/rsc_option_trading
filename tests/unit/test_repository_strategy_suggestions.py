@@ -134,3 +134,12 @@ def test_a_pick_without_a_method_version_is_refused_by_the_database(repo):
     row_without_version = {key: value for key, value in pick_row().items() if key != "method_version"}
     with pytest.raises(KeyError):                                                      # the writer needs the key
         repo.save_strategy_pick(row_without_version)
+
+
+def test_a_timestamptz_read_in_another_session_time_zone_is_the_same_instant_in_utc():
+    from datetime import timedelta
+    berlin = timezone(timedelta(hours=1))
+    instant = datetime(2026, 11, 21, 17, 58, tzinfo=timezone.utc)
+    converted = DatabaseRepository._row_dict(("as_of", "naive"), (instant.astimezone(berlin), datetime(2026, 11, 21, 17, 58)))
+    assert converted["as_of"] == instant and converted["as_of"].utcoffset() == timedelta(0)     # the old code gave 18:58 UTC
+    assert converted["naive"] == instant                                                          # a naive column is stored as UTC

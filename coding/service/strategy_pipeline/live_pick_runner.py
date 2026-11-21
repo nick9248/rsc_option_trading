@@ -28,9 +28,10 @@ class LivePickRunner:
         """
         self.service = service
 
-    def run(self, currency: str, progress: Callable[[str], None], now_utc: Optional[datetime] = None) -> str:
+    def run(self, currency: str, progress: Callable[[str], None], should_stop: Callable[[], bool] = lambda: False,
+            now_utc: Optional[datetime] = None) -> str:
         """
-        Pick the expiries.
+        Pick the expiries. ``should_stop`` is asked before every paid call; when it says stop, the picks made so far are kept and the summary says so.
 
         Returns:
             One line for the run summary.
@@ -43,9 +44,17 @@ class LivePickRunner:
         seen: Set[str] = set()
         paid = 0
         cost = 0.0
+        stopped = False
         for target in LIVE_TARGET_DAYS:
-            result = self.service.pick(currency, now, MODE_LIVE, target_days_to_expiry=target, minimum_days_to_expiry=MINIMUM_DAYS_TO_EXPIRY,
-                                       now_utc=now)
+            if should_stop():
+                stopped = True
+                break
+            try:
+                result = self.service.pick(currency, now, MODE_LIVE, target_days_to_expiry=target, minimum_days_to_expiry=MINIMUM_DAYS_TO_EXPIRY,
+                                           now_utc=now)
+            except Exception:
+                progress(f"{currency}: interrupted; {paid} picks stored and paid ({cost:.3f} USD) before the error")        # the money already spent is not lost from view
+                raise
             if result is None:
                 progress(f"{currency}: no pick for the expiry about {target:g} days away (no fresh stored chain, or no usable volatility)")
                 continue
@@ -56,7 +65,7 @@ class LivePickRunner:
             cost += result.cost_usd
             progress(f"{currency} {result.expiration}: {result.status}" + (f", {result.choice}" if result.choice else "")
                      + (" (already picked within the hour)" if result.stored_before else f", cost {result.cost_usd:.3f} USD"))
-        return f"{len(seen)} expiries, {paid} new picks, {cost:.3f} USD"
+        return f"{len(seen)} expiries, {paid} new picks, {cost:.3f} USD" + (" (stopped by the user)" if stopped else "")
 
 
 def build_live_pick_runner() -> LivePickRunner:
