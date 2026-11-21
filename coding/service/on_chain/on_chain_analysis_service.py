@@ -71,6 +71,7 @@ from coding.core.analytics.thresholds import (
 from coding.core.analytics.volatility_surface_calculator import VolatilitySurfaceCalculator
 from coding.core.database.repository import DatabaseRepository
 from coding.service.deribit.deribit_api_service import DeribitApiService
+from coding.service.on_chain.chain_source import CHAIN_SOURCE_LIVE, ChainSourceService
 from coding.service.on_chain.analysis_builder import OnChainAnalysisBuilder
 from coding.service.on_chain.market_wide_orchestrator import MarketWideOrchestrator
 
@@ -157,7 +158,8 @@ class OnChainAnalysisService:
     def __init__(
         self,
         api_service: Optional[DeribitApiService] = None,
-        repository: Optional[DatabaseRepository] = None
+        repository: Optional[DatabaseRepository] = None,
+        chain_source_mode: str = CHAIN_SOURCE_LIVE,
     ):
         """
         Initialize service with API service and optional database repository.
@@ -165,9 +167,12 @@ class OnChainAnalysisService:
         Args:
             api_service: Deribit API service instance (optional for read-only DB operations).
             repository: Database repository for querying trade data (optional).
+            chain_source_mode: ``CHAIN_SOURCE_LIVE`` (default: the chain is fetched from Deribit) or ``CHAIN_SOURCE_STORED`` (the
+                newest stored snapshot, live when it is missing or too old; see ``ChainSourceService``).
         """
         self.api = api_service
         self.repository = repository
+        self.chain_source = ChainSourceService(api_service, repository, chain_source_mode)
 
     def fetch_and_analyze(
         self,
@@ -211,14 +216,10 @@ class OnChainAnalysisService:
                 progress_callback(message)
             logger.info(message)
 
-        progress(f"Fetching book summary for {currency} options...")
-
-        all_data = self.api.get_book_summary(
-            currency=currency,
-            kind="option"
-        )
-
-        progress(f"Received {len(all_data)} instruments")
+        progress(f"Loading the option chain of {currency}...")
+        chain = self.chain_source.load(currency)
+        all_data = chain.instruments
+        progress(f"Option chain: {chain.description}")
 
         # Create analyzer and parse data
         progress("Parsing instruments and grouping by expiration...")
@@ -233,7 +234,10 @@ class OnChainAnalysisService:
         # highest-volume pick.
         progress(f"Fetching index price for {currency}...")
         try:
-            index_price = self.api.get_index_price(currency=currency)
+            if chain.index_price is not None:
+                index_price = chain.index_price                  # same instant as the stored chain
+            else:
+                index_price = self.api.get_index_price(currency=currency)
         except Exception as e:
             # Wave H Task H-F, Fix 3: nearest_expiry_median_underlying_price
             # now returns None (not a fabricated 0.0) when no instrument has

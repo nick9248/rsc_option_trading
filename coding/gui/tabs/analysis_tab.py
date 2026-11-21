@@ -20,6 +20,7 @@ from coding.gui.components.log_viewer import GuiLogHandler, LogViewer
 from coding.gui.components.menthorq_widgets import panel_frame, secondary_button
 from coding.gui.theme.colors import Colors
 from coding.service.analysis.analysis_run_service import AnalysisRunResult, AnalysisRunService
+from coding.service.on_chain.chain_source import CHAIN_SOURCE_LIVE, CHAIN_SOURCE_STORED, DEFAULT_MAX_SNAPSHOT_AGE_MINUTES
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,14 @@ FAILURE_MARKER = "FAILED"
 
 DESCRIPTION = ("Start Analysis syncs the local database when the VPS has newer rows (once), runs the on-chain analysis, "
                "builds the on-chain dashboard and the market report, merges them into one dashboard, and logs every step "
-               "below. Show Dashboard opens the dashboard of the last run in your browser.")
+               "below. The option chain comes from the newest stored snapshot (live from Deribit when it is older than the limit) "
+               "or always live, as chosen. Show Dashboard opens the dashboard of the last run in your browser.")
+
+
+CHAIN_SOURCE_CHOICES = {
+    f"Stored snapshot (live if older than {DEFAULT_MAX_SNAPSHOT_AGE_MINUTES:.0f} min)": CHAIN_SOURCE_STORED,
+    "Live from Deribit": CHAIN_SOURCE_LIVE,
+}
 
 
 class AnalysisWorker(QThread):
@@ -41,7 +49,7 @@ class AnalysisWorker(QThread):
     succeeded = Signal(object)   # AnalysisRunResult
     failed = Signal(str)
 
-    def __init__(self, currencies: List[str], service_factory: Callable[[], AnalysisRunService] = AnalysisRunService,
+    def __init__(self, currencies: List[str], service_factory: Callable[[], AnalysisRunService],
                  parent: Optional[QWidget] = None):
         """
         Args:
@@ -71,11 +79,11 @@ class AnalysisTab(QWidget):
     """Currency, Start Analysis, Show Dashboard, Clear -- and the output log."""
 
     def __init__(self, parent: Optional[QWidget] = None,
-                 service_factory: Callable[[], AnalysisRunService] = AnalysisRunService):
+                 service_factory: Optional[Callable[[], AnalysisRunService]] = None):
         """
         Args:
             parent: Parent widget.
-            service_factory: Builds the service (a fake in tests).
+            service_factory: Builds the service (a fake in tests); by default the real service with the chosen chain source.
         """
         super().__init__(parent)
         self.service_factory = service_factory
@@ -89,6 +97,13 @@ class AnalysisTab(QWidget):
         application = QApplication.instance()
         if application is not None:
             application.aboutToQuit.connect(self._wait_for_worker)
+
+    def _service_factory_for_run(self) -> Callable[[], AnalysisRunService]:
+        """The factory of the service of this run: the injected one, else the real service with the chosen option chain source."""
+        if self.service_factory is not None:
+            return self.service_factory
+        mode = self.chain_source_combo.currentData()
+        return lambda: AnalysisRunService(chain_source_mode=mode)
 
     def _setup_ui(self) -> None:
         """Build the widgets."""
@@ -114,6 +129,13 @@ class AnalysisTab(QWidget):
         self.currency_combo = QComboBox()
         self.currency_combo.addItems(list(CURRENCY_CHOICES))
         controls.addWidget(self.currency_combo)
+        controls.addWidget(QLabel("Option chain"))
+        self.chain_source_combo = QComboBox()
+        for label, mode in CHAIN_SOURCE_CHOICES.items():
+            self.chain_source_combo.addItem(label, mode)
+        self.chain_source_combo.setToolTip("Stored: the newest snapshot of the local database (the run syncs it first); live from Deribit when it is "
+                                           "older than the limit. Live: always fetch from Deribit.")
+        controls.addWidget(self.chain_source_combo)
         self.start_button = QPushButton("Start Analysis")
         self.start_button.setCursor(Qt.CursorShape.PointingHandCursor)
         controls.addWidget(self.start_button)
@@ -161,7 +183,7 @@ class AnalysisTab(QWidget):
         self.dashboard_button.setEnabled(False)
         self._set_status(f"Running {choice}...", Colors.WARNING)
         self.log_viewer.log_info(f"Starting analysis for {choice}...")
-        self.worker = AnalysisWorker(list(CURRENCY_CHOICES[choice]), self.service_factory, parent=self)
+        self.worker = AnalysisWorker(list(CURRENCY_CHOICES[choice]), self._service_factory_for_run(), parent=self)
         self.worker.progress.connect(self._on_progress)
         self.worker.succeeded.connect(self._on_succeeded)
         self.worker.failed.connect(self._on_failed)
