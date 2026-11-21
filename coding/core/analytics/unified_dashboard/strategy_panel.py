@@ -2,16 +2,19 @@
 The Strategy tab of the unified dashboard: the stored suggestions of the model, one card per expiry (pure: no files, no network).
 
 A suggestion is research output of a language model, built from the facts of an analysis at ``facts_as_of``; it is checked and priced
-by code but not scored against what happened. The panel says so, shows how old its facts are and marks old or rejected ones.
+by code but not scored against what happened. The panel says so, shows how old its facts are and marks old or rejected ones. A priced
+suggestion also gets its PnL-at-expiry chart.
 """
 
 import html
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from coding.core.analytics.charts.payoff import PayoffLeg, payoff_figure, summarize_payoff
 from coding.core.analytics.market_wide_calculator import MarketWideCalculator
+from coding.core.analytics.report.figure_style import figure_json
 from coding.core.analytics.report.report_page import format_utc, paragraph_fragment, table_fragment
 
 STALE_AFTER_HOURS = 4.0
@@ -37,6 +40,14 @@ class StoredSuggestion:
     net_premium_usd: Optional[float]
 
 
+@dataclass(frozen=True)
+class StrategyPanel:
+    """The Strategy tab: its inner HTML and the figures (Plotly JSON by id) its cards draw."""
+
+    html: str
+    figures: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+
+
 def _e(text: object) -> str:
     return html.escape(str(text))
 
@@ -56,7 +67,24 @@ def _list(items: Sequence[str]) -> str:
     return "<ul>" + "".join(f"<li>{_e(item)}</li>" for item in items) + "</ul>" if items else ""
 
 
-def _card(suggestion: StoredSuggestion, now_utc: datetime) -> str:
+def _payoff(suggestion: StoredSuggestion, legs: Sequence[Dict[str, Any]]) -> Tuple[str, Dict[str, Dict[str, Any]]]:
+    """The chart and the numbers under it for a priced suggestion: (html, figures); nothing when there are no legs or no price."""
+    if not legs or suggestion.net_premium_usd is None:
+        return "", {}
+    payoff_legs = [PayoffLeg(leg["action"], leg["option_type"], float(leg["strike"]), float(leg["quantity"])) for leg in legs]
+    entry_cash = -suggestion.net_premium_usd                                  # stored: positive = paid
+    summary = summarize_payoff(payoff_legs, entry_cash)
+    figure_id = f"strategy-{suggestion.expiration}"
+    profit = "unlimited" if summary.max_profit_usd is None else f"{summary.max_profit_usd:,.0f} USD"
+    loss = "unlimited" if summary.max_loss_usd is None else f"{summary.max_loss_usd:,.0f} USD"
+    breakevens = ", ".join(f"{value:,.0f}" for value in summary.breakevens) or "none"
+    text = (f"At expiry, before fees: maximum profit {profit}, maximum loss {loss}, breakeven {breakevens}. "
+            "Entry at the quotes of that moment.")
+    chart_html = f'<div class="switcher-plot" data-stale="{_e(figure_id)}"></div>' + paragraph_fragment(text, "note-s")
+    return chart_html, {figure_id: figure_json(payoff_figure(payoff_legs, entry_cash, suggestion.reference_price))}
+
+
+def _card(suggestion: StoredSuggestion, now_utc: datetime) -> Tuple[str, Dict[str, Dict[str, Any]]]:
     facts_time = suggestion.facts_as_of or suggestion.computed_at
     age_hours = max((now_utc - facts_time).total_seconds() / 3600.0, 0.0)
     warnings: List[str] = []
@@ -69,6 +97,7 @@ def _card(suggestion: StoredSuggestion, now_utc: datetime) -> str:
               f'{suggestion.reference_price:,.0f}</span></div></div>')
 
     body = ""
+    figures: Dict[str, Dict[str, Any]] = {}
     if suggestion.status in ("ok", "legs_rejected"):
         try:
             parsed = ""
@@ -77,15 +106,17 @@ def _card(suggestion: StoredSuggestion, now_utc: datetime) -> str:
             legs = data["legs"]
             title = view if data["strategy_name"].strip().lower() == view.lower() else f"{view}: {data['strategy_name']}"
             parsed += f"<h4>{_e(title)}</h4>" + paragraph_fragment(data["summary"])
+            chart_html, chart_figures = _payoff(suggestion, legs) if suggestion.status == "ok" else ("", {})
             if legs:
                 parsed += table_fragment(["Action", "Type", "Strike", "Quantity (coins)"],
                                          [[leg["action"], leg["option_type"], f"{leg['strike']:,.0f}", f"{leg['quantity']:g}"] for leg in legs],
                                          numeric_columns=(2, 3))
                 parsed += paragraph_fragment("Net at the quotes of that moment (buys at the ask, sells at the bid): "
-                                             + _premium_text(suggestion.net_premium_usd), "note-s")
+                                             + _premium_text(suggestion.net_premium_usd), "note-s") + chart_html
             parsed += ("<h4>Why</h4>" + _list(data["reasons"]) + "<h4>Risks</h4>" + _list(data["risks"])
                        + "<h4>What would make it wrong</h4>" + paragraph_fragment(data["invalidation"]))
             body += parsed                                  # only a fully read answer is shown
+            figures = chart_figures
         except (ValueError, KeyError, TypeError):
             warnings.append("The stored answer could not be read.")
             body += paragraph_fragment(suggestion.response[:RAW_TEXT_LIMIT], "note-s")
@@ -99,13 +130,13 @@ def _card(suggestion: StoredSuggestion, now_utc: datetime) -> str:
         body += paragraph_fragment(suggestion.response[:RAW_TEXT_LIMIT], "note-s")
 
     warning_html = "".join(f'<p class="note-s" style="color:var(--warn)"><strong>{_e(text)}</strong></p>' for text in warnings)
-    return f'<article class="card">{header}{warning_html}{body}<p class="note-s">Model {_e(suggestion.model)}.</p></article>'
+    return (f'<article class="card">{header}{warning_html}{body}<p class="note-s">Model {_e(suggestion.model)}.</p></article>', figures)
 
 
 def build_strategy_panel(suggestions: Sequence[StoredSuggestion], now_utc: datetime, currency: str,
-                         read_error: Optional[str] = None) -> str:
+                         read_error: Optional[str] = None) -> StrategyPanel:
     """
-    The inner HTML of the Strategy tab.
+    The Strategy tab: inner HTML and figures.
 
     Args:
         suggestions: The newest stored suggestion of each expiry (any order); expired expiries are left out.
@@ -126,7 +157,7 @@ def build_strategy_panel(suggestions: Sequence[StoredSuggestion], now_utc: datet
                                   "A new suggestion is made on request (scripts/suggest_strategies.py, about 0.06 USD per expiry); it is never "
                                   "made automatically.", "note-s"))
     if read_error:
-        return intro + paragraph_fragment(f"The stored suggestions could not be read: {read_error}", "note-s")
+        return StrategyPanel(intro + paragraph_fragment(f"The stored suggestions could not be read: {read_error}", "note-s"))
     open_suggestions: Dict[str, StoredSuggestion] = {}
     days_left: Dict[str, float] = {}
     for suggestion in suggestions:
@@ -136,6 +167,10 @@ def build_strategy_panel(suggestions: Sequence[StoredSuggestion], now_utc: datet
             open_suggestions[suggestion.expiration] = suggestion
             days_left[suggestion.expiration] = days
     if not open_suggestions:
-        return intro + paragraph_fragment("No stored suggestion for an expiry that is still open.", "note-s")
-    ordered = sorted(open_suggestions.values(), key=lambda s: days_left[s.expiration])
-    return intro + '<div class="cards">' + "".join(_card(suggestion, now) for suggestion in ordered) + "</div>"
+        return StrategyPanel(intro + paragraph_fragment("No stored suggestion for an expiry that is still open.", "note-s"))
+    ordered = sorted(open_suggestions.values(), key=lambda stored: days_left[stored.expiration])
+    cards = [_card(suggestion, now) for suggestion in ordered]
+    figures: Dict[str, Dict[str, Any]] = {}
+    for _, card_figures in cards:
+        figures.update(card_figures)
+    return StrategyPanel(intro + '<div class="cards">' + "".join(card for card, _ in cards) + "</div>", figures)
