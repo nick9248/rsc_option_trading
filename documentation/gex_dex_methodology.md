@@ -25,7 +25,7 @@ Net GEX = (Call Gamma - Put Gamma) × Spot Price² × 0.01
   - `Call Gamma = Σ(gamma_i × OI_i)` for all calls at the strike (all expiries passed to the calculator)
 - **Put Gamma**: Gamma weighted by open interest for all put options at a strike
   - `Put Gamma = Σ(gamma_i × OI_i)` for all puts at the strike
-- **Gamma**: Black-Scholes gamma (r = q = 0) from the mark IV, evaluated at the index price (per USD of underlying move, per 1 coin of contract). In the live on-chain analysis it is computed in `OnChainAnalysisService._compute_bs_gamma`, not read from the Deribit ticker. The MenthorQ replica can also evaluate gamma at each expiry's forward (`gamma_underlying="forward"`), but its default and the `GexDexCalculator` anchor is the index price.
+- **Gamma**: Black-Scholes gamma (r = q = 0) from the mark IV, evaluated at the index price (per USD of underlying move, per 1 coin of contract). In the live on-chain analysis it is computed in `OnChainAnalysisService._compute_bs_gamma`; no Greek is read from the Deribit ticker. The MenthorQ replica can also evaluate gamma at each expiry's forward (`gamma_underlying="forward"`), but its default and the `GexDexCalculator` anchor is the index price.
 - **OI**: Open interest in coins (contract multiplier 1 coin).
 - **Spot Price**: The index price (`analyzer.index_price`, from `get_index_price`) in the live analysis; the replica uses the stored index price. It is one number for all expiries. If the index price cannot be fetched, the live analysis falls back to the median underlying price of the nearest expiry's instruments (`OnChainAnalysisService`, `nearest_expiry_median_underlying_price`), and stops with an error when that is missing too.
 - **Spot²**: Converts the coin-denominated gamma exposure into USD.
@@ -66,7 +66,7 @@ Net DEX = Call Delta + Put Delta
 - **Put Delta**: Delta weighted by open interest for all puts at a strike (negative)
   - `Put Delta = Σ(delta_i × OI_i)` for all puts (delta < 0 for puts)
 
-Delta comes from the Deribit ticker `greeks` in the live analysis (gamma is the exception, see above). `net_dex` is in coins (not USD) and is not multiplied by spot. It is the sum of delta × open interest over all calls and puts, i.e. what all holders of the open contracts hold together, with no assumption about who the holders are. It makes no statement about whether the market is bullish or bearish: open interest has a buyer and a seller for every contract, so the sign only says that call delta outweighs put delta (positive) or the reverse (negative), weighted by open interest. The dealer-side figure is the negative of it (`dealer_delta_exposure = -net_dex`), under the assumption that dealers are short whatever holders hold.
+Delta is Black-Scholes (r = q = 0) from the mark IV on the expiry's forward price in the live analysis, the same way the VPS collector derives it (before 2026-11-21 it was read from the Deribit ticker, which was rate-limited for most instruments; against 24 live tickers the local delta differed by at most 0.13%, with larger relative differences only for deep out-of-the-money options whose delta is near 0). `net_dex` is in coins (not USD) and is not multiplied by spot. It is the sum of delta × open interest over all calls and puts, i.e. what all holders of the open contracts hold together, with no assumption about who the holders are. It makes no statement about whether the market is bullish or bearish: open interest has a buyer and a seller for every contract, so the sign only says that call delta outweighs put delta (positive) or the reverse (negative), weighted by open interest. The dealer-side figure is the negative of it (`dealer_delta_exposure = -net_dex`), under the assumption that dealers are short whatever holders hold.
 
 The MenthorQ replica has its own, separate DEX (`compute_net_delta_exposure`): `spot × Σ(delta × OI)` in USD, with delta evaluated at each expiry's forward and a leg without delta or open interest left out (counted in `instruments_missing_delta`). Do not compare it with `GexDexCalculator.net_dex` without converting units.
 
@@ -122,8 +122,8 @@ The GEX formula (gamma × spot² × 0.01, with a call-minus-put sign split) is w
 ### Data Aggregation
 
 1. **Fetch Data:**
-   - Book summary: OI, volume, mark_price, underlying_price
-   - Ticker endpoint per instrument: delta, theta, vega, mark_iv. Gamma is computed (Black-Scholes at the index price from mark_iv), not read from the ticker. An instrument whose ticker call fails is dropped and counted.
+   - Book summary (one call): OI, volume, mark_price, mark_iv, the expiry's forward (underlying_price) and the bid/ask quotes.
+   - Greeks are computed locally from mark_iv: delta, theta and vega on the expiry's forward, gamma on the index price. No call per instrument (about 1,000 ticker calls per run were answered with HTTP 429 for 83% of them in the run of 2026-11-21). An instrument whose Greeks cannot be computed keeps None Greeks; one that raises while it is processed is dropped and counted.
    - An instrument that arrives with a missing gamma or delta keeps its open interest, contributes 0 to the sums, and is counted in `instruments_missing_gamma` / `oi_missing_gamma` on the result, so a gap is disclosed rather than read as zero exposure.
 
 2. **Aggregate by Strike:**
@@ -217,7 +217,7 @@ If this is the maximum positive GEX, $72,000 is identified as **Call Resistance*
 **Data Collected:**
 - Spot Price: $68,725
 - Total Instruments: 124 options (calls + puts)
-- Greeks fetched via Deribit ticker API
+- Greeks fetched via Deribit ticker API (at that time; the live analysis now computes them locally)
 
 **Our Results (Updated Formula):**
 - Total Net GEX: -15,860,072.93

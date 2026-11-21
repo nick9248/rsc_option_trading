@@ -24,6 +24,8 @@ from unittest.mock import MagicMock, patch
 from coding.core.analytics.results.fixed_strike_vol_results import FixedStrikeVolResult
 from coding.service.on_chain.on_chain_analysis_service import OnChainAnalysisService
 
+JULY_2026_EPOCH = datetime(2026, 7, 25, tzinfo=timezone.utc).timestamp()      # before the expiries the tests below use
+
 # Settles 2026-08-01 08:00 UTC -- DTE > 0 relative to NOW_UTC below, so the
 # settled-expiry skip gate never fires in the pre-existing tests (that gate
 # gets its own dedicated test class further down).
@@ -362,7 +364,8 @@ def _make_analyzer(expirations, forward_price_by_expiration):
     analyzer = MagicMock()
     analyzer.get_expirations.return_value = expirations
     analyzer.parsed_data = {
-        exp: [{"instrument_name": f"BTC-{exp}-65000-C"}] for exp in expirations
+        exp: [{"instrument_name": f"BTC-{exp}-65000-C", "strike": 65000.0, "option_type": "C", "mark_iv": 60.0,
+               "underlying_price": 65010.0, "bid_price": 0.01, "ask_price": 0.02}] for exp in expirations
     }
     analyzer.index_price = 65000.0
     analyzer.forward_price_by_expiration = forward_price_by_expiration
@@ -378,11 +381,6 @@ def _run_loop_with_mocked_fsv(service, analyzer):
     inspect .call_args_list."""
     import coding.service.on_chain.on_chain_analysis_service as svc_module
 
-    service.api.get_ticker.return_value = {
-        "greeks": {"delta": 0.5, "gamma": 0.001, "theta": -10.0, "vega": 20.0},
-        "mark_iv": 60.0, "underlying_price": 65010.0,
-        "best_bid_price": 0.01, "best_ask_price": 0.02,
-    }
 
     with patch.object(svc_module, "GexDexCalculator") as mock_gex_cls, \
          patch.object(service, "_calculate_inferred_dealer_positioning", return_value=None), \
@@ -401,7 +399,8 @@ class TestCallerForwardPriceIsForwardFlag:
     reflects what was ACTUALLY used, not just whether a forward price
     happens to exist somewhere."""
 
-    def test_forward_price_available_passes_true(self):
+    def test_forward_price_available_passes_true(self, frozen_clock):
+        frozen_clock(JULY_2026_EPOCH)       # the test expiry 31JUL26 must not be settled yet
         analyzer = _make_analyzer([EXPIRATION], {EXPIRATION: 65010.0})
         service = _make_service(repository=MagicMock())
 
@@ -412,7 +411,8 @@ class TestCallerForwardPriceIsForwardFlag:
         assert spot_today == 65010.0
         assert is_forward is True
 
-    def test_forward_price_missing_falls_back_and_passes_false(self):
+    def test_forward_price_missing_falls_back_and_passes_false(self, frozen_clock):
+        frozen_clock(JULY_2026_EPOCH)
         analyzer = _make_analyzer([EXPIRATION], {})  # no forward price for this expiration
         service = _make_service(repository=MagicMock())
 
@@ -433,7 +433,8 @@ class TestCallerResolutionIsolation:
     every subsequent expiration's GEX/DEX/exposure-profile processing
     too)."""
 
-    def test_exception_resolving_forward_price_does_not_abort_remaining_expirations(self, caplog):
+    def test_exception_resolving_forward_price_does_not_abort_remaining_expirations(self, caplog, frozen_clock):
+        frozen_clock(JULY_2026_EPOCH)
         expirations = ["01AUG26", "02AUG26"]
         analyzer = _make_analyzer(expirations, {"01AUG26": 65010.0, "02AUG26": 65020.0})
 

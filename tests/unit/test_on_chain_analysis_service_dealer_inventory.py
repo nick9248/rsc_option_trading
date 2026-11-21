@@ -470,7 +470,8 @@ class TestSpotPriceValidationGate:
 
 
 class TestServiceWiring:
-    def test_fetch_greeks_and_store_gex_dex_wires_dealer_inventory_into_builder(self):
+    def test_fetch_greeks_and_store_gex_dex_wires_dealer_inventory_into_builder(self, frozen_clock):
+        frozen_clock(datetime(2026, 7, 25, tzinfo=timezone.utc).timestamp())       # 31JUL26 must not be settled yet
         from coding.service.on_chain.analysis_builder import OnChainAnalysisBuilder
 
         flow_rows = [
@@ -488,7 +489,8 @@ class TestServiceWiring:
         analyzer.get_expirations.return_value = ["31JUL26"]
         analyzer.parsed_data = {
             "31JUL26": [
-                {"instrument_name": "BTC-31JUL26-70000-C", "strike": 70000.0, "option_type": "C"},
+                {"instrument_name": "BTC-31JUL26-70000-C", "strike": 70000.0, "option_type": "C", "mark_iv": 60.0,
+                 "underlying_price": 70000.0, "bid_price": 0.01, "ask_price": 0.02},
             ]
         }
         analyzer.enriched_instruments = {}

@@ -165,13 +165,17 @@ class BlackScholesCalculator:
         if time_to_expiry <= 0:
             return None
 
-        return self.calculate_greeks(
+        greeks = self.calculate_greeks(
             spot_price=float(spot_price),
             strike_price=float(strike),
             time_to_expiry=time_to_expiry,
             implied_volatility=float(mark_iv) / 100.0,
             option_type=parsed["option_type"],
         )
+        # calculate_greeks answers an internal error with an all-zero dict; that is "could not compute", not four real zeros.
+        if not any(greeks[name] for name in ("delta", "gamma", "theta", "vega")):
+            return None
+        return greeks
 
     def _calculate_d1(
         self,
