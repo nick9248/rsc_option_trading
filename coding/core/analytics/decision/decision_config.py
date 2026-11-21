@@ -58,7 +58,7 @@ A band is a "meaningful" level only when its weight (sum over its distinct input
 reaches this. 0.3 = one item of about medium quality; a lone low-quality item (a failed check, a volume strike) stays below.
 """
 
-# ---------------------------------------------------------------- freshness (applied by the engine to every item)
+# ---------------------------------------------------------------- freshness (applied by the report builder to every item)
 
 DEFAULT_FRESHNESS_LIMIT_HOURS = 6.0
 """Age after which an item of an unknown input group counts as stale; 6 h is twice the slowest hourly feed's normal lag."""

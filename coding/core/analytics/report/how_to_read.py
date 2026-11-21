@@ -1483,7 +1483,7 @@ _DECISION_HELP = SectionHelp(
                 "of its data, and one sentence of what it says and does not say."),
             terms=(
                 HelpTerm("Evidence item", "One piece of evidence produced from one of the other tabs' services. Every source "
-                                          "is converted into the same form, so the engine treats them alike."),
+                                          "is converted into the same form, so the report treats them alike."),
                 HelpTerm("Selection", "Not every signal of the other tabs becomes an item. Dealer levels: the nearest monthly "
                                       "expiry and the one with the most open interest (walls, gamma flip and the sign of the "
                                       "total GEX of each view). MenthorQ replica: call resistance, put support and HVL. Option "
@@ -1498,7 +1498,7 @@ _DECISION_HELP = SectionHelp(
                                                "It comes from the sign of the total dealer GEX, a weak, assumption-based hint."),
                 HelpTerm("Input group", "The underlying data an item is derived from: deribit_open_interest, deribit_trades or "
                                         "binance_perpetual_candles. Items of one group are derived from the same data and are "
-                                        "not independent, so the engine counts each group once."),
+                                        "not independent, so the price map counts each group once."),
                 HelpTerm("Strength", "0 to 1: how strongly the item says what it says. A dealer level is scaled by the share "
                                      "of all open interest its expiry holds (full strength at 25 % or more)."),
                 HelpTerm("Quality", "0 to 1: how much the item can be trusted. The quality reasons name what lowered it "
@@ -1516,7 +1516,7 @@ _DECISION_HELP = SectionHelp(
             cases=(
                 HelpCase(
                     "Two items from one input group",
-                    "They count once: the engine takes the quality-weighted mean of their values and multiplies it by the "
+                    "They count once: the price map takes the quality-weighted mean of their values and multiplies it by the "
                     "quality-weighted mean of their quality. A second item of the same data does not add on top. It moves the "
                     "group's mean (quality-weighted) up or down, and supporting and opposing items of one group cancel inside it.",
                     f"Two items, each with quality {_two(DECISION_ITEM_QUALITY)} and value {_two(DECISION_ITEM_VALUE)}: "
@@ -1537,7 +1537,7 @@ _DECISION_HELP = SectionHelp(
                     f"{_two(DECISION_ITEM_QUALITY)} x {DECISION_VERY_STALE_QUALITY_FACTOR:g} = {_two(_DECISION_VERY_STALE_QUALITY)}."),
                 HelpCase(
                     "A source is not computed",
-                    "The engine runs without it and lists it under 'Sources not computed' with the reason (no stored data, "
+                    "The report runs without it and lists it under 'Sources not computed' with the reason (no stored data, "
                     "too few points for a band). Its items are simply absent; nothing is filled in for them.",
                     f"The taker ratio needs at least {DECISION_TAKER_MINIMUM_POINTS} hourly points in 30 days; with "
                     f"{DECISION_TAKER_POINTS_FOUND} it is listed as not computed."),

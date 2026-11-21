@@ -108,8 +108,9 @@ report says so; no level is invented.
 
 ## Recording (later)
 
-`decision_snapshots` keeps every saved report with its `method_version` (now `evidence-report-1`; older rows, if any, hold scenario
-scores). A later evaluator (not built) can compare the recorded levels with the price path after `computed_at`. Point in
+`decision_snapshots` keeps every saved report with its `method_version` (now `evidence-report-1`). Rows saved before 2026-11-21 (none exist
+at the time of writing) use the old schema with scenario scores; `DecisionReport.from_dict` ignores those fields, so read such rows as raw
+dicts if the scores are ever needed. A later evaluator (not built) can compare the recorded levels with the price path after `computed_at`. Point in
 time: every item must be at or before the report time (the engine refuses lookahead). Not yet bounded for replays of
 past instants: `DealerFlowLevelsService` sums trades up to the newest stored one and the newest trade time is unbounded
 (clamped to the window end); for live runs both are point in time.

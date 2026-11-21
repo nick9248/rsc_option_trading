@@ -19,7 +19,8 @@ from coding.core.analytics.report.section_fragments import NOT_COMPUTED
 
 DECISIONS_NOTE = "Reference levels and conditions, not orders, not targets, not a ranking of scenarios."
 GROUP_NOTE = ("Items of one input group are derived from the same data, so the price map counts a group once, however many "
-              "items it holds.")
+              "items it holds. Only price levels shape the map; directional and regime items are shown for reference and feed "
+              "nothing.")
 
 
 def _cell(text: str, css_class: str = "") -> str:
@@ -208,7 +209,7 @@ def caveats_fragment(report: DecisionReport) -> str:
 # ---------------------------------------------------------------- the whole tab
 
 def decision_body_fragment(report: DecisionReport) -> str:
-    """The parts of the Decision tab in reading order, each under its own heading (the first is the header line)."""
+    """The parts of the Evidence tab in reading order, each under its own heading (the first is the header line)."""
     return (decision_header_fragment(report)
             + "<h3>Price map</h3>" + price_map_fragment(report)
             + "<h3>Reference lines</h3>" + decisions_fragment(report)

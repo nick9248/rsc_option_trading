@@ -6,7 +6,7 @@ engine only reads these fields, so a new data source is a new extractor and noth
 
 Independence: ``input_group`` names the underlying data an item is derived from (for example "deribit_open_interest").
 Items that share an input group are NOT independent (MenthorQ replica levels and open-interest dealer walls are both
-computed from the same open interest), so the engine counts each group once.
+computed from the same open interest), so the price map counts each group once.
 """
 
 import json
@@ -36,13 +36,13 @@ class EvidenceItem:
     One piece of evidence.
 
     Attributes:
-        id: Unique, stable identifier (the engine sorts by it, so the same inputs give the same output).
+        id: Unique, stable identifier (the report builder sorts by it, so the same inputs give the same output).
         source: Human name of where it comes from, e.g. "MenthorQ replica (monthly expiries)".
         input_group: The underlying data it is derived from; items of one group are not independent.
         kind: One of ``KINDS``. price_level: a price where sources put a level (needs ``price``); directional: a lean up
             or down (needs ``direction``); range_regime: moves damped or amplified (needs ``regime``).
         statement: One plain sentence of what it says AND what it does not say.
-        as_of: When the underlying data was observed (UTC-aware); the engine judges freshness from it.
+        as_of: When the underlying data was observed (UTC-aware); the report builder judges freshness from it.
         strength: 0..1, how strongly it says what it says.
         quality: 0..1, how much it can be trusted; ``quality_reasons`` lists what lowered it.
         direction: bullish / bearish / neutral where meaningful (directional items), else None.
@@ -69,7 +69,7 @@ class EvidenceItem:
     details: Dict[str, Any] = field(default_factory=dict, compare=True, hash=False)
 
     def __post_init__(self) -> None:
-        """Refuse an item the engine could not use honestly (bad ranges, naive times, missing price or direction)."""
+        """Refuse an item the report could not use honestly (bad ranges, naive times, missing price or direction)."""
         if not self.id or not self.input_group:
             raise ValueError("an evidence item needs an id and an input group")
         if self.kind not in KINDS:

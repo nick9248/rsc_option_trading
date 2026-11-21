@@ -82,7 +82,7 @@ TOOLTIPS: Dict[str, Tooltip] = {
         "Short gamma = hedging tends to amplify moves; long gamma = it tends to dampen them. It is an assumption, not an observation.",
         "Short gamma with the price near a big put strike can mean faster moves than usual."),
     "chip_upside": Tooltip(
-        "The decision engine found no meaningful level above the price within 15% of it (its map range).",
+        "The evidence report found no meaningful level above the price within 15% of it (its map range).",
         "Treat the upside as unmapped, not as open sky: it only means the data shows no level there, so a move up has no mapped stopping point.",
         "Price 58,000 and no level up to 66,700 (15% above): an upward move has nothing mapped to stall at."),
     # ---- cards
