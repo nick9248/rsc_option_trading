@@ -19,7 +19,7 @@ from coding.core.analytics.candidates.distribution import LognormalDistribution
 from coding.core.analytics.candidates.generator import FAMILIES, CandidateLimits, generate_candidates
 from coding.core.analytics.candidates.metrics import compute_metrics
 from coding.core.analytics.candidates.scoring import IMPLIED, REALISED, RULES, CandidateOutcome, RuleReport, evaluate_rule
-from coding.core.analytics.realised_volatility import MINIMUM_RETURNS, realised_volatility
+from coding.core.analytics.realised_volatility import MINIMUM_RETURNS, last_completed_candle_start, realised_volatility
 from coding.core.analytics.risk.budget import RiskBudget, size_position
 from coding.core.database.repository import DatabaseRepository
 from coding.service.backtest.backtest_service import BacktestService
@@ -67,11 +67,10 @@ class ScoringLabService:
         self.repository = repository
         self.backtest = BacktestService(repository)
 
-    def realised_volatility(self, currency: str, entry_day: date) -> Optional[float]:
-        """Annualised volatility of the last 30 daily log returns of the perpetual that had finished before ``entry_day`` (None if too few)."""
-        # naive UTC on purpose: the repository method takes (and documents) naive UTC datetimes
-        start = datetime.combine(entry_day - timedelta(days=REALISED_VOL_DAYS + 15), time(0))
-        end = datetime.combine(entry_day, time(0)) - timedelta(seconds=1)              # candles dated before the entry day are closed
+    def realised_volatility(self, currency: str, entry_day: date, entry_hour_utc: int = 9) -> Optional[float]:
+        """Annualised volatility of the last 30 daily log returns of the perpetual from the candles complete at the entry time (None if too few)."""
+        end = last_completed_candle_start(datetime.combine(entry_day, time(entry_hour_utc), tzinfo=timezone.utc))      # naive UTC for the repository
+        start = end - timedelta(days=REALISED_VOL_DAYS + 15)
         return realised_volatility(self.repository.get_ohlcv_by_date_range(currency, start, end), REALISED_VOL_DAYS, MINIMUM_RETURNS)
 
     def run(self, currency: str, first_day: date, last_day: date, budget: RiskBudget, entry_hour_utc: int = 9,
@@ -106,7 +105,7 @@ class ScoringLabService:
             if entry is None:
                 skipped[reason] += 1
                 continue
-            realised_vol = self.realised_volatility(currency, entry_day)
+            realised_vol = self.realised_volatility(currency, entry_day, entry_hour_utc)
             if realised_vol is None or entry.atm_implied_volatility is None:
                 skipped["no volatility"] += 1
                 continue

@@ -2576,7 +2576,12 @@ class DatabaseRepository:
         volume: float
     ) -> None:
         """
-        Save one OHLCV daily candle to ohlcv_history.
+        Save one OHLCV daily candle to ohlcv_history; a candle already stored for the same instrument and start is OVERWRITTEN.
+
+        The collector fetches the newest candles every 30 minutes, so the candle of the running day is stored while it forms and must be
+        replaced as it grows. (With the former ``DO NOTHING`` the first, nearly empty version of every day stayed: close, high, low and
+        volume were frozen at the first minutes of the day from 2026-03-15 to 2026-11-21.) A candle is complete only when its day is over:
+        readers must use ``last_completed_candle_start``.
 
         Args:
             currency: Currency symbol (e.g., "BTC", "ETH").
@@ -2595,7 +2600,9 @@ class DatabaseRepository:
                     currency, instrument_name, timestamp, date,
                     open, high, low, close, volume
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (instrument_name, timestamp) DO NOTHING
+                ON CONFLICT (instrument_name, timestamp) DO UPDATE SET
+                    open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low,
+                    close = EXCLUDED.close, volume = EXCLUDED.volume
             """, (currency, instrument_name, timestamp, date,
                   open_price, high, low, close, volume))
             logger.debug(f"Saved OHLCV candle for {instrument_name} at {date}: close={close:.2f}")

@@ -39,11 +39,11 @@ def test_realised_volatility_is_the_annualised_std_of_the_last_30_daily_log_retu
     assert lab.realised_volatility("BTC", date(2026, 6, 1)) == pytest.approx(np.std(returns, ddof=1) * math.sqrt(365.0), rel=0.05)
 
 
-def test_realised_volatility_only_looks_at_days_that_finished_before_the_entry_day():
+def test_realised_volatility_only_uses_candles_that_were_complete_at_the_entry_time():
     lab, repository = make_lab()
     lab.realised_volatility("BTC", date(2026, 6, 1))
     start, end = repository.get_ohlcv_by_date_range.call_args.args[1:3]
-    assert end < datetime(2026, 6, 1, 0, 0) and start < end
+    assert end == datetime(2026, 5, 31, 9, 0) and start < end                       # the candle that finished at 08:00 UTC of 31 May is the newest one a 09:00 entry on 1 June may use
 
 
 def test_a_gap_in_the_daily_candles_is_not_stretched_into_one_return():

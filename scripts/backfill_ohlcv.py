@@ -4,7 +4,8 @@ OHLCV History Backfill Script
 Fetches 2 years of daily candles from Deribit for BTC-PERPETUAL and
 ETH-PERPETUAL and inserts them into ohlcv_history.
 
-Safe to re-run — uses ON CONFLICT DO NOTHING.
+Safe to re-run: a candle already stored is OVERWRITTEN with Deribit's current version (this is also the repair of the daily candles that the
+collector froze at the first minutes of each day from 2026-03-15 to 2026-11-21: run it once after the fix).
 
 Usage:
     python -m scripts.backfill_ohlcv
