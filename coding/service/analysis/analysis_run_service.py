@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Callable, List, Optional, Protocol, Sequence
 
 from coding.service.report.report_service import CURRENCIES, ReportResult, ReportService, ReportStopped, SyncStep
+from coding.service.on_chain.chain_source import CHAIN_SOURCE_STORED, CHAIN_SOURCES
 
 logger = logging.getLogger(__name__)
 
@@ -56,10 +57,10 @@ class UnifiedDashboardWriter(Protocol):
         ...
 
 
-def _default_workflow_factory(currency: str) -> WorkflowRunner:
+def _default_workflow_factory(currency: str, chain_source_mode: str) -> WorkflowRunner:
     """The real on-chain workflow of one currency (imported lazily: it pulls in the API and database code)."""
     from coding.service.on_chain.on_chain_workflow_service import OnChainWorkflowService
-    return OnChainWorkflowService(currency)
+    return OnChainWorkflowService(currency, chain_source_mode=chain_source_mode)
 
 
 def _default_unified_dashboard_service_factory() -> UnifiedDashboardWriter:
@@ -144,19 +145,26 @@ class AnalysisRunService:
     """Sync once, then analysis, dashboard, report and unified dashboard per currency, each step isolated from the others."""
 
     def __init__(self, report_service_factory: Callable[[], ReportService] = ReportService,
-                 workflow_factory: Callable[[str], WorkflowRunner] = _default_workflow_factory,
+                 workflow_factory: Optional[Callable[[str], WorkflowRunner]] = None,
                  dashboard_service_factory: Callable[[], DashboardWriter] = _default_dashboard_service_factory,
-                 unified_dashboard_service_factory: Callable[[], UnifiedDashboardWriter] = _default_unified_dashboard_service_factory):
+                 unified_dashboard_service_factory: Callable[[], UnifiedDashboardWriter] = _default_unified_dashboard_service_factory,
+                 chain_source_mode: str = CHAIN_SOURCE_STORED):
         """
         Args:
             report_service_factory: Builds the report service (sync check and report).
-            workflow_factory: ``currency -> object with run(progress_callback)`` (the on-chain workflow).
+            workflow_factory: ``currency -> object with run(progress_callback)`` (the on-chain workflow); by default the real one
+                with ``chain_source_mode``.
             dashboard_service_factory: Builds the object with ``write(result, folder) -> Path``.
             unified_dashboard_service_factory: Builds the object with
                 ``write(currency, market_report_path, onchain_dashboard_path, folder) -> Path``.
+            chain_source_mode: Where the analysis reads its option chain: ``CHAIN_SOURCE_STORED`` (the newest stored snapshot, live
+                when it is too old) or ``CHAIN_SOURCE_LIVE`` (always from Deribit).
         """
+        if chain_source_mode not in CHAIN_SOURCES:
+            raise ValueError(f"unknown chain source {chain_source_mode!r}; choose from {CHAIN_SOURCES}")
         self.report_service_factory = report_service_factory
-        self.workflow_factory = workflow_factory
+        self.chain_source_mode = chain_source_mode
+        self.workflow_factory = workflow_factory or (lambda currency: _default_workflow_factory(currency, chain_source_mode))
         self.dashboard_service_factory = dashboard_service_factory
         self.unified_dashboard_service_factory = unified_dashboard_service_factory
 

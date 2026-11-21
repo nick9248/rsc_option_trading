@@ -251,3 +251,10 @@ def test_a_page_that_cannot_be_deleted_is_logged_and_does_not_fail_the_run(recor
     assert any("Could not remove" in line and "file is open in the browser" in line for line in lines)   # shown, not only logged
     assert result.dashboard_path("BTC") is not None and result.report_path("BTC") is not None            # still on disk
     assert "Could not remove" in caplog.text and "file is open in the browser" in caplog.text
+
+
+def test_the_default_workflow_gets_the_chain_source_of_the_service():
+    assert AnalysisRunService().workflow_factory("BTC")._chain_source_mode == "stored"
+    assert AnalysisRunService(chain_source_mode="live").workflow_factory("ETH")._chain_source_mode == "live"
+    with pytest.raises(ValueError):
+        AnalysisRunService(chain_source_mode="cache")

@@ -82,7 +82,8 @@ def test_tab_has_the_requested_controls_and_no_results_widgets(qapp):
     assert [tab.currency_combo.itemText(index) for index in range(tab.currency_combo.count())] == ["BTC", "ETH", "BOTH"]
     assert not tab.dashboard_button.isEnabled()
     assert tab.findChildren(QTableWidget) == []                      # no Levels / metrics table
-    assert len(tab.findChildren(QComboBox)) == 1                     # only the currency choice: no expiry selector
+    assert len(tab.findChildren(QComboBox)) == 2                     # the currency and the option chain source: no expiry selector
+    assert [tab.chain_source_combo.itemData(index) for index in range(tab.chain_source_combo.count())] == ["stored", "live"]
     assert not any("convention" in button.text().lower() for button in tab.findChildren(QPushButton))
     tab.close()
 
@@ -197,4 +198,14 @@ def test_clear_empties_the_log(qapp, tmp_path):
     assert log_text(tab)
     tab.clear_button.click()
     assert log_text(tab) == ""
+    tab.close()
+
+
+def test_the_real_service_gets_the_chosen_option_chain_source(qapp):
+    tab = AnalysisTab()
+    assert tab.chain_source_combo.currentData() == "stored"            # default: the stored snapshot, live when it is too old
+    assert tab._service_factory_for_run()().chain_source_mode == "stored"
+    tab.chain_source_combo.setCurrentIndex(1)
+    service = tab._service_factory_for_run()()
+    assert service.workflow_factory("BTC")._chain_source_mode == "live"
     tab.close()

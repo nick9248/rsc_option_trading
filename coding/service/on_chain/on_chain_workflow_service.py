@@ -16,6 +16,7 @@ from typing import Callable, Optional
 from coding.core.analytics.results.analysis_result import OnChainAnalysisResult
 from coding.core.database.repository import DatabaseRepository
 from coding.service.deribit.deribit_api_service import DeribitApiService
+from coding.service.on_chain.chain_source import CHAIN_SOURCE_LIVE
 from coding.service.on_chain.on_chain_analysis_service import OnChainAnalysisService
 
 logger = logging.getLogger(__name__)
@@ -64,8 +65,18 @@ class OnChainWorkflowService:
         currency: str,
         api_service: Optional[DeribitApiService] = None,
         repository: Optional[DatabaseRepository] = None,
+        chain_source_mode: str = CHAIN_SOURCE_LIVE,
     ) -> None:
+        """
+        Args:
+            currency: "BTC" or "ETH".
+            api_service: Deribit access (built when omitted).
+            repository: Database access (built when omitted).
+            chain_source_mode: ``CHAIN_SOURCE_LIVE`` (default here and in ``OnChainAnalysisService``: a direct caller keeps fetching
+                live) or ``CHAIN_SOURCE_STORED``. The Analysis tab's ``AnalysisRunService`` defaults to stored.
+        """
         self.currency = currency
+        self._chain_source_mode = chain_source_mode
         self._api_service = api_service
         self._repository = repository
 
@@ -96,7 +107,7 @@ class OnChainWorkflowService:
         repository: DatabaseRepository,
         progress_callback: Optional[Callable[[str], None]],
     ) -> OnChainWorkflowOutput:
-        on_chain_service = OnChainAnalysisService(api_service, repository=repository)
+        on_chain_service = OnChainAnalysisService(api_service, repository=repository, chain_source_mode=self._chain_source_mode)
         report, result = on_chain_service.fetch_and_analyze(
             currency=self.currency,
             progress_callback=progress_callback,

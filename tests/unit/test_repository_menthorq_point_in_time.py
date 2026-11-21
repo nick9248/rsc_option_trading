@@ -30,7 +30,11 @@ CREATE TABLE snapshots (
     open_interest    DECIMAL(18,8),
     underlying_price DECIMAL(18,8),
     mark_price       DECIMAL(18,8),
-    mark_iv          DECIMAL(10,4)
+    mark_iv          DECIMAL(10,4),
+    volume           DECIMAL(18,8),
+    volume_usd       DECIMAL(18,2),
+    bid_price        DECIMAL(18,8),
+    ask_price        DECIMAL(18,8)
 );
 CREATE TABLE historical_trades (
     id               SERIAL PRIMARY KEY,
