@@ -11,10 +11,10 @@ START = datetime(2026, 11, 14, 10, 0, tzinfo=timezone.utc)
 
 
 def make_leg(block="BLOCK-1", expiration="25DEC26", strike=100000.0, option_type="C", direction="buy", amount=1.0,
-             declared=None, offset=0, trade_id=None):
+             declared=None, offset=0, trade_id=None, index_price=100000.0):
     return BlockTradeLeg(block, trade_id or f"{block}-{expiration}-{strike}-{option_type}-{direction}-{offset}",
                          START + timedelta(seconds=offset), expiration, strike, option_type, direction, amount,
-                         declared, None)
+                         declared, None, index_price)
 
 
 def test_one_leg_is_a_single_leg():
@@ -55,16 +55,17 @@ def test_declared_count_unknown_gives_no_suffix():
 
 def test_notional_counts_and_biggest_legs():
     legs = [
+        # notional = contracts x the index at the trade (100,000 here), whatever the strike
         make_leg(strike=100000.0, amount=2.0, direction="buy", option_type="C", offset=5),     # 200,000
-        make_leg(strike=50000.0, amount=1.0, direction="sell", option_type="P", offset=1),     # 50,000
-        make_leg(strike=120000.0, amount=3.0, direction="buy", option_type="C", offset=3),     # 360,000
-        make_leg(strike=80000.0, amount=0.5, direction="sell", option_type="P", offset=2),     # 40,000
+        make_leg(strike=50000.0, amount=1.0, direction="sell", option_type="P", offset=1),     # 100,000
+        make_leg(strike=120000.0, amount=3.0, direction="buy", option_type="C", offset=3),     # 300,000
+        make_leg(strike=80000.0, amount=0.5, direction="sell", option_type="P", offset=2),     # 50,000
     ]
     structure = describe_blocks(legs)[0]
     assert structure.notional_usd == pytest.approx(650000.0)
     assert (structure.legs_bought, structure.legs_sold, structure.calls, structure.puts) == (2, 2, 2, 2)
     assert [(leg.strike, leg.notional_usd) for leg in structure.biggest_legs] == [
-        (120000.0, 360000.0), (100000.0, 200000.0), (50000.0, 50000.0)]
+        (120000.0, 300000.0), (100000.0, 200000.0), (50000.0, 100000.0)]
     assert structure.biggest_legs[0].side == "buy" and structure.biggest_legs[0].contracts == 3.0
     assert structure.first_time == START + timedelta(seconds=1)
 
@@ -85,8 +86,8 @@ def make_flows(trades_by_expiry):
     return per_expiry, aggregate_by_strike(all_trades)
 
 
-def trade(expiration, strike, amount, is_block, option_type="C", direction="buy"):
-    return OptionTrade(expiration, strike, option_type, direction, amount, is_block)
+def trade(expiration, strike, amount, is_block, option_type="C", direction="buy", index_price=100000.0):
+    return OptionTrade(expiration, strike, option_type, direction, amount, is_block, index_price)
 
 
 def test_bar_shares_sum_to_one_and_nothing_is_unexplained():
@@ -95,8 +96,8 @@ def test_bar_shares_sum_to_one_and_nothing_is_unexplained():
         "26MAR27": [trade("26MAR27", 120000.0, 1.0, False)],
     })
     (bar,) = bar_expiry_shares(per_expiry, all_flow)
-    assert bar.total_notional_usd == pytest.approx(600000.0)
-    assert bar.blocked_notional_usd == pytest.approx(360000.0) and bar.blocked_share == pytest.approx(0.6)
+    assert bar.total_notional_usd == pytest.approx(500000.0)                       # 5 BTC x the index 100,000
+    assert bar.blocked_notional_usd == pytest.approx(300000.0) and bar.blocked_share == pytest.approx(0.6)
     assert [(item.expiry, item.share) for item in bar.expiries] == [("25DEC26", pytest.approx(0.8)),
                                                                    ("26MAR27", pytest.approx(0.2))]
     assert sum(item.share for item in bar.expiries) == pytest.approx(1.0)
@@ -110,7 +111,7 @@ def test_a_missing_expiry_shows_as_unexplained():
     })
     del per_expiry["26MAR27"]
     (bar,) = bar_expiry_shares(per_expiry, all_flow)
-    assert bar.unexplained_notional == pytest.approx(120000.0)
+    assert bar.unexplained_notional == pytest.approx(100000.0)                      # the 1 BTC of the missing expiry x 100,000
     assert bar.expiries[0].share == pytest.approx(0.75)
 
 

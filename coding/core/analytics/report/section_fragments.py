@@ -212,7 +212,7 @@ def option_flow_caption(flow: StrikeFlow, scope: str, window_start: datetime, wi
         return paragraph_fragment(f"{scope}: no trades between {format_utc(window_start)} and {format_utc(window_end)}.")
     calls_bought, calls_sold, puts_bought, puts_sold = flow_totals(flow)
     summary = (f"{scope}: {flow.trades_used:,} trades on {len(flow.strikes)} strikes "
-               f"({flow.trades_skipped:,} skipped: unknown side or size). Notional = contracts x strike.")
+               f"({flow.trades_skipped:,} skipped: unknown side, size or price). Notional = contracts x index price.")
     table = table_fragment(["", "Bought by takers", "Sold by takers"],
                            [["Calls", millions_text(calls_bought), millions_text(calls_sold)],
                             ["Puts", millions_text(puts_bought), millions_text(puts_sold)]],
@@ -276,7 +276,7 @@ def bar_expiry_table(bars: Sequence[BarExpiryShare], days_left_by_expiry: Dict[s
             f'<td class="num">{html.escape(percent_text(bar.blocked_share))}</td>'
             f'<td class="wrap">{", ".join(parts) if parts else html.escape(NOT_COMPUTED)}</td></tr>')
     return ('<div class="table-wrap"><table class="bar-expiries"><caption>The biggest bars of the all-expirations chart and the '
-            'expiries that carry them (notional = contracts x strike)</caption>'
+            'expiries that carry them (notional = contracts x index price)</caption>'
             f'<thead><tr>{head}</tr></thead><tbody>{"".join(body)}</tbody></table></div>')
 
 
@@ -307,7 +307,7 @@ def block_structure_table(blocks: Sequence[BlockStructure]) -> str:
             f'<td class="wrap">{legs}</td>'
             f'<td class="wrap">{html.escape(block.label)}</td></tr>')
     return ('<div class="table-wrap"><table class="block-structures"><caption>Largest block trades of the window by notional '
-            '(contracts x strike); buy/sell is the taker side of each leg</caption>'
+            '(contracts x index price); buy/sell is the taker side of each leg</caption>'
             f'<thead><tr>{head}</tr></thead><tbody>{"".join(body)}</tbody></table></div>')
 
 

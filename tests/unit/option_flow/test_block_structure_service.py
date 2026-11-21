@@ -21,7 +21,7 @@ class FakeRepository:
 
 
 def make_leg(block, amount, strike=100000.0):
-    return BlockTradeLeg(block, f"{block}-{strike}", NOW - timedelta(hours=1), "25DEC26", strike, "C", "buy", amount, None, None)
+    return BlockTradeLeg(block, f"{block}-{strike}", NOW - timedelta(hours=1), "25DEC26", strike, "C", "buy", amount, None, None, 100000.0)
 
 
 def test_the_window_is_the_one_of_strike_flow_and_the_largest_blocks_come_first():

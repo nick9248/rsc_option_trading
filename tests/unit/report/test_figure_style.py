@@ -15,8 +15,8 @@ DARK_COLORS = {"#1b2540", "white", "#ffe14a"}
 
 
 def strike_flow_figure():
-    trades = [OptionTrade("27NOV26", 68_000.0, "C", "buy", 2.0, False), OptionTrade("27NOV26", 68_000.0, "P", "buy", 1.0, True),
-              OptionTrade("27NOV26", 70_000.0, "P", "sell", 3.0, False), OptionTrade("27NOV26", 72_000.0, "C", "sell", 1.5, True)]
+    trades = [OptionTrade("27NOV26", 68_000.0, "C", "buy", 2.0, False, 70_000.0), OptionTrade("27NOV26", 68_000.0, "P", "buy", 1.0, True, 70_000.0),
+              OptionTrade("27NOV26", 70_000.0, "P", "sell", 3.0, False, 70_000.0), OptionTrade("27NOV26", 72_000.0, "C", "sell", 1.5, True, 70_000.0)]
     report = StrikeFlowReport("BTC", NOW - timedelta(hours=24), NOW, None, aggregate_by_strike(trades), NOW, NOW - timedelta(days=30))
     return OptionFlowService.build_figure(report, "notional")
 

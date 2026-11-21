@@ -56,9 +56,9 @@ def test_levels_far_from_the_spot_are_not_drawn_but_named_in_the_footer():
 
 def test_top_strikes_sum_screen_and_blocked_notional_of_one_type_and_side():
     flow = aggregate_by_strike([
-        OptionTrade("27NOV26", 70_000.0, "P", "buy", 2.0, False), OptionTrade("27NOV26", 70_000.0, "P", "buy", 3.0, True),
-        OptionTrade("27NOV26", 72_000.0, "P", "buy", 1.0, False), OptionTrade("27NOV26", 75_000.0, "C", "buy", 9.0, False)])
-    assert top_strikes(flow, "P", "buy", 5) == [(70_000.0, 5.0 * 70_000.0), (72_000.0, 72_000.0)]
+        OptionTrade("27NOV26", 70_000.0, "P", "buy", 2.0, False, 70_000.0), OptionTrade("27NOV26", 70_000.0, "P", "buy", 3.0, True, 70_000.0),
+        OptionTrade("27NOV26", 72_000.0, "P", "buy", 1.0, False, 70_000.0), OptionTrade("27NOV26", 75_000.0, "C", "buy", 9.0, False, 70_000.0)])
+    assert top_strikes(flow, "P", "buy", 5) == [(70_000.0, 5.0 * 70_000.0), (72_000.0, 1.0 * 70_000.0)]       # contracts x the index 70,000
     assert top_strikes(flow, "P", "buy", 1) == [(70_000.0, 5.0 * 70_000.0)]
     assert top_strikes(flow, "P", "sell", 3) == []
 
@@ -82,7 +82,7 @@ def test_flow_levels_are_skipped_with_a_note_when_there_are_no_trades():
     marks, notes = [], []
     service._add_flow_levels("BTC", 24, 2, marks, notes)
     assert marks == [] and "no trades" in notes[0]
-    trades = [OptionTrade("27NOV26", 70_000.0, "C", "sell", 2.0, False)]
+    trades = [OptionTrade("27NOV26", 70_000.0, "C", "sell", 2.0, False, 70_000.0)]
     service = LevelOverviewService(FakeRepository(trades), clock=lambda: NOW)
     service._add_flow_levels("BTC", 24, 2, marks, notes)
     assert [(m.kind, m.price) for m in marks] == [("sell", 70_000.0)] and marks[0].name.startswith("calls sold")

@@ -41,7 +41,8 @@ def make_context(tmp_path, currency="BTC"):
 # ---------------------------------------------------------------- option flow
 
 def make_trades(expiry, strike, amount):
-    return [OptionTrade(expiry, strike, "C", "buy", amount, False), OptionTrade(expiry, strike, "P", "sell", amount, True)]
+    # index price = strike, so the notional of these layout tests is easy to read (the definition is tested in test_strike_flow.py)
+    return [OptionTrade(expiry, strike, "C", "buy", amount, False, strike), OptionTrade(expiry, strike, "P", "sell", amount, True, strike)]
 
 
 class FakeOptionFlowService:
@@ -149,8 +150,8 @@ def test_option_flow_warns_when_no_trade_is_stored_at_all(tmp_path):
 
 def test_option_flow_names_the_expiry_that_carries_the_biggest_bar_and_lists_the_largest_blocks(tmp_path, monkeypatch):
     # 120,000 call bought: 99 contracts on 25DEC26 and 1 on 26MAR27 -> one expiry carries 99%
-    trades = [OptionTrade("25DEC26", 120_000.0, "C", "buy", 99.0, False), OptionTrade("26MAR27", 120_000.0, "C", "buy", 1.0, False),
-              OptionTrade("25DEC26", 100_000.0, "C", "buy", 5.0, True)]
+    trades = [OptionTrade("25DEC26", 120_000.0, "C", "buy", 99.0, False, 120_000.0), OptionTrade("26MAR27", 120_000.0, "C", "buy", 1.0, False, 120_000.0),
+              OptionTrade("25DEC26", 100_000.0, "C", "buy", 5.0, True, 100_000.0)]
     service = FakeOptionFlowService(trades, expiries=["25DEC26", "26MAR27"], blocks=[make_block("BLOCK-306229")])
     install_open_interest(monkeypatch)
     section = build_option_flow_section(make_context(tmp_path), service)

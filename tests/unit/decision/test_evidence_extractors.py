@@ -70,12 +70,14 @@ def test_dealer_evidence_with_a_passed_check_and_unknown_share():
 
 
 def trade(option_type, direction, amount, strike=65_000.0, block=False):
-    return OptionTrade("27NOV26", strike, option_type, direction, amount, block)
+    # index price = strike, so strikes with the same contracts rank by notional as these tests expect (the definition is tested
+    # in tests/unit/option_flow/test_strike_flow.py)
+    return OptionTrade("27NOV26", strike, option_type, direction, amount, block, strike)
 
 
 def leg(block_id, option_type, direction, amount, declared=None, strike=65_000.0):
     return BlockTradeLeg(block_id, f"{block_id}-{option_type}{direction}{amount}", NOW - timedelta(hours=1), "27NOV26", strike,
-                         option_type, direction, amount, declared, None)
+                         option_type, direction, amount, declared, None, strike)
 
 
 def test_option_flow_splits_screen_single_leg_and_multi_leg_blocks():

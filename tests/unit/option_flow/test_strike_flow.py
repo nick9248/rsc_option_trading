@@ -15,8 +15,8 @@ from coding.core.database.repository import DatabaseRepository
 from coding.service.option_flow.option_flow_service import OptionFlowService
 
 
-def trade(strike=70_000.0, kind="C", direction="buy", amount=2.0, block=False, expiry="27NOV26"):
-    return OptionTrade(expiry, strike, kind, direction, amount, block)
+def trade(strike=70_000.0, kind="C", direction="buy", amount=2.0, block=False, expiry="27NOV26", index_price=70_000.0):
+    return OptionTrade(expiry, strike, kind, direction, amount, block, index_price)
 
 
 def test_a_trade_goes_into_the_series_of_its_type_side_and_block_flag():
@@ -30,7 +30,8 @@ def test_a_trade_goes_into_the_series_of_its_type_side_and_block_flag():
 
 
 def test_contracts_and_notional_add_up_by_hand():
-    # Two calls sold at 70,000: 2 BTC and 3 BTC -> 5 contracts, notional = 5 x 70,000 = 350,000 (contracts times the strike).
+    # Two calls sold with the index at 70,000: 2 BTC and 3 BTC -> 5 contracts, notional = 5 x 70,000 = 350,000 (contracts times the
+    # index price at the trade; the strike does not enter, see test_notional_is_contracts_times_the_index_not_the_strike).
     flow = aggregate_by_strike([trade(direction="sell", amount=2.0), trade(direction="sell", amount=3.0),
                                 trade(direction="buy", amount=1.0, kind="P")])
     cell = flow.cell(70_000.0, "call_sell")
@@ -40,13 +41,16 @@ def test_contracts_and_notional_add_up_by_hand():
     assert (empty.contracts, empty.notional_usd, empty.trades) == (0.0, 0.0, 0)
 
 
-def test_it_reproduces_the_laevitas_tooltip_at_108000():
-    # Laevitas, 24 h to 12 Nov 2026, strike 108,000: Calls Buy $140.4K and Calls Sell $10.8K. Our stored trades there are
-    # calls bought for 1.0 and 0.3 BTC and calls sold for 0.1 BTC: 1.3 x 108,000 = 140,400 and 0.1 x 108,000 = 10,800.
+def test_notional_is_contracts_times_the_index_not_the_strike():
+    # The same trades as Laevitas's tooltip at the 108,000 strike (24 h to 12 Nov 2026: Calls Buy $140.4K = 1.3 BTC x 108,000, Calls
+    # Sell $10.8K = 0.1 BTC x 108,000). Laevitas multiplies by the strike. Here the index at the trade (70,000) is used: 1.3 x 70,000
+    # = 91,000 and 0.1 x 70,000 = 7,000, 35 % less than Laevitas at that strike because the strike is far above the index.
     flow = aggregate_by_strike([trade(strike=108_000.0, amount=1.0), trade(strike=108_000.0, amount=0.3),
                                 trade(strike=108_000.0, amount=0.1, direction="sell")])
-    assert flow.cell(108_000.0, "call_buy").notional_usd == pytest.approx(140_400.0)
-    assert flow.cell(108_000.0, "call_sell").notional_usd == pytest.approx(10_800.0)
+    assert flow.cell(108_000.0, "call_buy").notional_usd == pytest.approx(91_000.0)
+    assert flow.cell(108_000.0, "call_sell").notional_usd == pytest.approx(7_000.0)
+    assert 91_000.0 != pytest.approx(140_400.0, rel=0.3)
+    assert flow.cell(108_000.0, "call_buy").contracts == pytest.approx(1.3)
     assert all(flow.cell(108_000.0, series.key).trades == 0 for series in SERIES
                if series.key not in ("call_buy", "call_sell"))
 
@@ -59,8 +63,8 @@ def test_one_expiry_can_be_selected_and_strikes_are_sorted():
 
 def test_trades_that_cannot_be_used_are_skipped_and_counted_never_zero_filled():
     flow = aggregate_by_strike([trade(direction="hold"), trade(kind="X"), trade(amount=0.0), trade(amount=-1.0),
-                                trade(strike=0.0), trade()])
-    assert flow.trades_used == 1 and flow.trades_skipped == 5
+                                trade(strike=0.0), trade(index_price=0.0), trade()])
+    assert flow.trades_used == 1 and flow.trades_skipped == 6
 
 
 def test_option_type_and_direction_are_read_case_insensitively():
@@ -79,9 +83,9 @@ def test_figure_draws_calls_left_puts_right_in_millions_with_blocked_next_to_the
                                 trade(strike=72_000.0, kind="P", direction="sell", amount=2.0)])
     figure = build_strike_flow_figure(flow, "title")
     bars = figure_bars(figure)
-    assert bars["Calls Buy"] == ([-0.7, 0.0], ["70,000", "72,000"])                  # 10 x 70,000 = $0.7M, to the left
+    assert bars["Calls Buy"] == ([-0.7, 0.0], ["70,000", "72,000"])                  # 10 x index 70,000 = $0.7M, to the left
     assert bars["Call Buy Blocked"][0] == [-0.35, 0.0]                              # 5 x 70,000 = $0.35M
-    assert bars["Puts Sell"][0] == [0.0, 0.144]                                      # 2 x 72,000 = $0.144M, to the right
+    assert bars["Puts Sell"][0] == [0.0, 0.14]                                       # 2 x index 70,000 = $0.14M (not 2 x 72,000), to the right
     names = [bar.name for bar in figure.data]
     assert names.index("Call Buy Blocked") < names.index("Calls Buy")                # blocked first = next to the axis
     assert len(names) == 8 and figure.layout.barmode == "relative" and figure.layout.hovermode == "y unified"
@@ -109,7 +113,7 @@ def test_figure_rejects_an_unknown_unit_and_handles_no_trades():
 
 def test_small_values_get_decimals_so_tick_labels_stay_distinct():
     assert [tick_decimals(step) for step in (10.0, 0.5, 0.1, 0.25, 0.02)] == [0, 1, 1, 2, 2]
-    flow = aggregate_by_strike([trade(strike=1_000.0, kind="P", direction="buy", amount=0.3)])         # $0.0003M largest bar
+    flow = aggregate_by_strike([trade(strike=1_000.0, kind="P", direction="buy", amount=0.3, index_price=1_000.0)])    # $0.0003M largest bar
     labels = list(build_strike_flow_figure(flow, "t").layout.xaxis.ticktext)
     right_side = labels[len(labels) // 2:]                                       # 0 and the positive ticks
     assert len(set(right_side)) == len(right_side) and right_side[-1] != "$0M"
@@ -177,7 +181,8 @@ def test_expiry_is_case_insensitive_end_is_converted_to_utc_and_old_blocks_are_f
     report = service.strike_flow(expiry="27nov26", end=datetime(2026, 8, 20, 16, 0, tzinfo=plus_two))
     assert report.expiry == "27NOV26" and repository.calls[-1][3] == "27NOV26"
     assert report.window_end == datetime(2026, 8, 20, 14, 0, tzinfo=timezone.utc) and report.window_end.utcoffset() == timedelta(0)
-    assert "block trades were only stored from 2026-08-25" in service.build_figure(report).layout.annotations[-1].text
+    footer = service.build_figure(report).layout.annotations[-1].text.replace("<br>", " ")         # the footer wraps its lines
+    assert "block trades were only stored from 2026-08-25" in footer
     recent = service.build_figure(service.strike_flow())
     assert "block trades were only stored" not in recent.layout.annotations[-1].text
 
@@ -236,7 +241,8 @@ def test_repository_query_returns_the_window_the_expiry_and_the_block_flag(repo)
             ("b", 2_000, "BTC", "27NOV26", 80_000, "P", "buy", 10.0, 70_600.0, "block-1"),
             ("c", 3_000, "BTC", "25DEC26", 70_000, "C", "buy", 1.0, 70_700.0, None),
             ("d", 4_000, "ETH", "27NOV26", 3_000, "C", "buy", 1.0, 3_000.0, None),
-            ("e", 9_000, "BTC", "27NOV26", 70_000, "C", "buy", 1.0, 70_800.0, None)]       # outside the window
+            ("e", 9_000, "BTC", "27NOV26", 70_000, "C", "buy", 1.0, 70_800.0, None),       # outside the window
+            ("f", 1_700, "BTC", "27NOV26", 70_000, "C", "buy", 1.0, None, None)]          # no index price: cannot be valued, not returned
     with psycopg2.connect(**connection_settings) as connection:
         with connection.cursor() as cursor:
             cursor.executemany("INSERT INTO historical_trades (trade_id, trade_timestamp, currency, expiration, strike, option_type, "
@@ -257,7 +263,8 @@ def test_repository_query_returns_the_window_the_expiry_and_the_block_flag(repo)
     assert repository.get_latest_trade_time("BTC") == datetime.fromtimestamp(9.0, tz=timezone.utc)
     assert repository.get_latest_trade_time("SOL") is None
     flow = aggregate_by_strike(everything)
-    assert flow.cell(80_000.0, "put_buy_block").notional_usd == 10.0 * 80_000.0
+    assert flow.cell(80_000.0, "put_buy_block").notional_usd == 10.0 * 70_600.0          # contracts x the index at the trade, not x the strike
+    assert flow.cell(70_000.0, "call_sell").notional_usd == 2.5 * 70_500.0
 
 
 def test_series_key_finds_the_series_of_a_kind():

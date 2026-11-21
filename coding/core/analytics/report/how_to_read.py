@@ -94,9 +94,9 @@ def percent_from(price: float, reference: float) -> float:
     return (price - reference) / reference * 100.0
 
 
-def notional_usd(contracts: float, strike: float) -> float:
-    """Option-flow notional: contracts times the strike (Laevitas's definition, strike_flow.py)."""
-    return contracts * strike
+def notional_usd(contracts: float, index_price: float) -> float:
+    """Option-flow notional: contracts times the index price at the trade (strike_flow.py)."""
+    return contracts * index_price
 
 
 def bar_length_usd(blocked_usd: float, screen_usd: float) -> float:
@@ -233,14 +233,6 @@ def simple_average(values: Sequence[float]) -> float:
 def population_standard_deviation(values: Sequence[float]) -> float:
     """Population standard deviation of a few values, as the band of the chart uses (taker_flow_figure.py: pstdev)."""
     return pstdev(values)
-
-
-def index_notional_difference_percent(strike: float, index_price: float) -> float:
-    """
-    How much less contracts x index price is than contracts x strike, in percent of the strike:
-    (strike - index) / strike. Negative means more (strikes below the index).
-    """
-    return (strike - index_price) / strike * 100.0
 
 
 # Decision tab: constants copied from coding/core/analytics/decision/decision_config.py (the tests check them against it)
@@ -453,7 +445,6 @@ _RATIO_BELOW = example_ratio(FUTURES_BUY_USD, FUTURES_SELL_USD)
 _RATIO_ABOVE = example_ratio(FUTURES_ABOVE_BUY_USD, FUTURES_ABOVE_SELL_USD)
 _RATIO_EVEN = example_ratio(FUTURES_EVEN_USD, FUTURES_EVEN_USD)
 _RATIO_SPREAD = population_standard_deviation(FUTURES_RATIO_VALUES)
-_INDEX_LESS = [index_notional_difference_percent(strike, EXAMPLE_SPOT) for strike in FLOW_INDEX_STRIKES]
 _CALL_IV_OI = iv_times_open_interest(IV_OI_CALL_IV_PERCENT, IV_OI_CALL_OPEN_INTEREST)
 _SECOND_IV_OI = iv_times_open_interest(IV_OI_SECOND_IV_PERCENT, IV_OI_SECOND_OPEN_INTEREST)
 _NET_GEX = net_gex_per_one_percent_usd(GEX_CALL_GAMMA_SUM, GEX_PUT_GAMMA_SUM, EXAMPLE_SPOT)
@@ -462,8 +453,7 @@ _EXPIRY_NOTIONAL = open_interest_notional_usd(_EXPIRY_TOTAL, EXAMPLE_SPOT)
 _EXPIRY_SHARE = share_percent(_EXPIRY_TOTAL, EXPIRY_ALL_TOTAL)
 _EXPIRY_DAYS = days_left(EXPIRY_NOW, EXPIRY_SETTLEMENT)
 _FAR_DAYS = days_left(EXPIRY_NOW, EXPIRY_FAR_SETTLEMENT)
-_FLOW_NEAR = notional_usd(FLOW_CONTRACTS, FLOW_STRIKE)
-_FLOW_FAR = notional_usd(FLOW_CONTRACTS, FLOW_FAR_STRIKE)
+_FLOW_NOTIONAL = notional_usd(FLOW_CONTRACTS, EXAMPLE_SPOT)
 _FLOW_BAR = bar_length_usd(FLOW_BLOCKED_USD, FLOW_SCREEN_USD)
 _FLOW_SHARES = share_by_part_percent(FLOW_EXPIRY_PARTS_USD)
 _DEALER_POSITION = dealer_position(DEALER_TAKER_NET_CONTRACTS)
@@ -1058,12 +1048,10 @@ _OPTION_FLOW_HELP = SectionHelp(
                 HelpTerm("Blocked and screen", "Blocked = a block trade (block_trade_id set; for BTC in practice 25 BTC or "
                                                "more per leg; the BTC minimum is 25 BTC), negotiated off the screen. "
                                                "Screen = a normal order-book trade."),
-                HelpTerm("Notional", "Contracts times the strike, in USD (Laevitas's definition). One contract is 1 coin "
-                                     "(BTC or ETH). Contracts times the index price differs from it by (strike minus "
-                                     f"index) / strike. At index {_int(EXAMPLE_SPOT)}: {_int(_INDEX_LESS[0])} % less at a "
-                                     f"strike of {_int(FLOW_INDEX_STRIKES[0])}, {_int(_INDEX_LESS[1])} % less at "
-                                     f"{_int(FLOW_INDEX_STRIKES[1])}, and more for strikes below the index "
-                                     f"({_int(-_INDEX_LESS[2])} % more at {_int(FLOW_INDEX_STRIKES[2])})."),
+                HelpTerm("Notional", "Contracts times the index price at the trade, in USD: the value of the coins that changed "
+                                     "hands. One contract is 1 coin (BTC or ETH). Laevitas uses contracts times the strike "
+                                     "instead, which makes its bars longer than these for strikes above the index and shorter "
+                                     "below it; the strike is not an amount of money that changed hands, so it is not used here."),
                 HelpTerm("Contracts and trades", "Contracts: the size in coins. Trades: how many separate trades. One big "
                                                  "block is one trade; many small orders are many trades."),
                 HelpTerm("Unit switch", "Notional (USD), contracts or trades. The same trades, counted three ways."),
@@ -1079,23 +1067,23 @@ _OPTION_FLOW_HELP = SectionHelp(
                     "Calls bought (taker bought calls)",
                     "Takers paid up for calls. It can be a directional bet up, but also a hedge, the call leg of a "
                     "spread, a trade that closes an earlier short call, or a market maker lifting an offer.",
-                    f"{_int(FLOW_CONTRACTS)} contracts at strike {_int(FLOW_STRIKE)}: notional {_int(FLOW_CONTRACTS)} x "
-                    f"{_int(FLOW_STRIKE)} = {_int(_FLOW_NEAR)} USD."),
+                    f"{_int(FLOW_CONTRACTS)} contracts with the index at {_int(EXAMPLE_SPOT)}: notional {_int(FLOW_CONTRACTS)} x "
+                    f"{_int(EXAMPLE_SPOT)} = {_int(_FLOW_NOTIONAL)} USD, whatever the strike."),
                 HelpCase(
                     "Calls sold (taker sold calls)",
                     "Takers hit bids for calls. It can be a bet that price stays below the strike, covered call selling, "
                     "a closing of long calls, or one leg of a spread.",
-                    f"{_int(FLOW_CONTRACTS)} contracts at {_int(FLOW_STRIKE)} sold: the same {_int(_FLOW_NEAR)} USD, drawn in the Sell bar."),
+                    f"{_int(FLOW_CONTRACTS)} contracts sold with the index at {_int(EXAMPLE_SPOT)}: the same {_int(_FLOW_NOTIONAL)} USD, drawn in the Sell bar."),
                 HelpCase(
                     "Puts bought (taker bought puts)",
                     "Takers paid up for puts. It can be protection for a long position (a hedge, not a bearish view), "
                     "a bearish bet, a closing of short puts, or a spread leg.",
-                    f"{_int(FLOW_CONTRACTS)} puts at strike 65,000: {_int(notional_usd(FLOW_CONTRACTS, 65_000))} USD."),
+                    f"{_int(FLOW_CONTRACTS)} puts at strike 65,000 with the index at {_int(EXAMPLE_SPOT)}: {_int(_FLOW_NOTIONAL)} USD."),
                 HelpCase(
                     "Puts sold (taker sold puts)",
                     "Takers hit bids for puts. It can be a bet that price stays above the strike, income selling, a "
                     "closing of long puts, or a spread leg.",
-                    f"{_int(FLOW_CONTRACTS)} puts at 65,000 sold: {_int(notional_usd(FLOW_CONTRACTS, 65_000))} USD in the Sell bar on the put side."),
+                    f"{_int(FLOW_CONTRACTS)} puts at 65,000 sold with the index at {_int(EXAMPLE_SPOT)}: {_int(_FLOW_NOTIONAL)} USD in the Sell bar on the put side."),
                 HelpCase(
                     "A bar has a blocked part and a screen part",
                     "The bar's length is blocked plus screen volume of that type and side. The blocked part sits next "
@@ -1104,16 +1092,15 @@ _OPTION_FLOW_HELP = SectionHelp(
                     f"{_millions(_FLOW_BAR)} long."),
                 HelpCase(
                     "Notional, contracts and trades give different pictures",
-                    "Notional weighs high strikes more (it multiplies by the strike). Contracts count coins. Trades count "
-                    "orders. Switch the unit to see which strikes stand out each way.",
-                    f"The same {_int(FLOW_CONTRACTS)} contracts are {_int(_FLOW_NEAR)} USD at {_int(FLOW_STRIKE)} but "
-                    f"{_int(_FLOW_FAR)} USD at {_int(FLOW_FAR_STRIKE)}. One block of 100 contracts is 1 trade; 100 "
-                    "orders of 1 contract are 100 trades."),
+                    "Notional is contracts times the index price, so within a day it follows the contracts closely and the "
+                    "strike does not enter. Trades count orders and can rank strikes very differently: one large block is one "
+                    "trade. Switch the unit to see which strikes stand out each way.",
+                    f"The same {_int(FLOW_CONTRACTS)} contracts are {_int(_FLOW_NOTIONAL)} USD at any strike while the index is "
+                    f"{_int(EXAMPLE_SPOT)}. One block of 100 contracts is 1 trade; 100 orders of 1 contract are 100 trades."),
                 HelpCase(
                     "Large flow far out of the money",
                     "Far out-of-the-money flow is not optimism by itself. Cheap far strikes are used for tail "
-                    "protection, as spread legs, or to sell premium. Notional also inflates far out-of-the-money calls "
-                    "(high strikes); far puts (low strikes) are deflated.",
+                    "protection, as spread legs, or to sell premium.",
                     f"{_int(FLOW_CONTRACTS)} calls at {_int(FLOW_FAR_STRIKE)} with spot at {_int(EXAMPLE_SPOT)}: the strike is "
                     f"{_int(percent_from(FLOW_FAR_STRIKE, EXAMPLE_SPOT))} % above spot."),
                 HelpCase(
@@ -1417,7 +1404,7 @@ _LEVELS_HELP = SectionHelp(
                                                    "check failed."),
                 HelpTerm("Option flow (top strikes)", "For each of calls bought, calls sold, puts bought and puts sold over the last "
                                                       "24 hours, the 2 strikes with the most notional (screen plus blocked, "
-                                                      "contracts x strike)."),
+                                                      "contracts x index price)."),
                 HelpTerm("Shared inputs", "The MenthorQ replica and the OI-based dealer lane read the same open interest. The "
                                           "flow-based lane and the option flow lane read the same stored trades. So overlap "
                                           "is partly built in."),
