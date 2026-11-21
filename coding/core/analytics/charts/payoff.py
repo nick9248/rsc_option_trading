@@ -12,7 +12,7 @@ from typing import List, Optional, Sequence, Tuple
 
 import plotly.graph_objects as go
 
-from coding.core.analytics.charts.chart_theme import GRAY, GREEN, INK, RED, base_layout
+from coding.core.analytics.charts.chart_theme import GRAY, GREEN, INK, RED, base_layout, with_alpha
 
 
 @dataclass(frozen=True)
@@ -73,7 +73,7 @@ def summarize_payoff(legs: Sequence[PayoffLeg], entry_cash_usd: float) -> Payoff
             breakevens.append(left + (right - left) * (-value_left) / (value_right - value_left))
     if values[-1] == 0 and points[-1] > 0:
         breakevens.append(points[-1])
-    if slope_up != 0 and values[-1] * slope_up < 0:
+    if abs(slope_up) > 1e-12 and values[-1] * slope_up < 0:
         breakevens.append(points[-1] - values[-1] / slope_up)
     return PayoffSummary(None if unlimited_profit else max(values), None if unlimited_loss else max(-min(values), 0.0),
                          tuple(sorted(set(round(value, 6) for value in breakevens if math.isfinite(value) and value > 0))))
@@ -88,13 +88,13 @@ def payoff_figure(legs: Sequence[PayoffLeg], entry_cash_usd: float, spot: float,
     summary = summarize_payoff(legs, entry_cash_usd)
     low = 0.7 * min([spot] + [leg.strike for leg in legs])
     high = 1.3 * max([spot] + [leg.strike for leg in legs])
-    prices = sorted({low, high, *(leg.strike for leg in legs), *summary.breakevens, spot})
+    prices = sorted({low, high, *(leg.strike for leg in legs), *(value for value in summary.breakevens if low <= value <= high), spot})
     values = [pnl_at_expiry(legs, entry_cash_usd, price) for price in prices]
     figure = go.Figure()
-    for sign, color in ((1, GREEN), (-1, RED)):
+    for sign in (1, -1):
         shown = [value if value * sign > 0 else 0.0 for value in values]
         figure.add_trace(go.Scatter(x=prices, y=shown, mode="lines", line=dict(width=0), fill="tozeroy",
-                                    fillcolor="rgba(47,125,85,0.18)" if sign > 0 else "rgba(184,67,58,0.18)", hoverinfo="skip"))
+                                    fillcolor=with_alpha(GREEN if sign > 0 else RED, 0.18), hoverinfo="skip"))
     figure.add_trace(go.Scatter(x=prices, y=values, mode="lines", line=dict(color=INK, width=2.5), name="PnL at expiry",
                                 hovertemplate=f"{currency} %{{x:,.0f}}<br>PnL %{{y:,.0f}} USD<extra></extra>"))
     figure.add_vline(x=spot, line=dict(color=GRAY, width=1.5, dash="dash"), annotation_text=f"spot {spot:,.0f}", annotation_position="top")

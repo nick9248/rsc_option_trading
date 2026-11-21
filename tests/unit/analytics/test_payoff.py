@@ -65,3 +65,17 @@ def test_the_figure_has_the_curve_the_spot_and_the_breakevens():
     marks = [trace for trace in figure.data if trace.mode == "markers"]
     assert sorted(trace.x[0] for trace in marks) == pytest.approx([55000 - 581.0, 61000 + 581.0])
     assert figure.layout.xaxis.title.text == "BTC settlement price"
+
+
+def test_a_slope_of_float_noise_is_not_an_unlimited_structure_and_adds_no_far_breakeven():
+    legs = [leg("buy", "call", 60000, 0.1), leg("buy", "call", 60000, 0.2), leg("sell", "call", 60000, 0.3)]
+    summary = summarize_payoff(legs, -100.0)
+    assert summary.max_profit_usd == 0.0 or summary.max_profit_usd is not None
+    assert all(value < 1e7 for value in summary.breakevens)
+
+
+def test_the_fill_colours_come_from_the_theme():
+    from coding.core.analytics.charts.chart_theme import GREEN, RED, with_alpha
+    assert with_alpha("#2F7D55", 0.18) == "rgba(47,125,85,0.18)"
+    figure = payoff_figure(IRON_CONDOR, 581.0, 58000.0)
+    assert [trace.fillcolor for trace in figure.data[:2]] == [with_alpha(GREEN, 0.18), with_alpha(RED, 0.18)]

@@ -22,3 +22,9 @@ def base_layout(figure: go.Figure, x_title: str, y_title: str, height: int = CHA
                          paper_bgcolor=PAPER, plot_bgcolor=PAPER, font=dict(color=INK), showlegend=False,
                          xaxis=dict(gridcolor=RULE, zeroline=False), yaxis=dict(gridcolor=RULE, zeroline=False))
     return figure
+
+
+def with_alpha(hex_color: str, alpha: float) -> str:
+    """"#RRGGBB" as an rgba() string with the given opacity (for fills under a line)."""
+    red, green, blue = (int(hex_color[index:index + 2], 16) for index in (1, 3, 5))
+    return f"rgba({red},{green},{blue},{alpha})"
