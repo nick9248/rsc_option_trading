@@ -118,8 +118,8 @@ def generate_candidates(quotes: Iterable[Quote], spot: float, limits: CandidateL
                     continue
                 if _in_range(quote, limits.short_delta_range):                       # sell the nearer strike, buy the farther: credit
                     credit = _build(f"{kind}_credit_spread", [("sell", quote), ("buy", other)])
-                    add(credit)
-                    if credit is not None:
+                    if credit is not None and credit.key not in found:             # a width that snaps to a known strike pair adds nothing
+                        add(credit)
                         spreads.setdefault((kind, width_fraction), []).append(credit)
                 if _in_range(quote, limits.long_delta_range):                        # buy the nearer strike, sell the farther: debit
                     add(_build(f"{kind}_debit_spread", [("buy", quote), ("sell", other)]))

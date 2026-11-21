@@ -71,10 +71,13 @@ class ScoringLabService:
 
     def realised_volatility(self, currency: str, entry_day: date) -> Optional[float]:
         """Annualised volatility of the last 30 daily log returns of the perpetual that had finished before ``entry_day`` (None if too few)."""
+        # naive UTC on purpose: the repository method takes (and documents) naive UTC datetimes
         start = datetime.combine(entry_day - timedelta(days=REALISED_VOL_DAYS + 15), time(0))
         end = datetime.combine(entry_day, time(0)) - timedelta(seconds=1)              # candles dated before the entry day are closed
-        closes = [row["close"] for row in self.repository.get_ohlcv_by_date_range(currency, start, end)][-(REALISED_VOL_DAYS + 1):]
-        returns = [math.log(closes[index + 1] / closes[index]) for index in range(len(closes) - 1) if closes[index] > 0 and closes[index + 1] > 0]
+        candles = self.repository.get_ohlcv_by_date_range(currency, start, end)[-(REALISED_VOL_DAYS + 1):]
+        # only a close followed by the close of the NEXT day is a daily return: a gap in the candles is not stretched into one
+        returns = [math.log(second["close"] / first["close"]) for first, second in zip(candles, candles[1:])
+                   if first["close"] > 0 and second["close"] > 0 and (second["date"] - first["date"]) == timedelta(days=1)]
         if len(returns) < MINIMUM_RETURNS:
             return None
         return float(np.std(returns, ddof=1) * math.sqrt(365.0))
@@ -119,6 +122,8 @@ class ScoringLabService:
             distributions = {REALISED: LognormalDistribution(entry.forward, realised_vol, days_to_expiry),
                              IMPLIED: LognormalDistribution(entry.forward, entry.atm_implied_volatility, days_to_expiry)}
             outcomes: List[CandidateOutcome] = []
+            fitting = 0
+            day_cheapest: Optional[float] = None
             for candidate in generate_candidates(entry.quotes, entry.spot, limits):
                 metrics = compute_metrics(candidate, entry.spot, distributions)
                 if metrics.max_loss_usd <= 0:
@@ -126,13 +131,15 @@ class ScoringLabService:
                 trade = simulate_trade(candidate.family, entry.expiration, entry_time, entry.settlement_at, entry.spot, candidate.legs,
                                        entry.settlement_price)
                 outcomes.append(CandidateOutcome(candidate.family, metrics, trade.pnl_usd))
-                total += 1
-                feasible += size_position(metrics.max_loss_usd, budget, MINIMUM_QUANTITY[currency]).feasible
-                cheapest_loss = metrics.max_loss_usd if cheapest_loss is None else min(cheapest_loss, metrics.max_loss_usd)
+                fitting += size_position(metrics.max_loss_usd, budget, MINIMUM_QUANTITY[currency]).feasible
+                day_cheapest = metrics.max_loss_usd if day_cheapest is None else min(day_cheapest, metrics.max_loss_usd)
             if len(outcomes) < 3:
                 skipped["too few candidates"] += 1
                 continue
-            dates.append(outcomes)
+            dates.append(outcomes)                                              # only an accepted date counts in the totals
+            total += len(outcomes)
+            feasible += fitting
+            cheapest_loss = day_cheapest if cheapest_loss is None else min(cheapest_loss, day_cheapest)
         reports = [evaluate_rule(rule, dates) for rule in RULES]
         needed = (None if cheapest_loss is None else cheapest_loss * MINIMUM_QUANTITY[currency] * budget.losses_in_a_row
                   / budget.max_drawdown_fraction)

@@ -145,7 +145,7 @@ class BacktestService:
         # Snapshots before about August carry no mark IV: it is rebuilt from the mark price and the forward (Black-76), as in the
         # MenthorQ replay; a row that still has none gets no delta and is not used.
         rows, _ = fill_missing_implied_volatility([row for row in rows if row["expiration"] == expiration], captured_at)
-        forwards = sorted(row["underlying_price"] for row in rows if row["underlying_price"])
+        forwards = sorted(row["underlying_price"] for row in rows if row.get("underlying_price"))
         forward = forwards[len(forwards) // 2] if forwards else spot
         return EntryData(captured_at, spot, forward, expiration, settlement_at, settlement[0], self.quotes_from_rows(rows, spot, captured_at),
                          self._atm_implied_volatility(rows, forward)), ""

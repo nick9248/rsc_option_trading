@@ -46,6 +46,13 @@ def test_realised_volatility_only_looks_at_days_that_finished_before_the_entry_d
     assert end < datetime(2026, 6, 1, 0, 0) and start < end
 
 
+def test_a_gap_in_the_daily_candles_is_not_stretched_into_one_return():
+    candles = daily_closes()
+    gapped = [candle for index, candle in enumerate(candles) if index % 2 == 0]               # every second day missing: no consecutive pair
+    lab, _ = make_lab(closes=gapped)
+    assert lab.realised_volatility("BTC", date(2026, 6, 1)) is None
+
+
 def test_too_few_daily_closes_give_no_volatility():
     lab, _ = make_lab(closes=daily_closes(10))
     assert lab.realised_volatility("BTC", date(2026, 6, 1)) is None
