@@ -111,7 +111,6 @@ class ExpirationBundle:
     oi_changes: Optional[OiChangesResult]
     iv_percentile: Optional[IvPercentileResult]
     trend: Optional[TrendSnapshot]
-    flow_chart_paths: Dict[str, str]  # {"distribution"|"net_flow"|"trend": path}
     enriched_instruments: Tuple[Dict[str, Any], ...]  # greeks-enriched raw dicts
     # institutional_metrics_spec.md section 2 / task C3: taker-flow-inferred
     # dealer positioning (the third, separately-labeled view alongside

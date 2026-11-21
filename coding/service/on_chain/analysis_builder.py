@@ -50,12 +50,7 @@ class _ExpirationAccumulator:
     oi_changes: Optional[OiChangesResult] = None
     iv_percentile: Optional[IvPercentileResult] = None
     trend: Optional[TrendSnapshot] = None
-    flow_chart_paths: Dict[str, str] = None
     enriched_instruments: Tuple[Dict[str, Any], ...] = ()
-
-    def __post_init__(self) -> None:
-        if self.flow_chart_paths is None:
-            self.flow_chart_paths = {}
 
 
 class OnChainAnalysisBuilder:
@@ -106,9 +101,6 @@ class OnChainAnalysisBuilder:
 
     def set_flow(self, expiration: str, result: FlowResult) -> None:
         self._slot(expiration).flow = result
-
-    def set_flow_charts(self, expiration: str, paths: Dict[str, str]) -> None:
-        self._slot(expiration).flow_chart_paths = dict(paths)
 
     def set_vol_surface(self, expiration: str, result: VolSurfaceResult) -> None:
         self._slot(expiration).vol_surface = result
@@ -164,7 +156,6 @@ class OnChainAnalysisBuilder:
                     oi_changes=acc.oi_changes,
                     iv_percentile=acc.iv_percentile,
                     trend=acc.trend,
-                    flow_chart_paths=dict(acc.flow_chart_paths or {}),
                     enriched_instruments=acc.enriched_instruments,
                 )
             )

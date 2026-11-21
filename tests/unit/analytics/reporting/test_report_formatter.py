@@ -297,7 +297,7 @@ def _make_result(expiration: str = "10MAR26", **overrides) -> OnChainAnalysisRes
     bundle = ExpirationBundle(
         expiration=expiration, analysis=_make_analysis(expiration), gex_dex=None,
         flow=None, vol_surface=None, oi_changes=None, iv_percentile=None, trend=None,
-        flow_chart_paths={}, enriched_instruments=(),
+        enriched_instruments=(),
     )
     defaults = dict(
         currency="BTC", underlying_price=95000.0, generated_at=GENERATED_AT,
@@ -336,7 +336,7 @@ def test_render_expiration_from_result_includes_evidence_line_when_flow_present(
     bundle = ExpirationBundle(
         expiration="10MAR26", analysis=_make_analysis("10MAR26"), gex_dex=None, flow=flow,
         vol_surface=None, oi_changes=None, iv_percentile=None, trend=None,
-        flow_chart_paths={}, enriched_instruments=(),
+        enriched_instruments=(),
     )
     result = _make_result(expirations=(bundle,))
     text = formatter.render_expiration_from_result(result, "10MAR26", NOW_UTC)
@@ -369,7 +369,7 @@ def test_render_expiration_from_result_full_book_claim_when_gex_dex_complete():
     bundle = ExpirationBundle(
         expiration="10MAR26", analysis=_make_analysis("10MAR26"), gex_dex=gex_dex, flow=None,
         vol_surface=None, oi_changes=None, iv_percentile=None, trend=None,
-        flow_chart_paths={}, enriched_instruments=(),
+        enriched_instruments=(),
     )
     result = _make_result(expirations=(bundle,))
     text = formatter.render_expiration_from_result(result, "10MAR26", NOW_UTC)
@@ -390,7 +390,7 @@ def test_render_expiration_from_result_discloses_gap_when_gex_dex_incomplete():
     bundle = ExpirationBundle(
         expiration="10MAR26", analysis=_make_analysis("10MAR26"), gex_dex=gex_dex, flow=None,
         vol_surface=None, oi_changes=None, iv_percentile=None, trend=None,
-        flow_chart_paths={}, enriched_instruments=(),
+        enriched_instruments=(),
     )
     result = _make_result(expirations=(bundle,))
     text = formatter.render_expiration_from_result(result, "10MAR26", NOW_UTC)
@@ -422,7 +422,7 @@ def test_render_expiration_from_result_100pct_failure_discloses_not_full_book():
     bundle = ExpirationBundle(
         expiration="10MAR26", analysis=_make_analysis("10MAR26"), gex_dex=gex_dex, flow=None,
         vol_surface=None, oi_changes=None, iv_percentile=None, trend=None,
-        flow_chart_paths={}, enriched_instruments=(),
+        enriched_instruments=(),
     )
     result = _make_result(expirations=(bundle,))
     text = formatter.render_expiration_from_result(result, "10MAR26", NOW_UTC)
@@ -449,7 +449,7 @@ def test_render_expiration_from_result_no_gex_dex_keeps_legacy_full_book_claim()
     bundle = ExpirationBundle(
         expiration="10MAR26", analysis=_make_analysis("10MAR26"), gex_dex=None, flow=flow,
         vol_surface=None, oi_changes=None, iv_percentile=None, trend=None,
-        flow_chart_paths={}, enriched_instruments=(),
+        enriched_instruments=(),
     )
     result = _make_result(expirations=(bundle,))
     text = formatter.render_expiration_from_result(result, "10MAR26", NOW_UTC)
@@ -466,7 +466,7 @@ def test_render_expiration_from_result_includes_gex_dex_section_when_present():
     bundle = ExpirationBundle(
         expiration="10MAR26", analysis=_make_analysis("10MAR26"), gex_dex=gex_dex, flow=None,
         vol_surface=None, oi_changes=None, iv_percentile=None, trend=None,
-        flow_chart_paths={}, enriched_instruments=(),
+        enriched_instruments=(),
     )
     result = _make_result(expirations=(bundle,))
     text = formatter.render_expiration_from_result(result, "10MAR26", NOW_UTC)
@@ -491,7 +491,7 @@ def test_render_expiration_from_result_includes_fixed_strike_vol_section_when_pr
     bundle = ExpirationBundle(
         expiration="10MAR26", analysis=_make_analysis("10MAR26"), gex_dex=None, flow=None,
         vol_surface=None, oi_changes=None, iv_percentile=None, trend=None,
-        flow_chart_paths={}, enriched_instruments=(), fixed_strike_vol=fixed_strike_vol,
+        enriched_instruments=(), fixed_strike_vol=fixed_strike_vol,
     )
     result = _make_result(expirations=(bundle,))
     text = formatter.render_expiration_from_result(result, "10MAR26", NOW_UTC)
@@ -564,7 +564,7 @@ def test_render_expiration_from_result_section_order_matches_spec():
         expiration="10MAR26", analysis=_make_analysis("10MAR26"),
         gex_dex=gex_dex, flow=flow, vol_surface=vol_surface,
         oi_changes=oi_changes, iv_percentile=iv_percentile, trend=None,
-        flow_chart_paths={}, enriched_instruments=(),
+        enriched_instruments=(),
         dealer_inventory=dealer_inventory, exposure_profile=exposure_profile,
         fixed_strike_vol=fixed_strike_vol,
     )
@@ -897,12 +897,12 @@ def test_render_full_from_result_renders_multiple_expirations_in_order():
     bundle_a = ExpirationBundle(
         expiration="10MAR26", analysis=_make_analysis("10MAR26"), gex_dex=None, flow=None,
         vol_surface=None, oi_changes=None, iv_percentile=None, trend=None,
-        flow_chart_paths={}, enriched_instruments=(),
+        enriched_instruments=(),
     )
     bundle_b = ExpirationBundle(
         expiration="27JUN26", analysis=_make_analysis("27JUN26"), gex_dex=None, flow=None,
         vol_surface=None, oi_changes=None, iv_percentile=None, trend=None,
-        flow_chart_paths={}, enriched_instruments=(),
+        enriched_instruments=(),
     )
     result = _make_result(expirations=(bundle_a, bundle_b))
 

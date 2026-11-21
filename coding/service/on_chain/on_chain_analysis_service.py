@@ -17,13 +17,6 @@ from coding.core.analytics.black_scholes_calculator import (
     MAX_SANE_MARK_IV_PCT,
 )
 from coding.core.analytics.buy_sell_flow_analyzer import BuySellFlowAnalyzer
-from coding.core.analytics.chart_generator import (
-    generate_flow_distribution_chart,
-    generate_flow_trend_chart,
-    generate_net_flow_chart,
-    inject_hover_js,
-    save_chart,
-)
 from coding.core.analytics.dealer_inventory_calculator import DealerInventoryCalculator
 from coding.core.analytics.exposure_profile_calculator import ExposureProfileCalculator
 from coding.core.analytics.fixed_strike_vol_calculator import (
@@ -2468,67 +2461,8 @@ class OnChainAnalysisService:
                     window_end_ms=window_end_ms,
                 )
 
-                # Calculate once — pass result to storage, DB save, charts,
-                # and the report formatter, so all four describe one instant.
+                # Calculate once; the builder (and so the report formatter) gets this one result.
                 flow_result = flow_analyzer.calculate()
-                flow_result_dict = flow_result.to_dict()
-                # bugfix_spec.md Item 6 / F6.3.4 (carried from A4 review):
-                # to_dict()'s legacy shim doesn't carry the data-sufficiency
-                # gate. Add it so generate_report() can read sufficient_data
-                # per expiration for the EVIDENCE line — a one-line lookup,
-                # not a refactor.
-                flow_result_dict["sufficient_data"] = flow_result.sufficient_data
-                flow_result_dict["low_confidence"] = flow_result.low_confidence
-                flow_result_dict["lookback_hours"] = flow_result.lookback_hours
-
-                # Save to database for chart queries
-                # Save flow charts to output/charts/flow_analysis/<expiration>/
-                chart_paths: Dict[str, str] = {}
-                try:
-                    subfolder = f"flow_analysis/{expiration}"
-
-                    fig_dist = generate_flow_distribution_chart(
-                        flow_data=flow_result_dict,
-                        spot_price=analyzer.index_price,
-                        currency=analyzer.currency,
-                        expiration=expiration,
-                    )
-                    dist_path = save_chart(
-                        fig_dist, f"flow_distribution_{analyzer.currency}_{expiration}",
-                        subfolder=subfolder, save_png=False,
-                    )
-                    inject_hover_js(Path(dist_path))
-                    chart_paths["distribution"] = dist_path
-
-                    fig_net = generate_net_flow_chart(
-                        flow_data=flow_result_dict,
-                        spot_price=analyzer.index_price,
-                        currency=analyzer.currency,
-                        expiration=expiration,
-                    )
-                    net_path = save_chart(
-                        fig_net, f"net_flow_{analyzer.currency}_{expiration}",
-                        subfolder=subfolder, save_png=False,
-                    )
-                    inject_hover_js(Path(net_path))
-                    chart_paths["net_flow"] = net_path
-
-                    fig_trend = generate_flow_trend_chart(
-                        repository=self.repository,
-                        currency=analyzer.currency,
-                        expiration=expiration,
-                        lookback_days=7,
-                    )
-                    trend_path = save_chart(
-                        fig_trend, f"flow_trend_{analyzer.currency}_{expiration}",
-                        subfolder=subfolder, save_png=False,
-                    )
-                    inject_hover_js(Path(trend_path))
-                    chart_paths["trend"] = trend_path
-
-                    logger.info(f"Saved flow charts to output/charts/{subfolder}/")
-                except Exception as chart_error:
-                    logger.warning(f"Failed to save flow charts for {expiration}: {chart_error}")
 
                 # T10: the analyzer's own buy_sell_flow_structured/
                 # buy_sell_flow_data text-and-dict bookkeeping is deleted --
@@ -2537,7 +2471,6 @@ class OnChainAnalysisService:
                 # the builder already receives below).
                 if builder is not None:
                     builder.set_flow(expiration, flow_result)
-                    builder.set_flow_charts(expiration, chart_paths)
 
             except Exception as e:
                 logger.warning(f"Failed to calculate buy/sell flow for {expiration}: {e}")

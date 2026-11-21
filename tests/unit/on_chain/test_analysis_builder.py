@@ -105,7 +105,6 @@ class TestOnChainAnalysisBuilder:
         builder.set_expiration_analysis("28MAR26", analysis)
         builder.set_flow("28MAR26", flow)
         builder.set_trend("28MAR26", trend)
-        builder.set_flow_charts("28MAR26", {"distribution": "path/a.html"})
         builder.set_enriched_instruments("28MAR26", [{"strike": 90000.0, "delta": 0.5}])
         builder.set_recent_trades([{"instrument_name": "BTC-28MAR26-90000-C"}])
         builder.set_market_wide(market_wide)
@@ -126,7 +125,6 @@ class TestOnChainAnalysisBuilder:
         assert bundle.analysis == analysis
         assert bundle.flow == flow
         assert bundle.trend == trend
-        assert bundle.flow_chart_paths == {"distribution": "path/a.html"}
         assert bundle.enriched_instruments == ({"strike": 90000.0, "delta": 0.5},)
         assert bundle.gex_dex is None
         assert bundle.vol_surface is None
@@ -231,7 +229,7 @@ class TestOnChainAnalysisBuilder:
         )
         builder.set_expiration_analysis("28MAR26", _make_analysis())
         # 27JUN26 gets a gex_dex set via some other phase but never an analysis
-        builder.set_flow_charts("27JUN26", {})
+        builder.set_enriched_instruments("27JUN26", [])
 
         result = builder.build()
 

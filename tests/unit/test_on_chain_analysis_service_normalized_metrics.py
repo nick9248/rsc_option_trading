@@ -106,7 +106,7 @@ def _make_result(expirations=("25DEC26",), **analysis_kwargs):
         ExpirationBundle(
             expiration=exp, analysis=_make_analysis(exp, **analysis_kwargs),
             gex_dex=None, flow=None, vol_surface=None, oi_changes=None,
-            iv_percentile=None, trend=None, flow_chart_paths={}, enriched_instruments=(),
+            iv_percentile=None, trend=None, enriched_instruments=(),
         )
         for exp in expirations
     )

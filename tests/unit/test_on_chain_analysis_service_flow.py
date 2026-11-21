@@ -80,17 +80,7 @@ class TestCalculateBuySellFlowSingleFetch:
 
         with patch(
             "coding.service.on_chain.on_chain_analysis_service.BuySellFlowAnalyzer"
-        ) as MockAnalyzer, patch(
-            "coding.service.on_chain.on_chain_analysis_service.generate_flow_distribution_chart"
-        ), patch(
-            "coding.service.on_chain.on_chain_analysis_service.generate_net_flow_chart"
-        ), patch(
-            "coding.service.on_chain.on_chain_analysis_service.generate_flow_trend_chart"
-        ), patch(
-            "coding.service.on_chain.on_chain_analysis_service.save_chart", return_value=""
-        ), patch(
-            "coding.service.on_chain.on_chain_analysis_service.inject_hover_js"
-        ):
+        ) as MockAnalyzer:
             instance = MagicMock()
             instance.calculate.return_value.to_dict.return_value = {"flow_data": {}}
             MockAnalyzer.return_value = instance

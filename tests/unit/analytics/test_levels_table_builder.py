@@ -178,7 +178,6 @@ def _bundle(analysis, gex_dex=None, dealer_inventory=None, exposure_profile=None
         oi_changes=None,
         iv_percentile=None,
         trend=None,
-        flow_chart_paths={},
         enriched_instruments=(),
         dealer_inventory=dealer_inventory,
         exposure_profile=exposure_profile,

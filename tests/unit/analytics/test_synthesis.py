@@ -277,7 +277,7 @@ def make_onchain_result(
             ExpirationBundle(
                 expiration=expiration, analysis=analysis, gex_dex=gex_dex, flow=flow,
                 vol_surface=vol_surface, oi_changes=None, iv_percentile=None, trend=None,
-                flow_chart_paths={}, enriched_instruments=(),
+                enriched_instruments=(),
             ),
         )
 
@@ -2033,7 +2033,7 @@ class TestBuildExpiryMetrics:
         no_levels_bundle = ExpirationBundle(
             expiration=bundle.expiration, analysis=bundle.analysis, gex_dex=no_levels_gex,
             flow=bundle.flow, vol_surface=bundle.vol_surface, oi_changes=None,
-            iv_percentile=None, trend=None, flow_chart_paths={}, enriched_instruments=(),
+            iv_percentile=None, trend=None, enriched_instruments=(),
         )
         no_levels_result = OnChainAnalysisResult(
             currency=onchain_result.currency, underlying_price=onchain_result.underlying_price,
@@ -2077,7 +2077,7 @@ class TestBuildExpiryMetrics:
         skewed_bundle = ExpirationBundle(
             expiration=bundle.expiration, analysis=different_analysis, gex_dex=bundle.gex_dex,
             flow=bundle.flow, vol_surface=bundle.vol_surface, oi_changes=None,
-            iv_percentile=None, trend=None, flow_chart_paths={}, enriched_instruments=(),
+            iv_percentile=None, trend=None, enriched_instruments=(),
         )
         skewed_result = OnChainAnalysisResult(
             currency=onchain_result.currency, underlying_price=onchain_result.underlying_price,
@@ -2109,7 +2109,7 @@ class TestBuildExpiryMetrics:
         gated_bundle = ExpirationBundle(
             expiration=bundle.expiration, analysis=bundle.analysis, gex_dex=bundle.gex_dex,
             flow=gated_flow, vol_surface=bundle.vol_surface, oi_changes=None,
-            iv_percentile=None, trend=None, flow_chart_paths={}, enriched_instruments=(),
+            iv_percentile=None, trend=None, enriched_instruments=(),
         )
         gated_result = OnChainAnalysisResult(
             currency=onchain_result.currency, underlying_price=onchain_result.underlying_price,

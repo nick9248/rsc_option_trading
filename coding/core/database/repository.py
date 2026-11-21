@@ -389,65 +389,6 @@ class DatabaseRepository:
 
             return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
-    def get_hourly_flow_volumes(
-        self,
-        currency: str,
-        start_ts: int,
-        end_ts: int,
-        expiration: Optional[str] = None,
-        trade_filter: str = "all",
-    ) -> List[tuple]:
-        """
-        Fetch hourly-bucketed traded volume split by option type and direction.
-
-        Used by chart_generator.generate_flow_trend_chart.
-
-        Args:
-            currency: Currency symbol (BTC or ETH).
-            start_ts: Window start, epoch milliseconds.
-            end_ts: Window end, epoch milliseconds.
-            expiration: Optional expiration filter (e.g., "27MAR26").
-                None aggregates across all expirations.
-            trade_filter: "all" (no filter), "block" (notional >= $100k), or
-                "non_block" (notional < $100k).
-
-        Returns:
-            List of (hour, option_type, direction, total_volume) tuples
-            ordered by hour ascending.
-        """
-        filter_clause = {
-            "block":     "AND (amount * index_price) >= 100000",
-            "non_block": "AND (amount * index_price) < 100000",
-        }.get(trade_filter, "")
-
-        expiration_clause = "AND expiration = %s" if expiration else ""
-        params = (
-            (currency, expiration, start_ts, end_ts)
-            if expiration
-            else (currency, start_ts, end_ts)
-        )
-
-        query = f"""
-            SELECT
-                DATE_TRUNC('hour', TO_TIMESTAMP(trade_timestamp / 1000)) AS hour,
-                option_type,
-                direction,
-                SUM(amount) AS total_volume
-            FROM historical_trades
-            WHERE currency = %s
-                {expiration_clause}
-                AND trade_timestamp >= %s
-                AND trade_timestamp <= %s
-                AND direction IS NOT NULL
-                {filter_clause}
-            GROUP BY hour, option_type, direction
-            ORDER BY hour ASC
-        """
-
-        with self._db_cursor() as cursor:
-            cursor.execute(query, params)
-            return cursor.fetchall()
-
     def get_option_trades_between(self, currency: str, start_ts: int, end_ts: int,
                                   expiration: Optional[str] = None) -> List[OptionTrade]:
         """
