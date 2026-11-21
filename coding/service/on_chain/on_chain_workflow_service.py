@@ -67,6 +67,14 @@ class OnChainWorkflowService:
         repository: Optional[DatabaseRepository] = None,
         chain_source_mode: str = CHAIN_SOURCE_LIVE,
     ) -> None:
+        """
+        Args:
+            currency: "BTC" or "ETH".
+            api_service: Deribit access (built when omitted).
+            repository: Database access (built when omitted).
+            chain_source_mode: ``CHAIN_SOURCE_LIVE`` (default here and in ``OnChainAnalysisService``: a direct caller keeps fetching
+                live) or ``CHAIN_SOURCE_STORED``. The Analysis tab's ``AnalysisRunService`` defaults to stored.
+        """
         self.currency = currency
         self._chain_source_mode = chain_source_mode
         self._api_service = api_service

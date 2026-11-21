@@ -23,6 +23,10 @@ logger = logging.getLogger(__name__)
 CHAIN_SOURCE_STORED = "stored"
 CHAIN_SOURCE_LIVE = "live"
 CHAIN_SOURCES = (CHAIN_SOURCE_STORED, CHAIN_SOURCE_LIVE)
+MAX_INDEX_PRICE_GAP_MINUTES = 15.0
+"""Oldest index price (the last stored trade) that still counts as the index of the snapshot's capture instant."""
+MAX_CLOCK_AHEAD_MINUTES = 5.0
+"""A snapshot stamped further in the future than this (the collector's clock is ahead) is not trusted."""
 DEFAULT_MAX_SNAPSHOT_AGE_MINUTES = 45.0
 """The collector captures every 30 minutes: a snapshot up to 45 minutes old is the newest one the collector can have made."""
 
@@ -84,19 +88,27 @@ class ChainSourceService:
             return self._live(currency, "live chain from Deribit (chosen)")
         if self.repository is None:
             return self._live(currency, "live chain from Deribit (no local database)")
-        stored = self._stored(currency, now)
+        try:
+            stored = self._stored(currency, now)
+        except Exception as error:                    # a broken local database must not stop an analysis that can run live
+            logger.exception("Reading the stored snapshot failed")
+            stored = f"reading the stored snapshot failed: {type(error).__name__}: {error}"
         if isinstance(stored, ChainInput):
             return stored
         return self._live(currency, f"live chain from Deribit ({stored})")
 
     def _stored(self, currency: str, now: datetime):
         """A ``ChainInput`` from the stored snapshot, or the reason (text) why it cannot be used."""
-        assert self.repository is not None
+        if self.repository is None:
+            raise RuntimeError("a stored chain needs the local database")
         snapshot = self.repository.get_option_chain_snapshot_at_or_before(currency, now)
         if snapshot is None:
             return "no stored snapshot"
         captured_at, rows = snapshot
-        age_minutes = max((now - captured_at).total_seconds() / 60.0, 0.0)
+        age_minutes = (now - captured_at).total_seconds() / 60.0
+        if age_minutes < -MAX_CLOCK_AHEAD_MINUTES:
+            return f"stored snapshot of {captured_at:%Y-%m-%d %H:%M} UTC is {-age_minutes:.0f} min in the future (clock skew)"
+        age_minutes = max(age_minutes, 0.0)
         if age_minutes > self.max_age_minutes:
             return (f"stored snapshot of {captured_at:%Y-%m-%d %H:%M} UTC is {age_minutes:.0f} min old, limit "
                     f"{self.max_age_minutes:.0f} min")
@@ -104,12 +116,17 @@ class ChainSourceService:
         if index is None:
             return f"no index price at or before the snapshot of {captured_at:%Y-%m-%d %H:%M} UTC"
         index_price, index_time = index
+        index_gap_minutes = (captured_at - index_time).total_seconds() / 60.0
+        if index_gap_minutes > MAX_INDEX_PRICE_GAP_MINUTES:
+            return (f"newest index price before the snapshot is {index_gap_minutes:.0f} min older than it "
+                    f"(limit {MAX_INDEX_PRICE_GAP_MINUTES:.0f} min)")
         instruments = [{field: row.get(field) for field in _BOOK_SUMMARY_FIELDS} for row in rows]
         description = (f"stored snapshot of {captured_at:%Y-%m-%d %H:%M} UTC, {age_minutes:.0f} min old, {len(instruments)} instruments, "
                        f"index {index_price:,.2f} from the trade at {index_time:%H:%M:%S} UTC")
         return ChainInput(instruments, index_price, CHAIN_SOURCE_STORED, captured_at, age_minutes, description)
 
     def _live(self, currency: str, description: str) -> ChainInput:
-        assert self.api is not None, "a live chain needs the Deribit API"
+        if self.api is None:
+            raise RuntimeError("a live chain needs the Deribit API")
         instruments = self.api.get_book_summary(currency=currency, kind="option")
         return ChainInput(instruments, None, CHAIN_SOURCE_LIVE, None, None, f"{description}, {len(instruments)} instruments")

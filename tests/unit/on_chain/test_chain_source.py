@@ -81,6 +81,31 @@ def test_without_a_database_stored_mode_uses_live():
     assert service.load("BTC", NOW).source == CHAIN_SOURCE_LIVE
 
 
+def test_an_index_price_far_older_than_the_snapshot_is_not_used():
+    captured = NOW - timedelta(minutes=10)
+    service, _, _ = make((captured, [stored_row()]), index=(57000.0, captured - timedelta(hours=3)))
+    chain = service.load("BTC", NOW)
+    assert chain.source == CHAIN_SOURCE_LIVE and "index price" in chain.description and "180 min older" in chain.description
+
+
+def test_a_database_error_falls_back_to_live_with_the_error_as_reason():
+    service, _, repository = make(None)
+    repository.get_option_chain_snapshot_at_or_before.side_effect = RuntimeError("connection refused")
+    chain = service.load("BTC", NOW)
+    assert chain.source == CHAIN_SOURCE_LIVE and "connection refused" in chain.description
+
+
+def test_a_snapshot_stamped_in_the_future_is_not_trusted():
+    service, _, _ = make((NOW + timedelta(minutes=30), [stored_row()]))
+    chain = service.load("BTC", NOW)
+    assert chain.source == CHAIN_SOURCE_LIVE and "in the future" in chain.description
+
+
+def test_live_without_an_api_is_a_clear_error():
+    with pytest.raises(RuntimeError, match="Deribit API"):
+        ChainSourceService(None, None).load("BTC", NOW)
+
+
 def test_an_unknown_mode_is_refused():
     with pytest.raises(ValueError):
         ChainSourceService(MagicMock(), MagicMock(), mode="cache")
