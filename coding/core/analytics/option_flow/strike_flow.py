@@ -13,7 +13,7 @@ times the strike instead (found by fitting their tooltips: at the 108,000 strike
 A "buy" or "sell" here is what the taker did. It does not say whether the position was opened or closed, nor whether the
 taker was a customer or a market maker; blocks are negotiated and often several legs of one structure.
 
-A trade with an unknown type or side, or a non-positive size, strike or index price, is skipped and counted, never counted as zero.
+A trade with an unknown type or side, or a non-positive size or strike, or without a usable index price, is skipped and counted, never counted as zero.
 """
 
 from dataclasses import dataclass, field
@@ -60,7 +60,7 @@ class OptionTrade:
     direction: str                  # "buy" or "sell": the taker's side
     amount: float                   # contracts (BTC)
     is_block: bool
-    index_price: float              # USD index price at the trade (stored with every trade)
+    index_price: Optional[float]    # USD index price at the trade; None when not stored (the trade is then skipped and counted)
 
 
 @dataclass
@@ -103,7 +103,7 @@ def aggregate_by_strike(trades: Iterable[OptionTrade], expiry: Optional[str] = N
         if expiry is not None and trade.expiration != expiry:
             continue
         key = _SERIES_BY_KIND.get((trade.option_type.upper(), trade.direction.lower(), trade.is_block))
-        if key is None or trade.strike <= 0 or trade.amount <= 0 or trade.index_price <= 0:
+        if key is None or trade.strike <= 0 or trade.amount <= 0 or trade.index_price is None or trade.index_price <= 0:
             flow.trades_skipped += 1
             continue
         cell = flow.cells.setdefault(trade.strike, {}).setdefault(key, FlowCell())

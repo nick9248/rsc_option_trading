@@ -123,7 +123,7 @@ def test_flow_time_is_clamped_to_the_window_end_and_no_trades_give_no_items():
 def test_flow_strikes_are_weak_levels_scaled_by_the_largest():
     flow = aggregate_by_strike([trade("P", "buy", 2, strike=60_000.0), trade("C", "sell", 1, strike=70_000.0)])
     items = by_id(extractors.flow_strike_evidence(flow, NOW, NOW, hours=24, per_side=2))
-    # notional = contracts x strike: 120,000 and 70,000 -> strengths 1 and 70/120
+    # notional = contracts x index price (index price = strike in this helper): 120,000 and 70,000 -> strengths 1 and 70/120
     assert items["option_flow.strike.P_buy.60000"].strength == pytest.approx(1.0)
     assert items["option_flow.strike.C_sell.70000"].strength == pytest.approx(70_000 / 120_000)
     assert all(item.kind == "price_level" and item.quality == pytest.approx(0.35) for item in items.values())

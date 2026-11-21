@@ -268,8 +268,8 @@ def test_notional_is_contracts_times_the_index_and_the_help_says_how_laevitas_di
     term = next(term.meaning for term in topic_of("option-flow", "Buy and sell bars").terms if term.term == "Notional").replace("\n", " ")
     assert "index price at the trade" in term and "Laevitas uses contracts times the strike" in term
     assert not hasattr(help_module, "index_notional_difference_percent")
-    # what the old definition would give, by hand: 10 contracts at a 77,000 strike with the index at 70,000 is 9.1 % more than the index value
-    assert round((10 * 77_000 / (10 * 70_000) - 1) * 100, 1) == 10.0
+    # what the old strike-based definition would have given for 10 contracts at a 77,000 strike, index 70,000: 10 % more
+    assert notional_usd(10, 77_000) / notional_usd(10, 70_000) == pytest.approx(1.1)
 
 
 def test_option_flow_examples():

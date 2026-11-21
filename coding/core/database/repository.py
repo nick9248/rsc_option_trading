@@ -400,7 +400,7 @@ class DatabaseRepository:
             SELECT expiration, strike, option_type, direction, amount, (block_trade_id IS NOT NULL), index_price
             FROM historical_trades
             WHERE currency = %s AND trade_timestamp >= %s AND trade_timestamp < %s
-              AND strike IS NOT NULL AND direction IS NOT NULL AND option_type IS NOT NULL AND index_price IS NOT NULL
+              AND strike IS NOT NULL AND direction IS NOT NULL AND option_type IS NOT NULL
         """
         parameters: List[Any] = [currency, start_ts, end_ts]
         if expiration is not None:
@@ -410,14 +410,16 @@ class DatabaseRepository:
             cursor.execute(query, parameters)
             rows = cursor.fetchall()
         return [OptionTrade(expiration=row[0], strike=float(row[1]), option_type=row[2], direction=row[3],
-                            amount=float(row[4]), is_block=bool(row[5]), index_price=float(row[6]))
+                            amount=float(row[4]), is_block=bool(row[5]),
+                            index_price=float(row[6]) if row[6] is not None else None)
                 for row in rows]
 
     def get_block_trade_legs_between(self, currency: str, start_ms: int, end_ms: int) -> List[BlockTradeLeg]:
         """
         Every stored leg of a block trade (``block_trade_id`` set) with ``start_ms <= trade_timestamp < end_ms``
         (epoch milliseconds, the same bounds as ``get_option_trades_between``), oldest first. A block's other legs may
-        lie outside the window; compare ``block_trade_leg_count`` with the legs returned.
+        lie outside the window; compare ``block_trade_leg_count`` with the legs returned. A leg without a stored index price
+        cannot be valued and is left out (every stored trade has one so far).
         """
         query = """
             SELECT block_trade_id, trade_id, trade_timestamp, expiration, strike, option_type, direction, amount,

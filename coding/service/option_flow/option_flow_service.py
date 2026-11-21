@@ -111,7 +111,7 @@ class OptionFlowService:
         hours = round((report.window_end - report.window_start).total_seconds() / 3600)
         title = f"{report.currency} DERIBIT Buy/Sell Volume Last {hours}H {scope}"
         footer = (f"Window {report.window_start:%Y-%m-%d %H:%M} to {report.window_end:%Y-%m-%d %H:%M} UTC. "
-                  f"{report.flow.trades_used} trades ({report.flow.trades_skipped} skipped: unknown side or size). "
+                  f"{report.flow.trades_used} trades ({report.flow.trades_skipped} skipped: unknown side, size or price). "
                   "Buy/sell = the taker's side (aggressor); notional = contracts x index price at the trade (Laevitas uses the strike instead); "
                   "blocked = Deribit block trades.")
         if report.newest_trade is not None:

@@ -49,7 +49,6 @@ def test_notional_is_contracts_times_the_index_not_the_strike():
                                 trade(strike=108_000.0, amount=0.1, direction="sell")])
     assert flow.cell(108_000.0, "call_buy").notional_usd == pytest.approx(91_000.0)
     assert flow.cell(108_000.0, "call_sell").notional_usd == pytest.approx(7_000.0)
-    assert 91_000.0 != pytest.approx(140_400.0, rel=0.3)
     assert flow.cell(108_000.0, "call_buy").contracts == pytest.approx(1.3)
     assert all(flow.cell(108_000.0, series.key).trades == 0 for series in SERIES
                if series.key not in ("call_buy", "call_sell"))
@@ -63,8 +62,8 @@ def test_one_expiry_can_be_selected_and_strikes_are_sorted():
 
 def test_trades_that_cannot_be_used_are_skipped_and_counted_never_zero_filled():
     flow = aggregate_by_strike([trade(direction="hold"), trade(kind="X"), trade(amount=0.0), trade(amount=-1.0),
-                                trade(strike=0.0), trade(index_price=0.0), trade()])
-    assert flow.trades_used == 1 and flow.trades_skipped == 6
+                                trade(strike=0.0), trade(index_price=0.0), trade(index_price=None), trade()])
+    assert flow.trades_used == 1 and flow.trades_skipped == 7
 
 
 def test_option_type_and_direction_are_read_case_insensitively():
@@ -242,16 +241,18 @@ def test_repository_query_returns_the_window_the_expiry_and_the_block_flag(repo)
             ("c", 3_000, "BTC", "25DEC26", 70_000, "C", "buy", 1.0, 70_700.0, None),
             ("d", 4_000, "ETH", "27NOV26", 3_000, "C", "buy", 1.0, 3_000.0, None),
             ("e", 9_000, "BTC", "27NOV26", 70_000, "C", "buy", 1.0, 70_800.0, None),       # outside the window
-            ("f", 1_700, "BTC", "27NOV26", 70_000, "C", "buy", 1.0, None, None)]          # no index price: cannot be valued, not returned
+            ("f", 1_700, "BTC", "27NOV26", 70_000, "C", "buy", 1.0, None, None)]          # no index price: returned, then skipped and counted
     with psycopg2.connect(**connection_settings) as connection:
         with connection.cursor() as cursor:
             cursor.executemany("INSERT INTO historical_trades (trade_id, trade_timestamp, currency, expiration, strike, option_type, "
                                "direction, amount, index_price, block_trade_id) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", rows)
     everything = repository.get_option_trades_between("BTC", 0, 5_000)
     assert sorted((t.strike, t.option_type, t.direction, t.amount, t.is_block) for t in everything) == [
-        (70_000.0, "C", "buy", 1.0, False), (70_000.0, "C", "sell", 2.5, False), (80_000.0, "P", "buy", 10.0, True)]
+        (70_000.0, "C", "buy", 1.0, False), (70_000.0, "C", "buy", 1.0, False), (70_000.0, "C", "sell", 2.5, False),
+        (80_000.0, "P", "buy", 10.0, True)]
+    assert sorted(t.index_price is None for t in everything) == [False, False, False, True]
     only_november = repository.get_option_trades_between("BTC", 0, 5_000, "27NOV26")
-    assert len(only_november) == 2 and all(t.expiration == "27NOV26" for t in only_november)
+    assert len(only_november) == 3 and all(t.expiration == "27NOV26" for t in only_november)
     assert repository.get_first_block_trade_time("BTC") == datetime.fromtimestamp(2.0, tz=timezone.utc)
     assert repository.get_first_block_trade_time("ETH") is None
     with psycopg2.connect(**connection_settings) as connection:
@@ -263,6 +264,7 @@ def test_repository_query_returns_the_window_the_expiry_and_the_block_flag(repo)
     assert repository.get_latest_trade_time("BTC") == datetime.fromtimestamp(9.0, tz=timezone.utc)
     assert repository.get_latest_trade_time("SOL") is None
     flow = aggregate_by_strike(everything)
+    assert flow.trades_skipped == 1 and flow.trades_used == 3                    # the trade without an index price is counted, not valued
     assert flow.cell(80_000.0, "put_buy_block").notional_usd == 10.0 * 70_600.0          # contracts x the index at the trade, not x the strike
     assert flow.cell(70_000.0, "call_sell").notional_usd == 2.5 * 70_500.0
 
