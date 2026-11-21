@@ -12,6 +12,9 @@ from coding.core.analytics.backtest.structures import Leg
 T0 = datetime(2026, 6, 1, 9, tzinfo=timezone.utc)
 
 
+SETTLED = datetime(2026, 6, 5, 8, tzinfo=timezone.utc)
+
+
 def leg(action, option_type, strike, price):
     return Leg(action, option_type, strike, f"BTC-5JUN26-{strike}-{option_type[0].upper()}", price)
 
@@ -34,7 +37,7 @@ def test_intrinsic_value():
 
 def test_a_put_credit_spread_that_expires_worthless_keeps_the_credit_less_fees():
     legs = [leg("sell", "put", 70000, 360.0), leg("buy", "put", 66000, 120.0)]
-    trade = simulate_trade("put_credit_spread", "5JUN26", T0, 75000.0, legs, 76000.0)
+    trade = simulate_trade("put_credit_spread", "5JUN26", T0, SETTLED, 75000.0, legs, 76000.0)
     assert trade.premium_usd == 240.0 and trade.payoff_usd == 0.0 and trade.delivery_fees_usd == 0.0
     # fees: min(22.5, 45) for the sold put, min(22.5, 15) for the bought one
     assert trade.trading_fees_usd == pytest.approx(22.5 + 15.0)
@@ -43,7 +46,7 @@ def test_a_put_credit_spread_that_expires_worthless_keeps_the_credit_less_fees()
 
 def test_a_put_credit_spread_through_both_strikes_loses_the_width_less_the_credit_and_fees():
     legs = [leg("sell", "put", 70000, 360.0), leg("buy", "put", 66000, 120.0)]
-    trade = simulate_trade("put_credit_spread", "5JUN26", T0, 75000.0, legs, 62000.0)
+    trade = simulate_trade("put_credit_spread", "5JUN26", T0, SETTLED, 75000.0, legs, 62000.0)
     assert trade.payoff_usd == -4000.0                                    # -(8000) + 4000
     # delivery fees: sold put intrinsic 8000 -> min(9.3, 1000) = 9.3; bought put intrinsic 4000 -> 9.3
     assert trade.delivery_fees_usd == pytest.approx(2 * 0.00015 * 62000)
@@ -51,14 +54,14 @@ def test_a_put_credit_spread_through_both_strikes_loses_the_width_less_the_credi
 
 
 def test_a_bought_call_pays_its_ask_and_receives_the_intrinsic_value():
-    trade = simulate_trade("long_call", "5JUN26", T0, 75000.0, [leg("buy", "call", 80000, 700.0)], 90000.0)
+    trade = simulate_trade("long_call", "5JUN26", T0, SETTLED, 75000.0, [leg("buy", "call", 80000, 700.0)], 90000.0)
     assert trade.premium_usd == -700.0 and trade.payoff_usd == 10000.0
     assert trade.pnl_usd == pytest.approx(-700.0 + 10000.0 - 22.5 - 0.00015 * 90000)
 
 
 def test_summary_statistics_drawdown_and_months():
     def trade(day, pnl):
-        base = simulate_trade("x", "5JUN26", datetime(2026, 6, day, 9, tzinfo=timezone.utc), 1.0, [], 1.0)
+        base = simulate_trade("x", "5JUN26", datetime(2026, 6, 1, 9, tzinfo=timezone.utc), datetime(2026, 6, day, 8, tzinfo=timezone.utc), 1.0, [], 1.0)
         return base.__class__(**{**base.__dict__, "pnl_usd": pnl})
     trades = [trade(1, 100.0), trade(2, 100.0), trade(3, -300.0), trade(4, 50.0)]
     summary = summarize(trades[::-1], Counter({"no snapshot": 2}))          # order of the input does not matter
@@ -66,6 +69,18 @@ def test_summary_statistics_drawdown_and_months():
     assert summary.total_pnl_usd == -50.0 and summary.worst_pnl_usd == -300.0 and summary.best_pnl_usd == 100.0
     assert summary.max_drawdown_usd == 300.0                                # 200 -> -100
     assert summary.pnl_by_month == {"2026-06": -50.0} and summary.skipped == {"no snapshot": 2}
+
+
+def test_drawdown_and_months_follow_the_settlement_not_the_entry():
+    def trade(entry, settled, pnl):
+        base = simulate_trade("x", "5JUN26", entry, settled, 1.0, [], 1.0)
+        return base.__class__(**{**base.__dict__, "pnl_usd": pnl})
+    # entered 30 May, settled 2 Jun: a loss; entered 1 Jun, settled 1 Jun: wins. The loss is realised last.
+    trades = [trade(datetime(2026, 5, 30, 9, tzinfo=timezone.utc), datetime(2026, 6, 2, 8, tzinfo=timezone.utc), -500.0),
+              trade(datetime(2026, 6, 1, 9, tzinfo=timezone.utc), datetime(2026, 6, 1, 15, tzinfo=timezone.utc), 200.0)]
+    summary = summarize(trades)
+    assert summary.pnl_by_month == {"2026-06": -300.0}                   # not split into May and June by entry
+    assert summary.max_drawdown_usd == 500.0                             # 200 realised first, then -500: from the peak 200 to -300
 
 
 def test_no_trades_gives_none_not_zero_statistics():

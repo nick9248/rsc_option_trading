@@ -12,7 +12,7 @@ ENTRY = datetime(2026, 6, 1, 9, tzinfo=timezone.utc)
 
 def rows(expiration="5JUN26", forward=70000.0):
     out = []
-    for strike in (56000, 60000, 63000, 65000, 68000, 70000, 72000, 75000, 77000, 80000, 85000):
+    for strike in range(50000, 90001, 1000):                                   # a dense chain, like the real one
         for option_type in ("C", "P"):
             intrinsic = max(forward - strike, 0) if option_type == "C" else max(strike - forward, 0)
             mark = max(intrinsic / forward, 0.002) + 0.004
@@ -52,6 +52,18 @@ def test_the_expiry_nearest_the_target_is_chosen_and_too_close_ones_are_not():
     assert run(make_repository(chain=chain), target_days_to_expiry=1.0, minimum_days_to_expiry=2.0).trades[0].expiration == "8JUN26"
 
 
+def test_two_expiries_equally_far_from_the_target_pick_the_earlier_one_every_time():
+    captured_at = datetime(2026, 6, 1, 8, tzinfo=timezone.utc)                # 4JUN26 is exactly 3 days away, 6JUN26 exactly 5
+    chain = rows("6JUN26") + rows("4JUN26")
+    for _ in range(3):
+        expiration, _ = BacktestService._choose_expiry(chain, captured_at, 4.0, 2.0)
+        assert expiration == "4JUN26"
+
+
+def test_the_trade_carries_the_settlement_time():
+    assert run(make_repository()).trades[0].settlement_at == datetime(2026, 6, 5, 8, tzinfo=timezone.utc)
+
+
 def test_a_snapshot_older_than_45_minutes_is_not_used():
     result = run(make_repository(captured_at=ENTRY - timedelta(minutes=50)))
     assert result.trades == () and result.summary.skipped == {"no fresh snapshot": 1}
@@ -73,7 +85,7 @@ def test_an_index_price_far_older_than_the_snapshot_is_not_used():
 
 def test_a_chain_without_iv_and_without_quotes_gives_a_reason():
     chain = [dict(row, mark_iv=None, mark_price=None) for row in rows()]
-    assert list(run(make_repository(chain=chain)).summary.skipped) == ["no quoted put to sell"]
+    assert list(run(make_repository(chain=chain)).summary.skipped) == ["no quoted put near the wanted delta to sell"]
 
 
 def test_days_after_now_are_not_entered():

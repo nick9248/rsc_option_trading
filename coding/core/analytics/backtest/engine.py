@@ -25,6 +25,8 @@ class Trade:
     structure: str
     expiration: str
     entry_time: datetime
+    settlement_at: datetime
+    """When the trade is settled and its PnL is realised (08:00 UTC of the expiry)."""
     spot_at_entry: float
     settlement_price: float
     legs: Tuple[Leg, ...]
@@ -41,8 +43,8 @@ def intrinsic_value_usd(option_type: str, strike: float, settlement_price: float
     return max(settlement_price - strike, 0.0) if option_type == "call" else max(strike - settlement_price, 0.0)
 
 
-def simulate_trade(structure: str, expiration: str, entry_time: datetime, spot_at_entry: float, legs: Sequence[Leg],
-                   settlement_price: float) -> Trade:
+def simulate_trade(structure: str, expiration: str, entry_time: datetime, settlement_at: datetime, spot_at_entry: float,
+                   legs: Sequence[Leg], settlement_price: float) -> Trade:
     """Hold the legs to expiry and settle them at ``settlement_price``."""
     premium = payoff = trading_fees = delivery_fees = 0.0
     for leg in legs:
@@ -52,7 +54,7 @@ def simulate_trade(structure: str, expiration: str, entry_time: datetime, spot_a
         intrinsic = intrinsic_value_usd(leg.option_type, leg.strike, settlement_price)
         payoff += -sign * intrinsic                                       # the buyer receives it, the seller pays it
         delivery_fees += delivery_fee_usd(settlement_price, intrinsic)
-    return Trade(structure, expiration, entry_time, spot_at_entry, settlement_price, tuple(legs), premium, payoff, trading_fees,
+    return Trade(structure, expiration, entry_time, settlement_at, spot_at_entry, settlement_price, tuple(legs), premium, payoff, trading_fees,
                  delivery_fees, premium + payoff - trading_fees - delivery_fees)
 
 
@@ -72,15 +74,16 @@ class Summary:
     mean_premium_usd: Optional[float]
     mean_fees_usd: Optional[float]
     max_drawdown_usd: float
-    """Largest fall of the cumulative PnL (trades in entry order) from a previous high."""
+    """Largest fall of the cumulative realised PnL (trades in settlement order) from a previous high."""
     pnl_by_month: Dict[str, float]
+    """PnL by month of settlement, when it is realised."""
     skipped: Dict[str, int]
     """Entry days that produced no trade, by reason."""
 
 
 def summarize(trades: Sequence[Trade], skipped: Optional[Counter] = None) -> Summary:
-    """Statistics of the trades, which may be in any order."""
-    ordered = sorted(trades, key=lambda trade: trade.entry_time)
+    """Statistics of the trades, which may be in any order. Drawdown and months follow the settlement time: that is when PnL exists."""
+    ordered = sorted(trades, key=lambda trade: trade.settlement_at)
     pnl = [trade.pnl_usd for trade in ordered]
     cumulative = peak = drawdown = 0.0
     for value in pnl:
@@ -89,11 +92,11 @@ def summarize(trades: Sequence[Trade], skipped: Optional[Counter] = None) -> Sum
         drawdown = max(drawdown, peak - cumulative)
     monthly: Dict[str, float] = {}
     for trade in ordered:
-        key = trade.entry_time.strftime("%Y-%m")
+        key = trade.settlement_at.strftime("%Y-%m")
         monthly[key] = monthly.get(key, 0.0) + trade.pnl_usd
     count = len(pnl)
     return Summary(
-        trades=count, wins=sum(1 for value in pnl if value > 0), win_rate=(sum(1 for v in pnl if v > 0) / count) if count else None,
+        trades=count, wins=sum(1 for value in pnl if value > 0), win_rate=(sum(1 for value in pnl if value > 0) / count) if count else None,
         total_pnl_usd=sum(pnl), mean_pnl_usd=statistics.fmean(pnl) if count else None,
         median_pnl_usd=statistics.median(pnl) if count else None,
         stdev_pnl_usd=statistics.stdev(pnl) if count > 1 else None, worst_pnl_usd=min(pnl) if count else None,

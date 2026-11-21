@@ -5,7 +5,7 @@ Research only: no orders. Code: `coding/core/analytics/backtest/` (structures, f
 
 ## What it does
 One trade per entry day (default 09:00 UTC) held to expiry. Point in time: the newest stored chain snapshot at or before the entry
-(at most 45 min old), the index price of that instant (at most 15 min older than the snapshot), the expiry nearest the target days to
+(at most 45 min old), a strike only if its delta is within 0.05 of the target (else the day is skipped), the index price of that instant (at most 15 min older than the snapshot), the expiry nearest the target days to
 expiry (default 7, at least 2), strikes chosen by Black-Scholes delta from that snapshot only (snapshots without mark IV get it rebuilt
 from the mark price and the forward, as in the MenthorQ replay). Buys fill at the ask, sells at the bid. Settlement: the mean index price
 of the option trades in the 30 minutes before 08:00 UTC of the expiry (an estimate of Deribit's delivery price; at least 5 trades).
@@ -18,7 +18,7 @@ Fees: 0.03% of the index per fill (at most 12.5% of the option price); 0.015% of
 
 ## Read before trusting a number
 - Trades are independent and overlap (a new one every day, each lives about a week). No margin, no position limit, no compounding. The
-  "max drawdown" is of the sum of independent one-coin trades, not of an account.
+  "max drawdown" is of the sum of independent one-coin trades in settlement order, not of an account. Months are months of settlement.
 - USD view: premiums at the entry index, payoffs at the settlement price. Real options are margined and settled in the coin.
 - Quotes are snapshots every 30 minutes, taken at the capture time (not at 09:00 sharp): the bid and ask may have moved. Fills are assumed
   at the touch, with no size limit and no slippage beyond the spread. This favours the strategies.
@@ -27,17 +27,18 @@ Fees: 0.03% of the index per fill (at most 12.5% of the option price); 0.015% of
   short-premium structures win often and lose rarely and large (the strangle's worst trade is -12,256 USD for one coin, its best +1,023).
 - Hold to expiry only: no stops, no early exit, no adjustments.
 
-## First run (BTC, 2026-03-20 to 2026-10-31, 09:00 UTC, about 7 days to expiry, defaults)
+## First run, a dated snapshot (2026-11-21; BTC, 2026-03-20 to 2026-10-31, 09:00 UTC, about 7 days to expiry, defaults)
+These figures will change with the data and the rules: re-run `scripts/run_backtest.py` for current ones.
 | structure | trades | win rate | total USD | mean | median | worst | max drawdown |
 |---|---|---|---|---|---|---|---|
 | short_strangle | 225 | 84% | -64,375 | -286 | 508 | -12,256 | 128,199 |
 | put_credit_spread | 225 | 91% | 2,989 | 13 | 179 | -3,856 | 29,291 |
 | iron_condor | 225 | 81% | -9,437 | -42 | 336 | -3,695 | 41,095 |
-| long_call | 225 | 18% | 24,791 | 110 | -650 | -1,203 | 60,661 |
-| long_put | 225 | 20% | -33,029 | -147 | -718 | -1,391 | 70,535 |
+| long_call | 217 | 18% | 28,697 | 132 | -652 | -1,203 | 57,542 |
+| long_put | 220 | 20% | -32,867 | -149 | -723 | -1,391 | 70,373 |
 
-Month by month the results swing hard (the strangle: +13,938 in April, -35,406 in May, -89,414 in August): the sign of the total depends
-on a few large moves. Fees average 46 to 74 USD per trade.
+Month of settlement by month the results swing hard (the strangle: +13,708 in April, -46,982 in June, -91,381 in August): the sign of the total depends
+on a few large moves. Fees average 25 to 69 USD per trade. The long structures skip 8 and 5 days where no quoted option has a delta within 0.05 of 0.30.
 
 ## Checked against raw data
 Two trades (the worst put credit spread, 2026-05-30 5JUN26, and a typical winner, 2026-05-16 22MAY26) were recomputed from raw SQL

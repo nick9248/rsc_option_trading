@@ -31,14 +31,14 @@ def _money(value: Optional[float]) -> str:
 
 def log_result(result: BacktestResult) -> None:
     """Log the statistics of one structure."""
-    s = result.summary
-    win_rate = "n/a" if s.win_rate is None else f"{s.win_rate:.0%}"
+    summary = result.summary
+    win_rate = "n/a" if summary.win_rate is None else f"{summary.win_rate:.0%}"
     logger.info("%-18s trades %3d | win rate %4s | total %9s | mean %7s | median %7s | worst %8s | best %8s | max drawdown %8s | "
-                "mean premium %7s | mean fees %5s", result.structure, s.trades, win_rate, _money(s.total_pnl_usd), _money(s.mean_pnl_usd),
-                _money(s.median_pnl_usd), _money(s.worst_pnl_usd), _money(s.best_pnl_usd), _money(s.max_drawdown_usd),
-                _money(s.mean_premium_usd), _money(s.mean_fees_usd))
-    logger.info("%-18s skipped %s", "", s.skipped or "nothing")
-    logger.info("%-18s by month %s", "", {month: round(value) for month, value in sorted(s.pnl_by_month.items())})
+                "mean premium %7s | mean fees %5s", result.structure, summary.trades, win_rate, _money(summary.total_pnl_usd), _money(summary.mean_pnl_usd),
+                _money(summary.median_pnl_usd), _money(summary.worst_pnl_usd), _money(summary.best_pnl_usd), _money(summary.max_drawdown_usd),
+                _money(summary.mean_premium_usd), _money(summary.mean_fees_usd))
+    logger.info("%-18s skipped %s", "", summary.skipped or "nothing")
+    logger.info("%-18s by month %s", "", {month: round(value) for month, value in sorted(summary.pnl_by_month.items())})
 
 
 def write_csv(path: Path, result: BacktestResult) -> None:

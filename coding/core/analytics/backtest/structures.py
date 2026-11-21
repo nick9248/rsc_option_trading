@@ -26,6 +26,9 @@ class StructureParameters:
     """Distance of a protective wing from its short strike, as a fraction of spot."""
     long_delta: float = 0.30
     """Absolute delta of a bought call or put (long_call, long_put)."""
+    delta_tolerance: float = 0.05
+    """A short or long option whose absolute delta is further than this from its target is not used: the structure is skipped
+    rather than traded under the wrong rule."""
 
 
 @dataclass(frozen=True)
@@ -52,23 +55,25 @@ class Leg:
     entry_price_usd: float
 
 
-def _nearest_delta(quotes: Sequence[Quote], option_type: str, target: float, action: str,
+def _nearest_delta(quotes: Sequence[Quote], option_type: str, target: float, action: str, tolerance: float,
                    beyond: Optional[float] = None) -> Optional[Quote]:
-    """The quote whose absolute delta is nearest the target and that has the side the fill needs (bid to sell, ask to buy)."""
-    usable = [q for q in quotes if q.option_type == option_type and (q.bid_usd if action == "sell" else q.ask_usd)]
+    """The quote whose absolute delta is nearest the target (within the tolerance) that has the side the fill needs (bid to sell, ask to buy)."""
+    usable = [quote for quote in quotes if quote.option_type == option_type and (quote.bid_usd if action == "sell" else quote.ask_usd)]
     if option_type == "call" and beyond is not None:
-        usable = [q for q in usable if q.strike > beyond]
+        usable = [quote for quote in usable if quote.strike > beyond]
     if option_type == "put" and beyond is not None:
-        usable = [q for q in usable if q.strike < beyond]
-    return min(usable, key=lambda q: abs(abs(q.delta) - target)) if usable else None
+        usable = [quote for quote in usable if quote.strike < beyond]
+    usable = [quote for quote in usable if abs(abs(quote.delta) - target) <= tolerance]
+    return min(usable, key=lambda quote: (abs(abs(quote.delta) - target), quote.strike)) if usable else None
 
 
 def _wing(quotes: Sequence[Quote], short: Quote, spot: float, wing_fraction: float) -> Optional[Quote]:
     """The bought protection: the quoted strike nearest the wanted distance beyond the short strike, never at or inside it."""
     direction = -1 if short.option_type == "put" else 1
     wanted = short.strike + direction * wing_fraction * spot
-    usable = [q for q in quotes if q.option_type == short.option_type and q.ask_usd and q.strike * direction > short.strike * direction]
-    return min(usable, key=lambda q: abs(q.strike - wanted)) if usable else None
+    usable = [quote for quote in quotes if quote.option_type == short.option_type and quote.ask_usd
+              and quote.strike * direction > short.strike * direction]
+    return min(usable, key=lambda quote: (abs(quote.strike - wanted), quote.strike)) if usable else None
 
 
 def _leg(action: str, quote: Quote) -> Leg:
@@ -99,19 +104,20 @@ def select_legs(structure: str, quotes: Sequence[Quote], spot: float,
         raise ValueError(f"unknown structure {structure!r}; choose from {STRUCTURES}")
     if structure in (LONG_CALL, LONG_PUT):
         option_type = "call" if structure == LONG_CALL else "put"
-        bought = _nearest_delta(quotes, option_type, parameters.long_delta, "buy")
-        return ([_leg("buy", bought)], "") if bought else (None, f"no quoted {option_type} to buy")
+        bought = _nearest_delta(quotes, option_type, parameters.long_delta, "buy", parameters.delta_tolerance)
+        return ([_leg("buy", bought)], "") if bought else (None, f"no quoted {option_type} near the wanted delta to buy")
 
     legs: List[Leg] = []
     short_put = short_call = None
     if structure in (SHORT_STRANGLE, PUT_CREDIT_SPREAD, IRON_CONDOR):
-        short_put = _nearest_delta(quotes, "put", parameters.short_delta, "sell")
+        short_put = _nearest_delta(quotes, "put", parameters.short_delta, "sell", parameters.delta_tolerance)
         if short_put is None:
-            return None, "no quoted put to sell"
+            return None, "no quoted put near the wanted delta to sell"
     if structure in (SHORT_STRANGLE, IRON_CONDOR):
-        short_call = _nearest_delta(quotes, "call", parameters.short_delta, "sell", beyond=short_put.strike if short_put else None)
+        short_call = _nearest_delta(quotes, "call", parameters.short_delta, "sell", parameters.delta_tolerance,
+                                    beyond=short_put.strike if short_put else None)
         if short_call is None:
-            return None, "no quoted call to sell above the put"
+            return None, "no quoted call near the wanted delta to sell above the put"
     for short in (short_put, short_call):
         if short is None:
             continue

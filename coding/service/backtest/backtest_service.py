@@ -106,7 +106,7 @@ class BacktestService:
             return None, "expiry not settled yet"
         settlement = self.repository.get_settlement_index_price(currency, settlement_at)
         if settlement is None or settlement[1] < MIN_SETTLEMENT_TRADES:
-            return None, "no settlement price"
+            return None, "no settlement price"                    # counted in the summary; a share of skipped days is visible there
 
         # Snapshots before about August carry no mark IV: it is rebuilt from the mark price and the forward (Black-76), as in the
         # MenthorQ replay; a row that still has none gets no delta and is not used.
@@ -115,13 +115,13 @@ class BacktestService:
         legs, reason = select_legs(structure, quotes, spot, parameters)
         if legs is None:
             return None, reason
-        return simulate_trade(structure, expiration, entry_time, spot, legs, settlement[0]), ""
+        return simulate_trade(structure, expiration, entry_time, settlement_at, spot, legs, settlement[0]), ""
 
     @staticmethod
     def _choose_expiry(rows: Sequence[Dict], captured_at: datetime, target_days: float, minimum_days: float
                        ) -> Tuple[Optional[str], Optional[datetime]]:
         best: Optional[Tuple[float, str, datetime]] = None
-        for expiration in {row["expiration"] for row in rows}:
+        for expiration in sorted({row["expiration"] for row in rows}):
             settlement_at = parse_expiry_settlement(expiration)
             if settlement_at is None:
                 continue
@@ -129,12 +129,15 @@ class BacktestService:
             if days < minimum_days:
                 continue
             distance = abs(days - target_days)
-            if best is None or distance < best[0]:
+            if best is None or (distance, settlement_at) < (best[0], best[2]):          # a tie goes to the earlier expiry
                 best = (distance, expiration, settlement_at)
         return (best[1], best[2]) if best else (None, None)
 
     def _quotes(self, rows: Sequence[Dict], spot: float, captured_at: datetime) -> List[Quote]:
-        """USD quotes of the expiry's options with the Black-Scholes delta of the snapshot's own mark IV and forward."""
+        """
+        USD quotes of the expiry's options with the Black-Scholes delta of the snapshot's own mark IV and forward. Coin prices are
+        converted at the INDEX price, never the expiry's future: the pricing-basis rule of this project (see SnapshotService).
+        """
         captured_naive = captured_at.astimezone(timezone.utc).replace(tzinfo=None)
         quotes: List[Quote] = []
         for row in rows:
