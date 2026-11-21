@@ -127,3 +127,13 @@ def test_the_market_view_is_minus_the_costs_for_every_candidate_whatever_the_ske
         line = next(part for part in render_shortlist([item]).split(" | ") if part.startswith("market view"))
         expected = -(item.metrics.spread_cost_usd + item.metrics.trading_fees_usd)
         assert f"{expected:+,.0f}" in line
+
+
+def test_the_market_view_agrees_with_the_numerical_expectation_on_a_chain_priced_at_one_volatility():
+    # independent check of the identity: on a chain priced at ONE volatility, the grid expectation of the PnL under that volatility equals
+    # minus the costs, up to the small delivery fees (0.015% of the settlement price per leg in the money)
+    distributions = {"implied": LognormalDistribution(FORWARD, VOL, DAYS)}
+    for candidate in generate_candidates(chain(half_spread=3.0), FORWARD)[:80:9]:
+        metrics = compute_metrics(candidate, FORWARD, distributions)
+        numerical = metrics.by_distribution["implied"].expected_pnl_usd
+        assert numerical == pytest.approx(metrics.market_expected_pnl_usd, abs=0.00015 * FORWARD * len(candidate.legs) + 2.0)

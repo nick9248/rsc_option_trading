@@ -57,7 +57,7 @@ def log_report(currency: str, repository: DatabaseRepository, mode: str, method_
 def evaluate_all(service: StrategyPickService, currency: str, mode: Optional[str] = None) -> int:
     """Evaluate every stored pick that can be; one failing row is logged and does not stop the others. Returns how many were stored."""
     stored = 0
-    for row in service.repository.get_strategy_picks(currency, mode=mode, evaluated=False, method_version=METHOD_VERSION):
+    for row in service.repository.get_strategy_picks(currency, mode=mode, evaluated=False):                    # every method version: no model call
         try:
             stored += bool(service.evaluate(row))
         except Exception:
@@ -78,13 +78,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--capital", type=float, default=DEFAULT_RESEARCH_CAPITAL_USD, help="notional account in USD (research results are in R)")
     parser.add_argument("--max-drawdown", type=float, default=0.20)
     parser.add_argument("--model", default=DEFAULT_MODEL)
-    parser.add_argument("--method-version", action="append", help="report: the method version(s) to show (default: pipeline-1 and the current one)")
+    parser.add_argument("--method-version", action="append", help="report: the method version(s) to show (default: every version that has stored picks)")
     parser.add_argument("--yes", action="store_true", help="needed for a replay (many paid calls)")
     arguments = parser.parse_args(argv)
     init_logging(task_name="run_strategy_pipeline", log_to_file=False)
     repository = DatabaseRepository()
     if arguments.command == "report":
-        for version in arguments.method_version or ["pipeline-1", METHOD_VERSION]:
+        stored_versions = sorted({row["method_version"] for row in repository.get_strategy_picks(arguments.currency)})
+        for version in arguments.method_version or stored_versions:
             log_report(arguments.currency, repository, MODE_REPLAY, version)
             log_report(arguments.currency, repository, MODE_LIVE, version)
         return 0

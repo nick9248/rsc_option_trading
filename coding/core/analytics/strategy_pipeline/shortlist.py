@@ -112,7 +112,7 @@ def render_shortlist(shortlist: Sequence[ShortlistItem]) -> str:
         entry = f"credit {_usd(metrics.entry_cash_usd)}" if metrics.entry_cash_usd >= 0 else f"debit {_usd(-metrics.entry_cash_usd)}"
         profit = "unlimited" if metrics.max_profit_usd is None else _usd(metrics.max_profit_usd)
         breakevens = ", ".join(_usd(value) for value in metrics.breakevens) or "none"
-        views = [f"market view: expected PnL {-(metrics.spread_cost_usd + metrics.trading_fees_usd):+,.0f} (minus its costs)"]
+        views = [f"market view: expected PnL {metrics.market_expected_pnl_usd:+,.0f} (minus its costs)"]
         result = metrics.by_distribution.get(REALISED)
         if result is not None:
             views.append(f"realised-vol view: P(profit) {result.probability_of_profit:.0%}, expected PnL {result.expected_pnl_usd:+,.0f}, "
@@ -137,7 +137,8 @@ def candidate_record(item: ShortlistItem) -> Dict[str, Any]:
             "entry_cash_usd": _finite(metrics.entry_cash_usd), "mid_cash_usd": _finite(item.candidate.mid_cash_usd),
             "max_loss_usd": _finite(metrics.max_loss_usd), "max_profit_usd": _finite(metrics.max_profit_usd),
             "breakevens": [_finite(value) for value in metrics.breakevens], "spread_cost_usd": _finite(metrics.spread_cost_usd),
-            "trading_fees_usd": _finite(metrics.trading_fees_usd), "baseline_score": _finite(item.score), "market_expected_pnl_usd": _finite(-(metrics.spread_cost_usd + metrics.trading_fees_usd)),
+            "trading_fees_usd": _finite(metrics.trading_fees_usd), "baseline_score": _finite(item.score),
+            "market_expected_pnl_usd": _finite(metrics.market_expected_pnl_usd),
             "distributions": {name: {"probability_of_profit": _finite(result.probability_of_profit),
                                      "expected_pnl_usd": _finite(result.expected_pnl_usd), "tail_loss_usd": _finite(result.tail_loss_usd)}
                               for name, result in metrics.by_distribution.items()}}

@@ -47,6 +47,15 @@ class CandidateMetrics:
     breakevens: Tuple[float, ...]
     by_distribution: Dict[str, DistributionMetrics]
 
+    @property
+    def market_expected_pnl_usd(self) -> float:
+        """
+        The expected PnL at the chain's own prices: minus what trading at the touch costs (the spread against the mid and the trading
+        fees), for every structure. At the mid a structure has an expected PnL of zero under the market's own (risk-neutral) distribution;
+        delivery fees (a few USD) are not included.
+        """
+        return -(self.spread_cost_usd + self.trading_fees_usd)
+
 
 def pnl_on_grid(candidate: Candidate, spot: float, prices: np.ndarray) -> np.ndarray:
     """PnL (USD, one coin per leg) at each settlement price: entry cash, minus trading fees, plus payoff, minus delivery fees."""
