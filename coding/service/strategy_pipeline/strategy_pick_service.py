@@ -20,7 +20,7 @@ from coding.core.analytics.candidates.metrics import compute_metrics, metrics_at
 from coding.core.analytics.candidates.scoring import IMPLIED, REALISED
 from coding.core.analytics.menthorq_replication_calculator import parse_expiry_settlement
 from coding.core.analytics.risk.budget import RiskBudget, size_position
-from coding.core.analytics.risk.venue import Venue
+from coding.core.analytics.risk.venue import DERIVE_TAKER_FEES, Venue
 from coding.core.analytics.strategy_pipeline.facts import render_facts
 from coding.core.analytics.strategy_pipeline.shortlist import (
     MAX_COST_FRACTION_OF_RISK, NO_TRADE, PICK_SCHEMA, SYSTEM_PROMPT, ShortlistItem, Pick, baseline_id, build_shortlist, candidate_record, parse_pick, render_shortlist)
@@ -107,6 +107,8 @@ class StrategyPickService:
         if REALISED not in distributions:
             return "no realised volatility", None
         venue = self.venues.get(currency) if mode == MODE_LIVE else None
+        if mode == MODE_LIVE and venue is None:
+            logger.warning("No venue is configured for %s: the live pick uses the research rules (Deribit fees, fractions of a coin)", currency)
         if venue is None:
             scored = [(candidate, compute_metrics(candidate, entry.spot, distributions)) for candidate in generate_candidates(entry.quotes, entry.spot)]
         else:
@@ -250,7 +252,8 @@ class StrategyPickService:
         outcomes: Dict[str, Any] = {}
         for item in row["candidates"]:
             legs = [Leg(leg["action"], leg["option_type"], leg["strike"], leg["instrument"], leg["entry_price_usd"]) for leg in item["legs"]]
-            trade = simulate_trade(item["family"], row["expiration"], row["as_of"], settlement_at, row["spot"], legs, settlement[0])
+            trade = simulate_trade(item["family"], row["expiration"], row["as_of"], settlement_at, row["spot"], legs, settlement[0],
+                                   self._leg_fee(item, row["spot"]))
             outcomes[item["id"]] = {"pnl_usd": trade.pnl_usd, "r": trade.pnl_usd / item["max_loss_usd"]}
         outcomes["_shortlist_mean_r"] = sum(value["r"] for value in outcomes.values()) / len(row["candidates"])
         outcomes["_all_mean_r"] = self._all_candidates_mean_r(row, settlement_at, settlement[0])
@@ -258,9 +261,18 @@ class StrategyPickService:
             return False
         return self.repository.save_strategy_pick_evaluation(row["id"], now, settlement[0], row["baseline_id"], outcomes)
 
+    @staticmethod
+    def _leg_fee(item: Dict[str, Any], spot: float):
+        """The trading fee function of a stored candidate: the venue's schedule at its stored size, or None (Deribit's, one coin) for a research one."""
+        quantity = item.get("quantity")
+        if not quantity:
+            return None
+        return lambda price: DERIVE_TAKER_FEES.fee_per_coin_usd(spot, price, quantity)
+
     def _all_candidates_mean_r(self, row: Dict[str, Any], settlement_at: datetime, settlement_price: float) -> Optional[float]:
         """
-        Mean R of every candidate the chain of that instant offered that passes the same cost filter as the shortlist (regenerated from the
+        Mean R of every candidate the chain of that instant offered that passes the same cost filter as the shortlist, in the research setting (Deribit fees,
+        fractions of a coin, also for a venue-sized live pick: the comparison set is the research one) (regenerated from the
         stored snapshot at the stored instant, priced at the stored spot).
         """
         entry, reason = self.backtest.load_entry(row["currency"], row["as_of"], 7.0, 2.0, datetime.now(timezone.utc), settled=False,

@@ -75,3 +75,19 @@ def test_a_live_shortlist_keeps_only_candidates_with_a_positive_expected_result_
     _, replay = service._shortlist_for("BTC", AS_OF, entry, NOW, MODE_REPLAY)
     assert all(item.metrics.by_distribution["realised"].expected_pnl_usd > 0 for item in live)
     assert any(item.metrics.by_distribution["realised"].expected_pnl_usd <= 0 for item in replay)       # the replay keeps them: the filter is the venue path's
+
+
+def test_the_venue_check_reports_a_changed_minimum_and_nothing_when_all_agree():
+    from scripts.check_derive_venue import differences
+    same = {"minimum_amount": "0.01", "amount_step": "0.00001", "base_fee": "0.5", "taker_fee_rate": "0.0003", "mark_price_fee_rate_cap": "0.125"}
+    assert differences({"BTC": BTC}, lambda currency: same) == []
+    changed = dict(same, minimum_amount="0.1", base_fee="1")
+    assert differences({"BTC": BTC}, lambda currency: changed) == ["BTC minimum order: the code has 0.01, Derive says 0.1",
+                                                                  "BTC base fee: the code has 0.5, Derive says 1"]
+
+
+def test_a_crossed_quote_with_no_loss_is_dropped_instead_of_dividing_by_zero():
+    from coding.core.analytics.backtest.structures import Leg, Quote
+    from coding.core.analytics.candidates.generator import Candidate
+    zero_loss = Candidate("put_credit_spread", (Leg("sell", "put", 60_000.0, "S", 500.0), Leg("buy", "put", 59_000.0, "B", 500.0)), 0.0, 0.0)
+    assert metrics_at_venue_size(zero_loss, SPOT, {}, BTC, 10.0) is None

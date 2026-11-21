@@ -134,7 +134,7 @@ def metrics_at_venue_size(candidate: Candidate, spot: float, distributions: Mapp
     """
     quantity = venue.minimum_amount
     metrics = compute_metrics(candidate, spot, distributions, venue.taker_fees, quantity)
-    if metrics.max_loss_usd * quantity > risk_per_trade_usd:
+    if metrics.max_loss_usd <= 0 or metrics.max_loss_usd * quantity > risk_per_trade_usd:       # a loss of zero or less is a crossed or stale quote
         return None
     for _ in range(MAX_SIZE_ITERATIONS):
         larger = venue.floor_to_step(risk_per_trade_usd / metrics.max_loss_usd)
@@ -142,4 +142,6 @@ def metrics_at_venue_size(candidate: Candidate, spot: float, distributions: Mapp
             break
         quantity = larger
         metrics = compute_metrics(candidate, spot, distributions, venue.taker_fees, quantity)
+        if metrics.max_loss_usd <= 0:
+            return None
     return metrics

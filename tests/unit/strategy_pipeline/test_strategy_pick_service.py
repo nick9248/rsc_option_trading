@@ -208,3 +208,12 @@ def test_evaluate_waits_for_the_settlement_and_skips_evaluated_and_unusable_pick
     assert service.evaluate({**row, "evaluated_at": NOW}, now_utc=NOW) is False
     assert service.evaluate({**row, "status": "invalid_response"}, now_utc=NOW) is False
     repository.save_strategy_pick_evaluation.assert_not_called()
+
+
+def test_a_venue_sized_pick_is_evaluated_with_the_venue_fees_at_its_stored_size_and_a_research_pick_with_deribit_fees():
+    from coding.core.analytics.risk.venue import DERIVE_TAKER_FEES
+    item = {"quantity": 0.02}
+    fee = StrategyPickService._leg_fee(item, 60_000.0)
+    assert fee(1_000.0) == pytest.approx(DERIVE_TAKER_FEES.fee_per_coin_usd(60_000.0, 1_000.0, 0.02))
+    assert fee(1_000.0) == pytest.approx(0.5 / 0.02 + 18.0)                      # base fee per coin at this size + 0.03% of 60,000
+    assert StrategyPickService._leg_fee({"quantity": None}, 60_000.0) is None and StrategyPickService._leg_fee({}, 60_000.0) is None
