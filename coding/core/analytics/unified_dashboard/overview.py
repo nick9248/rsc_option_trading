@@ -9,6 +9,8 @@ import math
 import re
 from html.parser import HTMLParser
 
+from coding.core.analytics.unified_dashboard.glossary import tooltip_text
+
 
 # --------------------------------------------------------------------------- parsing
 class _Tables(HTMLParser):
@@ -209,10 +211,24 @@ def icon(name, size=15):
     return f'<svg class="ico" width="{size}" height="{size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{ICON[name]}</svg>'
 
 
+# Which tooltip a tile, gauge or card gets, by its label (glossary.py). A test checks that none is missing.
+TILE_TOOLTIPS = {"DVOL": "dvol", "IV rank 365d": "iv_rank", "Net GEX · all expiries": "net_gex", "Taker buy/sell": "taker_ratio",
+                 "Perpetual OI": "perp_oi", "Futures basis": "basis", "Variance risk premium": "vrp", "Funding 8h": "funding"}
+GAUGE_TOOLTIPS = {"g1": "dvol_percentile", "g2": "iv_percentile"}
+CARD_TOOLTIPS = {"Price map": "card_price_map", "Gamma roll-off": "card_gamma", "Volatility": "card_volatility", "Decision": "card_decision",
+                 "Skew heatmap": "card_skew", "Open interest by expiry": "card_open_interest", "Blocks & large prints": "card_blocks",
+                 "Data health": "card_health", "Expiries": "card_expiries"}
+
+
+def tip_attributes(key):
+    """The HTML attributes that show the glossary tooltip ``key`` on hover and keyboard focus (empty without a key)."""
+    return f' data-tip="{esc(tooltip_text(key))}" tabindex="0"' if key else ""
+
+
 def card(title, inner, ico="grid", sub="", goto=None, cls=""):
     g = f'<button type="button" class="goto" data-goto="{goto}">Open tab {icon("arrow", 13)}</button>' if goto else ""
     s = f'<span class="card-sub">{esc(sub)}</span>' if sub else ""
-    return (f'<section class="card {cls}"><div class="card-head"><div class="card-title"><span class="card-ico">{icon(ico)}</span>'
+    return (f'<section class="card {cls}"><div class="card-head"><div class="card-title{" has-tip" if title in CARD_TOOLTIPS else ""}"{tip_attributes(CARD_TOOLTIPS.get(title))}><span class="card-ico">{icon(ico)}</span>'
             f'<h3>{esc(title)}</h3></div><div class="card-meta">{s}{g}</div></div>{inner}</section>')
 
 
@@ -232,7 +248,7 @@ def gauge(frac, big, label, sub, uid):
     if frac is None:
         return ""
     L = math.pi * 50
-    return (f'<figure class="gauge"><svg viewBox="0 0 120 70" width="150" height="88" role="img" aria-label="{esc(label)}: {esc(big)}">'
+    return (f'<figure class="gauge{" has-tip" if uid in GAUGE_TOOLTIPS else ""}"{tip_attributes(GAUGE_TOOLTIPS.get(uid))}><svg viewBox="0 0 120 70" width="150" height="88" role="img" aria-label="{esc(label)}: {esc(big)}">'
             f'<defs><linearGradient id="{uid}" x1="0" y1="0" x2="1" y2="0"><stop offset="0" class="stop-acc"/><stop offset="1" class="stop-warn"/></linearGradient></defs>'
             f'<path class="g-track" d="M10,62 A50,50 0 0 1 110,62"/><path d="M10,62 A50,50 0 0 1 110,62" fill="none" stroke="url(#{uid})" stroke-width="9" stroke-linecap="round" stroke-dasharray="{L * max(0, min(1, frac)):.1f} {L:.1f}"/>'
             f'<text class="g-big" x="60" y="52" text-anchor="middle">{esc(big)}</text><text class="g-sub" x="60" y="66" text-anchor="middle">{esc(sub)}</text></svg>'
@@ -240,7 +256,7 @@ def gauge(frac, big, label, sub, uid):
 
 
 def tile(k, v, s, tone="", extra=""):
-    return f'<div class="tile"><span class="t-k">{esc(k)}</span><div class="t-row"><span class="t-v">{esc(v)}</span>{extra}</div><span class="t-s {tone}">{esc(s)}</span></div>'
+    return f'<div class="tile{" has-tip" if k in TILE_TOOLTIPS else ""}"{tip_attributes(TILE_TOOLTIPS.get(k))}><span class="t-k">{esc(k)}</span><div class="t-row"><span class="t-v">{esc(v)}</span>{extra}</div><span class="t-s {tone}">{esc(s)}</span></div>'
 
 
 def meter_mini(frac):
@@ -485,14 +501,13 @@ def build_overview(A, B, currency):
 
     # ---- hero
     sup = support or (max((p for p in cands if p < spot), default=None))
-    chips = [f'<span class="chip chip-live">● Chain {esc(dict(A["facts"]).get("Chain snapshot", "")[11:16])} UTC</span>',
-             ]
+    chips = [f'<span class="chip chip-live"{tip_attributes("chip_chain")}>● Chain {esc(dict(A["facts"]).get("Chain snapshot", "")[11:16])} UTC</span>']
     if net_gex is not None:
-        chips.append(f'<span class="chip chip-{"neg" if net_gex < 0 else "pos"}">{"Short" if net_gex < 0 else "Long"} gamma</span>')
+        chips.append(f'<span class="chip chip-{"neg" if net_gex < 0 else "pos"}"{tip_attributes("chip_gamma")}>{"Short" if net_gex < 0 else "Long"} gamma</span>')
     if upside_unmapped:
-        chips.append('<span class="chip chip-warn">Upside unmapped</span>')
+        chips.append(f'<span class="chip chip-warn"{tip_attributes("chip_upside")}>Upside unmapped</span>')
     if conf:
-        chips.append(f'<span class="chip">Confidence · {esc(conf)}</span>')
+        chips.append(f'<span class="chip"{tip_attributes("chip_confidence")}>Confidence · {esc(conf)}</span>')
     line = []
     if sup:
         line.append(f"Support {fmt_int(sup)} · {pct_from(sup, spot).lstrip('−+')} below")
