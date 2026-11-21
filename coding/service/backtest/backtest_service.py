@@ -29,6 +29,22 @@ MIN_SETTLEMENT_TRADES = 5
 
 
 @dataclass(frozen=True)
+class EntryData:
+    """What a backtest or the scoring lab needs about one entry day."""
+
+    captured_at: datetime
+    spot: float
+    forward: float
+    """Median forward of the chosen expiry's options."""
+    expiration: str
+    settlement_at: datetime
+    settlement_price: float
+    quotes: List[Quote]
+    atm_implied_volatility: Optional[float]
+    """As a fraction (0.55 for 55%)."""
+
+
+@dataclass(frozen=True)
 class BacktestResult:
     """The trades of one structure and their statistics."""
 
@@ -88,6 +104,24 @@ class BacktestService:
 
     def _trade_for(self, currency: str, structure: str, entry_time: datetime, target_days: float, minimum_days: float,
                    parameters: StructureParameters, now: datetime) -> Tuple[Optional[Trade], str]:
+        entry, reason = self.load_entry(currency, entry_time, target_days, minimum_days, now)
+        if entry is None:
+            return None, reason
+        legs, reason = select_legs(structure, entry.quotes, entry.spot, parameters)
+        if legs is None:
+            return None, reason
+        return simulate_trade(structure, entry.expiration, entry_time, entry.settlement_at, entry.spot, legs, entry.settlement_price), ""
+
+    def load_entry(self, currency: str, entry_time: datetime, target_days: float, minimum_days: float,
+                   now: datetime) -> Tuple[Optional[EntryData], str]:
+        """
+        Everything known at the entry instant and the outcome: the chain of the expiry nearest the target as USD quotes, the spot and the
+        forward, the implied volatility, and the delivery price estimate. Point in time: the chain and the spot are of the entry; the
+        settlement price is of the expiry (used only to settle, never to choose).
+
+        Returns:
+            (entry data, "") or (None, reason) for a day that cannot be traded.
+        """
         snapshot = self.repository.get_option_chain_snapshot_at_or_before(currency, entry_time)
         if snapshot is None:
             return None, "no snapshot"
@@ -99,7 +133,7 @@ class BacktestService:
             return None, "no index price at the snapshot"
         spot = index[0]
 
-        expiration, settlement_at = self._choose_expiry(rows, captured_at, target_days, minimum_days)
+        expiration, settlement_at = self.choose_expiry(rows, captured_at, target_days, minimum_days)
         if expiration is None or settlement_at is None:
             return None, "no expiry in range"
         if settlement_at > now:
@@ -111,14 +145,23 @@ class BacktestService:
         # Snapshots before about August carry no mark IV: it is rebuilt from the mark price and the forward (Black-76), as in the
         # MenthorQ replay; a row that still has none gets no delta and is not used.
         rows, _ = fill_missing_implied_volatility([row for row in rows if row["expiration"] == expiration], captured_at)
-        quotes = self._quotes(rows, spot, captured_at)
-        legs, reason = select_legs(structure, quotes, spot, parameters)
-        if legs is None:
-            return None, reason
-        return simulate_trade(structure, expiration, entry_time, settlement_at, spot, legs, settlement[0]), ""
+        forwards = sorted(row["underlying_price"] for row in rows if row.get("underlying_price"))
+        forward = forwards[len(forwards) // 2] if forwards else spot
+        return EntryData(captured_at, spot, forward, expiration, settlement_at, settlement[0], self.quotes_from_rows(rows, spot, captured_at),
+                         self._atm_implied_volatility(rows, forward)), ""
 
     @staticmethod
-    def _choose_expiry(rows: Sequence[Dict], captured_at: datetime, target_days: float, minimum_days: float
+    def _atm_implied_volatility(rows: Sequence[Dict], forward: float) -> Optional[float]:
+        """Mark IV (as a fraction) of the call and the put at the strike nearest the forward, averaged; None when there is none."""
+        usable = [row for row in rows if row.get("mark_iv") and row.get("strike")]
+        if not usable:
+            return None
+        nearest = min(abs(row["strike"] - forward) for row in usable)
+        atm = [row["mark_iv"] for row in usable if abs(row["strike"] - forward) == nearest]
+        return sum(atm) / len(atm) / 100.0
+
+    @staticmethod
+    def choose_expiry(rows: Sequence[Dict], captured_at: datetime, target_days: float, minimum_days: float
                        ) -> Tuple[Optional[str], Optional[datetime]]:
         best: Optional[Tuple[float, str, datetime]] = None
         for expiration in sorted({row["expiration"] for row in rows}):
@@ -133,7 +176,7 @@ class BacktestService:
                 best = (distance, expiration, settlement_at)
         return (best[1], best[2]) if best else (None, None)
 
-    def _quotes(self, rows: Sequence[Dict], spot: float, captured_at: datetime) -> List[Quote]:
+    def quotes_from_rows(self, rows: Sequence[Dict], spot: float, captured_at: datetime) -> List[Quote]:
         """
         USD quotes of the expiry's options with the Black-Scholes delta of the snapshot's own mark IV and forward. Coin prices are
         converted at the INDEX price, never the expiry's future: the pricing-basis rule of this project (see SnapshotService).
