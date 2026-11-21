@@ -6,8 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from coding.core.analytics.decision.decision_report import (
-    BREAK_DOWN, BREAK_UP, INSIDE, ChangeTrigger, DecisionItem, DecisionReport, ScenarioAssessment)
+from coding.core.analytics.decision.decision_report import DecisionItem, DecisionReport
 from coding.core.analytics.decision.evidence import EvidenceItem
 from coding.core.analytics.decision.price_map import MapLevel, PriceMap
 from coding.core.analytics.report import decision_fragments as fragments
@@ -39,29 +38,14 @@ def make_evidence():
     ]
 
 
-def make_scenarios():
-    return [
-        ScenarioAssessment(INSIDE, "stays above 66,000 (no mapped level above within 15%: the upside is unmapped)", 66_000.0,
-                           None, None, None, 54.5, 1.2, 0.0, {"deribit_open_interest": 0.6, "deribit_trades": 0.6},
-                           ["dealer.put_wall", "option_flow.screen_net"], [], [1.0, 3.0], "medium",
-                           ["0: 2 distinct input groups agree", "+3 points in total -> medium"]),
-        ScenarioAssessment(BREAK_DOWN, "breaks below 66,000, no further mapped level below within 15%", None, None, 66_000.0,
-                           None, 0.0, 0.0, 0.6, {"deribit_open_interest": -0.6}, [], ["dealer.put_wall"], None, "low",
-                           ["-1: no distinct input group supports it"])]
-
-
 def make_report(**changes):
     support = map_level(66_000.0, ids=("dealer.put_wall",))
     price_map = PriceMap(SPOT, 700.0, 10_500.0, [support, MapLevel(75_500.0, 75_400.0, 75_600.0, 0.1, ["deribit_trades"],
                                                                     ["x"], False)],
                          support, None, None, None, ["far.level"], [])
     report = DecisionReport(
-        currency="BTC", as_of=NOW, reference_price=SPOT, score_scale="0-100, uncalibrated: relative support, not a probability",
-        evidence=make_evidence(), price_map=price_map, scenarios=make_scenarios(), top_scenario=INSIDE, confidence="medium",
-        confidence_reasons=["+3 points in total -> medium"],
-        what_would_change=[ChangeTrigger("option_flow.screen_net", "if option_flow.screen_net turned bearish", BREAK_DOWN),
-                           ChangeTrigger("dealer.put_wall", "if dealer.put_wall (price level at 66,000) were absent", None)],
-        decisions=[DecisionItem("notice", "These are decision-support items, not orders and not price targets."),
+        currency="BTC", as_of=NOW, reference_price=SPOT, evidence=make_evidence(), price_map=price_map,
+        decisions=[DecisionItem("notice", "These are reference levels and conditions, not orders and not price targets."),
                    DecisionItem("reference_hedge", "Reference level for a hedge: 66,000 (nearest mapped level below)."),
                    DecisionItem("data_caveat", "Data caveat: Option flow & <b>strikes</b>: stale.")],
         not_computed=["futures taker ratio: no BTCUSDT taker ratio computed <i>"],
@@ -72,20 +56,21 @@ def make_report(**changes):
 
 # ---------------------------------------------------------------- fragments
 
-def test_header_marks_the_top_scenario_and_says_the_score_is_uncalibrated():
+def test_header_states_the_reference_range_and_the_evidence_counts_without_any_score():
     html_text = fragments.decision_header_fragment(make_report())
-    assert "<mark>stays above 66,000 (no mapped level above within 15%: the upside is unmapped)</mark>" in html_text
-    assert "Confidence: medium" in html_text
-    assert "Evidence score 54.5 of 100 (uncalibrated, not a probability)" in html_text
-    assert "uncalibrated, not a probability" in html_text
+    assert "<mark>Support 66,000; the upside is unmapped (spot 70,000)</mark>" in html_text          # the make_report map is one-sided
+    assert "4 evidence items from 2 input groups, 1 sources not computed" in html_text
+    assert "not a forecast and not a ranking of scenarios" in html_text
+    for word in ("Confidence", "Evidence score", "scenario with net support", "uncalibrated"):
+        assert word not in html_text
     assert html_text.count("<mark>") == 1
 
 
-def test_header_without_a_top_scenario_says_so_and_gives_the_reason():
-    report = make_report(top_scenario=None, confidence="low", confidence_reasons=["no mapped level on either side of the spot"])
-    html_text = fragments.decision_header_fragment(report)
-    assert "<mark>No scenario has net support</mark>" in html_text and "no mapped level on either side" in html_text
-    assert "Confidence: low" in html_text
+def test_header_with_both_sides_mapped_and_with_none():
+    both = replace(make_report().price_map, resistance=map_level(74_000.0))
+    assert "<mark>Reference range 66,000 to 74,000 around the spot 70,000</mark>" in fragments.decision_header_fragment(make_report(price_map=both))
+    nothing = replace(make_report().price_map, support=None)
+    assert "<mark>No level is mapped on either side of the spot 70,000</mark>" in fragments.decision_header_fragment(make_report(price_map=nothing))
 
 
 def test_every_fragment_escapes_its_text_and_never_writes_a_dollar_sign():
@@ -113,7 +98,7 @@ def test_price_map_downside_unmapped_and_neither_side_mapped():
     assert "One-sided map: the downside is unmapped" in fragments.price_map_fragment(make_report(price_map=resistance_only))
     nothing = replace(price_map, support=None, levels=[])
     html_text = fragments.price_map_fragment(make_report(price_map=nothing))
-    assert "Neither side is mapped" in html_text and "no scenario can be built" in html_text
+    assert "Neither side is mapped" in html_text and "no scenario" not in html_text
     assert "One-sided" not in html_text
 
 
@@ -122,20 +107,10 @@ def test_price_map_lists_a_band_at_the_spot():
     assert "At the spot (the band contains the spot)" in fragments.price_map_fragment(make_report(price_map=price_map))
 
 
-def test_scenarios_table_has_scores_labels_evidence_and_reasons():
-    html_text = fragments.scenarios_fragment(make_report())
-    for text in ("54.5", "medium", "low", "dealer.put_wall, option_flow.screen_net", "deribit_open_interest +0.60",
-                 "<li>0: 2 distinct input groups agree</li>", "-1: no distinct input group supports it",
-                 "do not add up to 100", "not a probability"):
-        assert text in html_text, text
-    assert "none" in html_text                       # the break down has no supporting evidence: an empty list, said as such
-    assert "No scenario" in fragments.scenarios_fragment(make_report(scenarios=[]))
-
-
 def test_decisions_are_listed_exactly_as_produced_with_the_note():
     report = make_report()
     html_text = fragments.decisions_fragment(report)
-    assert "Decision support, not orders, not targets." in html_text
+    assert "Reference levels and conditions, not orders, not targets, not a ranking of scenarios." in html_text
     assert html_text.count("<li>") == len(report.decisions) == 3
     assert "<strong>reference hedge</strong> Reference level for a hedge: 66,000 (nearest mapped level below)." in html_text
 
@@ -167,14 +142,6 @@ def test_tiny_values_are_never_shown_as_zero_and_the_horizon_is_shown():
     html_text = fragments.evidence_fragment(make_report(evidence=[tiny, none]))
     assert "<td class=\"num\">&lt;0.01</td>" in html_text and "<td class=\"num\">12.3</td>" in html_text
     assert "<td class=\"num\">not computed</td>" in html_text
-
-
-def test_what_would_change_lists_the_triggers_and_says_when_there_are_none():
-    html_text = fragments.change_triggers_fragment(make_report())
-    assert "if option_flow.screen_net turned bearish" in html_text and "breaks below" in html_text
-    assert "no scenario with net support" in html_text
-    assert "No single item&#x27;s flip or removal changes the top scenario." in fragments.change_triggers_fragment(
-        make_report(what_would_change=[]))
 
 
 def test_caveats_and_freshness_list_not_computed_caveats_and_ages():
@@ -233,7 +200,7 @@ def test_section_calls_the_service_once_with_the_report_clock_and_renders_only_i
     section = build_decision_section(context)
     (service,) = fake_service.instances
     assert service.repository is repository and service.calls == [("BTC", NOW)]
-    assert section.key == "decision" and section.title == "Decision" and not section.failed
+    assert section.key == "decision" and section.title == "Evidence" and not section.failed
     assert section.body_html == fragments.decision_body_fragment(make_report())
     assert "Report time 2026-11-14 12:00 UTC; spot 70,000." == section.as_of
     assert NOT_RECORDED_NOTE in section.notes and "scripts/decision_maker.py --save" in NOT_RECORDED_NOTE
@@ -243,32 +210,33 @@ def test_section_calls_the_service_once_with_the_report_clock_and_renders_only_i
 
 def test_decision_is_the_last_section_and_the_others_are_unchanged():
     assert [key for key, _, _ in SECTION_BUILDERS] == ["menthorq", "futures-flow", "option-flow", "dealer-levels", "levels", "decision"]
-    assert SECTION_BUILDERS[-1][1:] == ("Decision", build_decision_section)
+    assert SECTION_BUILDERS[-1][1:] == ("Evidence", build_decision_section)
 
 
 def test_a_lookup_error_becomes_a_missing_data_section_with_the_sync_hint(tmp_path, fake_service):
     fake_service.outcome = LookupError("no BTC option-chain snapshot with an index price is stored")
-    service = make_service(tmp_path, builders=[("decision", "Decision", build_decision_section)])
+    service = make_service(tmp_path, builders=[("decision", "Evidence", build_decision_section)])
     result = service.generate("BTC", skip_sync=True)
     page = written_page(result)
-    assert result.failed_sections == ["Decision"]
+    assert result.failed_sections == ["Evidence"]
     assert "No BTC option-chain snapshot with an index price is stored." in page and SYNC_HINT in page
     assert "How to read this tab" in page and "Evidence and input groups" in page          # the help stays on a failed tab
 
 
 def test_any_other_error_shows_its_type_and_message(tmp_path, fake_service):
     fake_service.outcome = RuntimeError("boom")
-    result = make_service(tmp_path, builders=[("decision", "Decision", build_decision_section)]).generate("BTC", skip_sync=True)
+    result = make_service(tmp_path, builders=[("decision", "Evidence", build_decision_section)]).generate("BTC", skip_sync=True)
     page = written_page(result)
-    assert result.failed_sections == ["Decision"]
-    assert "Decision failed with RuntimeError: boom." in page and SYNC_HINT not in page
+    assert result.failed_sections == ["Evidence"]
+    assert "Evidence failed with RuntimeError: boom." in page and SYNC_HINT not in page
 
 
 def test_a_built_decision_section_is_in_the_page_with_its_help_and_never_saves(tmp_path, fake_service):
-    result = make_service(tmp_path, builders=[("decision", "Decision", build_decision_section)]).generate("BTC", skip_sync=True)
+    result = make_service(tmp_path, builders=[("decision", "Evidence", build_decision_section)]).generate("BTC", skip_sync=True)
     page = written_page(result)
     assert result.failed_sections == [] and [outcome.key for outcome in result.sections] == ["decision"]
-    assert "Best-supported scenario: <mark>" in page and "uncalibrated, not a probability" in page
+    assert "Best-supported scenario" not in page and "Confidence" not in page and "<h3>Scenarios</h3>" not in page
+    assert "<h3>Price map</h3>" in page and "<h3>Reference lines</h3>" in page and "<h3>Evidence</h3>" in page
     assert "How to read this tab" in page and "Evidence and input groups" in page
     assert fake_service.instances[0].calls[0][1] == result.generated_at
 

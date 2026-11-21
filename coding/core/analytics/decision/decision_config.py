@@ -3,34 +3,18 @@ Every weight, threshold and prior of the decision maker, in one place.
 
 NONE of these values is calibrated. There is no ground truth yet (no recorded decision has been scored against what the
 price did), so each value is a prior: a stated, reasoned starting point that the owner can discuss and that calibration
-from ``decision_snapshots`` will later replace. The engine (``scenario_engine.py``, ``price_map.py``) reads only this
-module; it hard-codes no number of its own. Each constant carries a docstring saying why it has its value.
+from ``decision_snapshots`` will later replace. The report builder (``evidence_report.py``), ``price_map.py`` and the extractors read
+only this module; they hard-code no number of their own. Each constant carries a docstring saying why it has its value.
 
 Scales used below:
 * strength and quality are 0..1 (see ``EvidenceItem``);
-* a "group contribution" is a signed number, at most ``GROUP_CONTRIBUTION_CAP`` in size;
-* the evidence score is 0..100, uncalibrated, and is NOT a probability (scenario scores do not add up to anything).
+* a "group contribution" is a signed number, at most ``GROUP_CONTRIBUTION_CAP`` in size.
+
+(The scenario scores, the confidence labels and their constants were removed on 2026-11-21: they were never calibrated and no
+recorded decision had been checked against what the price did.)
 """
 
 from typing import Dict
-
-# ---------------------------------------------------------------- scale of the evidence score
-
-EVIDENCE_SCORE_SCALE = "0-100, uncalibrated: relative support, not a probability"
-"""Printed next to every score so no reader takes it for a probability."""
-
-SCORE_HALF_POINT = 1.0
-"""
-Net support that maps to a score of 50 (score = 100 x net / (net + SCORE_HALF_POINT)). 1.0 is the contribution of one
-full-strength, full-quality input group, so a score of 50 means "about one perfect source's worth of net
-support". The curve saturates, so adding groups raises the score with diminishing returns and never reaches 100.
-"""
-
-CONFLICT_PENALTY = 1.0
-"""
-How much opposing support is subtracted from supporting support (net = support - CONFLICT_PENALTY x opposition).
-1.0 treats one unit of opposition as cancelling one unit of support: no reason yet to weigh either side more.
-"""
 
 # ---------------------------------------------------------------- aggregation of input groups
 
@@ -49,13 +33,10 @@ trusting one data source more than another. Quality (per evidence item) already 
 
 GROUP_CONTRIBUTION_CAP = 1.0
 """
-Largest size of one input group's contribution to one scenario (and to one level's weight). Stops a group with many
+Largest size of one input group's contribution to one level's weight. Stops a group with many
 items (for example many open-interest levels) from outvoting the others: one group is one opinion, however many items it
 produced. 1.0 = one full-strength, full-quality item.
 """
-
-MINIMUM_AGREEING_CONTRIBUTION = 0.05
-"""A group counts as "agreeing" with a scenario only when its contribution is above this; smaller is noise-level support."""
 
 # ---------------------------------------------------------------- price map
 
@@ -103,86 +84,6 @@ VERY_STALE_MULTIPLE = 4.0
 
 VERY_STALE_QUALITY_FACTOR = 0.1
 """Quality factor of a very stale item: it is kept visible in the evidence list but carries almost no weight."""
-
-# ---------------------------------------------------------------- how each kind of evidence relates to each scenario
-
-LEVEL_SUPPORTS_INSIDE = 1.0
-"""A level that bounds the range supports "stays inside" with full strength: a mapped boundary is what "inside" means."""
-
-LEVEL_OPPOSES_BREAK = 1.0
-"""The same level opposes the break through it with full strength (it is the obstacle the break has to pass)."""
-
-DIRECTIONAL_SUPPORTS_BREAK = 1.0
-"""Bullish evidence supports the break up (bearish: the break down) with full strength."""
-
-DIRECTIONAL_OPPOSES_OTHER_BREAK = 1.0
-"""Bullish evidence opposes the break down (bearish: the break up) with full strength: it points the other way."""
-
-DIRECTIONAL_OPPOSES_INSIDE = 0.5
-"""A one-sided flow opposes "stays inside" only half: pressure in one direction does not mean the range breaks."""
-
-BALANCED_SUPPORTS_INSIDE = 1.0
-"""Balanced (neutral) directional evidence supports "stays inside"; its strength already says how balanced it is."""
-
-RANGE_BOUND_SUPPORTS_INSIDE = 1.0
-"""A range-bound regime hint supports "stays inside" fully (its weakness is in its strength and quality, not here)."""
-
-RANGE_BOUND_OPPOSES_BREAK = 0.5
-"""A range-bound regime hint opposes each break half: it says moves are damped, not that a given level holds."""
-
-EXPANSION_OPPOSES_INSIDE = 1.0
-"""An expansion regime hint (moves amplified) opposes "stays inside" fully."""
-
-ONE_SIDED_EXPANSION_OPPOSES_INSIDE = 0.5
-"""
-On a one-sided map ("stays above support" with the upside unmapped) an expansion hint opposes "inside" only half: a large
-move toward the unmapped side does not contradict it, a move through the mapped bound does.
-"""
-
-EXPANSION_SUPPORTS_BREAK = 0.5
-"""An expansion regime hint supports each break only half: it has no direction, so it splits between both sides."""
-
-# ---------------------------------------------------------------- confidence label (low / medium / high)
-
-HIGH_CONFIDENCE_MINIMUM_GROUPS = 3
-"""
-"high" needs at least three distinct input groups agreeing. Distinct data feeds, not independent evidence: open interest accumulates the trades and all groups react to the same price moves. Today only three groups exist (Deribit open interest,
-Deribit trades, Binance perpetual candles), so "high" needs all of them on one side.
-"""
-
-LOW_CONFIDENCE_MAXIMUM_GROUPS = 1
-"""With at most one agreeing input group the label is "low" whatever else holds: one data source is one opinion."""
-
-HIGH_CONFIDENCE_MINIMUM_POINTS = 2
-"""Net points (each confidence reason adds +1, 0 or -1) needed for "high"."""
-
-LOW_CONFIDENCE_MAXIMUM_POINTS = -1
-"""Net points at or below which the label is "low"."""
-
-STALE_SUPPORT_BLOCKS_HIGH = True
-"""A scenario with any stale supporting item is at most "medium": "high" should never rest on old data."""
-
-HIGH_CONFLICT_SHARE = 0.35
-"""
-Opposition above this share costs a point: more than a third of the weight disagrees. The share is measured per item
-(sum of quality x |value| of the opposing items over that of all items speaking to the scenario), because the group means
-of the score net a conflict away inside a group.
-"""
-
-LOW_CONFLICT_SHARE = 0.10
-"""Opposition below this share earns a point: the evidence that has a say is almost one-sided."""
-
-GOOD_MEAN_QUALITY = 0.6
-"""Mean quality of the supporting items at or above this earns a point."""
-
-POOR_MEAN_QUALITY = 0.35
-"""Mean quality of the supporting items below this costs a point (assumption-based or failed-check inputs dominate)."""
-
-WIDE_MARGIN_POINTS = 20.0
-"""The top scenario earns a point when it leads the second by at least this many score points."""
-
-NARROW_MARGIN_POINTS = 10.0
-"""The top scenario loses a point when it leads the second by less than this: the ranking could flip on little."""
 
 # ---------------------------------------------------------------- extractor priors (base quality and strength per source)
 

@@ -1,22 +1,18 @@
-"""The Decision tab help: every constant and worked example recomputed against the decision engine itself."""
+"""The Decision tab help: every constant and worked example recomputed against the evidence report code itself."""
 
-import statistics
 from datetime import timedelta
 
 import pytest
 
 from coding.core.analytics.decision import decision_config as config
-from coding.core.analytics.decision.decision_report import BREAK_DOWN, BREAK_UP, INSIDE, SCENARIO_ORDER
 from coding.core.analytics.decision.evidence import EvidenceItem
+from coding.core.analytics.decision.evidence_report import apply_freshness
 from coding.core.analytics.decision.independence import group_contribution
 from coding.core.analytics.decision.price_map import build_price_map
-from coding.core.analytics.decision.scenario_engine import (
-    _confidence, _variant, apply_freshness, build_decision_report, stances)
 from coding.core.analytics.report import how_to_read as help_module
-from coding.core.analytics.report.how_to_read import (
-    SECTION_HELP, confidence_label, confidence_points, evidence_score, group_contribution_value, quality_after_age)
+from coding.core.analytics.report.how_to_read import SECTION_HELP, group_contribution_value, quality_after_age
 from coding.service.decision import evidence_extractors as extractors
-from tests.unit.decision.evidence_builders import NOW, directional, level, regime
+from tests.unit.decision.evidence_builders import NOW, level
 from tests.unit.decision.test_evidence_extractors import dealer_levels, open_interest_row
 from tests.unit.report.test_how_to_read import case_of, topic_of
 
@@ -25,24 +21,17 @@ OPEN_INTEREST = "deribit_open_interest"
 TRADES = "deribit_trades"
 
 
-def example_items():
-    """The put wall (open interest) and call wall (trades) of the 'two groups agree' example."""
-    return [level("put", OPEN_INTEREST, help_module.DECISION_PUT_WALL, help_module.DECISION_WALL_QUALITY,
-                  help_module.DECISION_WALL_STRENGTH),
-            level("call", TRADES, help_module.DECISION_CALL_WALL, help_module.DECISION_WALL_QUALITY,
-                  help_module.DECISION_WALL_STRENGTH)]
-
-
-def test_the_decision_help_exists_with_its_four_topics():
+def test_the_decision_help_exists_with_its_three_topics_and_no_scoring_topic():
     assert SECTION_HELP["decision"].section_key == "decision"
-    assert len(SECTION_HELP["decision"].topics) == 4
-    for title in ("Evidence and input groups", "The price map", "Scenarios, evidence score", "Decisions, what would change"):
+    assert len(SECTION_HELP["decision"].topics) == 3
+    for title in ("Evidence and input groups", "The price map", "Reference lines and data problems"):
         assert topic_of("decision", title)
+    titles = " ".join(topic.title for topic in SECTION_HELP["decision"].topics).lower()
+    assert "scenario" not in titles and "confidence" not in titles and "score" not in titles
 
 
 def test_constants_match_the_decision_config():
     pairs = {
-        "DECISION_SCORE_HALF_POINT": config.SCORE_HALF_POINT, "DECISION_CONFLICT_PENALTY": config.CONFLICT_PENALTY,
         "DECISION_GROUP_CONTRIBUTION_CAP": config.GROUP_CONTRIBUTION_CAP,
         "DECISION_MINIMUM_LEVEL_WEIGHT": config.MINIMUM_LEVEL_WEIGHT,
         "DECISION_MAXIMUM_LEVEL_DISTANCE_SHARE": config.MAXIMUM_LEVEL_DISTANCE_SHARE,
@@ -50,14 +39,6 @@ def test_constants_match_the_decision_config():
         "DECISION_STALE_QUALITY_FACTOR": config.STALE_QUALITY_FACTOR, "DECISION_VERY_STALE_MULTIPLE": config.VERY_STALE_MULTIPLE,
         "DECISION_VERY_STALE_QUALITY_FACTOR": config.VERY_STALE_QUALITY_FACTOR,
         "DECISION_FAILED_CHECK_QUALITY_FACTOR": config.FAILED_CHECK_QUALITY_FACTOR,
-        "DECISION_MINIMUM_AGREEING_CONTRIBUTION": config.MINIMUM_AGREEING_CONTRIBUTION,
-        "DECISION_HIGH_MINIMUM_GROUPS": config.HIGH_CONFIDENCE_MINIMUM_GROUPS,
-        "DECISION_LOW_MAXIMUM_GROUPS": config.LOW_CONFIDENCE_MAXIMUM_GROUPS,
-        "DECISION_HIGH_CONFLICT_SHARE": config.HIGH_CONFLICT_SHARE, "DECISION_LOW_CONFLICT_SHARE": config.LOW_CONFLICT_SHARE,
-        "DECISION_GOOD_MEAN_QUALITY": config.GOOD_MEAN_QUALITY, "DECISION_POOR_MEAN_QUALITY": config.POOR_MEAN_QUALITY,
-        "DECISION_WIDE_MARGIN_POINTS": config.WIDE_MARGIN_POINTS, "DECISION_NARROW_MARGIN_POINTS": config.NARROW_MARGIN_POINTS,
-        "DECISION_HIGH_MINIMUM_POINTS": config.HIGH_CONFIDENCE_MINIMUM_POINTS,
-        "DECISION_LOW_MAXIMUM_POINTS": config.LOW_CONFIDENCE_MAXIMUM_POINTS,
         "DECISION_TAKER_MINIMUM_POINTS": config.TAKER_BAND_MINIMUM_POINTS}
     for name, value in pairs.items():
         assert getattr(help_module, name) == value, name
@@ -91,72 +72,15 @@ def test_freshness_example_matches_the_engine():
     assert "0.30" in text and "0.06" in text and "5 hours" in text and "13 hours" in text
 
 
-def test_scenario_example_matches_the_engine():
-    report = build_decision_report("BTC", NOW, SPOT, example_items())
-    inside, break_up = report.scenario(INSIDE), report.scenario(BREAK_UP)
-    assert report.top_scenario == INSIDE
-    assert inside.evidence_score == pytest.approx(help_module._DECISION_INSIDE_SCORE) == pytest.approx(54.545, abs=0.001)
-    assert break_up.evidence_score == help_module._DECISION_BREAK_UP_SCORE == 0.0
-    assert inside.support == pytest.approx(1.2) and break_up.opposition == pytest.approx(0.6)
-    assert inside.confidence == "medium" and help_module._DECISION_MEDIUM_POINTS == 3
-    assert "+3 points in total -> medium" in inside.confidence_reasons[-1]
-    assert evidence_score(1.2, 0.0) == pytest.approx(inside.evidence_score)
-    example = case_of("decision", "Two groups agree, wide margin").example
-    assert "54.5" in example and "1.20" in example and "+3: medium" in example and "score 0.0" in example
-
-
-def engine_label(example, score=50.0):
-    """The engine's own label and points for the five inputs of a help example (``scenario_engine._confidence``)."""
-    groups, conflict, quality, stale, margin = example
-    stale_reasons = ("stale: 4.0 h old (limit 3 h), quality x0.5",) if stale else ()
-    supporting = EvidenceItem("support", "source", OPEN_INTEREST, "price_level", "text", NOW, 1.0, quality, price=1.0,
-                              quality_reasons=stale_reasons)
-    entry = {"key": INSIDE, "contributions": {f"group{index}": 0.5 for index in range(groups)},
-             "item_support": 1.0 - conflict, "item_opposition": conflict, "supporting": ["support"],
-             "score": score}
-    other = {"key": BREAK_UP, "score": score - margin}
-    label, reasons = _confidence(entry, [entry, other], {"support": supporting}, {INSIDE: "inside", BREAK_UP: "up"})
-    points = int(reasons[-1].split(" points")[0])
-    return label, points
-
-
-@pytest.mark.parametrize("name", ["HIGH", "CAPPED", "CONFLICT", "ONE_GROUP"])
-def test_confidence_examples_match_the_engine(name):
-    example = getattr(help_module, f"DECISION_{name}_EXAMPLE")
-    engine = engine_label(example)
-    assert engine == (confidence_label(example[0], confidence_points(*example), 50.0, example[3]), confidence_points(*example))
-
-
-def test_confidence_example_labels_in_the_text():
-    expected = {"Three groups agree": ("high", 3), "A supporting item is stale": ("medium", 2),
-                "The evidence conflicts": ("medium", 1), "Only one input group supports": ("low", 2)}
-    for start, (label, points) in expected.items():
-        example = case_of("decision", start).example
-        assert example.endswith(f"{label}."), (start, example)
-        assert f"{points:+d}" in example, (start, example)
-    assert engine_label(help_module.DECISION_HIGH_EXAMPLE) == ("high", 3)
-    assert engine_label(help_module.DECISION_CAPPED_EXAMPLE) == ("medium", 2)
-    assert "+1, +1, 0, -1, +1 = +2" in case_of("decision", "A supporting item is stale").example
-    assert "+1, -1, +1, 0, 0 = +1" in case_of("decision", "The evidence conflicts").example
-    assert "high is still possible" in case_of("decision", "The evidence conflicts").reading
-    assert engine_label(help_module.DECISION_CONFLICT_EXAMPLE) == ("medium", 1)
-    assert engine_label(help_module.DECISION_ONE_GROUP_EXAMPLE) == ("low", 2)
-    assert confidence_label(3, 2, 0.0, 0) == "low"          # a score of 0 is low whatever else holds
-
-
 def test_price_map_examples_match_the_engine():
     window = help_module.zoom_window(SPOT, config.MAXIMUM_LEVEL_DISTANCE_SHARE)
     assert tuple(round(value) for value in window) == (59_500, 80_500)
     one_sided = build_price_map([level("put", OPEN_INTEREST, 66_000.0, 0.6, 1.0)], SPOT)
     assert one_sided.support is not None and one_sided.resistance is None
-    report = build_decision_report("BTC", NOW, SPOT, [level("put", OPEN_INTEREST, 66_000.0, 0.6, 1.0)])
-    assert {scenario.key for scenario in report.scenarios} == {INSIDE, BREAK_DOWN}
-    assert report.scenario(INSIDE).title.startswith("stays above 66,000")
-    assert report.scenario(BREAK_DOWN).title.startswith("breaks below 66,000")
     example = case_of("decision", "One side is unmapped").example
     assert "59,500 to 80,500" in example and "66,000" in example
-    empty = build_decision_report("BTC", NOW, SPOT, [level("far", OPEN_INTEREST, 120_000.0, 0.6, 1.0)])
-    assert empty.scenarios == [] and empty.top_scenario is None and empty.confidence == "low"
+    empty = build_price_map([level("far", OPEN_INTEREST, 120_000.0, 0.6, 1.0)], SPOT)
+    assert empty.support is None and empty.resistance is None and empty.left_out == ["far"]
 
 
 def test_weak_item_example_matches_the_price_map():
@@ -192,9 +116,10 @@ def test_taker_ratio_minimum_points_example_matches_the_extractor():
     assert "240 hourly points" in case_of("decision", "A source is not computed").example
 
 
-def test_help_states_the_documented_limits():
+def test_help_states_the_documented_limits_and_the_removal_of_scoring():
     text = " ".join(" ".join(limit for limit in topic.limits) for topic in SECTION_HELP["decision"].topics).lower()
-    for phrase in ("not a forecast", "not calibrated", "probability", "quiet market", "inside", "not independent"):
+    for phrase in ("not calibrated", "not independent", "no scoring of scenarios", "no confidence label", "not a recommendation"):
         assert phrase in text, phrase
     summary = SECTION_HELP["decision"].summary.lower()
     assert "not a forecast" in summary and "not an order" in summary and "price target" in summary
+    assert "does not score scenarios" in summary

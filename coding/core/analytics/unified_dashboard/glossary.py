@@ -85,10 +85,6 @@ TOOLTIPS: Dict[str, Tooltip] = {
         "The decision engine found no meaningful level above the price within 15% of it (its map range).",
         "Treat the upside as unmapped, not as open sky: it only means the data shows no level there, so a move up has no mapped stopping point.",
         "Price 58,000 and no level up to 66,700 (15% above): an upward move has nothing mapped to stall at."),
-    "chip_confidence": Tooltip(
-        "The decision engine's confidence label for its best-supported scenario.",
-        "It reflects how many independent evidence groups agree and how fresh the data is. The score is hand-weighted and uncalibrated: it is not a probability.",
-        "Confidence low with score 23: weak, mixed evidence."),
     # ---- cards
     "card_price_map": Tooltip(
         "Price levels within 20% of the price where open interest, dealer hedging or flow concentrate: call resistance, put support, max pain, zero gamma and others.",
@@ -102,10 +98,10 @@ TOOLTIPS: Dict[str, Tooltip] = {
         "Implied volatility of each expiry (the term structure) next to realized volatility and where it sits in its own history (vol cone).",
         "Near expiries above far ones (backwardation) means stress: the market expects the movement soon. Implied above realized means options are rich.",
         "Implied 59% vs realized 40% over 10 days: options price more movement than has happened."),
-    "card_decision": Tooltip(
-        "The summary of the decision engine: the best-supported scenario for the price, its score and the evidence behind it.",
-        "A score ranks scenarios against each other. It is uncalibrated, not a probability and not a trade signal.",
-        "Scenario 'stays between 60,000 and 68,000' with score 23, low confidence: a weak lean."),
+    "card_evidence": Tooltip(
+        "The summary of the evidence report: the reference range around the price (nearest mapped support and resistance), which side is unmapped, and how many evidence items back it.",
+        "Levels and evidence, not a forecast and not a score: there is no ranking of scenarios and no confidence label, because the old scores were never calibrated. Open the tab for each item's strength, quality and caveats.",
+        "Reference range 53,000 to 63,000 with the upside unmapped means support and resistance were found on the downside only."),
     "card_skew": Tooltip(
         "Skew per expiry: how much more or less expensive puts are than calls (25-delta risk reversal = call IV minus put IV, in volatility points).",
         "Negative = puts cost more (protection is in demand), positive = calls cost more. The more negative, the stronger the fear of a fall.",

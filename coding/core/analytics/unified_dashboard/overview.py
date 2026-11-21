@@ -215,7 +215,7 @@ def icon(name, size=15):
 TILE_TOOLTIPS = {"DVOL": "dvol", "IV rank 365d": "iv_rank", "Net GEX · all expiries": "net_gex", "Taker buy/sell": "taker_ratio",
                  "Perpetual OI": "perp_oi", "Futures basis": "basis", "Variance risk premium": "vrp", "Funding 8h": "funding"}
 GAUGE_TOOLTIPS = {"g1": "dvol_percentile", "g2": "iv_percentile"}
-CARD_TOOLTIPS = {"Price map": "card_price_map", "Gamma roll-off": "card_gamma", "Volatility": "card_volatility", "Decision": "card_decision",
+CARD_TOOLTIPS = {"Price map": "card_price_map", "Gamma roll-off": "card_gamma", "Volatility": "card_volatility", "Evidence": "card_evidence",
                  "Skew heatmap": "card_skew", "Open interest by expiry": "card_open_interest", "Blocks & large prints": "card_blocks",
                  "Data health": "card_health", "Expiries": "card_expiries"}
 
@@ -282,7 +282,6 @@ def build_overview(A, B, currency):
     bars = rows_as_dicts(find(ta, cls="bar-expiries"))
     blocks_a = rows_as_dicts(find(ta, cls="block-structures"))
     pmap = rows_as_dicts(find(ta, cls="price-map"))
-    scen = rows_as_dicts(find(ta, cls="scenarios"))
     ages = rows_as_dicts(find(ta, "Data ages"))
 
     spot = num(mm.get("Spot")) or num(dict(B["facts"]).get("Spot"))
@@ -345,7 +344,7 @@ def build_overview(A, B, currency):
         if p and "spot" not in role.lower():
             if p < spot and support is None:
                 support = p
-            add(p, "Decision " + ("support" if p < spot else "resistance"), f"weight {r.get('Weight', '')}", "dec")
+            add(p, "Evidence " + ("support" if p < spot else "resistance"), f"weight {r.get('Weight', '')}", "dec")
     zg = num(key.get("Zero gamma level (re-priced)", [None, None])[1]) if key else None
     if zg:
         add(zg, "Zero gamma", f"{front} · re-priced", "deal")
@@ -357,7 +356,7 @@ def build_overview(A, B, currency):
     for r in bars[:5]:
         carried = (r.get("Carried by expiry", "").split(",")[0]).strip()
         add(num(r.get("Strike")), f"{r.get('Type', '')} {r.get('Taker side', '')} {r.get('Notional', '')}", carried, "flow")
-    catname = {"dec": "Decision", "deal": "Dealer", "pain": "Max pain", "flow": "Flow"}
+    catname = {"dec": "Evidence", "deal": "Dealer", "pain": "Max pain", "flow": "Flow"}
     ladder_rows = []
     for p in sorted(cands, reverse=True):
         items = cands[p]
@@ -421,16 +420,10 @@ def build_overview(A, B, currency):
     vtxt = re.sub(r"<mark>(.*?)</mark>", r"[[\1]]", verdict.group(1)) if verdict else ""
     vtxt = esc(re.sub("<[^>]+>", "", vtxt)).replace("[[", "<mark>").replace("]]", "</mark>")
     vfail = re.search(r'<p class="verdict-failed">(.*?)</p>', A["raw"], re.S)
-    sc_rows = ""
-    for r in scen[:4]:
-        sc = num(r.get("Evidence score")) or 0
-        sc_rows += (f'<div class="sc"><div class="sc-top"><span class="sc-n">{esc(r.get("Scenario", ""))}</span><span class="sc-c conf-{esc(r.get("Confidence", "").lower())}">{esc(r.get("Confidence", ""))}</span></div>'
-                    f'<div class="sc-bar"><span style="width:{sc:.0f}%"></span></div><span class="sc-v">evidence score {sc:.1f} / 100</span></div>')
     pm_rows = "".join(f'<div class="pm"><span>{esc(r.get("Role", ""))}</span><b>{esc(r.get("Price", ""))}</b><span>{esc(r.get("From the spot", ""))}</span></div>' for r in pmap)
     upside_unmapped = bool(vfail and "upside is unmapped" in vfail.group(1))
-    conf = scen[0].get("Confidence", "") if scen else ""
     decision = (f'<p class="verdict-s">{vtxt}</p>' + (f'<p class="warn-line">{esc(re.sub("<[^>]+>", "", vfail.group(1)))}</p>' if vfail else "")
-                + f'<div class="scens">{sc_rows}</div><div class="pmap">{pm_rows}</div>')
+                + f'<div class="pmap">{pm_rows}</div>')
 
     # ---- skew heatmap
     heat = ""
@@ -506,8 +499,6 @@ def build_overview(A, B, currency):
         chips.append(f'<span class="chip chip-{"neg" if net_gex < 0 else "pos"}"{tip_attributes("chip_gamma")}>{"Short" if net_gex < 0 else "Long"} gamma</span>')
     if upside_unmapped:
         chips.append(f'<span class="chip chip-warn"{tip_attributes("chip_upside")}>Upside unmapped</span>')
-    if conf:
-        chips.append(f'<span class="chip"{tip_attributes("chip_confidence")}>Confidence · {esc(conf)}</span>')
     line = []
     if sup:
         line.append(f"Support {fmt_int(sup)} · {pct_from(sup, spot).lstrip('−+')} below")
@@ -527,7 +518,7 @@ def build_overview(A, B, currency):
 <div class="grid3">
 {card("Price map", ladder, "map", "levels within 20% of spot", "levels")}
 {card("Gamma roll-off", gamma, "bars", "net GEX by expiry", "market-wide")}
-<div class="stack">{card("Volatility", volc, "wave", "ATM IV term · realized", "market-wide")}{card("Decision", decision, "flag", "evidence engine", "decision")}</div>
+<div class="stack">{card("Volatility", volc, "wave", "ATM IV term · realized", "market-wide")}{card("Evidence", decision, "flag", "levels and evidence", "decision")}</div>
 </div>
 {card("Skew heatmap", heatc, "grid", f"{len(skew)} expiries", "market-wide")}
 <div class="grid3">

@@ -5,30 +5,16 @@ from datetime import timedelta
 
 import pytest
 
-from coding.core.analytics.decision.decision_report import BREAK_DOWN, INSIDE, DecisionReport
+from coding.core.analytics.decision.decision_report import DecisionReport
 from coding.core.analytics.decision.evidence import EvidenceItem
-from coding.core.analytics.decision.scenario_engine import build_decision_report
+from coding.core.analytics.decision.evidence_report import build_decision_report
 from coding.service.decision import evidence_extractors as extractors
-from tests.unit.decision.evidence_builders import NOW, SPOT, directional, level, regime
+from tests.unit.decision.evidence_builders import NOW, SPOT, level
 from tests.unit.decision.test_evidence_extractors import by_id, dealer_levels, open_interest_row
 
 
 def report_of(items):
     return build_decision_report("BTC", NOW, SPOT, items)
-
-
-def test_on_a_one_sided_map_a_lean_toward_the_unmapped_side_does_not_oppose_inside():
-    # support only: "stays above 95,000"; bullish points to the unmapped upside, so it does not oppose inside
-    bullish = report_of([level("support", "g1", 95_000), directional("bull", "g2", "bullish", quality=1.0)])
-    assert "g2" not in bullish.scenario(INSIDE).group_contributions
-    assert bullish.scenario(INSIDE).evidence_score == pytest.approx(100 * 0.5 / 1.5)        # the support alone: 0.5
-    # bearish still opposes inside (-0.5 x 1 x 1) and supports the break down (+1)
-    bearish = report_of([level("support", "g1", 95_000), directional("bear", "g2", "bearish", quality=1.0)])
-    assert bearish.scenario(INSIDE).group_contributions["g2"] == pytest.approx(-0.5)
-    assert bearish.scenario(BREAK_DOWN).group_contributions["g2"] == pytest.approx(1.0)
-    # expansion opposes a one-sided inside only half: -0.5 x strength 1 x quality 0.5 = -0.25
-    expansion = report_of([level("support", "g1", 95_000), regime("wild", "g2", "expansion")])
-    assert expansion.scenario(INSIDE).group_contributions["g2"] == pytest.approx(-0.25)
 
 
 def test_a_band_containing_the_spot_is_neither_support_nor_resistance():

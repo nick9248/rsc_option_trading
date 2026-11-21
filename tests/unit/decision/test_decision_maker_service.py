@@ -169,9 +169,9 @@ def test_save_snapshot_stores_the_report_dict_under_its_key(service):
 
 def test_summary_lines_are_readable_and_carry_the_disclaimer(service):
     lines = summary_lines(service.build_report("BTC"))
-    assert lines[0] == "BTC decision report as of 2026-11-14 12:00 UTC, spot 65,000.00"
-    assert lines[1].startswith("Score scale: 0-100, uncalibrated")
-    assert lines[-1].startswith("Decision support only")
+    assert lines[0] == "BTC evidence report as of 2026-11-14 12:00 UTC, spot 65,000.00"
+    assert not any("Score scale" in line or "Scenario" in line or "confidence" in line.lower() for line in lines)
+    assert lines[-1].startswith("Reference levels and the evidence behind them")
 
 
 def test_an_old_spot_is_flagged_and_its_time_is_in_the_context(service):

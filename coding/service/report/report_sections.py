@@ -533,5 +533,5 @@ SECTION_BUILDERS: List[Tuple[str, str, Callable[[SectionContext], ReportSection]
     ("option-flow", "Option flow", build_option_flow_section),
     ("dealer-levels", "Dealer levels", build_dealer_levels_section),
     ("levels", "Levels", build_levels_section),
-    ("decision", "Decision", build_decision_section),
+    ("decision", "Evidence", build_decision_section),
 ]
