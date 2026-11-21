@@ -37,8 +37,18 @@ def test_a_target_without_a_usable_chain_is_said_not_hidden():
     assert summary.startswith("0 expiries") and len(lines) == len(LIVE_TARGET_DAYS) and "no pick" in lines[0]
 
 
-def test_the_budget_error_stops_the_run_and_reaches_the_caller():
+def test_the_budget_error_reaches_the_caller_and_the_money_already_spent_is_reported():
     service = MagicMock()
-    service.pick.side_effect = [result("22NOV26"), BudgetExceeded("used")]
+    service.pick.side_effect = [result("22NOV26"), result("27NOV26"), BudgetExceeded("used")]
+    lines = []
     with pytest.raises(BudgetExceeded):
-        LivePickRunner(service).run("BTC", lambda line: None, now_utc=NOW)
+        LivePickRunner(service).run("BTC", lines.append, now_utc=NOW)
+    assert "at least 2 picks stored and paid (0.090 USD)" in lines[-1]
+
+
+def test_a_stop_request_ends_the_run_before_the_next_paid_call_and_keeps_the_picks():
+    service = MagicMock()
+    service.pick.side_effect = [result("22NOV26"), result("27NOV26")]
+    asked = iter([False, True])
+    summary = LivePickRunner(service).run("BTC", lambda line: None, should_stop=lambda: next(asked), now_utc=NOW)
+    assert service.pick.call_count == 1 and summary == "1 expiries, 1 new picks, 0.045 USD (stopped by the user)"

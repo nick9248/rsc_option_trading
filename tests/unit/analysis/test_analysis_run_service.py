@@ -265,7 +265,7 @@ class FakeStrategyRunner:
     def __init__(self, recorder, error=None):
         self.recorder, self.error = recorder, error
 
-    def run(self, currency, progress):
+    def run(self, currency, progress, *, should_stop):
         self.recorder.calls.append(f"strategy:{currency}")
         progress(f"{currency}: picked")
         if self.error:
@@ -301,3 +301,28 @@ def test_a_failing_strategy_step_is_recorded_and_the_dashboard_is_still_built(re
     step = next(step for step in result.steps if step.name == "strategy picks")
     assert step.status == "failed" and "claude_api_key" in step.message
     assert any(step.name == "unified dashboard" and step.status == "succeeded" for step in result.steps)
+
+
+def test_the_paid_step_is_skipped_when_the_sync_failed_and_the_dashboard_is_still_built(recorder):
+    recorder.sync_failed = True
+    service = recorder.service()
+    service.ask_model = True
+    service.strategy_runner_factory = lambda: FakeStrategyRunner(recorder)
+    result = service.run(["BTC"], lambda line: None)
+    step = next(step for step in result.steps if step.name == "strategy picks")
+    assert step.status == "skipped" and "no money spent" in step.message and "strategy:BTC" not in recorder.calls
+    assert any(step.name == "unified dashboard" and step.status == "succeeded" for step in result.steps)
+
+
+def test_the_stop_request_reaches_the_paid_step(recorder):
+    seen = []
+
+    class Runner:
+        def run(self, currency, progress, *, should_stop):
+            seen.append(should_stop)
+            return "stopped"
+    service = recorder.service()
+    service.ask_model = True
+    service.strategy_runner_factory = Runner
+    service.run(["BTC"], lambda line: None, should_stop=lambda: False)
+    assert seen and callable(seen[0]) and seen[0]() is False

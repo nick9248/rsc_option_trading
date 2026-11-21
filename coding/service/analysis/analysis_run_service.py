@@ -53,8 +53,8 @@ class DashboardWriter(Protocol):
 class StrategyRunner(Protocol):
     """What this service needs from the live pick runner."""
 
-    def run(self, currency: str, progress: Callable[[str], None]) -> str:
-        """Ask the model about a few expiries of the currency; returns one summary line."""
+    def run(self, currency: str, progress: Callable[[str], None], *, should_stop: Callable[[], bool]) -> str:
+        """Ask the model about a few expiries of the currency (checking ``should_stop`` before each paid call); returns one summary line."""
         ...
 
 
@@ -237,6 +237,11 @@ class AnalysisRunService:
                 progress(f"Step {index}/{total}: {label} skipped: analysis failed")
                 continue
 
+            if name == STEP_STRATEGY and any(step.name == STEP_SYNC and step.status == STATUS_FAILED for step in run_result.steps):
+                run_result.steps.append(StepOutcome(name, currency, STATUS_SKIPPED, "skipped: the database sync failed, so the chain may be old (no money spent)"))
+                progress(f"Step {index}/{total}: {label} skipped: the database sync failed (no money spent)")
+                continue
+
             if name == STEP_UNIFIED and (run_result.dashboard_path(currency) is None or run_result.report_path(currency) is None):
                 run_result.steps.append(StepOutcome(name, currency, STATUS_SKIPPED, "skipped: the dashboard or the report is missing"))
                 progress(f"Step {index}/{total}: {label} skipped: the dashboard or the report is missing")
@@ -252,7 +257,7 @@ class AnalysisRunService:
                     analysis_outputs[currency] = output
                     outcome = StepOutcome(name, currency, STATUS_SUCCEEDED, "done", output.bundle_path)
                 elif name == STEP_STRATEGY:
-                    message = self.strategy_runner_factory().run(currency, progress)
+                    message = self.strategy_runner_factory().run(currency, progress, should_stop=stop_requested)
                     outcome = StepOutcome(name, currency, STATUS_SUCCEEDED, message)
                 elif name == STEP_DASHBOARD:
                     output = analysis_outputs[currency]

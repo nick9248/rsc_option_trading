@@ -1453,11 +1453,14 @@ class DatabaseRepository:
 
     @staticmethod
     def _row_dict(columns: Sequence[str], row: Sequence[Any]) -> Dict[str, Any]:
-        """A row as a dict: numbers as floats (NULL stays None), timestamps made UTC-aware."""
+        """
+        A row as a dict: numbers as floats (NULL stays None), timestamps UTC-aware. A timestamptz value arrives in the session time zone
+        and is converted to UTC; a timestamp without time zone is stored as UTC by this project and is only labelled.
+        """
         converted: Dict[str, Any] = {}
         for column, value in zip(columns, row):
             if isinstance(value, datetime):
-                value = value.replace(tzinfo=timezone.utc)
+                value = value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
             elif value is not None and not isinstance(value, (str, int, float, bool, dict, list)):
                 value = float(value)
             converted[column] = value
