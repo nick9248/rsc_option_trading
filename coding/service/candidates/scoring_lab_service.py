@@ -7,7 +7,6 @@ entry day); only the settlement price comes from the future, and only to settle.
 """
 
 import logging
-import math
 from collections import Counter
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
@@ -20,6 +19,7 @@ from coding.core.analytics.candidates.distribution import LognormalDistribution
 from coding.core.analytics.candidates.generator import FAMILIES, CandidateLimits, generate_candidates
 from coding.core.analytics.candidates.metrics import compute_metrics
 from coding.core.analytics.candidates.scoring import IMPLIED, REALISED, RULES, CandidateOutcome, RuleReport, evaluate_rule
+from coding.core.analytics.realised_volatility import MINIMUM_RETURNS, realised_volatility
 from coding.core.analytics.risk.budget import RiskBudget, size_position
 from coding.core.database.repository import DatabaseRepository
 from coding.service.backtest.backtest_service import BacktestService
@@ -27,8 +27,6 @@ from coding.service.backtest.backtest_service import BacktestService
 logger = logging.getLogger(__name__)
 
 REALISED_VOL_DAYS = 30
-MINIMUM_RETURNS = 20
-"""Fewer daily returns than this give no realised volatility, and the date is skipped."""
 MINIMUM_QUANTITY = {"BTC": 0.1, "ETH": 1.0}
 """Deribit's minimum order size of an option, in coins (checked against get_instruments on 2026-11-21)."""
 
@@ -74,13 +72,7 @@ class ScoringLabService:
         # naive UTC on purpose: the repository method takes (and documents) naive UTC datetimes
         start = datetime.combine(entry_day - timedelta(days=REALISED_VOL_DAYS + 15), time(0))
         end = datetime.combine(entry_day, time(0)) - timedelta(seconds=1)              # candles dated before the entry day are closed
-        candles = self.repository.get_ohlcv_by_date_range(currency, start, end)[-(REALISED_VOL_DAYS + 1):]
-        # only a close followed by the close of the NEXT day is a daily return: a gap in the candles is not stretched into one
-        returns = [math.log(second["close"] / first["close"]) for first, second in zip(candles, candles[1:])
-                   if first["close"] > 0 and second["close"] > 0 and (second["date"] - first["date"]) == timedelta(days=1)]
-        if len(returns) < MINIMUM_RETURNS:
-            return None
-        return float(np.std(returns, ddof=1) * math.sqrt(365.0))
+        return realised_volatility(self.repository.get_ohlcv_by_date_range(currency, start, end), REALISED_VOL_DAYS, MINIMUM_RETURNS)
 
     def run(self, currency: str, first_day: date, last_day: date, budget: RiskBudget, entry_hour_utc: int = 9,
             target_days_to_expiry: float = 7.0, minimum_days_to_expiry: float = 2.0, limits: CandidateLimits = CandidateLimits(),
