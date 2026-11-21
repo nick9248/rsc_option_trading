@@ -144,7 +144,7 @@ def test_hvl_at_a_chain_edge_fires_no_hvl_alert():
     assert [alert.key for alert in alerts if alert.key in hvl_keys] == []
 
 
-REFERENCE_DIRECTORY = Path(__file__).parents[3] / "output" / "menthorq_replicate"
+REFERENCE_DIRECTORY = Path(__file__).parents[2] / "fixtures" / "menthorq"
 
 
 @pytest.mark.parametrize("reference_name", [

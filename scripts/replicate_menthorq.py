@@ -5,7 +5,7 @@ panels from the local database.
 Usage (from repo root):
     .venv\\Scripts\\python -m scripts.replicate_menthorq --menthorq-date 2026-10-12 ^
         --expiry-universe all ^
-        --reference output/menthorq_replicate/menthorq_reference_20261012T2359Z.json
+        --reference tests/fixtures/menthorq/menthorq_reference_20261012T2359Z.json
 
 --menthorq-date YYYY-MM-DD replays a MenthorQ chart labelled with that date:
 as_of = 23:59 UTC of the date, open interest as of 00:00 UTC of the same date.
