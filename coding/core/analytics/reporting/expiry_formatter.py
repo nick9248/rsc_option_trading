@@ -237,7 +237,10 @@ def format_context_section(
     # matching the RR25/BF25 percentile-cell convention already shipped in
     # market_wide_formatter.py).
     pcr = analysis.put_call_ratio
-    if pcr.ratio == float("inf"):
+    no_open_interest = pcr.total_call_oi + pcr.total_put_oi == 0
+    if no_open_interest:
+        lines.append("P/C Ratio: N/A (no open interest)")
+    elif pcr.ratio == float("inf"):
         lines.append("P/C Ratio: N/A (No Call OI)")
     elif pcr.percentile_90d is not None:
         lines.append(
@@ -254,10 +257,13 @@ def format_context_section(
     # spec.md section 9: replaces the full CALLS/PUTS/COMBINED TOTALS block
     # and the hard-coded oi_skew label).
     money = analysis.moneyness
-    lines.append(
-        f"Moneyness: ITM calls {money.calls.itm_pct:.1f}%  |  "
-        f"ITM puts {money.puts.itm_pct:.1f}%"
-    )
+    if no_open_interest:
+        lines.append("Moneyness: N/A (no open interest)")
+    else:
+        lines.append(
+            f"Moneyness: ITM calls {money.calls.itm_pct:.1f}%  |  "
+            f"ITM puts {money.puts.itm_pct:.1f}%"
+        )
 
     # Volume P/C -- one line.
     vol = analysis.volume_stats

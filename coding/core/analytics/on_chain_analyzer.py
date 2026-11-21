@@ -439,7 +439,10 @@ class OnChainMetricsCalculator:
         Returns:
             Dict with max_pain_strike, pain_by_strike, and min_pain_value.
         """
-        if not strike_data:
+        # No open interest at all (a newly listed expiry): every candidate has the same pain (0), so "the minimum" would be
+        # the first strike by accident. There is no max pain to report.
+        has_open_interest = any(data["call_oi"] > 0 or data["put_oi"] > 0 for data in strike_data.values())
+        if not strike_data or not has_open_interest:
             return {
                 "max_pain_strike": None,
                 "pain_by_strike": {},

@@ -128,3 +128,14 @@ class TestCalculateMaxPainHandComputed:
 
         assert result["max_pain_strike"] == 100.0
         assert result["min_pain_value"] == 0.0
+
+
+class TestNoOpenInterestAtAll:
+    def test_an_expiry_without_open_interest_has_no_max_pain_not_its_first_strike(self):
+        calculator = OnChainMetricsCalculator(data=[], currency="BTC")
+        empty = {strike: {"call_oi": 0.0, "put_oi": 0.0} for strike in (51_000.0, 52_000.0, 53_000.0)}
+
+        result = calculator.calculate_max_pain(empty)
+
+        assert result["max_pain_strike"] is None
+        assert result["pain_by_strike"] == {}

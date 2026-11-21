@@ -1988,8 +1988,9 @@ class SynthesisEngine:
             )
 
         # Score the 3 most important expiries by OI, excluding DTE=0
+        # An expiry without any open interest (new listing) has no put/call ratio and no max pain to score: left out.
         top_expiries = sorted(
-            [e for e in expiries_sorted if e.dte > 0],
+            [e for e in expiries_sorted if e.dte > 0 and e.total_oi > 0],
             key=lambda e: e.total_oi, reverse=True
         )[:3]
 
@@ -2015,7 +2016,7 @@ class SynthesisEngine:
 
         # Near-term scores (for transition detection) — full scorer set
         near_direction_scores = []
-        for exp in near_term[:3]:
+        for exp in [e for e in near_term if e.total_oi > 0][:3]:
             near_direction_scores.append(
                 self.scorer.score_pc_ratio(exp.pc_ratio, dte=exp.dte))
             near_direction_scores.append(
@@ -2037,7 +2038,7 @@ class SynthesisEngine:
 
         # Far-term scores — full scorer set
         far_direction_scores = []
-        for exp in far_term[:3]:
+        for exp in [e for e in far_term if e.total_oi > 0][:3]:
             far_direction_scores.append(
                 self.scorer.score_pc_ratio(exp.pc_ratio, dte=exp.dte))
             far_direction_scores.append(

@@ -218,6 +218,17 @@ def test_context_max_pain_na_when_no_strike():
     assert "Max Pain: N/A" in text
 
 
+def test_context_without_open_interest_shows_no_put_call_ratio_and_no_moneyness():
+    analysis = _make_analysis(
+        max_pain=MaxPainResult(max_pain_strike=None, pain_by_strike={}, min_pain_value=0.0),
+        put_call_ratio=PutCallRatioResult(total_call_oi=0.0, total_put_oi=0.0, ratio=0.0, bias="Neutral"),
+    )
+    text = format_context_section(analysis, SPOT_PRICE, _make_vol_surface(), NOW_UTC)
+    assert "P/C Ratio: N/A (no open interest)" in text
+    assert "Moneyness: N/A (no open interest)" in text
+    assert "0.00" not in text.split("Volume P/C")[0]
+
+
 def test_context_max_pain_suppressed_outside_expiry_week():
     """
     institutional_metrics_spec.md section 9 independent review ruling:

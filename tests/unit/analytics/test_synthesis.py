@@ -2251,6 +2251,17 @@ class TestSynthesisEngineRun:
         # test of "some valid regime was classified", not a pin on which one.
         assert any(regime.value in result for regime in MarketRegime)
 
+    def test_an_expiry_without_open_interest_is_not_scored(self, monkeypatch):
+        scored = []
+        original = ScoringEngine.score_pc_ratio
+        monkeypatch.setattr(ScoringEngine, "score_pc_ratio", staticmethod(lambda ratio, dte=None: scored.append(ratio) or original(ratio, dte=dte)))
+        empty = make_expiry_metrics(expiry="25NOV26", dte=4, total_oi=0, pc_ratio=0.0, max_pain_sufficient_data=False)
+        real = make_expiry_metrics(expiry="27NOV26", dte=6, total_oi=5000, pc_ratio=0.9)
+
+        SynthesisEngine().run(make_market_wide(), [empty, real])
+
+        assert scored and 0.0 not in scored                       # the empty expiry's invented 0.0 never reaches the scorer
+
     def test_run_returns_regime_label(self):
         engine = SynthesisEngine()
         market = make_market_wide()

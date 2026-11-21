@@ -12,6 +12,7 @@ from plotly.subplots import make_subplots
 from coding.core.analytics.levels_table_builder import build_levels_table
 from coding.core.analytics.menthorq_replication_calculator import parse_expiry_settlement
 from coding.core.analytics.onchain_dashboard.formatting import (
+    has_open_interest,
     BLUE, GRAY, GREEN, ORANGE, PURPLE, RED, add_markers, clean, clean_all, count_text, empty_figure, has_values,
     number_text, percent_text, ratio_text, strike_text, text_or_missing, usd_text, utc_text)
 from coding.core.analytics.report.figure_style import figure_json
@@ -298,7 +299,7 @@ def statistic_rows(bundle: ExpirationBundle, delta_flow_bucket: Optional[FlowBuc
                   if ratio.percentile_90d is not None else ", percentile not computed")
     rows = [
         ["Instruments", f"{analysis.total_instruments} ({analysis.call_count} calls, {analysis.put_count} puts)"],
-        ["Put/call ratio (open interest)", f"{ratio_text(ratio.ratio)} (calls {count_text(ratio.total_call_oi)}, puts "
+        ["Put/call ratio (open interest)", f"{ratio_text(ratio.ratio) if has_open_interest(ratio) else NOT_COMPUTED} (calls {count_text(ratio.total_call_oi)}, puts "
                                            f"{count_text(ratio.total_put_oi)}{percentile})"],
         ["Volume", f"{number_text(volume.total_volume, 1)} coins, put/call {ratio_text(volume.volume_ratio)}"],
     ]
