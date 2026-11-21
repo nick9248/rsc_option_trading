@@ -364,6 +364,10 @@ class OnChainMetricsCalculator:
                 "volume_usd": item.get("volume_usd", 0) or 0,
                 "mark_price": item.get("mark_price", 0) or 0,
                 "mark_iv": item.get("mark_iv"),
+                # Needed to compute the Greeks locally (the expiry's forward) and for the RR25/BF25 "quoted" filter (quotes).
+                "underlying_price": item.get("underlying_price"),
+                "bid_price": item.get("bid_price"),
+                "ask_price": item.get("ask_price"),
             }
 
             if expiration not in grouped:

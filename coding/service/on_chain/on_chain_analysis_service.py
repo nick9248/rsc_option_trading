@@ -1508,100 +1508,46 @@ class OnChainAnalysisService:
             if not instruments:
                 continue
 
-            progress_callback(f"Fetching Greeks for {expiration} ({len(instruments)} instruments)...")
+            progress_callback(f"Computing Greeks for {expiration} ({len(instruments)} instruments)...")
 
-            # Fetch Greeks for each instrument
+            # Every Greek is computed here from the book summary's mark_iv (Black-Scholes on the expiry's forward for delta,
+            # vega and theta, on the index for gamma, see _compute_bs_gamma). Nothing is fetched per instrument: one
+            # /public/ticker call per instrument (about 1,000 per run) was answered with HTTP 429 (Too Many Requests) for
+            # 83% of them in the run of 2026-11-21, which left most of the book without Greeks. Against 24 live tickers
+            # (3 expiries) delta differed by at most 0.13%, vega by 0.07%, theta by 0.02% at the median; the VPS collector
+            # already derives its Greeks the same way.
             instruments_with_greeks = []
-            # Wave G re-review (Important #1): a ticker fetch that raises
-            # (rate-limiting, API errors) drops the instrument entirely --
-            # correct, you can't use data you don't have -- but the drop
-            # must still feed the SAME completeness signal
-            # GexDexResult.instruments_missing_gamma/oi_missing_gamma
-            # carries for a null-greek-after-arrival instrument (Task
-            # G2-A bug 2). Without this, the exact scenario that motivated
-            # this whole task (31/830 instruments dropped to rate-
-            # limiting, one expiry losing 34.49% of its OI-weighted
-            # representation) still reads as a clean "full book" -- the
-            # drop never reached _aggregate_by_strike, so it never
-            # incremented anything. Tracked here, at the actual drop site,
-            # and folded into the per-expiry GexDexResult below (and, for
-            # the elif instruments: branch further down, when EVERY
-            # instrument in this expiration fails).
+            # An instrument whose Greeks cannot be computed (no usable mark_iv or forward, settled) is kept with None
+            # Greeks, which GexDexCalculator counts as "missing" in its completeness fields; it is never given a 0.
+            # dropped_* stay for an unexpected error while processing one instrument.
             dropped_instrument_count = 0
             dropped_instrument_oi = 0.0
-            for i, item in enumerate(instruments):
+            for item in instruments:
                 try:
-                    ticker = self.api.get_ticker(item["instrument_name"])
-                    # independent review round 4 sweep: same M1/#5/#6 bug
-                    # class -- a two-arg .get(key, default) only applies
-                    # the default when the key is ABSENT, not when it's
-                    # present-but-null. "greeks" isn't declared in
-                    # deribit_schemas.py's TICKER schema at all (option-
-                    # specific field the schema doesn't model), but a
-                    # present-but-null value here would otherwise crash
-                    # the next line's greeks.get("delta") with
-                    # AttributeError -- silently dropping this instrument
-                    # via the per-instrument except below rather than
-                    # extracting it.
-                    greeks = ticker.get("greeks") or {}
+                    mark_iv = item.get("mark_iv")
+                    forward_price = item.get("underlying_price")
+                    greeks = bs_calculator.calculate_greeks_safe(
+                        item, mark_iv, forward_price, fixed_strike_vol_now_utc,
+                        max_sane_mark_iv_pct=_MAX_SANE_MARK_IV_PCT,
+                    ) or {}
 
                     item_with_greeks = item.copy()
                     item_with_greeks["delta"] = greeks.get("delta")
                     item_with_greeks["theta"] = greeks.get("theta")
                     item_with_greeks["vega"] = greeks.get("vega")
-                    item_with_greeks["mark_iv"] = ticker.get("mark_iv")
-                    # underlying_price is nullable in practice (stale/
-                    # illiquid instruments); .get(key) or fallback covers
-                    # both "absent" and "present-but-null" -- currently
-                    # benign only because nothing downstream crashes on a
-                    # None here yet, not because the two-arg form was safe.
-                    item_with_greeks["underlying_price"] = ticker.get("underlying_price") or analyzer.index_price
-                    # institutional_metrics_spec.md section 3(b) step 1
-                    # (Task C4): RR25/BF25's "quoted" filter needs bid/ask.
-                    # Ticker's fields are best_bid_price/best_ask_price
-                    # (unlike book-summary's bid_price/ask_price, which the
-                    # daemon's own enrichment reads) -- normalized to the
-                    # same bid_price/ask_price keys here so
-                    # VolatilitySurfaceCalculator's filter works the same
-                    # regardless of which enrichment path produced the
-                    # instrument dict.
-                    item_with_greeks["bid_price"] = ticker.get("best_bid_price")
-                    item_with_greeks["ask_price"] = ticker.get("best_ask_price")
-                    # Task G2-A (Wave G fresh audit, bug 1): gamma is NEVER
-                    # read from ticker.greeks.gamma here (unlike delta/vega/
-                    # theta above, which stay ticker-sourced) -- see
-                    # _compute_bs_gamma's docstring for why. This is the one
-                    # deliberate exception to this loop's "trust the
-                    # ticker" convention.
-                    #
-                    # Task Wave-J-A (Fix 2): the spot fed into this BS
-                    # gamma computation must be analyzer.index_price -- the
-                    # SAME anchor GexDexCalculator uses for its S² scaling
-                    # a few lines below (`GexDexCalculator(instruments_
-                    # with_greeks, analyzer.index_price, ...)`). The old
-                    # code passed item_with_greeks["underlying_price"]
-                    # (ticker.get("underlying_price"), a FUTURE/forward
-                    # price -- bugfix_spec.md Item 7's own anchor table),
-                    # which computed gamma's VALUE at one anchor while
-                    # GexDexCalculator's S² term scaled it at a DIFFERENT
-                    # one -- internally inconsistent with the "GEX must
-                    # anchor on the index" comment at that construction
-                    # site. Measured basis in this repo's own fixture: up
-                    # to +3.9% forward/spot divergence on the far-dated
-                    # expiry, largest exactly where aggregate_across_
-                    # expirations sums everything together.
+                    item_with_greeks["mark_iv"] = mark_iv
+                    # Anchors: the expiry's forward for the option Greeks; the index for gamma and for GEX's S^2 term
+                    # (bugfix_spec.md Item 7).
+                    item_with_greeks["underlying_price"] = forward_price or analyzer.index_price
+                    # RR25/BF25's "quoted" filter needs the quotes; the book summary has them for every instrument.
+                    item_with_greeks["bid_price"] = item.get("bid_price")
+                    item_with_greeks["ask_price"] = item.get("ask_price")
                     item_with_greeks["gamma"] = self._compute_bs_gamma(
-                        bs_calculator, item, item_with_greeks["mark_iv"],
-                        analyzer.index_price, fixed_strike_vol_now_utc,
+                        bs_calculator, item, mark_iv, analyzer.index_price, fixed_strike_vol_now_utc,
                     )
                     instruments_with_greeks.append(item_with_greeks)
-
-                    if (i + 1) % 20 == 0:
-                        progress_callback(
-                            f"  Fetched {i + 1}/{len(instruments)} for {expiration}"
-                        )
                 except Exception as e:
-                    logger.warning(f"Failed to fetch Greeks for {item['instrument_name']}: {e}")
+                    logger.warning(f"Failed to compute Greeks for {item['instrument_name']}: {e}")
                     dropped_instrument_count += 1
                     dropped_instrument_oi += item.get("open_interest") or 0
 
@@ -1753,7 +1699,7 @@ class OnChainAnalysisService:
                     builder.set_fixed_strike_vol(expiration, fixed_strike_vol_result)
             else:
                 # Wave G re-review (Important #2): EVERY instrument in
-                # this expiration failed its ticker fetch (100% drop) --
+                # this expiration failed its Greek computation (100% drop) --
                 # `instruments` above is guaranteed non-empty here (the
                 # `if not instruments: continue` gate at the top of this
                 # loop already handled "no instruments at all"), so this
@@ -1775,8 +1721,8 @@ class OnChainAnalysisService:
                 # EVIDENCE line's "full book" gate.
                 logger.warning(
                     f"OnChainAnalysisService: all {len(instruments)} instruments "
-                    f"for {analyzer.currency} {expiration} failed their ticker "
-                    "fetch -- recording a fully-degenerate GEX/DEX result "
+                    f"for {analyzer.currency} {expiration} failed their Greek "
+                    "computation -- recording a fully-degenerate GEX/DEX result "
                     "(100% completeness gap) rather than leaving gex_dex as "
                     "None, so the report cannot claim 'full book' for this "
                     "expiration."
