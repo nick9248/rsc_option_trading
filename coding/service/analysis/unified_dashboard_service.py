@@ -65,5 +65,5 @@ class UnifiedDashboardService:
             rows = self.repository_factory().get_strategy_picks(currency, mode=MODE_LIVE, method_version=METHOD_VERSION)
             return build_strategy_panel([StoredPick(**{name: row[name] for name in PICK_FIELDS}) for row in rows], now, currency)
         except Exception as error:
-            logger.exception("Reading the stored strategy suggestions failed")
+            logger.exception("Reading the stored strategy picks failed")
             return build_strategy_panel([], now, currency, read_error=f"{type(error).__name__}: {error}")
