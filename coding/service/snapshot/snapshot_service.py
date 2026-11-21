@@ -5,10 +5,11 @@ Handles fetching and filtering option chain snapshots.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
+from coding.core.analytics.black_scholes_calculator import BlackScholesCalculator
 from coding.service.deribit.deribit_api_service import DeribitApiService
 
 logger = logging.getLogger(__name__)
@@ -19,7 +20,7 @@ class SnapshotService:
     Service for fetching and filtering option chain snapshots.
 
     Handles book summary fetching, expiration filtering,
-    volume filtering, optional Greek fetching, and CSV export.
+    volume filtering, optional local Greeks, and CSV export.
     """
 
     def __init__(self, api_service: Optional[DeribitApiService] = None):
@@ -48,7 +49,7 @@ class SnapshotService:
             currency: Currency symbol (BTC, ETH).
             expirations: List of expiration dates to include.
             min_volume: Minimum volume filter (0 = no filter).
-            fetch_greeks: Whether to fetch Greeks from ticker endpoint.
+            fetch_greeks: Whether to add Greeks computed locally from mark IV (no requests).
             progress_callback: Optional callback for progress updates.
 
         Returns:
@@ -107,6 +108,10 @@ class SnapshotService:
 
         progress(f"Filtered to {len(filtered_data)} instruments for selected expirations")
 
+        # Each instrument's own underlying is the future of ITS expiry; the injection below replaces it with one global value, so
+        # keep it for the Greeks.
+        own_forward = {item["instrument_name"]: item.get("underlying_price") for item in filtered_data}
+
         # Inject the true underlying price into every filtered instrument.
         # This replaces each instrument's own stale cached value.
         if true_underlying_price:
@@ -128,28 +133,50 @@ class SnapshotService:
             ]
             progress(f"After volume filter: {len(filtered_data)} instruments")
 
-        # Optionally fetch Greeks from ticker
+        # Optionally add Greeks, computed locally by Black-Scholes from each instrument's mark IV (the same method as the analysis
+        # and the collector). One ticker request per instrument was answered with HTTP 429 for most of the chain.
         if fetch_greeks and filtered_data:
-            progress("Fetching Greeks from ticker...")
-            for i, item in enumerate(filtered_data):
-                try:
-                    ticker = self.api.get_ticker(item["instrument_name"])
-                    greeks = ticker.get("greeks", {})
-                    item["delta"] = greeks.get("delta")
-                    item["gamma"] = greeks.get("gamma")
-                    item["vega"] = greeks.get("vega")
-                    item["theta"] = greeks.get("theta")
-                    item["rho"] = greeks.get("rho")
-
-                    if (i + 1) % 10 == 0:
-                        progress(f"Fetched Greeks for {i + 1}/{len(filtered_data)} instruments")
-                except Exception as e:
-                    logger.warning(f"Failed to fetch Greeks for {item['instrument_name']}: {e}")
+            progress("Computing Greeks from mark IV...")
+            self._add_greeks(filtered_data, own_forward)
 
         # Sort by instrument name
         filtered_data.sort(key=lambda x: x.get("instrument_name", ""))
 
         return filtered_data
+
+    @staticmethod
+    def _add_greeks(items: List[Dict], own_forward: Dict[str, Optional[float]]) -> None:
+        """
+        Add delta, gamma, vega, theta and rho to every item, in place.
+
+        Delta, vega, theta and rho use the future of the instrument's own expiry (``own_forward``, the book summary's value before
+        the global underlying was injected); gamma uses the index price, as in the analysis. An instrument that cannot be computed
+        (no mark IV, no forward, expired) gets None for all five, never 0. One summary warning counts those.
+        """
+        calculator = BlackScholesCalculator()
+        now_utc = datetime.now(timezone.utc).replace(tzinfo=None)             # the calculator works with naive UTC
+        without_greeks = 0
+        for item in items:
+            mark_iv = item.get("mark_iv")
+            forward = own_forward.get(item.get("instrument_name"))
+            index = item.get("index_price") or forward
+            parts = str(item.get("instrument_name", "")).split("-")           # BTC-27NOV26-58000-C
+            if len(parts) != 4 or not parts[2].replace(".", "", 1).isdigit():
+                at_forward = at_index = None
+            else:
+                parsed = {"instrument_name": item["instrument_name"], "strike": float(parts[2]), "option_type": parts[3]}
+                at_forward = calculator.calculate_greeks_safe(parsed, mark_iv, forward, now_utc)
+                at_index = calculator.calculate_greeks_safe(parsed, mark_iv, index, now_utc)
+            item["delta"] = at_forward["delta"] if at_forward else None
+            item["vega"] = at_forward["vega"] if at_forward else None
+            item["theta"] = at_forward["theta"] if at_forward else None
+            item["rho"] = at_forward["rho"] if at_forward else None
+            item["gamma"] = at_index["gamma"] if at_index else None
+            if at_forward is None:
+                item["gamma"] = None                      # all five or none: a partial set would look complete
+                without_greeks += 1
+        if without_greeks:
+            logger.warning(f"{without_greeks} of {len(items)} instruments have no Greeks (no mark IV or forward, or expired)")
 
     def _extract_underlying_price(self, all_data: List[Dict]) -> float:
         """

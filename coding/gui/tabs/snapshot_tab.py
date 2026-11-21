@@ -44,7 +44,7 @@ class SnapshotWorker(QThread):
     """
     Worker thread for fetching snapshot data.
 
-    Fetches book summary and optionally enriches with Greeks from ticker.
+    Fetches book summary and optionally adds Greeks computed from mark IV.
     """
 
     progress = Signal(str)
@@ -66,7 +66,7 @@ class SnapshotWorker(QThread):
             currency: Currency symbol (ETH, BTC).
             expirations: List of expiration dates to include.
             min_volume: Minimum volume filter (0 = no filter).
-            fetch_greeks: Whether to fetch Greeks from ticker endpoint.
+            fetch_greeks: Whether to add Greeks computed from mark IV.
             parent: Parent widget.
         """
         super().__init__(parent)
@@ -284,8 +284,8 @@ class SnapshotTab(QWidget):
         filter_row.addStretch()
 
         # Fetch Greeks checkbox
-        self.greeks_checkbox = QCheckBox("Fetch Greeks")
-        self.greeks_checkbox.setToolTip("Fetch Greeks from ticker (slower but complete)")
+        self.greeks_checkbox = QCheckBox("Add Greeks")
+        self.greeks_checkbox.setToolTip("Compute Greeks from each instrument's mark IV (Black-Scholes, instant, no extra requests)")
         self.greeks_checkbox.setStyleSheet(f"""
             QCheckBox {{
                 color: {Colors.TEXT_SECONDARY};

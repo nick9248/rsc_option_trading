@@ -221,7 +221,9 @@ def test_context_max_pain_na_when_no_strike():
 def test_context_without_open_interest_shows_no_put_call_ratio_and_no_moneyness():
     analysis = _make_analysis(
         max_pain=MaxPainResult(max_pain_strike=None, pain_by_strike={}, min_pain_value=0.0),
-        put_call_ratio=PutCallRatioResult(total_call_oi=0.0, total_put_oi=0.0, ratio=0.0, bias="Neutral"),
+        put_call_ratio=PutCallRatioResult(total_call_oi=0.0, total_put_oi=0.0, ratio=None, bias="N/A"),
+        moneyness=MoneynessResult(calls=_leg(0.0, 0.0, 0.0, 0.0, None, None), puts=_leg(0.0, 0.0, 0.0, 0.0, None, None),
+                                  totals=_leg(0.0, 0.0, 0.0, 0.0, None, None), oi_skew="N/A"),
     )
     text = format_context_section(analysis, SPOT_PRICE, _make_vol_surface(), NOW_UTC)
     assert "P/C Ratio: N/A (no open interest)" in text

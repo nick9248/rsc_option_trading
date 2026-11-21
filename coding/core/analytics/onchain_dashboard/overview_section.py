@@ -9,7 +9,6 @@ from typing import List, Optional
 from coding.core.analytics.historical_normalizer import HistoricalNormalizer, NormalizedMetric
 from coding.core.analytics.onchain_dashboard.expiry_section import key_level_rows, ordered_bundles
 from coding.core.analytics.onchain_dashboard.formatting import (
-    has_open_interest,
     count_text, fraction_percent_text, number_text, percent_text, ratio_text, strike_text, text_or_missing, utc_text)
 from coding.core.analytics.report.report_page import ReportSection, paragraph_fragment, table_fragment
 from coding.core.analytics.report.section_fragments import NOT_COMPUTED
@@ -69,7 +68,7 @@ def expiry_comparison_rows(result: OnChainAnalysisResult) -> List[List[str]]:
             strike_text(levels.call_resistance.strike) if levels is not None and levels.call_resistance else NOT_COMPUTED,
             strike_text(levels.put_support.strike) if levels is not None and levels.put_support else NOT_COMPUTED,
             text_or_missing(levels.gamma_regime) if levels is not None else NOT_COMPUTED,
-            ratio_text(analysis.put_call_ratio.ratio) if has_open_interest(analysis.put_call_ratio) else NOT_COMPUTED,
+            ratio_text(analysis.put_call_ratio.ratio),
             count_text(analysis.put_call_ratio.total_call_oi + analysis.put_call_ratio.total_put_oi),
             percent_text(surface.atm_iv) if surface is not None else NOT_COMPUTED,
         ])

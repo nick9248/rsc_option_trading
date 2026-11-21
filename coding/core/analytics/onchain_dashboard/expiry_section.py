@@ -9,10 +9,10 @@ from typing import Any, Dict, List, Optional, Tuple
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+from coding.core.analytics.greek_exposure.vega_theta_exposure import calculate_vega_theta_exposure
 from coding.core.analytics.levels_table_builder import build_levels_table
 from coding.core.analytics.menthorq_replication_calculator import parse_expiry_settlement
 from coding.core.analytics.onchain_dashboard.formatting import (
-    has_open_interest,
     BLUE, GRAY, GREEN, ORANGE, PURPLE, RED, add_markers, clean, clean_all, count_text, empty_figure, has_values,
     number_text, percent_text, ratio_text, strike_text, text_or_missing, usd_text, utc_text)
 from coding.core.analytics.report.figure_style import figure_json
@@ -299,7 +299,7 @@ def statistic_rows(bundle: ExpirationBundle, delta_flow_bucket: Optional[FlowBuc
                   if ratio.percentile_90d is not None else ", percentile not computed")
     rows = [
         ["Instruments", f"{analysis.total_instruments} ({analysis.call_count} calls, {analysis.put_count} puts)"],
-        ["Put/call ratio (open interest)", f"{ratio_text(ratio.ratio) if has_open_interest(ratio) else NOT_COMPUTED} (calls {count_text(ratio.total_call_oi)}, puts "
+        ["Put/call ratio (open interest)", f"{ratio_text(ratio.ratio)} (calls {count_text(ratio.total_call_oi)}, puts "
                                            f"{count_text(ratio.total_put_oi)}{percentile})"],
         ["Volume", f"{number_text(volume.total_volume, 1)} coins, put/call {ratio_text(volume.volume_ratio)}"],
     ]
@@ -336,6 +336,15 @@ def statistic_rows(bundle: ExpirationBundle, delta_flow_bucket: Optional[FlowBuc
                  ["Trades behind the delta-adjusted flow", f"{delta_flow_bucket.trade_count:,} (skipped {delta_flow_bucket.skipped_count})"]]
         if delta_flow_window:
             rows.append(["Window of the delta-adjusted flow", delta_flow_window])
+    vega_theta = calculate_vega_theta_exposure(bundle.enriched_instruments)
+    if vega_theta is None:
+        rows.append(["Vega / theta exposure", NOT_COMPUTED])
+    else:
+        coverage = f" ({vega_theta.instruments_missing} instruments without greeks left out)" if vega_theta.instruments_missing else ""
+        rows += [["Vega exposure, holder side", number_text(vega_theta.holder_vega_usd_per_vol_point, 0, " USD per vol point", True) + coverage],
+                 ["Vega exposure, assumed dealer", number_text(vega_theta.dealer_vega_usd_per_vol_point, 0, " USD per vol point", True)],
+                 ["Theta exposure, holder side", number_text(vega_theta.holder_theta_usd_per_day, 0, " USD per day", True)],
+                 ["Theta exposure, assumed dealer", number_text(vega_theta.dealer_theta_usd_per_day, 0, " USD per day", True)]]
     exposure = bundle.exposure_profile
     rows.append(["Vanna / charm, holder side", NOT_COMPUTED if exposure is None else
                  f"vanna {number_text(exposure.total_vex_holder, 0, ' USD per vol point', True)}, charm "

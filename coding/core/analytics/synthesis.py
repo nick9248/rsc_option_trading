@@ -125,7 +125,7 @@ class ExpiryMetrics:
     total_oi: int
     notional: float
     max_pain: float
-    pc_ratio: float
+    pc_ratio: Optional[float]                      # None for an expiry without open interest
     # CARRIED FINDING (B2 review, task C1): this expiry's OWN forward/
     # underlying price (bundle.analysis.underlying_price -- the same
     # source bugfix_spec.md Item 7's report_formatter fix uses), not the
@@ -2553,7 +2553,7 @@ Perp Funding: {funding_rate_str}  | 8h: {funding_8h_str}
             rr25_display = f"{exp.risk_reversal_25d:+.1f}%" if exp.risk_reversal_25d is not None else "N/A"
             lines.append(
                 f"  {exp.expiry} ({exp.dte}d): MaxPain ${exp.max_pain:,.0f} ({mp_dist:+.1f}%) | "
-                f"P/C {exp.pc_ratio:.2f} | ATM IV {atm_iv_display} | "
+                f"P/C {f'{exp.pc_ratio:.2f}' if exp.pc_ratio is not None else 'N/A'} | ATM IV {atm_iv_display} | "
                 f"RR25 {rr25_display} | Flow: {exp.flow_bias}"
             )
 
@@ -2775,7 +2775,7 @@ class SynthesisMapper:
             max_pain = result.underlying_price
 
         pc_ratio = analysis.put_call_ratio.ratio
-        if pc_ratio == float("inf"):
+        if pc_ratio is not None and pc_ratio == float("inf"):
             pc_ratio = 99.0
 
         # GEX/DEX
@@ -2895,7 +2895,7 @@ class SynthesisMapper:
             notional=notional,
             total_volume=int(total_volume),
             max_pain=float(max_pain),
-            pc_ratio=float(pc_ratio),
+            pc_ratio=float(pc_ratio) if pc_ratio is not None else None,
             # CARRIED FINDING (B2 review, task C1): this expiry's own
             # forward price, sourced the same way Item 7's report_formatter
             # fix does -- bundle.analysis.underlying_price, not the global
