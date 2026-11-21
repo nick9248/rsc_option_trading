@@ -19,6 +19,11 @@ from coding.core.analytics.report.report_page import format_utc, paragraph_fragm
 
 STALE_AFTER_HOURS = 4.0
 """A pick older than this is marked: the market has moved. The check is by time only; the spot of the pick is shown next to the age."""
+MAX_SELECTED_TRADES = 2
+"""At most this many picks are marked as the trades to take: the expiries share one view of the market, so more of them is the same bet again."""
+ASKED_NOTE = ("The model is asked about the expiries nearest 3, 7, 14 and 30 days only (each ask costs about 0.05 USD); every other expiry is not asked, "
+              "which is not a no-trade answer.")
+NO_TRADE = "no_trade"
 RAW_TEXT_LIMIT = 600
 """Characters of an unusable answer that are shown."""
 
@@ -113,12 +118,49 @@ def _chart(pick: StoredPick, chosen: Dict[str, Any]) -> Tuple[str, Dict[str, Dic
     return chart_html, {figure_id: figure_json(payoff_figure(legs, entry_cash, pick.spot))}
 
 
-def _card(pick: StoredPick, now_utc: datetime) -> Tuple[str, Dict[str, Dict[str, Any]]]:
+def _score(pick: StoredPick) -> Optional[float]:
+    """Expected PnL per unit of maximum loss of the chosen candidate under the realised-volatility view; None when there is no usable choice."""
+    if pick.status != "ok" or not pick.quantity:
+        return None
+    chosen = next((candidate for candidate in pick.candidates if candidate["id"] == pick.choice), None)
+    if chosen is None or not chosen.get("max_loss_usd"):
+        return None
+    expected = chosen.get("distributions", {}).get("realised", {}).get("expected_pnl_usd")
+    return None if expected is None else expected / chosen["max_loss_usd"]
+
+
+def select_trades(picks: Sequence[StoredPick], now_utc: datetime) -> List[StoredPick]:
+    """
+    The picks to take: the best ones by expected PnL per risk, at most ``MAX_SELECTED_TRADES``. Never a pick without a usable choice, with a
+    non-positive expectation, or older than ``STALE_AFTER_HOURS`` (the market has moved).
+    """
+    fresh = [pick for pick in picks if (now_utc - pick.as_of).total_seconds() <= STALE_AFTER_HOURS * 3600.0]
+    scored = [(score, pick) for pick in fresh for score in [_score(pick)] if score is not None and score > 0]
+    scored.sort(key=lambda item: item[0], reverse=True)
+    return [pick for _, pick in scored[:MAX_SELECTED_TRADES]]
+
+
+def _selection_text(selected: Sequence[StoredPick]) -> str:
+    """The plain statement of what to trade and how much is at risk."""
+    if not selected:
+        return paragraph_fragment("No pick is selected as a trade: none that is fresh has a usable choice and a positive expected PnL under the realised-volatility view.", "note-s")
+    names = ", ".join(f"{pick.expiration} (max loss {_usd(pick.max_loss_usd)} USD)" for pick in selected)
+    total = None if any(pick.max_loss_usd is None for pick in selected) else sum(pick.max_loss_usd for pick in selected)
+    families = [next((c.get("family") for c in pick.candidates if c["id"] == pick.choice), None) for pick in selected]
+    text = (f"Selected trades (best expected PnL per risk among picks younger than {STALE_AFTER_HOURS:g} h, at most {MAX_SELECTED_TRADES}): {names}. "
+            f"If all of them lose the whole maximum, {'not computed' if total is None else _usd(total) + ' USD'} is lost. "
+            "The other picks are not additional trades.")
+    if len(selected) > 1 and None not in families and len(set(families)) == 1:
+        text += " The selected trades are the same structure on the same view of the market: treat them as one bet, not as diversification."
+    return paragraph_fragment(text)
+
+
+def _card(pick: StoredPick, now_utc: datetime, role: str = "") -> Tuple[str, Dict[str, Dict[str, Any]]]:
     age_hours = max((now_utc - pick.as_of).total_seconds() / 3600.0, 0.0)
     warnings: List[str] = []
     if age_hours > STALE_AFTER_HOURS:
         warnings.append(f"This pick is {_age_text(age_hours)} old: the market has moved since. Ask again before relying on it.")
-    header = (f'<div class="card-head"><div class="card-title"><h3>{_e(pick.expiration)}</h3></div><div class="card-meta">'
+    header = (f'<div class="card-head"><div class="card-title"><h3>{_e(pick.expiration)}{(" - " + _e(role)) if role else ""}</h3></div><div class="card-meta">'
               f'<span class="card-sub">facts of {_e(format_utc(pick.as_of))} ({_e(_age_text(age_hours))} old), spot {pick.spot:,.0f}</span></div></div>')
     body = ""
     figures: Dict[str, Dict[str, Any]] = {}
@@ -200,8 +242,17 @@ def build_strategy_panel(picks: Sequence[StoredPick], now_utc: datetime, currenc
     if not open_picks:
         return StrategyPanel(intro + paragraph_fragment("No stored pick for an expiry that is still open.", "note-s"))
     ordered = sorted(open_picks.values(), key=lambda stored: days_left[stored.expiration])
-    cards = [_card(pick, now) for pick in ordered]
+    selected = select_trades(ordered, now)
+    chosen_ids = {id(pick) for pick in selected}
+
+    def role(pick: StoredPick) -> str:
+        if id(pick) in chosen_ids:
+            return "SELECTED TRADE"
+        return "alternative, not selected" if pick.status == "ok" and pick.choice != NO_TRADE else "no trade"
+
+    cards = [_card(pick, now, role(pick)) for pick in ordered]
     figures: Dict[str, Dict[str, Any]] = {}
     for _, card_figures in cards:
         figures.update(card_figures)
-    return StrategyPanel(intro + '<div class="cards">' + "".join(card for card, _ in cards) + "</div>", figures)
+    coverage = paragraph_fragment(ASKED_NOTE + " Asked in this view: " + ", ".join(pick.expiration for pick in ordered) + ".", "note-s")
+    return StrategyPanel(intro + _selection_text(selected) + coverage + '<div class="cards">' + "".join(card for card, _ in cards) + "</div>", figures)

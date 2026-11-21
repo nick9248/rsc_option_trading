@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional, Set
 
+from coding.core.analytics.risk.budget import RiskBudget
 from coding.service.strategy_pipeline.strategy_pick_service import MODE_LIVE, StrategyPickService
 
 logger = logging.getLogger(__name__)
@@ -16,6 +17,9 @@ logger = logging.getLogger(__name__)
 LIVE_TARGET_DAYS = (3.0, 7.0, 14.0, 30.0)
 """The expiry nearest each of these many days away is picked (the same expiry for two targets is picked once)."""
 MINIMUM_DAYS_TO_EXPIRY = 1.0
+LIVE_CAPITAL_USD = 150.0
+"""The account the live picks are sized for (the owner starts with 100 to 200 USD); with the 20% drawdown limit and 4 losses in a row one trade
+may lose 7.5 USD. Change it here when the real account changes."""
 
 
 class LivePickRunner:
@@ -45,6 +49,7 @@ class LivePickRunner:
         paid = 0
         cost = 0.0
         stopped = False
+        without_pick = []
         for target in LIVE_TARGET_DAYS:
             if should_stop():
                 stopped = True
@@ -56,6 +61,7 @@ class LivePickRunner:
                 progress(f"{currency}: interrupted; at least {paid} picks stored and paid ({cost:.3f} USD) before the error")        # the money already spent is not lost from view
                 raise
             if result is None:
+                without_pick.append(f"{target:g}")
                 progress(f"{currency}: no pick for the expiry about {target:g} days away (no fresh stored chain, or no usable volatility)")
                 continue
             if result.expiration in seen:
@@ -65,7 +71,10 @@ class LivePickRunner:
             cost += result.cost_usd
             progress(f"{currency} {result.expiration}: {result.status}" + (f", {result.choice}" if result.choice else "")
                      + (" (already picked within the hour)" if result.stored_before else f", cost {result.cost_usd:.3f} USD"))
-        return f"{len(seen)} expiries, {paid} new picks, {cost:.3f} USD" + (" (stopped by the user)" if stopped else "")
+        summary = f"{len(seen)} expiries, {paid} new picks, {cost:.3f} USD"
+        if without_pick:
+            summary += f"; no pick for the expiry about {', '.join(without_pick)} days away (no fresh stored chain, or no usable volatility)"
+        return summary + (" (stopped by the user)" if stopped else "")
 
 
 def build_live_pick_runner() -> LivePickRunner:
@@ -82,4 +91,4 @@ def build_live_pick_runner() -> LivePickRunner:
     api_key = os.environ.get("claude_api_key")
     if not api_key:
         raise RuntimeError("claude_api_key is not set in .env")
-    return LivePickRunner(StrategyPickService(DatabaseRepository(), anthropic.Anthropic(api_key=api_key)))
+    return LivePickRunner(StrategyPickService(DatabaseRepository(), anthropic.Anthropic(api_key=api_key), risk_budget=RiskBudget(LIVE_CAPITAL_USD)))
