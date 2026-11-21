@@ -218,3 +218,19 @@ def test_the_ask_claude_checkbox_is_off_by_default_and_reaches_the_service(qapp)
     tab.ask_model_checkbox.setChecked(True)
     assert tab._service_factory_for_run()().ask_model is True
     tab.close()
+
+
+def test_no_control_overlaps_another_at_a_narrow_and_a_wide_window(qapp):
+    tab = AnalysisTab()
+    tab.show()
+    widgets = [tab.currency_combo, tab.chain_source_combo, tab.ask_model_checkbox, tab.start_button, tab.dashboard_button, tab.clear_button]
+    for width in (1000, 1780):
+        tab.resize(width, 520)
+        qapp.processEvents()
+        rectangles = [(widget, widget.mapTo(tab, widget.rect().topLeft()), widget.size()) for widget in widgets]
+        for index, (first, first_top_left, first_size) in enumerate(rectangles):
+            for second, second_top_left, second_size in rectangles[index + 1:]:
+                separated = (first_top_left.x() + first_size.width() <= second_top_left.x() or second_top_left.x() + second_size.width() <= first_top_left.x()
+                             or first_top_left.y() + first_size.height() <= second_top_left.y() or second_top_left.y() + second_size.height() <= first_top_left.y())
+                assert separated, f"{first.objectName() or type(first).__name__} overlaps {second.objectName() or type(second).__name__} at {width} px"
+    tab.close()

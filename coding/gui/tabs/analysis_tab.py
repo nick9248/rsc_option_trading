@@ -125,7 +125,8 @@ class AnalysisTab(QWidget):
         frame_layout = QVBoxLayout(frame)
         frame_layout.setContentsMargins(16, 12, 16, 12)
         frame_layout.setSpacing(8)
-        selectors = QHBoxLayout()                      # row 1: what to analyse; row 2: the buttons (one row overlapped on narrow windows)
+        # Row 1: what to analyse; row 2: the buttons (one row overlapped on narrow windows).
+        selectors = QHBoxLayout()
         selectors.setSpacing(10)
         controls = QHBoxLayout()
         controls.setSpacing(10)
@@ -141,7 +142,7 @@ class AnalysisTab(QWidget):
                                            "older than the limit. Live: always fetch from Deribit.")
         self.chain_source_combo.setMinimumWidth(340)
         selectors.addWidget(self.chain_source_combo)
-        self.ask_model_checkbox = QCheckBox("Ask Claude for strategies (about 0.2 USD per currency)")
+        self.ask_model_checkbox = QCheckBox("Ask Claude for strategies (about 0.2 USD)")
         self.ask_model_checkbox.setToolTip("The model picks among candidate structures that code built and priced, for a few expiries; the picks appear in the "
                                            "Strategy tab. Costs money (about 0.05 USD per expiry); off by default. Needs claude_api_key in .env.")
         selectors.addWidget(self.ask_model_checkbox)
