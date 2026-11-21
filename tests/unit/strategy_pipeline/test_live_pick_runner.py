@@ -43,7 +43,7 @@ def test_the_budget_error_reaches_the_caller_and_the_money_already_spent_is_repo
     lines = []
     with pytest.raises(BudgetExceeded):
         LivePickRunner(service).run("BTC", lines.append, now_utc=NOW)
-    assert "2 picks stored and paid (0.090 USD)" in lines[-1]
+    assert "at least 2 picks stored and paid (0.090 USD)" in lines[-1]
 
 
 def test_a_stop_request_ends_the_run_before_the_next_paid_call_and_keeps_the_picks():

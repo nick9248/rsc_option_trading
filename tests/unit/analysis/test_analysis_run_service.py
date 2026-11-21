@@ -265,7 +265,7 @@ class FakeStrategyRunner:
     def __init__(self, recorder, error=None):
         self.recorder, self.error = recorder, error
 
-    def run(self, currency, progress, should_stop):
+    def run(self, currency, progress, *, should_stop):
         self.recorder.calls.append(f"strategy:{currency}")
         progress(f"{currency}: picked")
         if self.error:
@@ -318,7 +318,7 @@ def test_the_stop_request_reaches_the_paid_step(recorder):
     seen = []
 
     class Runner:
-        def run(self, currency, progress, should_stop):
+        def run(self, currency, progress, *, should_stop):
             seen.append(should_stop)
             return "stopped"
     service = recorder.service()

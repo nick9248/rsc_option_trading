@@ -53,7 +53,7 @@ class DashboardWriter(Protocol):
 class StrategyRunner(Protocol):
     """What this service needs from the live pick runner."""
 
-    def run(self, currency: str, progress: Callable[[str], None], should_stop: Callable[[], bool]) -> str:
+    def run(self, currency: str, progress: Callable[[str], None], *, should_stop: Callable[[], bool]) -> str:
         """Ask the model about a few expiries of the currency (checking ``should_stop`` before each paid call); returns one summary line."""
         ...
 
@@ -257,7 +257,7 @@ class AnalysisRunService:
                     analysis_outputs[currency] = output
                     outcome = StepOutcome(name, currency, STATUS_SUCCEEDED, "done", output.bundle_path)
                 elif name == STEP_STRATEGY:
-                    message = self.strategy_runner_factory().run(currency, progress, stop_requested)
+                    message = self.strategy_runner_factory().run(currency, progress, should_stop=stop_requested)
                     outcome = StepOutcome(name, currency, STATUS_SUCCEEDED, message)
                 elif name == STEP_DASHBOARD:
                     output = analysis_outputs[currency]
