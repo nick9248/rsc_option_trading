@@ -272,6 +272,20 @@ def basis_table(market: MarketWideResult) -> str:
     return table_fragment(["Future", "Days", "Mark price", "Index price", "Annualized premium"], rows, numeric_columns=(1, 2, 3, 4))
 
 
+def block_structure_text(block) -> str:
+    """
+    What a block is: the exchange's combo name when the legs were sent as a registered combo, else the legs themselves ("single leg"
+    or "custom") -- a custom block has no combo name, which does not mean the structure is unknown.
+    """
+    if block.combo_id:
+        return block.combo_id
+    legs = [name.split("-", 1)[1] if "-" in name else name for name in block.instruments]       # 27NOV26-58000-C
+    if not legs:
+        return NOT_COMPUTED
+    shown = ", ".join(legs[:4]) + (f" and {len(legs) - 4} more" if len(legs) > 4 else "")
+    return f"{'single leg' if block.leg_count == 1 else 'custom'}: {shown}"
+
+
 def block_tables(market: MarketWideResult) -> str:
     """Block trades and large prints as tables."""
     blocks = market.block_trades
@@ -284,7 +298,7 @@ def block_tables(market: MarketWideResult) -> str:
         ["Block id", "Legs", "Structure", "Premium (USD)", "Time"],
         [[block.block_trade_id, str(block.leg_count) + ("" if block.leg_count == block.observed_leg_count
                                                          else f" ({block.observed_leg_count} seen)"),
-          text_or_missing(block.combo_id), number_text(block.combined_premium_usd, 0), _time_text(block.timestamp)]
+          block_structure_text(block), number_text(block.combined_premium_usd, 0), _time_text(block.timestamp)]
          for block in blocks.blocks], numeric_columns=(1, 3)) if blocks.blocks else paragraph_fragment("No block trades in the window.", "note"))
     text += "<h4>Large prints (screen prints, not blocks)</h4>" + (table_fragment(
         ["Time", "Instrument", "Size", "Direction", "Notional (USD)", "IV"],
