@@ -9,7 +9,7 @@ import pytest
 
 from coding.core.analytics.risk.budget import RiskBudget
 from coding.service.strategy.strategy_suggestion_service import BudgetExceeded
-from coding.service.strategy_pipeline.strategy_pick_service import MODE_LIVE, MODE_REPLAY, StrategyPickService
+from coding.service.strategy_pipeline.strategy_pick_service import METHOD_VERSION, MODE_LIVE, MODE_REPLAY, StrategyPickService
 from tests.unit.backtest.test_backtest_service import ENTRY, NOW, make_repository
 from tests.unit.strategy_pipeline.test_facts import analysis_row, daily_closes, volatility_row
 
@@ -62,6 +62,7 @@ def test_a_replay_pick_is_stored_with_the_facts_the_shortlist_the_choice_and_a_s
     assert result.status == "ok" and result.choice == shortlist[0].candidate_id and result.row_id == 11 and result.cost_usd > 0
     row = repository.save_strategy_pick.call_args.args[0]
     assert row["mode"] == "replay" and row["as_of"] == AS_OF and row["status"] == "ok" and row["request_id"] == "req_9"
+    assert row["method_version"] == METHOD_VERSION
     assert "## Market" in row["facts"] and len(row["candidates"]) == len(shortlist) and row["baseline_id"] is not None
     chosen = shortlist[0]
     assert row["max_loss_usd"] == pytest.approx(500.0) and row["quantity"] == pytest.approx(500.0 / chosen.metrics.max_loss_usd)   # 10,000 x 20% / 4
@@ -108,6 +109,7 @@ def test_an_instant_already_stored_is_returned_without_a_call():
     client.messages.create.assert_not_called()
     repository.save_strategy_pick.assert_not_called()
     assert repository.get_strategy_picks.call_args.kwargs["as_of"] == AS_OF                  # a replay instant is looked up exactly
+    assert repository.get_strategy_picks.call_args.kwargs["method_version"] == METHOD_VERSION   # an older method version does not block a new answer
 
 
 def test_a_live_pick_is_not_repeated_within_an_hour_for_the_same_expiry():

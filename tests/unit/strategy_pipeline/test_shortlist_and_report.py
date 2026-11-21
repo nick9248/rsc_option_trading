@@ -50,9 +50,13 @@ def test_candidates_whose_costs_eat_the_risk_are_dropped():
 def test_the_text_shows_legs_costs_and_both_views_and_stored_records_are_plain_data():
     shortlist = build_shortlist(scored())
     text = render_shortlist(shortlist)
-    assert text.startswith("## Shortlist") and "C1 " in text and "realised-vol view: P(profit)" in text and "implied-vol view" in text
+    assert text.startswith("## Shortlist") and "C1 " in text and "realised-vol view: P(profit)" in text
+    assert "market view: expected PnL" in text and "implied-vol view" not in text            # exact, no flat-volatility artefact
     assert "max profit unlimited" in text
     json.dumps([candidate_record(item) for item in shortlist], allow_nan=False)
+    for item in shortlist:
+        record = candidate_record(item)
+        assert record["market_expected_pnl_usd"] == pytest.approx(-(item.metrics.spread_cost_usd + item.metrics.trading_fees_usd))
     assert BASELINE_RULE == "expected_pnl_per_risk_realised_vol"
 
 
@@ -114,3 +118,22 @@ def test_a_stored_record_never_holds_a_non_finite_number():
     record = candidate_record(broken)
     assert record["spread_cost_usd"] is None and record["breakevens"] == [None]
     json.dumps(record, allow_nan=False)
+
+
+def test_the_market_view_is_minus_the_costs_for_every_candidate_whatever_the_skew():
+    # a chain whose puts are richer than a flat volatility would price them (skew): the flat lognormal "implied view" would show a positive
+    # expected PnL for selling them; the market view must stay exactly minus the costs
+    for item in build_shortlist(scored()):
+        line = next(part for part in render_shortlist([item]).split(" | ") if part.startswith("market view"))
+        expected = -(item.metrics.spread_cost_usd + item.metrics.trading_fees_usd)
+        assert f"{expected:+,.0f}" in line
+
+
+def test_the_market_view_agrees_with_the_numerical_expectation_on_a_chain_priced_at_one_volatility():
+    # independent check of the identity: on a chain priced at ONE volatility, the grid expectation of the PnL under that volatility equals
+    # minus the costs, up to the small delivery fees (0.015% of the settlement price per leg in the money)
+    distributions = {"implied": LognormalDistribution(FORWARD, VOL, DAYS)}
+    for candidate in generate_candidates(chain(half_spread=3.0), FORWARD)[:80:9]:
+        metrics = compute_metrics(candidate, FORWARD, distributions)
+        numerical = metrics.by_distribution["implied"].expected_pnl_usd
+        assert numerical == pytest.approx(metrics.market_expected_pnl_usd, abs=0.00015 * FORWARD * len(candidate.legs) + 2.0)

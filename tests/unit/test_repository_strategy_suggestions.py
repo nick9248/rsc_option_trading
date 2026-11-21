@@ -11,7 +11,8 @@ from coding.core.database.config import ConnectionPool, DatabaseConfig
 from coding.core.database.repository import DatabaseRepository
 
 MIGRATIONS = [Path(__file__).parents[2] / "migrations" / name for name in ("038_add_strategy_suggestions.sql", "039_strategy_suggestions_facts_as_of.sql",
-                                                                           "040_add_strategy_picks.sql")]
+                                                                           "040_add_strategy_picks.sql", "041_strategy_picks_method_version.sql",
+                                                                           "042_strategy_picks_method_version_no_default.sql")]
 
 
 @pytest.fixture
@@ -85,8 +86,8 @@ def test_the_newest_suggestion_of_each_expiry_is_read_with_its_times_and_types(r
 
 
 def pick_row(**overrides):
-    return {"currency": "BTC", "expiration": "27NOV26", "mode": "replay", "as_of": datetime(2026, 11, 20, 9, 0, tzinfo=timezone.utc),
-            "computed_at": datetime(2026, 11, 21, 12, 0, tzinfo=timezone.utc), "spot": 58000.0, "model": "claude-opus-5-5", "status": "ok",
+    return {"currency": "BTC", "expiration": "27NOV26", "mode": "replay", "method_version": "pipeline-2",
+            "as_of": datetime(2026, 11, 20, 9, 0, tzinfo=timezone.utc), "computed_at": datetime(2026, 11, 21, 12, 0, tzinfo=timezone.utc), "spot": 58000.0, "model": "claude-opus-5-5", "status": "ok",
             "facts": "facts", "candidates": [{"id": "C1", "legs": [], "max_loss_usd": 100.0}], "choice": "C1", "ranking": ["C1"], "response": "{}",
             "quantity": 0.5, "max_loss_usd": 50.0, "risk_per_trade_usd": 500.0, "input_tokens": 3500, "output_tokens": 3000, "cache_read_tokens": 0,
             "cache_write_tokens": 0, "cost_usd": 0.08, "request_id": "req_1", "baseline_id": "C1", **overrides}
@@ -97,20 +98,22 @@ def test_a_pick_is_stored_once_per_instant_read_back_and_evaluated_once(repo):
     assert first is not None
     assert repo.save_strategy_pick(pick_row(cost_usd=9.0)) is None                      # the same instant: nothing changes, nothing is paid for twice
     assert repo.save_strategy_pick(pick_row(mode="live")) is not None                   # another mode is another row
+    assert repo.save_strategy_pick(pick_row(method_version="pipeline-3")) is not None  # another method version is another row
+    assert len(repo.get_strategy_picks("BTC", method_version="pipeline-3")) == 1 and {row["method_version"] for row in repo.get_strategy_picks("BTC", mode="replay")} == {"pipeline-2", "pipeline-3"}
     later = pick_row(mode="live", as_of=datetime(2026, 11, 20, 9, 30, tzinfo=timezone.utc))
     assert repo.save_strategy_pick(later) is not None
     assert len(repo.get_strategy_picks("BTC", mode="live", as_of_since=datetime(2026, 11, 20, 9, 15, tzinfo=timezone.utc))) == 1
 
-    rows = repo.get_strategy_picks("BTC", mode="replay")
+    rows = repo.get_strategy_picks("BTC", mode="replay", method_version="pipeline-2")
     assert len(rows) == 1 and rows[0]["candidates"][0]["id"] == "C1" and rows[0]["ranking"] == ["C1"]
     assert rows[0]["as_of"].tzinfo is not None and isinstance(rows[0]["spot"], float) and rows[0]["evaluated_at"] is None
-    assert repo.get_strategy_picks("BTC", evaluated=True) == [] and len(repo.get_strategy_picks("BTC", evaluated=False)) == 3
-    assert len(repo.get_strategy_picks("BTC", expiration="27NOV26", as_of=pick_row()["as_of"], mode="replay")) == 1
+    assert repo.get_strategy_picks("BTC", evaluated=True) == [] and len(repo.get_strategy_picks("BTC", evaluated=False)) == 4
+    assert len(repo.get_strategy_picks("BTC", expiration="27NOV26", as_of=pick_row()["as_of"], mode="replay", method_version="pipeline-2")) == 1
 
     evaluated_at = datetime(2026, 11, 27, 9, tzinfo=timezone.utc)
     assert repo.save_strategy_pick_evaluation(first, evaluated_at, 59000.0, "C1", {"C1": {"pnl_usd": 10.0, "r": 0.1}}) is True
     assert repo.save_strategy_pick_evaluation(first, evaluated_at, 1.0, "C9", {"x": 1}) is False      # a second evaluation changes nothing
-    done = repo.get_strategy_picks("BTC", mode="replay", evaluated=True)[0]
+    done = repo.get_strategy_picks("BTC", mode="replay", evaluated=True, method_version="pipeline-2")[0]
     assert done["settlement_price"] == 59000.0 and done["outcomes"]["C1"]["r"] == 0.1 and done["baseline_id"] == "C1"
 
 
@@ -125,3 +128,9 @@ def test_a_pick_with_a_naive_time_or_nan_is_refused(repo):
         repo.save_strategy_pick(pick_row(as_of=datetime(2026, 11, 20, 9)))
     with pytest.raises(ValueError):
         repo.save_strategy_pick(pick_row(candidates=[{"x": float("nan")}]))
+
+
+def test_a_pick_without_a_method_version_is_refused_by_the_database(repo):
+    row_without_version = {key: value for key, value in pick_row().items() if key != "method_version"}
+    with pytest.raises(KeyError):                                                      # the writer needs the key
+        repo.save_strategy_pick(row_without_version)
