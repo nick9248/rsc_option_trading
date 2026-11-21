@@ -1437,6 +1437,92 @@ class DatabaseRepository:
                  "model": row[4], "status": row[5], "response": row[6],
                  "net_premium_usd": None if row[7] is None else float(row[7])} for row in rows]
 
+    # ------------------------------------------------------------------
+    # Stored hourly analysis, point in time (written by the collector on the VPS and synced)
+    # ------------------------------------------------------------------
+
+    _ANALYSIS_COLUMNS = (
+        "snapshot_hour", "created_at", "max_pain_strike", "max_pain_distance_pct", "put_call_ratio_oi", "put_call_ratio_volume",
+        "total_call_oi", "total_put_oi", "total_net_gex", "total_net_dex", "call_resistance_strike", "put_support_strike", "hvl_level",
+        "resistance_1_strike", "resistance_1_call_oi", "support_1_strike", "support_1_put_oi", "total_volume", "itm_call_oi_pct",
+        "otm_call_oi_pct", "itm_put_oi_pct", "otm_put_oi_pct", "underlying_price", "index_price", "forward_price")
+    _VOLATILITY_COLUMNS = (
+        "snapshot_hour", "atm_iv", "skew_25d", "put_25d_iv", "call_25d_iv", "net_vanna", "net_charm", "vwap_iv", "vrp_absolute",
+        "vrp_percentage", "realized_vol", "iv_percentile_expiry", "iv_percentile_365d", "iv_rank_365d", "expected_daily_move",
+        "expected_weekly_move", "expected_monthly_move", "pc_atm_ratio", "pc_near_otm_ratio", "pc_far_otm_ratio", "underlying_price")
+
+    @staticmethod
+    def _row_dict(columns: Sequence[str], row: Sequence[Any]) -> Dict[str, Any]:
+        """A row as a dict: numbers as floats (NULL stays None), timestamps made UTC-aware."""
+        converted: Dict[str, Any] = {}
+        for column, value in zip(columns, row):
+            if isinstance(value, datetime):
+                value = value.replace(tzinfo=timezone.utc)
+            elif value is not None and not isinstance(value, (str, int, float)):
+                value = float(value)
+            converted[column] = value
+        return converted
+
+    def get_onchain_analysis_snapshot_at_or_before(self, currency: str, expiration: str, as_of: datetime) -> Optional[Dict[str, Any]]:
+        """
+        The newest stored hourly analysis of one expiry that was WRITTEN at or before ``as_of`` (its ``created_at``, about 20 minutes
+        after the hour it describes; the database default stamps it in UTC: on the stored data it is 2 to 58 minutes after the hour, never
+        negative and never an hour more): max pain, put/call ratios, GEX and DEX totals, key levels, open-interest shares.
+
+        Returns:
+            A dict of the columns (numbers as floats, NULL as None, ``snapshot_hour`` and ``created_at`` UTC-aware), or None.
+        """
+        as_of_naive = as_of.astimezone(timezone.utc).replace(tzinfo=None)
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                f"SELECT {', '.join(self._ANALYSIS_COLUMNS)} FROM onchain_analysis_snapshots "
+                "WHERE currency = %s AND expiration = %s AND created_at <= %s ORDER BY snapshot_hour DESC LIMIT 1",
+                (currency, expiration, as_of_naive))
+            row = cursor.fetchone()
+        return None if row is None else self._row_dict(self._ANALYSIS_COLUMNS, row)
+
+    def get_onchain_volatility_snapshot_at_or_before(self, currency: str, expiration: str, as_of: datetime) -> Optional[Dict[str, Any]]:
+        """
+        The newest stored hourly volatility analysis of one expiry (ATM IV, 25-delta skew, variance risk premium, realised volatility,
+        IV percentile, expected moves, vanna and charm) whose hour had ended at or before ``as_of`` (the table has no write time: a
+        row is taken to be known one hour after its ``snapshot_hour``; rows made later by the backfill are computed as of their hour).
+        """
+        as_of_naive = as_of.astimezone(timezone.utc).replace(tzinfo=None)
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                f"SELECT {', '.join(self._VOLATILITY_COLUMNS)} FROM onchain_volatility_snapshots "
+                "WHERE currency = %s AND expiration = %s AND snapshot_hour + interval '1 hour' <= %s ORDER BY snapshot_hour DESC LIMIT 1",
+                (currency, expiration, as_of_naive))
+            row = cursor.fetchone()
+        return None if row is None else self._row_dict(self._VOLATILITY_COLUMNS, row)
+
+    def get_latest_dvol_candle_start_before(self, asset: str, before_time: datetime) -> Optional[datetime]:
+        """Start of the newest hourly DVOL candle that had closed by ``before_time`` (None when there is none): its age tells how stale the DVOL is."""
+        with self._db_cursor() as cursor:
+            cursor.execute("SELECT MAX(timestamp) FROM dvol_history WHERE asset = %s AND timestamp + interval '1 hour' <= %s",
+                           (asset, before_time))
+            newest = cursor.fetchone()[0]
+        return None if newest is None else newest.astimezone(timezone.utc)
+
+    def get_flow_delta_window(self, currency: str, expiration: str, as_of: datetime, hours: int = 24) -> Dict[str, Any]:
+        """
+        The delta-adjusted option flow of one expiry over the ``hours`` hours that had ended at or before ``as_of``: sums of the
+        hourly rows (HIRO, premium, gross delta, trades), the number of hourly rows present and the newest hour among them.
+        """
+        as_of_naive = as_of.astimezone(timezone.utc).replace(tzinfo=None)
+        newest_hour = as_of_naive - timedelta(hours=1)                  # an hour is known one hour after it starts
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT COUNT(*), SUM(hiro_usd), SUM(premium_usd), SUM(gross_delta_usd), SUM(trade_count), MAX(snapshot_hour)
+                FROM flow_delta_hourly
+                WHERE currency = %s AND expiration = %s AND snapshot_hour <= %s AND snapshot_hour > %s
+                """, (currency, expiration, newest_hour, newest_hour - timedelta(hours=hours)))
+            count, hiro, premium, gross, trades, newest = cursor.fetchone()
+        return {"hours_present": int(count), "newest_hour": None if newest is None else newest.replace(tzinfo=timezone.utc), "hiro_usd": None if hiro is None else float(hiro),
+                "premium_usd": None if premium is None else float(premium),
+                "gross_delta_usd": None if gross is None else float(gross), "trade_count": None if trades is None else int(trades)}
+
     def get_settlement_index_price(self, currency: str, settlement_at: datetime, window_minutes: int = 30
                                    ) -> Optional[Tuple[float, int]]:
         """

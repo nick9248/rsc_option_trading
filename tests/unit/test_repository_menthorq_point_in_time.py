@@ -36,6 +36,23 @@ CREATE TABLE snapshots (
     bid_price        DECIMAL(18,8),
     ask_price        DECIMAL(18,8)
 );
+CREATE TABLE onchain_analysis_snapshots (
+    id serial PRIMARY KEY, snapshot_hour timestamp NOT NULL, currency varchar(10) NOT NULL, expiration varchar(20) NOT NULL,
+    max_pain_strike numeric, max_pain_distance_pct numeric, put_call_ratio_oi numeric, put_call_ratio_volume numeric, total_call_oi numeric,
+    total_put_oi numeric, total_net_gex numeric, total_net_dex numeric, call_resistance_strike numeric, put_support_strike numeric,
+    hvl_level numeric, resistance_1_strike numeric, resistance_1_call_oi numeric, support_1_strike numeric, support_1_put_oi numeric,
+    total_volume numeric, itm_call_oi_pct numeric, otm_call_oi_pct numeric, itm_put_oi_pct numeric, otm_put_oi_pct numeric,
+    underlying_price numeric, created_at timestamp, index_price numeric, forward_price numeric);
+CREATE TABLE onchain_volatility_snapshots (
+    id serial PRIMARY KEY, snapshot_hour timestamp NOT NULL, currency varchar(10) NOT NULL, expiration varchar(20) NOT NULL, atm_iv numeric,
+    skew_25d numeric, put_25d_iv numeric, call_25d_iv numeric, net_vanna numeric, net_charm numeric, vwap_iv numeric, vrp_absolute numeric,
+    vrp_percentage numeric, realized_vol numeric, iv_percentile_expiry numeric, iv_percentile_365d numeric, iv_rank_365d numeric,
+    expected_daily_move numeric, expected_weekly_move numeric, expected_monthly_move numeric, pc_atm_ratio numeric, pc_near_otm_ratio numeric,
+    pc_far_otm_ratio numeric, underlying_price numeric);
+CREATE TABLE flow_delta_hourly (
+    id serial PRIMARY KEY, snapshot_hour timestamp NOT NULL, currency varchar(10) NOT NULL, expiration varchar(20) NOT NULL, hiro_usd numeric,
+    premium_usd numeric, gross_delta_usd numeric, net_contracts numeric, gross_contracts numeric, trade_count integer);
+CREATE TABLE dvol_history (id serial PRIMARY KEY, asset varchar(10) NOT NULL, timestamp timestamptz NOT NULL, dvol_value numeric);   -- timestamptz, as in the real table
 CREATE TABLE historical_trades (
     id               SERIAL PRIMARY KEY,
     trade_id         VARCHAR(50)    NOT NULL,
@@ -227,3 +244,49 @@ def test_settlement_price_is_the_mean_index_of_the_trades_in_the_last_30_minutes
     ])
     assert repository.get_settlement_index_price("BTC", settlement) == (200.0, 3)
     assert repository.get_settlement_index_price("BTC", settlement - timedelta(days=3)) is None
+
+
+def test_stored_hourly_analysis_is_read_by_write_time_and_never_from_the_future(repo):
+    repository, scratch_connection = repo
+    hour = datetime(2026, 11, 6, 8)
+    _execute(scratch_connection,
+             "INSERT INTO onchain_analysis_snapshots (snapshot_hour, currency, expiration, max_pain_strike, created_at) VALUES (%s, 'BTC', '27NOV26', %s, %s)",
+             [(hour, 60000, hour + timedelta(minutes=22)), (hour + timedelta(hours=1), 61000, hour + timedelta(hours=1, minutes=22))])
+    before_second_write = datetime(2026, 11, 6, 9, 10, tzinfo=timezone.utc)                  # the second row exists only from 09:22
+    assert repository.get_onchain_analysis_snapshot_at_or_before("BTC", "27NOV26", before_second_write)["max_pain_strike"] == 60000.0
+    assert repository.get_onchain_analysis_snapshot_at_or_before("BTC", "27NOV26", before_second_write + timedelta(minutes=15))["max_pain_strike"] == 61000.0
+    assert repository.get_onchain_analysis_snapshot_at_or_before("BTC", "27NOV26", datetime(2026, 11, 6, 8, 10, tzinfo=timezone.utc)) is None
+    assert repository.get_onchain_analysis_snapshot_at_or_before("ETH", "27NOV26", before_second_write) is None
+    row = repository.get_onchain_analysis_snapshot_at_or_before("BTC", "27NOV26", before_second_write)
+    assert row["snapshot_hour"].tzinfo is not None and isinstance(row["max_pain_strike"], float) and row["total_net_gex"] is None
+
+
+def test_stored_hourly_volatility_is_known_one_hour_after_its_hour_starts(repo):
+    repository, scratch_connection = repo
+    _execute(scratch_connection, "INSERT INTO onchain_volatility_snapshots (snapshot_hour, currency, expiration, atm_iv) VALUES (%s, 'BTC', '27NOV26', %s)",
+             [(datetime(2026, 11, 6, 8), 50.0), (datetime(2026, 11, 6, 9), 52.0)])
+    assert repository.get_onchain_volatility_snapshot_at_or_before("BTC", "27NOV26", datetime(2026, 11, 6, 9, 30, tzinfo=timezone.utc))["atm_iv"] == 50.0
+    assert repository.get_onchain_volatility_snapshot_at_or_before("BTC", "27NOV26", datetime(2026, 11, 6, 10, 0, tzinfo=timezone.utc))["atm_iv"] == 52.0
+    assert repository.get_onchain_volatility_snapshot_at_or_before("BTC", "27NOV26", datetime(2026, 11, 6, 8, 59, tzinfo=timezone.utc)) is None
+
+
+def test_flow_window_sums_only_the_24_hours_that_had_ended(repo):
+    repository, scratch_connection = repo
+    start = datetime(2026, 11, 5, 0)
+    _execute(scratch_connection, "INSERT INTO flow_delta_hourly (snapshot_hour, currency, expiration, hiro_usd, premium_usd, gross_delta_usd, trade_count) "
+             "VALUES (%s, 'BTC', '27NOV26', 10, 1, 100, 2)", [(start + timedelta(hours=hour),) for hour in range(0, 48)])
+    window = repository.get_flow_delta_window("BTC", "27NOV26", datetime(2026, 11, 6, 12, tzinfo=timezone.utc))     # hours 11:00 back to 12:00 the day before
+    assert window == {"hours_present": 24, "newest_hour": datetime(2026, 11, 6, 11, tzinfo=timezone.utc), "hiro_usd": 240.0, "premium_usd": 24.0, "gross_delta_usd": 2400.0, "trade_count": 48}
+    empty = repository.get_flow_delta_window("ETH", "27NOV26", datetime(2026, 11, 6, 12, tzinfo=timezone.utc))
+    assert empty["hours_present"] == 0 and empty["hiro_usd"] is None
+
+
+def test_the_newest_dvol_candle_must_have_closed_by_the_instant(repo):
+    repository, scratch_connection = repo
+    hour = datetime(2026, 11, 6, 8, tzinfo=timezone.utc)
+    _execute(scratch_connection, "INSERT INTO dvol_history (asset, timestamp, dvol_value) VALUES ('BTC', %s, 50)",
+             [(hour + timedelta(hours=offset),) for offset in (0, 1, 2)])
+    assert repository.get_latest_dvol_candle_start_before("BTC", hour + timedelta(hours=2)) == hour + timedelta(hours=1)    # the 10:00 candle has not closed
+    assert repository.get_latest_dvol_candle_start_before("BTC", hour + timedelta(hours=3)) == hour + timedelta(hours=2)
+    assert repository.get_latest_dvol_candle_start_before("BTC", hour + timedelta(minutes=30)) is None
+    assert repository.get_latest_dvol_candle_start_before("ETH", hour + timedelta(hours=3)) is None
