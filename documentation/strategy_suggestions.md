@@ -12,12 +12,14 @@ Code prepares, the model proposes, code checks. Research only: nothing here plac
 4. The answer is parsed and **checked in code**: every leg must be a strike of the chain with the quote its fill needs. Legs are priced by
    code: a buy at the ask, a sell at the bid (net premium; positive = paid).
 5. Everything is stored in `strategy_suggestions` (migration 038): the facts shown, the answer as received, status
-   (`ok`, `legs_rejected`, `refused`, `invalid_response`), token usage, cost and the request id. A later evaluator scores each row
+   (`ok`, `legs_rejected`, `refused`, `invalid_response`), token usage, cost and the request id, and `facts_as_of`: the instant of the chain and index price shown (the capture time of the stored snapshot, else the fetch time; migration 039), which a later evaluator measures from. `computed_at` is when the call was made.
+   Only strikes shown in the chain table can be used and priced; a duplicate option in two legs, non-finite numbers or wrong types make the answer `invalid_response`. A paid answer is always stored with its cost, whatever happens after the call. A later evaluator scores each row
    against what happened after it.
 
 ## Cost control
 - Cost of a call is computed from its usage at list prices (Opus 5.5: 4 / 20 USD per million tokens in / out) and stored.
 - Before each call the stored total plus a 0.60 USD reserve must stay within the budget (default 15 USD). Otherwise the call is not made.
+- Run one process at a time: the budget check reads the stored total and is not atomic across processes.
 - More than one expiry in one run needs `--yes`. `--dry-run` shows the facts and their token count (count_tokens, free).
 - First real call (27NOV26): 0.06 USD.
 

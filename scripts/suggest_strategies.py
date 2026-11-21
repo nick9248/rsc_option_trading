@@ -54,6 +54,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     with DeribitApiService(timeout=90) as api:
         service = OnChainAnalysisService(api, repository=repository, chain_source_mode=CHAIN_SOURCE_STORED)
         _, result = service.fetch_and_analyze(arguments.currency, return_result=True)
+    chain = service.last_chain
+    facts_as_of = chain.captured_at if chain is not None and chain.captured_at is not None else result.generated_at
+
+    for expiry in arguments.expiry:                 # every label is checked before the first paid call
+        try:
+            build_expiry_facts(result, expiry)
+        except LookupError as error:
+            logger.error("%s", error)
+            return 1
 
     if arguments.dry_run:
         for expiry in arguments.expiry:
@@ -66,9 +75,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     suggestions = StrategySuggestionService(repository, client, model=arguments.model)
     for expiry in arguments.expiry:
         try:
-            outcome = suggestions.suggest(result, expiry)
+            outcome = suggestions.suggest(result, expiry, facts_as_of)
         except BudgetExceeded as error:
             logger.error("Budget reached: %s", error)
+            return 1
+        except anthropic.APIError as error:
+            logger.error("The call for %s failed (not billed): %s", expiry, error)
             return 1
         logger.info("%s: %s, cost %.4f USD\n%s", expiry, outcome.status, outcome.cost_usd, outcome.response_text)
         if outcome.pricing is not None:

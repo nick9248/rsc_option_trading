@@ -35,6 +35,14 @@ def test_a_bad_answer_is_refused(text):
         parse_suggestion(text)
 
 
+def test_non_finite_numbers_text_for_lists_and_duplicate_legs_are_refused():
+    leg = {"action": "buy", "option_type": "put", "strike": 55000, "quantity": 1}
+    for text in (answer(legs=[{**leg, "quantity": float("nan")}]).replace("NaN", "NaN"), answer(reasons="abc"), answer(summary=5),
+                 answer(legs=[leg, {**leg, "action": "sell"}]), json.dumps([1, 2])):
+        with pytest.raises(ValueError):
+            parse_suggestion(text)
+
+
 def test_no_trade_may_have_no_legs():
     assert parse_suggestion(answer(view="no_trade", legs=[])).legs == ()
 
@@ -53,10 +61,15 @@ def test_quantity_scales_the_premium():
 def test_a_leg_not_in_the_chain_is_reported_and_nothing_is_priced():
     legs = [{"action": "sell", "option_type": "put", "strike": 54500, "quantity": 1}]
     pricing = price_legs(parse_suggestion(answer(legs=legs)), QUOTES)
-    assert pricing.net_premium_usd is None and "not in the chain" in pricing.problems[0]
+    assert pricing.net_premium_usd is None and "not among the strikes shown" in pricing.problems[0]
 
 
 def test_a_missing_side_is_reported_not_taken_as_zero():
     legs = [{"action": "sell", "option_type": "call", "strike": 60000, "quantity": 1}]            # no bid
     pricing = price_legs(parse_suggestion(answer(legs=legs)), QUOTES)
     assert pricing.net_premium_usd is None and "no bid" in pricing.problems[0]
+
+
+def test_no_trade_has_no_premium_not_zero():
+    pricing = price_legs(parse_suggestion(answer(view="no_trade", legs=[])), QUOTES)
+    assert pricing.net_premium_usd is None and pricing.problems == ()

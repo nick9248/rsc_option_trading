@@ -13,6 +13,7 @@ from coding.service.strategy.strategy_suggestion_service import (
     BudgetExceeded, StrategySuggestionService, call_cost_usd)
 
 NOW = datetime(2026, 11, 21, 12, 0, tzinfo=timezone.utc)
+FACTS_AS_OF = datetime(2026, 11, 21, 11, 30, tzinfo=timezone.utc)
 
 
 def response(text, stop_reason="end_turn", input_tokens=3000, output_tokens=3000, cache_read=0, cache_write=0):
@@ -57,11 +58,11 @@ def test_a_good_answer_is_stored_priced_with_its_cost(real_result):
     expiration, facts, priced = real_legs(real_result)
     service, client, repository = make_service(real_result, response(answer_for(priced)))
 
-    outcome = service.suggest(real_result, expiration, now_utc=NOW)
+    outcome = service.suggest(real_result, expiration, FACTS_AS_OF, now_utc=NOW)
 
     assert outcome.status == "ok" and outcome.row_id == 7 and outcome.pricing.net_premium_usd is not None
     row = repository.save_strategy_suggestion.call_args.args[0]
-    assert row["status"] == "ok" and row["computed_at"] == NOW and row["expiration"] == expiration
+    assert row["status"] == "ok" and row["computed_at"] == NOW and row["facts_as_of"] == FACTS_AS_OF and row["expiration"] == expiration
     assert row["facts"] == facts.text and row["cost_usd"] == pytest.approx(outcome.cost_usd) and row["request_id"] == "req_1"
     call = client.messages.create.call_args.kwargs
     assert call["model"] == "claude-opus-5-5" and "tools" not in call and call["output_config"]["format"]["type"] == "json_schema"
@@ -73,7 +74,7 @@ def test_a_leg_that_is_not_in_the_chain_is_stored_as_rejected(real_result):
                       "legs": [{"action": "buy", "option_type": "call", "strike": 12345, "quantity": 1}]})
     service, _, repository = make_service(real_result, response(bad))
 
-    outcome = service.suggest(real_result, expiration, now_utc=NOW)
+    outcome = service.suggest(real_result, expiration, FACTS_AS_OF, now_utc=NOW)
 
     assert outcome.status == "legs_rejected" and outcome.pricing.net_premium_usd is None
     assert repository.save_strategy_suggestion.call_args.args[0]["net_premium_usd"] is None
@@ -83,7 +84,7 @@ def test_an_answer_that_is_not_json_is_stored_as_invalid_with_its_cost(real_resu
     expiration, _, _ = real_legs(real_result)
     service, _, repository = make_service(real_result, response("I think you should buy calls"))
 
-    outcome = service.suggest(real_result, expiration, now_utc=NOW)
+    outcome = service.suggest(real_result, expiration, FACTS_AS_OF, now_utc=NOW)
 
     assert outcome.status == "invalid_response" and outcome.cost_usd > 0
     assert repository.save_strategy_suggestion.call_args.args[0]["response"] == "I think you should buy calls"
@@ -92,7 +93,7 @@ def test_an_answer_that_is_not_json_is_stored_as_invalid_with_its_cost(real_resu
 def test_a_refusal_is_stored_as_refused(real_result):
     expiration, _, _ = real_legs(real_result)
     service, _, repository = make_service(real_result, response("", stop_reason="refusal"))
-    assert service.suggest(real_result, expiration, now_utc=NOW).status == "refused"
+    assert service.suggest(real_result, expiration, FACTS_AS_OF, now_utc=NOW).status == "refused"
 
 
 def test_the_budget_stops_the_call_before_it_is_made(real_result):
@@ -100,10 +101,48 @@ def test_the_budget_stops_the_call_before_it_is_made(real_result):
     service, client, repository = make_service(real_result, response("x"), spent=14.9, budget=15.0)
 
     with pytest.raises(BudgetExceeded):
-        service.suggest(real_result, expiration, now_utc=NOW)
+        service.suggest(real_result, expiration, FACTS_AS_OF, now_utc=NOW)
 
     client.messages.create.assert_not_called()
     repository.save_strategy_suggestion.assert_not_called()
+
+
+def test_a_response_of_an_unexpected_shape_is_still_stored_with_its_cost(real_result):
+    expiration, _, _ = real_legs(real_result)
+    odd = response("x")
+    odd.content = [SimpleNamespace(type="text")]                         # a text block without text
+    service, _, repository = make_service(real_result, odd)
+
+    outcome = service.suggest(real_result, expiration, FACTS_AS_OF, now_utc=NOW)
+
+    assert outcome.status == "invalid_response" and outcome.cost_usd > 0
+    repository.save_strategy_suggestion.assert_called_once()
+
+
+def test_an_answer_cut_at_the_token_limit_is_invalid_not_parsed(real_result):
+    expiration, _, priced = real_legs(real_result)
+    service, _, _ = make_service(real_result, response(answer_for(priced), stop_reason="max_tokens"))
+    assert service.suggest(real_result, expiration, FACTS_AS_OF, now_utc=NOW).status == "invalid_response"
+
+
+def test_a_naive_facts_time_is_refused(real_result):
+    expiration, _, _ = real_legs(real_result)
+    service, client, _ = make_service(real_result, response("x"))
+    with pytest.raises(ValueError):
+        service.suggest(real_result, expiration, datetime(2026, 11, 21, 11, 30))
+    client.messages.create.assert_not_called()
+
+
+def test_a_strike_that_exists_but_was_not_shown_is_rejected(real_result, monkeypatch):
+    monkeypatch.setattr("coding.core.analytics.strategy_suggestion.expiry_facts.CHAIN_ROWS", 2)       # show only the 2 strikes nearest spot
+    expiration, facts, _ = real_legs(real_result)
+    bundle = real_result.bundle(expiration)
+    hidden = next(float(i["strike"]) for i in bundle.enriched_instruments
+                  if float(i["strike"]) not in {key[0] for key in facts.quotes} and i.get("ask_price"))
+    bad = json.dumps({"view": "bullish", "strategy_name": "x", "summary": "s", "reasons": [], "risks": [], "invalidation": "i",
+                      "legs": [{"action": "buy", "option_type": "call", "strike": hidden, "quantity": 1}]})
+    service, _, _ = make_service(real_result, response(bad))
+    assert service.suggest(real_result, expiration, FACTS_AS_OF, now_utc=NOW).status == "legs_rejected"
 
 
 def test_a_model_without_a_known_price_is_refused():

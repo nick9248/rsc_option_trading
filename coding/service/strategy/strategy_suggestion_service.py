@@ -3,7 +3,8 @@ Asks the model for a strategy per expiry from the facts the code prepared, check
 stores everything (point in time) for a later evaluation. Orchestration only: the facts, the schema and the pricing are core code.
 
 Safety: the service never places an order (there is no code path to one); every call is paid, so the total cost of all stored calls is
-checked against a budget before each call and the cost of each call is stored.
+checked against a budget before each call and the cost of each call is stored. Run one process at a time: the budget check reads the
+stored total and is not atomic across processes.
 """
 
 import logging
@@ -100,14 +101,24 @@ class StrategySuggestionService:
         self.model = model
         self.budget_usd = budget_usd
 
-    def suggest(self, result: OnChainAnalysisResult, expiration: str, now_utc: Optional[datetime] = None) -> SuggestionOutcome:
+    def suggest(self, result: OnChainAnalysisResult, expiration: str, facts_as_of: datetime, now_utc: Optional[datetime] = None) -> SuggestionOutcome:
         """
         Ask for a strategy for one expiry, check it, price it and store it.
+
+        Args:
+            result: The analysis.
+            expiration: The expiry label.
+            facts_as_of: Instant of the chain and index price in the result (capture time of a stored snapshot, else the fetch
+                time): the point in time a later evaluation starts from. Timezone-aware UTC.
+            now_utc: The current instant (default: now).
 
         Raises:
             BudgetExceeded: before the call, when the stored cost plus the reserved worst case would pass the budget.
             LookupError: when the expiry has no facts (not in the result, or no quotes).
+            ValueError: for a naive ``facts_as_of``.
         """
+        if facts_as_of.tzinfo is None:
+            raise ValueError("facts_as_of must be timezone-aware (UTC)")
         facts = build_expiry_facts(result, expiration)
         spent = self.repository.get_strategy_suggestion_total_cost()
         if spent + WORST_CASE_CALL_USD > self.budget_usd:
@@ -120,32 +131,40 @@ class StrategySuggestionService:
             system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
             messages=[{"role": "user", "content": facts.text + "\n\nPropose the best strategy for this expiry, or no_trade."}],
             output_config={"effort": EFFORT, "format": {"type": "json_schema", "schema": SUGGESTION_SCHEMA}})
+        # The call is paid from here on: whatever goes wrong below, a row with its cost is stored.
         usage = response.usage
         cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
         cache_write = getattr(usage, "cache_creation_input_tokens", 0) or 0
         cost = call_cost_usd(self.model, usage.input_tokens, usage.output_tokens, cache_read, cache_write)
-        text = "".join(block.text for block in response.content if block.type == "text")
-
+        text = ""
         suggestion: Optional[StrategySuggestion] = None
         pricing: Optional[LegPricing] = None
-        if response.stop_reason == "refusal":
-            status = "refused"
-            category = getattr(getattr(response, "stop_details", None), "category", None)
-            text = text or f"refused ({category})"
-        else:
-            try:
+        try:
+            text = "".join(getattr(block, "text", "") for block in response.content if block.type == "text")
+            if response.stop_reason == "refusal":
+                status = "refused"
+                category = getattr(getattr(response, "stop_details", None), "category", None)
+                text = text or f"refused ({category})"
+            elif response.stop_reason == "max_tokens":
+                status = "invalid_response"
+                logger.warning("The answer was cut at %d tokens", MAX_TOKENS)
+            else:
                 suggestion = parse_suggestion(text)
                 pricing = price_legs(suggestion, facts.quotes)
                 status = "ok" if not pricing.problems else "legs_rejected"
-            except ValueError as error:
-                status = "invalid_response"
-                logger.warning("The answer of the model is not usable: %s", error)
+        except ValueError as error:
+            status = "invalid_response"
+            logger.warning("The answer of the model is not usable: %s", error)
+        except Exception as error:                    # an unexpected shape of the response: keep the paid answer and the cost
+            status = "invalid_response"
+            text = text or repr(response)
+            logger.exception("Unexpected response: %s", error)
         if pricing is not None and pricing.problems:
             logger.warning("Legs rejected: %s", "; ".join(pricing.problems))
 
         row_id = self.repository.save_strategy_suggestion({
-            "currency": result.currency, "expiration": expiration, "computed_at": now, "reference_price": facts.spot,
-            "model": self.model, "status": status, "facts": facts.text, "response": text,
+            "currency": result.currency, "expiration": expiration, "computed_at": now, "facts_as_of": facts_as_of,
+            "reference_price": facts.spot, "model": self.model, "status": status, "facts": facts.text, "response": text,
             "net_premium_usd": None if pricing is None else pricing.net_premium_usd,
             "input_tokens": usage.input_tokens, "output_tokens": usage.output_tokens, "cache_read_tokens": cache_read,
             "cache_write_tokens": cache_write, "cost_usd": cost, "request_id": getattr(response, "_request_id", None)})

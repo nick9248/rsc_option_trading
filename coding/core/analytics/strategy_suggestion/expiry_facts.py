@@ -42,7 +42,7 @@ class ExpiryFacts:
     spot: float
     text: str
     quotes: Dict[Tuple[float, str], LegQuote]
-    """(strike, "call" or "put") -> quote, for every strike of the expiry (not only the ones shown in the text)."""
+    """(strike, "call" or "put") -> quote, for the strikes shown in the text only: nothing else may be used or priced."""
 
 
 def _usd(price_in_coins: Optional[float], index_price: float) -> Optional[float]:
@@ -50,13 +50,19 @@ def _usd(price_in_coins: Optional[float], index_price: float) -> Optional[float]
     return price_in_coins * index_price if price_in_coins else None
 
 
+def _mark_usd(price_in_coins: Optional[float], index_price: float) -> Optional[float]:
+    return None if price_in_coins is None else price_in_coins * index_price
+
+
 def _quotes(bundle: ExpirationBundle, index_price: float) -> Dict[Tuple[float, str], LegQuote]:
     quotes: Dict[Tuple[float, str], LegQuote] = {}
     for instrument in bundle.enriched_instruments:
-        kind = "call" if instrument.get("option_type") == "C" else "put"
+        kind = {"C": "call", "P": "put"}.get(instrument.get("option_type"))
+        if kind is None:
+            continue                                   # an unknown type is not guessed to be a put
         quotes[(float(instrument["strike"]), kind)] = LegQuote(
             bid_usd=_usd(instrument.get("bid_price"), index_price), ask_usd=_usd(instrument.get("ask_price"), index_price),
-            mark_usd=_usd(instrument.get("mark_price"), index_price), implied_volatility_pct=instrument.get("mark_iv"),
+            mark_usd=_mark_usd(instrument.get("mark_price"), index_price), implied_volatility_pct=instrument.get("mark_iv"),
             open_interest=float(instrument.get("open_interest") or 0))
     return quotes
 
@@ -65,14 +71,18 @@ def _money(value: Optional[float]) -> str:
     return "-" if value is None else f"{value:,.0f}"
 
 
-def _chain_table(quotes: Dict[Tuple[float, str], LegQuote], spot: float) -> List[str]:
-    strikes = sorted({strike for strike, _ in quotes
-                      if abs(strike - spot) <= CHAIN_RANGE_FRACTION * spot
-                      and any(quotes.get((strike, kind)) and (quotes[(strike, kind)].open_interest > 0 or quotes[(strike, kind)].ask_usd)
-                              for kind in ("call", "put"))},
-                     key=lambda strike: abs(strike - spot))[:CHAIN_ROWS]
+def _shown_strikes(quotes: Dict[Tuple[float, str], LegQuote], spot: float) -> List[float]:
+    """The strikes of the chain table: the closest to spot within the range that have open interest or an ask, in strike order."""
+    candidates = {strike for strike, _ in quotes
+                  if abs(strike - spot) <= CHAIN_RANGE_FRACTION * spot
+                  and any(quotes.get((strike, kind)) and (quotes[(strike, kind)].open_interest > 0 or quotes[(strike, kind)].ask_usd)
+                          for kind in ("call", "put"))}
+    return sorted(sorted(candidates, key=lambda strike: abs(strike - spot))[:CHAIN_ROWS])
+
+
+def _chain_table(quotes: Dict[Tuple[float, str], LegQuote], strikes: List[float]) -> List[str]:
     lines = ["strike | call bid / ask / IV% / OI | put bid / ask / IV% / OI   (USD per coin, OI in coins; - = no quote)"]
-    for strike in sorted(strikes):
+    for strike in strikes:
         cells = []
         for kind in ("call", "put"):
             quote = quotes.get((strike, kind))
@@ -117,6 +127,8 @@ def build_expiry_facts(result: OnChainAnalysisResult, expiration: str) -> Expiry
         skew = [[entry.expiration, number_text(entry.atm_iv_interp, 1, "%"), number_text(entry.rr_25d, 2), number_text(entry.bf_25d, 2)]
                 for entry in market.skew_term_structure.entries if entry.expiration == expiration]
         lines += _rows("Skew of this expiry (expiry, ATM IV, 25d risk reversal, 25d butterfly)", skew or [["not computed"]])
-    quotes = _quotes(bundle, spot)
-    lines += ["## Chain (the only strikes you may use are the ones listed)"] + _chain_table(quotes, spot)
+    all_quotes = _quotes(bundle, spot)
+    strikes = _shown_strikes(all_quotes, spot)
+    quotes = {key: quote for key, quote in all_quotes.items() if key[0] in strikes}        # only what the model was shown may be used
+    lines += ["## Chain (the only strikes you may use are the ones listed)"] + _chain_table(quotes, strikes)
     return ExpiryFacts(result.currency, expiration, spot, "\n".join(lines), quotes)

@@ -10,7 +10,7 @@ import pytest
 from coding.core.database.config import ConnectionPool, DatabaseConfig
 from coding.core.database.repository import DatabaseRepository
 
-MIGRATION = Path(__file__).parents[2] / "migrations" / "038_add_strategy_suggestions.sql"
+MIGRATIONS = [Path(__file__).parents[2] / "migrations" / name for name in ("038_add_strategy_suggestions.sql", "039_strategy_suggestions_facts_as_of.sql")]
 
 
 @pytest.fixture
@@ -29,7 +29,8 @@ def repo():
     scratch_connection = dict(base_connection, database=scratch_name)
     with psycopg2.connect(**scratch_connection) as connection:
         with connection.cursor() as cursor:
-            cursor.execute(MIGRATION.read_text(encoding="utf-8"))
+            for migration in MIGRATIONS:
+                cursor.execute(migration.read_text(encoding="utf-8"))
     ConnectionPool().close_all()
     repository = DatabaseRepository(config=DatabaseConfig(
         host=scratch_connection["host"], port=scratch_connection["port"], database=scratch_name,
@@ -45,6 +46,7 @@ def repo():
 
 def row(**overrides):
     return {"currency": "BTC", "expiration": "27NOV26", "computed_at": datetime(2026, 11, 21, 12, 0, tzinfo=timezone.utc),
+            "facts_as_of": datetime(2026, 11, 21, 11, 30, tzinfo=timezone.utc),
             "reference_price": 58000.0, "model": "claude-opus-5-5", "status": "ok", "facts": "facts", "response": "{}",
             "net_premium_usd": -581.0, "input_tokens": 3000, "output_tokens": 3000, "cache_read_tokens": 0,
             "cache_write_tokens": 0, "cost_usd": 0.06, "request_id": "req_1", **overrides}
@@ -61,3 +63,5 @@ def test_rows_are_added_and_their_cost_is_summed(repo):
 def test_a_naive_time_is_refused(repo):
     with pytest.raises(ValueError):
         repo.save_strategy_suggestion(row(computed_at=datetime(2026, 11, 21, 12, 0)))
+    with pytest.raises(ValueError):
+        repo.save_strategy_suggestion(row(facts_as_of=datetime(2026, 11, 21, 11, 30)))

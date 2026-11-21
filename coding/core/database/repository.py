@@ -1392,7 +1392,7 @@ class DatabaseRepository:
         Store one answer of the model (migration 038); rows are only added.
 
         Args:
-            row: currency, expiration, computed_at (timezone-aware UTC), reference_price, model, status, facts, response,
+            row: currency, expiration, computed_at and facts_as_of (timezone-aware UTC), reference_price, model, status, facts, response,
                 net_premium_usd (None allowed), input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd,
                 request_id (None allowed).
 
@@ -1400,17 +1400,17 @@ class DatabaseRepository:
             The id of the new row.
 
         Raises:
-            ValueError: for a naive ``computed_at``.
+            ValueError: for a naive ``computed_at`` or ``facts_as_of``.
         """
-        if row["computed_at"].tzinfo is None:
-            raise ValueError("computed_at must be timezone-aware (UTC)")
+        if row["computed_at"].tzinfo is None or row["facts_as_of"].tzinfo is None:
+            raise ValueError("computed_at and facts_as_of must be timezone-aware (UTC)")
         with self._db_cursor() as cursor:
             cursor.execute(
                 """
                 INSERT INTO strategy_suggestions (
-                    currency, expiration, computed_at, reference_price, model, status, facts, response, net_premium_usd,
+                    currency, expiration, computed_at, facts_as_of, reference_price, model, status, facts, response, net_premium_usd,
                     input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, request_id)
-                VALUES (%(currency)s, %(expiration)s, %(computed_at)s, %(reference_price)s, %(model)s, %(status)s, %(facts)s,
+                VALUES (%(currency)s, %(expiration)s, %(computed_at)s, %(facts_as_of)s, %(reference_price)s, %(model)s, %(status)s, %(facts)s,
                         %(response)s, %(net_premium_usd)s, %(input_tokens)s, %(output_tokens)s, %(cache_read_tokens)s,
                         %(cache_write_tokens)s, %(cost_usd)s, %(request_id)s)
                 RETURNING id
