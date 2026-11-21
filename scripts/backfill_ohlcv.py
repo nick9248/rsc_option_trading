@@ -4,7 +4,8 @@ OHLCV History Backfill Script
 Fetches 2 years of daily candles from Deribit for BTC-PERPETUAL and
 ETH-PERPETUAL and inserts them into ohlcv_history.
 
-Safe to re-run — uses ON CONFLICT DO NOTHING.
+Safe to re-run: a candle already stored is OVERWRITTEN with Deribit's current version (this is also the repair of the daily candles that the
+collector froze at the first minutes of each day from 2026-03-15 to 2026-11-21: run it once after the fix).
 
 Usage:
     python -m scripts.backfill_ohlcv
@@ -67,6 +68,9 @@ def backfill_currency(api: DeribitApiService, repo: DatabaseRepository, currency
 
     inserted = 0
     for i, ts_ms in enumerate(ticks):
+        if any(i >= len(series) or series[i] is None for series in (opens, highs, lows, closes, volumes)):
+            logger.warning(f"Incomplete candle at {ts_ms}: skipped")
+            continue
         try:
             dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).replace(tzinfo=None)
             repo.save_ohlcv(
@@ -74,11 +78,11 @@ def backfill_currency(api: DeribitApiService, repo: DatabaseRepository, currency
                 instrument_name=instrument,
                 timestamp=ts_ms,
                 date=dt,
-                open_price=float(opens[i]) if i < len(opens) else 0.0,
-                high=float(highs[i]) if i < len(highs) else 0.0,
-                low=float(lows[i]) if i < len(lows) else 0.0,
-                close=float(closes[i]) if i < len(closes) else 0.0,
-                volume=float(volumes[i]) if i < len(volumes) else 0.0
+                open_price=float(opens[i]),
+                high=float(highs[i]),
+                low=float(lows[i]),
+                close=float(closes[i]),
+                volume=float(volumes[i])
             )
             inserted += 1
         except Exception as e:

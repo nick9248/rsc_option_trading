@@ -142,3 +142,20 @@ def test_realised_volatility_ignores_gaps_in_the_candles():
     assert realised_volatility(closes, 30) == pytest.approx(0.01 * (365 ** 0.5), rel=0.05)         # alternating +1% and -1%: a daily standard deviation of about 1%
     gapped = [candle for index, candle in enumerate(closes) if index % 2 == 0]
     assert realised_volatility(gapped, 30) is None
+
+
+def test_a_candle_is_used_only_when_its_day_is_over_and_settled():
+    from coding.core.analytics.realised_volatility import last_completed_candle_start
+    # the candle starting 2026-10-19 08:00 UTC finishes at 2026-10-20 08:00; the collector's last refresh is certainly in by 09:00
+    assert last_completed_candle_start(datetime(2026, 10, 20, 9, tzinfo=timezone.utc)) == datetime(2026, 10, 19, 8)
+    assert last_completed_candle_start(datetime(2026, 10, 20, 8, 59, tzinfo=timezone.utc)) == datetime(2026, 10, 19, 7, 59)       # a minute earlier: the candle of 18 Oct is the newest
+    assert last_completed_candle_start(datetime(2026, 10, 20, 10, tzinfo=timezone(timedelta(hours=1)))) == datetime(2026, 10, 19, 8)
+    with pytest.raises(ValueError):
+        last_completed_candle_start(datetime(2026, 10, 20, 8))
+
+
+def test_the_facts_read_candles_up_to_the_last_complete_one_and_not_the_running_candle():
+    service, repository = make_service()
+    build(service)
+    start, end = repository.get_ohlcv_by_date_range.call_args.args[1:3]
+    assert end == AS_OF.replace(tzinfo=None) - timedelta(days=1, hours=1) and start < end

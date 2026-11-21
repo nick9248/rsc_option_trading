@@ -10,7 +10,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
-from coding.core.analytics.realised_volatility import realised_volatility
+from coding.core.analytics.realised_volatility import last_completed_candle_start, realised_volatility
 from coding.core.analytics.strategy_pipeline.facts import MAX_SNAPSHOT_AGE_HOURS, FactsV1
 from coding.core.analytics.menthorq_replication_calculator import parse_expiry_settlement
 from coding.core.database.repository import DatabaseRepository
@@ -125,7 +125,7 @@ class FactsAsOfService:
         return latest, 100.0 * sum(1 for value in closes if value <= latest) / len(closes)
 
     def _realised(self, currency: str, as_of: datetime, days: int) -> Optional[float]:
-        """Realised volatility of the last ``days`` daily returns that had finished before the day of ``as_of``."""
-        day_start = datetime.combine(as_of.astimezone(timezone.utc).date(), datetime.min.time())     # the UTC day; naive: the repository takes naive UTC
-        candles = self.repository.get_ohlcv_by_date_range(currency, day_start - timedelta(days=days + 15), day_start - timedelta(seconds=1))
+        """Realised volatility of the last ``days`` daily returns of the candles that were complete at ``as_of`` (the running candle is never used)."""
+        end = last_completed_candle_start(as_of)
+        candles = self.repository.get_ohlcv_by_date_range(currency, end - timedelta(days=days + 15), end)
         return realised_volatility(candles, days)
