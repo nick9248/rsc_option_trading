@@ -7,7 +7,7 @@ settles in the money.
 """
 
 from dataclasses import dataclass
-from typing import Dict, Mapping, Optional, Tuple
+from typing import Callable, Dict, Mapping, Optional, Tuple
 
 import numpy as np
 
@@ -16,7 +16,10 @@ from coding.core.analytics.backtest.fees import (
 from coding.core.analytics.candidates.distribution import LognormalDistribution
 from coding.core.analytics.candidates.generator import Candidate
 from coding.core.analytics.charts.payoff import PayoffLeg, summarize_payoff
+from coding.core.analytics.risk.venue import FeeSchedule, Venue
 
+MAX_SIZE_ITERATIONS = 6
+"""Repeats of the size search of ``metrics_at_venue_size`` (it converges in two or three)."""
 TAIL_FRACTION = 0.05
 """The tail loss is the average PnL of the worst 5% of outcomes."""
 
@@ -46,6 +49,8 @@ class CandidateMetrics:
     """After trading fees, before delivery fees; positive."""
     breakevens: Tuple[float, ...]
     by_distribution: Dict[str, DistributionMetrics]
+    quantity: Optional[float] = None
+    """The position size (coins per leg) the per-coin fees assume (a venue's base fee is per order); None: one coin, Deribit fees."""
 
     @property
     def market_expected_pnl_usd(self) -> float:
@@ -57,9 +62,15 @@ class CandidateMetrics:
         return -(self.spread_cost_usd + self.trading_fees_usd)
 
 
-def pnl_on_grid(candidate: Candidate, spot: float, prices: np.ndarray) -> np.ndarray:
-    """PnL (USD, one coin per leg) at each settlement price: entry cash, minus trading fees, plus payoff, minus delivery fees."""
-    pnl = np.full_like(prices, candidate.entry_cash_usd - sum(trading_fee_usd(spot, leg.entry_price_usd) for leg in candidate.legs))
+def pnl_on_grid(candidate: Candidate, spot: float, prices: np.ndarray, leg_fee: Optional[Callable[[float], float]] = None) -> np.ndarray:
+    """
+    PnL (USD, one coin per leg) at each settlement price: entry cash, minus trading fees, plus payoff, minus delivery fees.
+
+    Args:
+        leg_fee: Trading fee per coin of a leg as a function of its entry price; None: the Deribit schedule.
+    """
+    fee_of = leg_fee or (lambda price: trading_fee_usd(spot, price))
+    pnl = np.full_like(prices, candidate.entry_cash_usd - sum(fee_of(leg.entry_price_usd) for leg in candidate.legs))
     for leg in candidate.legs:
         intrinsic = np.maximum(prices - leg.strike, 0.0) if leg.option_type == "call" else np.maximum(leg.strike - prices, 0.0)
         pnl += (intrinsic if leg.action == "buy" else -intrinsic)
@@ -77,14 +88,26 @@ def _distribution_metrics(pnl: np.ndarray, weights: np.ndarray) -> DistributionM
     return DistributionMetrics(float(weights[pnl > 0].sum()), float((pnl * weights).sum()), tail_loss)
 
 
-def compute_metrics(candidate: Candidate, spot: float, distributions: Mapping[str, LognormalDistribution]) -> CandidateMetrics:
+def compute_metrics(candidate: Candidate, spot: float, distributions: Mapping[str, LognormalDistribution],
+                    fee_schedule: Optional[FeeSchedule] = None, quantity: float = 1.0) -> CandidateMetrics:
     """
     Cost, risk and expected result of a candidate.
+
+    Args:
+        fee_schedule: A venue's taker fees; None: the Deribit schedule, one coin (the research default).
+        quantity: With a fee schedule, the position size in coins per leg: its base fee per order is spread over this many coins.
 
     Raises:
         ValueError: when the candidate's loss is unlimited (only defined-risk structures are scored; an unlimited profit is allowed).
     """
-    fees = sum(trading_fee_usd(spot, leg.entry_price_usd) for leg in candidate.legs)
+    leg_fee: Optional[Callable[[float], float]] = None
+    if fee_schedule is None:
+        fees = sum(trading_fee_usd(spot, leg.entry_price_usd) for leg in candidate.legs)
+    else:
+        def venue_leg_fee(price: float) -> float:
+            return fee_schedule.fee_per_coin_usd(spot, price, quantity)
+        leg_fee = venue_leg_fee
+        fees = sum(venue_leg_fee(leg.entry_price_usd) for leg in candidate.legs)
     summary = summarize_payoff([PayoffLeg(leg.action, leg.option_type, leg.strike, 1.0) for leg in candidate.legs],
                                candidate.entry_cash_usd - fees)
     if summary.max_loss_usd is None:
@@ -92,6 +115,31 @@ def compute_metrics(candidate: Candidate, spot: float, distributions: Mapping[st
     by_distribution = {}
     for name, distribution in distributions.items():
         prices, weights = distribution.grid()
-        by_distribution[name] = _distribution_metrics(pnl_on_grid(candidate, spot, prices), weights)
+        by_distribution[name] = _distribution_metrics(pnl_on_grid(candidate, spot, prices, leg_fee), weights)
     return CandidateMetrics(candidate.entry_cash_usd, candidate.mid_cash_usd - candidate.entry_cash_usd, fees, summary.max_profit_usd,
-                            summary.max_loss_usd, summary.breakevens, by_distribution)
+                            summary.max_loss_usd, summary.breakevens, by_distribution,
+                            None if fee_schedule is None else quantity)
+
+
+def metrics_at_venue_size(candidate: Candidate, spot: float, distributions: Mapping[str, LognormalDistribution], venue: Venue,
+                          risk_per_trade_usd: float) -> Optional[CandidateMetrics]:
+    """
+    The metrics of the candidate at the largest size the venue allows whose maximum loss stays within the risk per trade, fees at that size.
+
+    The base fee per order falls per coin as the size grows, so the size is found by repeating: start at the minimum order, size from the loss
+    it gives, recompute. The sizes only grow, so the loss never ends above the limit.
+
+    Returns:
+        The metrics (with ``quantity``), or None when even the venue's minimum order risks more than ``risk_per_trade_usd``.
+    """
+    quantity = venue.minimum_amount
+    metrics = compute_metrics(candidate, spot, distributions, venue.taker_fees, quantity)
+    if metrics.max_loss_usd * quantity > risk_per_trade_usd:
+        return None
+    for _ in range(MAX_SIZE_ITERATIONS):
+        larger = venue.floor_to_step(risk_per_trade_usd / metrics.max_loss_usd)
+        if larger <= quantity:
+            break
+        quantity = larger
+        metrics = compute_metrics(candidate, spot, distributions, venue.taker_fees, quantity)
+    return metrics

@@ -199,7 +199,7 @@ def _card(pick: StoredPick, now_utc: datetime, role: str = "") -> Tuple[str, Dic
         warnings.insert(0, "The model declined to answer this request.")
         body += paragraph_fragment(pick.response[:RAW_TEXT_LIMIT], "note-s")
     elif pick.status == "no_candidates":
-        warnings.insert(0, "The chain offered no usable candidate for this expiry.")
+        warnings.insert(0, "No candidate fits this expiry: none could be placed within the loss budget and the venue minimum order with a positive expected result after fees. The model was not asked (no cost).")
     else:
         warnings.insert(0, "The answer of the model was not usable (not in the expected form, or not a candidate of the shortlist).")
         body += paragraph_fragment(pick.response[:RAW_TEXT_LIMIT], "note-s")

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Callable, Optional, Set
 
 from coding.core.analytics.risk.budget import RiskBudget
+from coding.core.analytics.risk.venue import DERIVE_VENUES
 from coding.service.strategy_pipeline.strategy_pick_service import MODE_LIVE, StrategyPickService
 
 logger = logging.getLogger(__name__)
@@ -91,4 +92,5 @@ def build_live_pick_runner() -> LivePickRunner:
     api_key = os.environ.get("claude_api_key")
     if not api_key:
         raise RuntimeError("claude_api_key is not set in .env")
-    return LivePickRunner(StrategyPickService(DatabaseRepository(), anthropic.Anthropic(api_key=api_key), risk_budget=RiskBudget(LIVE_CAPITAL_USD)))
+    return LivePickRunner(StrategyPickService(DatabaseRepository(), anthropic.Anthropic(api_key=api_key), risk_budget=RiskBudget(LIVE_CAPITAL_USD),
+                                                 venues=DERIVE_VENUES))

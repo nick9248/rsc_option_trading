@@ -42,3 +42,15 @@ paid. A missing key, an exhausted budget or an API error fails only that step; t
 pipeline-1: the shortlist showed a flat-volatility "implied view" that ignored skew (the model read it as fair value). pipeline-2: the market view is exact
 (minus costs). Replay of 30 instants (2026-08-30 to 10-27): pipeline-1 model -0.27 R, pipeline-2 -0.36 R, average candidate -0.04, baseline top-1 -0.54 to -0.59:
 no evidence yet that the model beats the average candidate.
+
+## Venue (Derive) and method pipeline-3
+Positions are traded on Derive; prices come from the Deribit chain the collector stores (a fair proxy: at matching strikes Derive's spreads were 0.86 to 0.92
+times Deribit's on 2026-11-21; Derive quotes fewer strikes). Live picks use the Derive rules (`risk/venue.py`, source docs.derive.xyz and
+`public/get_all_instruments`, read 2026-11-21): BTC minimum order 0.01 (step 0.00001), ETH 0.1 (step 0.01); taker fee 0.5 USD per order + min(0.03% x notional,
+12.5% x premium), one order per leg. Not modelled: maker orders (no base fee, may not fill), RFQ discounts (fee waived on the cheaper leg of a spread), tiers; the
+delivery fee is the Deribit rate (not confirmed for Derive). So costs are an upper bound.
+- Candidates: spreads from 0.4% of spot wide are tried (the research default starts at 2%); each is sized to the largest allowed size whose maximum loss is within the
+  risk per trade (fees at that size, because the base fee per order is spread over fewer coins at a small size); one whose minimum order risks more is dropped.
+- Only candidates with a positive expected result under the realised-volatility view stay; with none left, the model is not asked (no cost) and the tab says so.
+- On the 2026-11-21 chain with a 150 USD account (7.5 USD per trade) only single long calls and puts passed the 15% cost filter and all had a clearly negative
+  expectation: the answer of the pipeline for such an account is "no trade". Replay (research, Deribit fees, fractions of a coin) is unchanged.
