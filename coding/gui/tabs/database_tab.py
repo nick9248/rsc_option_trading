@@ -108,7 +108,6 @@ class DatabaseTab(QWidget):
 
         controls_layout.addStretch()
 
-
         # Sync from VPS button
         self.sync_vps_btn = QPushButton("Sync from VPS")
         self.sync_vps_btn.setStyleSheet(f"""
