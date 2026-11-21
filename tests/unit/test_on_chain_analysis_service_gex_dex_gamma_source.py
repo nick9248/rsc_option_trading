@@ -173,6 +173,55 @@ class TestGreeksAreComputedLocally:
         assert aggregate_result.oi_missing_gamma == pytest.approx(100.0)
 
 
+    def test_an_instrument_without_its_own_forward_uses_the_expiry_forward_then_the_index(self, frozen_clock):
+        frozen_clock(_FROZEN_EPOCH)
+        service = _make_service()
+        analyzer = _FakeAnalyzer(
+            currency="BTC", index_price=95000.0,
+            parsed_data={"31DEC26": [_instrument("BTC-31DEC26-50000-C", 50000.0, "C", forward=None),
+                                     _instrument("BTC-31DEC26-51000-C", 51000.0, "C", forward=None)]},
+        )
+        analyzer.forward_price_by_expiration = {"31DEC26": 95800.0}
+
+        service._fetch_greeks_and_store_gex_dex(analyzer, progress_callback=lambda msg: None)
+        with_expiry_forward = analyzer.enriched_instruments["31DEC26"]
+        assert all(item["delta"] is not None and item["underlying_price"] == 95800.0 for item in with_expiry_forward)
+
+        analyzer.forward_price_by_expiration = {}
+        analyzer.enriched_instruments = {}
+        service._fetch_greeks_and_store_gex_dex(analyzer, progress_callback=lambda msg: None)
+        assert all(item["delta"] is not None and item["underlying_price"] == 95000.0 for item in analyzer.enriched_instruments["31DEC26"])
+
+    def test_an_all_zero_answer_of_the_calculator_is_not_computed_not_four_zeros(self, frozen_clock):
+        frozen_clock(_FROZEN_EPOCH)
+        service = _make_service()
+        analyzer = _FakeAnalyzer(currency="BTC", index_price=95000.0,
+                                 parsed_data={"31DEC26": [_instrument("BTC-31DEC26-50000-C", 50000.0, "C", oi=100.0)]})
+        zeros = {"delta": 0.0, "gamma": 0.0, "theta": 0.0, "vega": 0.0, "rho": 0.0}   # what its blanket except returns
+
+        with patch.object(BlackScholesCalculator, "calculate_greeks", return_value=zeros):
+            aggregate_result, _ = service._fetch_greeks_and_store_gex_dex(analyzer, progress_callback=lambda msg: None)
+
+        enriched = analyzer.enriched_instruments["31DEC26"][0]
+        assert (enriched["delta"], enriched["vega"], enriched["theta"], enriched["gamma"]) == (None, None, None, None)
+        assert aggregate_result.instruments_missing_gamma == 1
+
+    def test_a_settled_instrument_is_not_part_of_the_book_and_not_counted_missing(self, frozen_clock):
+        frozen_clock(_FROZEN_EPOCH)                              # 2026-01-01 00:00 UTC: 31DEC25 08:00 UTC has passed
+        service = _make_service()
+        analyzer = _FakeAnalyzer(
+            currency="BTC", index_price=95000.0,
+            parsed_data={"31DEC25": [_instrument("BTC-31DEC25-50000-C", 50000.0, "C", oi=500.0)],
+                         "31DEC26": [_instrument("BTC-31DEC26-50000-C", 50000.0, "C", oi=100.0)]},
+        )
+
+        aggregate_result, _ = service._fetch_greeks_and_store_gex_dex(analyzer, progress_callback=lambda msg: None)
+
+        assert "31DEC25" not in analyzer.enriched_instruments
+        assert len(analyzer.enriched_instruments["31DEC26"]) == 1
+        assert aggregate_result.instruments_missing_gamma == 0
+
+
 def _fail_for(*names):
     """A replacement for _compute_bs_gamma that raises for the named instruments (an unexpected error while processing one)."""
     real = OnChainAnalysisService._compute_bs_gamma

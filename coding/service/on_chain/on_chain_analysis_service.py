@@ -1457,6 +1457,12 @@ class OnChainAnalysisService:
         )
         return calc["gamma"] if calc is not None else None
 
+    @staticmethod
+    def _is_settled(bs_calculator: BlackScholesCalculator, item: Dict[str, Any], now_utc: datetime) -> bool:
+        """True when the instrument is parseable and its 08:00 UTC settlement has passed."""
+        parsed = bs_calculator.parse_instrument_name(item.get("instrument_name", ""))
+        return parsed is not None and now_utc.replace(tzinfo=None) >= parsed["expiry_time"]
+
     def _fetch_greeks_and_store_gex_dex(
         self,
         analyzer: OnChainMetricsCalculator,
@@ -1508,6 +1514,12 @@ class OnChainAnalysisService:
             if not instruments:
                 continue
 
+            # Contracts past their 08:00 UTC settlement can stay in the book summary for a few minutes: they have no Greeks
+            # to compute and are not part of the book.
+            instruments = [item for item in instruments if not self._is_settled(bs_calculator, item, fixed_strike_vol_now_utc)]
+            if not instruments:
+                continue
+
             progress_callback(f"Computing Greeks for {expiration} ({len(instruments)} instruments)...")
 
             # Every Greek is computed here from the book summary's mark_iv (Black-Scholes on the expiry's forward for delta,
@@ -1525,7 +1537,9 @@ class OnChainAnalysisService:
             for item in instruments:
                 try:
                     mark_iv = item.get("mark_iv")
-                    forward_price = item.get("underlying_price")
+                    # The instrument's own forward, else the expiry's, else the index (the ticker path had the same fallback).
+                    forward_price = (item.get("underlying_price") or analyzer.forward_price_by_expiration.get(expiration)
+                                     or analyzer.index_price)
                     greeks = bs_calculator.calculate_greeks_safe(
                         item, mark_iv, forward_price, fixed_strike_vol_now_utc,
                         max_sane_mark_iv_pct=_MAX_SANE_MARK_IV_PCT,
@@ -1538,7 +1552,7 @@ class OnChainAnalysisService:
                     item_with_greeks["mark_iv"] = mark_iv
                     # Anchors: the expiry's forward for the option Greeks; the index for gamma and for GEX's S^2 term
                     # (bugfix_spec.md Item 7).
-                    item_with_greeks["underlying_price"] = forward_price or analyzer.index_price
+                    item_with_greeks["underlying_price"] = forward_price
                     # RR25/BF25's "quoted" filter needs the quotes; the book summary has them for every instrument.
                     item_with_greeks["bid_price"] = item.get("bid_price")
                     item_with_greeks["ask_price"] = item.get("ask_price")

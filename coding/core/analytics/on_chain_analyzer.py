@@ -238,8 +238,8 @@ class OnChainMetricsCalculator:
 
         Groups by expiry parsed from ``instrument_name`` (mirrors
         ``parse_instruments``'s own parsing, done separately here because
-        ``parse_instruments`` drops ``underlying_price`` from its parsed
-        shape) and applies the shared ``select_forward_price`` pick --
+        ``parse_instruments`` keeps each instrument's own ``underlying_price``
+        but not the per-expiry pick this method makes) and applies the shared ``select_forward_price`` pick --
         the same highest-volume-in-group logic
         ``DeribitApiService.get_option_chain_snapshot`` uses for its own
         ``futures_by_expiry`` (bugfix_spec.md F7.3.1: shared helper, not a
