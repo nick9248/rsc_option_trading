@@ -212,3 +212,18 @@ def test_latest_capture_is_the_newest_at_or_before_as_of_without_loading_rows(re
     assert repository.get_latest_option_chain_capture_at_or_before("BTC", AS_OF - timedelta(minutes=1)) == \
         AS_OF - timedelta(minutes=40)
     assert repository.get_latest_option_chain_capture_at_or_before("ETH", AS_OF) is None
+
+
+def test_settlement_price_is_the_mean_index_of_the_trades_in_the_last_30_minutes(repo):
+    repository, scratch_connection = repo
+    settlement = datetime(2026, 11, 6, 8, tzinfo=timezone.utc)
+    _insert_trades(scratch_connection, [
+        ("a", settlement - timedelta(minutes=31), "BTC", 1000.0),          # before the window
+        ("b", settlement - timedelta(minutes=20), "BTC", 100.0),
+        ("c", settlement - timedelta(minutes=1), "BTC", 200.0),
+        ("d", settlement, "BTC", 300.0),                                  # the settlement instant itself is inside
+        ("e", settlement + timedelta(seconds=1), "BTC", 9000.0),          # after: never looked at
+        ("f", settlement - timedelta(minutes=5), "ETH", 5000.0),          # another currency
+    ])
+    assert repository.get_settlement_index_price("BTC", settlement) == (200.0, 3)
+    assert repository.get_settlement_index_price("BTC", settlement - timedelta(days=3)) is None
