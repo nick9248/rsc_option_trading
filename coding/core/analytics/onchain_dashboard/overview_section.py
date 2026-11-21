@@ -9,6 +9,7 @@ from typing import List, Optional
 from coding.core.analytics.historical_normalizer import HistoricalNormalizer, NormalizedMetric
 from coding.core.analytics.onchain_dashboard.expiry_section import key_level_rows, ordered_bundles
 from coding.core.analytics.onchain_dashboard.formatting import (
+    has_open_interest,
     count_text, fraction_percent_text, number_text, percent_text, ratio_text, strike_text, text_or_missing, utc_text)
 from coding.core.analytics.report.report_page import ReportSection, paragraph_fragment, table_fragment
 from coding.core.analytics.report.section_fragments import NOT_COMPUTED
@@ -55,11 +56,6 @@ def normalized_metric_rows(result: OnChainAnalysisResult) -> List[List[str]]:
                     + _regime_cell(metric, "30d") + [text_or_missing(metric.regime_30d) if metric.sufficient else NOT_COMPUTED]
                     + _regime_cell(metric, "90d"))
     return rows
-
-
-def has_open_interest(ratio) -> bool:
-    """False for an expiry nobody has opened a position in (new listing): its put/call ratio is then undefined, not 0."""
-    return (ratio.total_call_oi + ratio.total_put_oi) > 0
 
 
 def expiry_comparison_rows(result: OnChainAnalysisResult) -> List[List[str]]:
