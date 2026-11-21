@@ -13,10 +13,10 @@ from coding.core.analytics.levels_table_builder import build_levels_table
 from coding.core.analytics.menthorq_replication_calculator import parse_expiry_settlement
 from coding.core.analytics.onchain_dashboard.formatting import (
     BLUE, GRAY, GREEN, ORANGE, PURPLE, RED, add_markers, clean, clean_all, count_text, empty_figure, has_values,
-    number_text, percent_text, ratio_text, strike_text, text_or_missing, usd_text)
+    number_text, percent_text, ratio_text, strike_text, text_or_missing, usd_text, utc_text)
 from coding.core.analytics.report.figure_style import figure_json
 from coding.core.analytics.report.report_page import (
-    ReportSection, SwitcherControl, format_utc, paragraph_fragment, switcher_configuration, switcher_fragment, table_fragment,
+    ReportSection, SwitcherControl, paragraph_fragment, switcher_configuration, switcher_fragment, table_fragment,
     view_key)
 from coding.core.analytics.report.section_fragments import NOT_COMPUTED
 from coding.core.analytics.results.analysis_result import ExpirationBundle, OnChainAnalysisResult
@@ -402,7 +402,7 @@ def delta_flow_window_text(result: OnChainAnalysisResult) -> str:
     """The window behind the delta-adjusted flow: its length, how many hourly rows exist, and since when it is stale."""
     text = f"{result.delta_flow_lookback_hours:g} h, {result.delta_flow_hours_present} hourly rows persisted"
     if result.delta_flow_stale_since is not None:
-        text += f"; STALE: the newest row is from {format_utc(result.delta_flow_stale_since)}"
+        text += f"; STALE: the newest row is from {utc_text(result.delta_flow_stale_since)}"
     return text
 
 

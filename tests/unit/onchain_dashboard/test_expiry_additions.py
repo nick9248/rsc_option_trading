@@ -111,9 +111,10 @@ def test_a_missing_delta_flow_is_not_computed_and_not_zero(bundle_with_surface):
 def test_the_delta_flow_window_says_how_much_data_there_is_and_when_it_is_stale(real_result):
     assert delta_flow_window_text(dataclasses.replace(real_result, delta_flow_lookback_hours=24.0, delta_flow_hours_present=3,
                                                       delta_flow_stale_since=None)) == "24 h, 3 hourly rows persisted"
-    stale = datetime(2026, 11, 20, 12, 0, tzinfo=timezone.utc)
-    text = delta_flow_window_text(dataclasses.replace(real_result, delta_flow_stale_since=stale))
-    assert "STALE" in text and "2026-11-20 12:00 UTC" in text
+    # the service stores the newest hour as a NAIVE UTC datetime (a real run failed on this); an aware one must work too
+    for stale in (datetime(2026, 11, 20, 12, 0), datetime(2026, 11, 20, 12, 0, tzinfo=timezone.utc)):
+        text = delta_flow_window_text(dataclasses.replace(real_result, delta_flow_stale_since=stale))
+        assert "STALE" in text and "2026-11-20 12:00 UTC" in text
 
 
 def test_an_empty_moneyness_bucket_is_said_to_be_empty_not_zero(bundle_with_surface):
