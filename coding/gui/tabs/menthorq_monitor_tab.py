@@ -86,7 +86,7 @@ logger = logging.getLogger(__name__)
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_OUTPUT_BASE_DIRECTORY = REPOSITORY_ROOT / "output" / "menthorq_replicate" / "gui" / "monitor"
-REFERENCE_DIRECTORY = REPOSITORY_ROOT / "output" / "menthorq_replicate"
+REFERENCE_DIRECTORY = REPOSITORY_ROOT / "tests" / "fixtures" / "menthorq"
 
 # The replication service's and the monitor package's messages go to this tab's log.
 GUI_LOG_LOGGER_NAMES = ("coding.service.on_chain.menthorq_replication_service",
