@@ -8,13 +8,14 @@ Rewritten 2026-11-14. The "Flow Charts" window (button "View Flow Charts" in the
 
 - the per-strike net taker flow in the Levels table,
 - the flow signals in the synthesis (net sentiment, trend, data-sufficiency gate),
-- the flow section of the report,
-- three HTML charts per expiration saved under `output/charts/flow_analysis/<expiration>/` (distribution, net flow, trend).
+- the flow section of the report (`report.txt`).
 
-Its definitions differ from the Option flow section of the report: notional = amount x index price; "block" = a trade with notional of at least $100k (not Deribit's block flag). Replacing it would change the synthesis inputs and thresholds, so it needs a separate decision.
+The three HTML charts per expiration that used to be saved under `output/charts/flow_analysis/` were removed on 2026-11-21: neither dashboard used them. On the same trades and window its contracts per strike, option type and side are identical to the Option flow section (checked on 6 expiries of the local database); only the two definitions below differ.
+
+Its definitions differ from the Option flow section of the report: notional = amount x index price; "block" = a trade with notional of at least $100k (not Deribit's block flag). On 14,740 trades of one 24 h window only 408 carried a `block_trade_id`, while this rule called 3,873 "block": it never misses a real block but is about 9 times too wide, so its block split should not be trusted. Replacing it would change the synthesis inputs and thresholds, so it needs a separate decision.
 
 ## Tests
 
 - `tests/unit/test_buy_sell_flow_analyzer.py`
 - `tests/unit/test_on_chain_analysis_service_flow.py`, `test_on_chain_analysis_service_flow_window_utc.py`
-- `tests/unit/test_repository_flow_analysis_trades.py`, `test_repository_hourly_flow_volumes.py`
+- `tests/unit/test_repository_flow_analysis_trades.py`

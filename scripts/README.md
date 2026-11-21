@@ -36,4 +36,3 @@ Run every script from the repo root, for example `.venv\Scripts\python -m script
 | Script | What it does |
 |--------|--------------|
 | `record_onchain_fixture.py` | Records live API and DB responses as the fixture for the on-chain golden-master test. Not a routine script. |
-| `cleanup_expired_charts.py` | Removes chart folders in `output/charts/` for expirations Deribit no longer lists. |

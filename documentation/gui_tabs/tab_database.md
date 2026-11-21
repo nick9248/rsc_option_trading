@@ -9,7 +9,6 @@ Earlier versions of this tab also had "Capture" tiles and a "Capture All" button
 ## Controls
 
 - **Sync from VPS**: runs `VpsSyncService.sync()` in a background thread and logs the progress and a summary. While it runs the button reads "Syncing...".
-- **Open Charts Folder**: opens `output/charts/` in the file browser.
 - A log area with the output.
 
 ## Architecture
