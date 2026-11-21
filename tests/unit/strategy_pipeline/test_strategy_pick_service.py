@@ -28,6 +28,7 @@ def make_service(reply_choice="C1", spent=0.0, stored=None, mode_reply=None):
     repository.get_total_model_spend.return_value = spent
     repository.get_strategy_picks.return_value = stored or []
     repository.save_strategy_pick.return_value = 11
+    repository.save_strategy_pick_evaluation.return_value = True
     client = MagicMock()
     client.messages.create.return_value = mode_reply
     service = StrategyPickService(repository, client, RiskBudget(10_000.0))
@@ -36,7 +37,8 @@ def make_service(reply_choice="C1", spent=0.0, stored=None, mode_reply=None):
 
 def reply_for(service, choice_index=0, **overrides):
     """A model reply choosing the n-th shortlisted candidate (the shortlist is built from the same fake data)."""
-    entry, facts, shortlist = service._shortlist_for("BTC", AS_OF, MODE_REPLAY, 7.0, 2.0, None, NOW)
+    entry, _ = service._entry_for("BTC", AS_OF, MODE_REPLAY, 7.0, 2.0, None, NOW)
+    _, shortlist = service._shortlist_for("BTC", AS_OF, entry, NOW)
     ids = [item.candidate_id for item in shortlist]
     ranking = [ids[choice_index]] + [value for value in ids if value != ids[choice_index]]
     body = {"choice": ids[choice_index], "ranking": ranking, "view": "range_bound", "summary": "s", "reasons": ["r"], "risks": ["k"],
@@ -105,6 +107,24 @@ def test_an_instant_already_stored_is_returned_without_a_call():
     assert result.stored_before and result.row_id == 4 and result.cost_usd == 0.0
     client.messages.create.assert_not_called()
     repository.save_strategy_pick.assert_not_called()
+    assert repository.get_strategy_picks.call_args.kwargs["as_of"] == AS_OF                  # a replay instant is looked up exactly
+
+
+def test_a_live_pick_is_not_repeated_within_an_hour_for_the_same_expiry():
+    service, client, repository = make_service(stored=[{"id": 4, "status": "ok", "choice": "C3", "quantity": 0.1}])
+    result = service.pick("BTC", AS_OF, MODE_LIVE, now_utc=NOW)
+    assert result.stored_before and repository.get_strategy_picks.call_args.kwargs["as_of_since"] == AS_OF - timedelta(hours=1)
+    client.messages.create.assert_not_called()
+
+
+def test_a_paid_answer_that_cannot_be_stored_is_logged_with_its_cost_and_the_error_is_raised(caplog):
+    service, client, repository = make_service()
+    reply, _ = reply_for(service)
+    client.messages.create.return_value = reply
+    repository.save_strategy_pick.side_effect = RuntimeError("database down")
+    with pytest.raises(RuntimeError):
+        run(service)
+    assert "could not be stored" in caplog.text and "req_9" in caplog.text
 
 
 def test_the_budget_stops_the_call_before_it_is_made():
@@ -144,7 +164,8 @@ def test_a_naive_instant_and_an_unknown_mode_are_refused():
 
 def stored_pick(service, repository):
     """A pick row as the repository returns it, built from a real shortlist of the fake chain."""
-    entry, facts, shortlist = service._shortlist_for("BTC", AS_OF, MODE_REPLAY, 7.0, 2.0, None, NOW)
+    entry, _ = service._entry_for("BTC", AS_OF, MODE_REPLAY, 7.0, 2.0, None, NOW)
+    _, shortlist = service._shortlist_for("BTC", AS_OF, entry, NOW)
     from coding.core.analytics.strategy_pipeline.shortlist import baseline_id, candidate_record
     return {"id": 5, "currency": "BTC", "expiration": entry.expiration, "mode": "replay", "as_of": AS_OF, "spot": entry.spot, "status": "ok",
             "choice": shortlist[0].candidate_id, "evaluated_at": None, "baseline_id": baseline_id(shortlist),
@@ -164,6 +185,14 @@ def test_evaluate_settles_every_shortlisted_candidate_and_the_whole_chain_and_st
     for item in shortlist:
         assert outcomes[item.candidate_id]["r"] == pytest.approx(outcomes[item.candidate_id]["pnl_usd"] / item.metrics.max_loss_usd)
     assert -1.5 < outcomes["_all_mean_r"] < 1.5
+
+
+def test_evaluate_reports_false_when_the_row_was_already_evaluated_elsewhere():
+    service, _, repository = make_service()
+    row, _ = stored_pick(service, repository)
+    repository.get_settlement_index_price.return_value = (70500.0, 300)
+    repository.save_strategy_pick_evaluation.return_value = False
+    assert service.evaluate(row, now_utc=NOW) is False
 
 
 def test_evaluate_waits_for_the_settlement_and_skips_evaluated_and_unusable_picks():

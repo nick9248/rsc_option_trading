@@ -80,7 +80,7 @@ def test_a_bad_answer_is_refused(text):
 
 def evaluated(choice, model_r, baseline_r, shortlist_r=0.0, all_r=0.0, baseline="C1"):
     outcomes = {"C1": {"pnl_usd": 0.0, "r": baseline_r}, "C2": {"pnl_usd": 0.0, "r": model_r}, "_shortlist_mean_r": shortlist_r, "_all_mean_r": all_r}
-    return {"choice": choice, "baseline_id": baseline, "outcomes": outcomes}
+    return {"choice": choice, "baseline_id": baseline, "outcomes": outcomes, "status": "no_trade" if choice == NO_TRADE else "ok"}
 
 
 def test_the_report_compares_the_model_with_every_baseline_pair_by_pair_and_counts_no_trade_as_zero():
@@ -97,3 +97,20 @@ def test_picks_without_an_evaluation_or_a_usable_choice_are_left_out_and_an_empt
     report = summarize_picks([{"choice": "C2", "baseline_id": "C1", "outcomes": None}, {"choice": None, "baseline_id": "C1", "outcomes": {}},
                               evaluated("C7", 1.0, 1.0)])
     assert report.picks == 0 and report.mean_model_r is None and report.model_minus_baseline_t is None
+
+
+def test_refused_unusable_and_waiting_picks_are_counted_apart_not_dropped():
+    rows = [evaluated("C2", 0.5, 0.1), {"status": "invalid_response", "choice": None, "baseline_id": "C1", "outcomes": None},
+            {"status": "refused", "choice": None, "baseline_id": "C1", "outcomes": None},
+            {"status": "ok", "choice": "C2", "baseline_id": "C1", "outcomes": None}]
+    report = summarize_picks(rows)
+    assert report.picks == 1 and report.unusable_answers == 2 and report.not_yet_evaluated == 1
+
+
+def test_a_stored_record_never_holds_a_non_finite_number():
+    from dataclasses import replace
+    item = build_shortlist(scored())[0]
+    broken = replace(item, metrics=replace(item.metrics, spread_cost_usd=float("nan"), breakevens=(float("inf"),)))
+    record = candidate_record(broken)
+    assert record["spread_cost_usd"] is None and record["breakevens"] == [None]
+    json.dumps(record, allow_nan=False)

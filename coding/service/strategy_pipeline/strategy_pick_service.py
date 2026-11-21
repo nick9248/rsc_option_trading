@@ -9,7 +9,7 @@ the total cost of all stored model calls is checked against a budget before each
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Sequence
 
 from coding.core.analytics.backtest.engine import simulate_trade
@@ -22,7 +22,7 @@ from coding.core.analytics.menthorq_replication_calculator import parse_expiry_s
 from coding.core.analytics.risk.budget import RiskBudget, size_position
 from coding.core.analytics.strategy_pipeline.facts import render_facts
 from coding.core.analytics.strategy_pipeline.shortlist import (
-    NO_TRADE, PICK_SCHEMA, SYSTEM_PROMPT, ShortlistItem, Pick, baseline_id, build_shortlist, candidate_record, parse_pick, render_shortlist)
+    MAX_COST_FRACTION_OF_RISK, NO_TRADE, PICK_SCHEMA, SYSTEM_PROMPT, ShortlistItem, Pick, baseline_id, build_shortlist, candidate_record, parse_pick, render_shortlist)
 from coding.core.database.repository import DatabaseRepository
 from coding.service.backtest.backtest_service import MIN_SETTLEMENT_TRADES, BacktestService
 from coding.service.strategy.strategy_suggestion_service import (
@@ -78,13 +78,13 @@ class StrategyPickService:
         self.backtest = BacktestService(repository)
         self.facts_service = FactsAsOfService(repository)
 
-    def _shortlist_for(self, currency: str, as_of: datetime, mode: str, target_days: float, minimum_days: float, expiration: Optional[str],
-                       now: datetime):
-        """(entry, facts, shortlist) or (None, reason, None)."""
-        entry, reason = self.backtest.load_entry(currency, as_of, target_days, minimum_days, now, settled=(mode == MODE_REPLAY),
-                                                 expiration=expiration)
-        if entry is None:
-            return None, reason, None
+    def _entry_for(self, currency: str, as_of: datetime, mode: str, target_days: float, minimum_days: float, expiration: Optional[str],
+                   now: datetime):
+        """(entry, "") or (None, reason): the chain of the expiry at the instant (the cheap part: no facts, no candidates yet)."""
+        return self.backtest.load_entry(currency, as_of, target_days, minimum_days, now, settled=(mode == MODE_REPLAY), expiration=expiration)
+
+    def _shortlist_for(self, currency: str, as_of: datetime, entry, now: datetime):
+        """(facts, shortlist), or (reason, None) when the volatility needed for the view is missing."""
         facts = self.facts_service.build(currency, entry.expiration, as_of, entry.spot, entry.forward)
         days = (entry.settlement_at - entry.captured_at).total_seconds() / 86400.0
         distributions: Dict[str, LognormalDistribution] = {}
@@ -93,10 +93,10 @@ class StrategyPickService:
         if entry.atm_implied_volatility:
             distributions[IMPLIED] = LognormalDistribution(entry.forward, entry.atm_implied_volatility, days)
         if REALISED not in distributions:
-            return None, "no realised volatility", None
+            return "no realised volatility", None
         scored = [(candidate, compute_metrics(candidate, entry.spot, distributions))
                   for candidate in generate_candidates(entry.quotes, entry.spot)]
-        return entry, facts, build_shortlist(scored)
+        return facts, build_shortlist(scored)
 
     def pick(self, currency: str, as_of: datetime, mode: str = MODE_REPLAY, target_days_to_expiry: float = 7.0, minimum_days_to_expiry: float = 2.0,
              expiration: Optional[str] = None, now_utc: Optional[datetime] = None) -> Optional[PickResult]:
@@ -124,14 +124,20 @@ class StrategyPickService:
         if mode not in (MODE_LIVE, MODE_REPLAY):
             raise ValueError(f"unknown mode {mode!r}")
         now = now_utc or datetime.now(timezone.utc)
-        entry, facts, shortlist = self._shortlist_for(currency, as_of, mode, target_days_to_expiry, minimum_days_to_expiry, expiration, now)
+        entry, reason = self._entry_for(currency, as_of, mode, target_days_to_expiry, minimum_days_to_expiry, expiration, now)
         if entry is None:
+            logger.info("%s %s: not usable (%s)", currency, as_of.isoformat(), reason)
+            return None
+        # Never pay twice: a replay instant is stored once; a live pick is not repeated within an hour for the same expiry and chain.
+        stored = (self.repository.get_strategy_picks(currency, mode=mode, expiration=entry.expiration, as_of=as_of) if mode == MODE_REPLAY else
+                  self.repository.get_strategy_picks(currency, mode=mode, expiration=entry.expiration, as_of_since=as_of - timedelta(hours=1)))
+        if stored:
+            row = stored[-1]
+            return PickResult(row["id"], row["status"], row["choice"], None, [], row["quantity"], 0.0, True)
+        facts, shortlist = self._shortlist_for(currency, as_of, entry, now)
+        if shortlist is None:
             logger.info("%s %s: not usable (%s)", currency, as_of.isoformat(), facts)
             return None
-        stored = self.repository.get_strategy_picks(currency, mode=mode, expiration=entry.expiration, as_of=as_of)
-        if stored:
-            row = stored[0]
-            return PickResult(row["id"], row["status"], row["choice"], None, shortlist, row["quantity"], 0.0, True)
         facts_text = render_facts(facts)
         record = [candidate_record(item) for item in shortlist]
         if not shortlist:
@@ -177,10 +183,14 @@ class StrategyPickService:
             status = "invalid_response"
             text = text or repr(response)
             logger.exception("Unexpected response: %s", error)
-        row_id = self._save(currency, entry.expiration, mode, as_of, now, entry.spot, status, facts_text, record,
-                            None if parsed is None else parsed.choice, None if parsed is None else list(parsed.ranking), text, quantity, max_loss,
-                            usage.input_tokens, usage.output_tokens, cache_read, cache_write, cost, getattr(response, "_request_id", None),
-                            baseline_id(shortlist))
+        try:
+            row_id = self._save(currency, entry.expiration, mode, as_of, now, entry.spot, status, facts_text, record,
+                                None if parsed is None else parsed.choice, None if parsed is None else list(parsed.ranking), text, quantity,
+                                max_loss, usage.input_tokens, usage.output_tokens, cache_read, cache_write, cost,
+                                getattr(response, "_request_id", None), baseline_id(shortlist))
+        except Exception:
+            logger.error("The paid answer could not be stored (cost %.4f USD, request %s): %s", cost, getattr(response, "_request_id", None), text)
+            raise
         logger.info("Pick %s stored: %s %s, cost %.4f USD", row_id, status, None if parsed is None else parsed.choice, cost)
         return PickResult(row_id, status, None if parsed is None else parsed.choice, parsed, shortlist, quantity, cost, False)
 
@@ -222,11 +232,13 @@ class StrategyPickService:
         outcomes["_all_mean_r"] = self._all_candidates_mean_r(row, settlement_at, settlement[0])
         if outcomes["_all_mean_r"] is None:
             return False
-        self.repository.save_strategy_pick_evaluation(row["id"], now, settlement[0], row["baseline_id"], outcomes)
-        return True
+        return self.repository.save_strategy_pick_evaluation(row["id"], now, settlement[0], row["baseline_id"], outcomes)
 
     def _all_candidates_mean_r(self, row: Dict[str, Any], settlement_at: datetime, settlement_price: float) -> Optional[float]:
-        """Mean R of every candidate the chain of that instant offered (regenerated: the snapshot is stored)."""
+        """
+        Mean R of every candidate the chain of that instant offered that passes the same cost filter as the shortlist (regenerated from the
+        stored snapshot at the stored instant, priced at the stored spot).
+        """
         entry, reason = self.backtest.load_entry(row["currency"], row["as_of"], 7.0, 2.0, datetime.now(timezone.utc), settled=False,
                                                  expiration=row["expiration"])
         if entry is None:
@@ -234,9 +246,9 @@ class StrategyPickService:
             return None
         values: List[float] = []
         for candidate in generate_candidates(entry.quotes, entry.spot):
-            metrics = compute_metrics(candidate, entry.spot, {})
-            if metrics.max_loss_usd <= 0:
+            metrics = compute_metrics(candidate, row["spot"], {})
+            if metrics.max_loss_usd <= 0 or (metrics.spread_cost_usd + metrics.trading_fees_usd) > MAX_COST_FRACTION_OF_RISK * metrics.max_loss_usd:
                 continue
-            trade = simulate_trade(candidate.family, row["expiration"], row["as_of"], settlement_at, entry.spot, candidate.legs, settlement_price)
+            trade = simulate_trade(candidate.family, row["expiration"], row["as_of"], settlement_at, row["spot"], candidate.legs, settlement_price)
             values.append(trade.pnl_usd / metrics.max_loss_usd)
         return sum(values) / len(values) if values else None

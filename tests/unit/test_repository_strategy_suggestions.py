@@ -97,16 +97,19 @@ def test_a_pick_is_stored_once_per_instant_read_back_and_evaluated_once(repo):
     assert first is not None
     assert repo.save_strategy_pick(pick_row(cost_usd=9.0)) is None                      # the same instant: nothing changes, nothing is paid for twice
     assert repo.save_strategy_pick(pick_row(mode="live")) is not None                   # another mode is another row
+    later = pick_row(mode="live", as_of=datetime(2026, 11, 20, 9, 30, tzinfo=timezone.utc))
+    assert repo.save_strategy_pick(later) is not None
+    assert len(repo.get_strategy_picks("BTC", mode="live", as_of_since=datetime(2026, 11, 20, 9, 15, tzinfo=timezone.utc))) == 1
 
     rows = repo.get_strategy_picks("BTC", mode="replay")
     assert len(rows) == 1 and rows[0]["candidates"][0]["id"] == "C1" and rows[0]["ranking"] == ["C1"]
     assert rows[0]["as_of"].tzinfo is not None and isinstance(rows[0]["spot"], float) and rows[0]["evaluated_at"] is None
-    assert repo.get_strategy_picks("BTC", evaluated=True) == [] and len(repo.get_strategy_picks("BTC", evaluated=False)) == 2
+    assert repo.get_strategy_picks("BTC", evaluated=True) == [] and len(repo.get_strategy_picks("BTC", evaluated=False)) == 3
     assert len(repo.get_strategy_picks("BTC", expiration="27NOV26", as_of=pick_row()["as_of"], mode="replay")) == 1
 
     evaluated_at = datetime(2026, 11, 27, 9, tzinfo=timezone.utc)
-    repo.save_strategy_pick_evaluation(first, evaluated_at, 59000.0, "C1", {"C1": {"pnl_usd": 10.0, "r": 0.1}})
-    repo.save_strategy_pick_evaluation(first, evaluated_at, 1.0, "C9", {"x": 1})        # a second evaluation changes nothing
+    assert repo.save_strategy_pick_evaluation(first, evaluated_at, 59000.0, "C1", {"C1": {"pnl_usd": 10.0, "r": 0.1}}) is True
+    assert repo.save_strategy_pick_evaluation(first, evaluated_at, 1.0, "C9", {"x": 1}) is False      # a second evaluation changes nothing
     done = repo.get_strategy_picks("BTC", mode="replay", evaluated=True)[0]
     assert done["settlement_price"] == 59000.0 and done["outcomes"]["C1"]["r"] == 0.1 and done["baseline_id"] == "C1"
 

@@ -8,6 +8,7 @@ copies of one.
 """
 
 import json
+import math
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -123,17 +124,24 @@ def render_shortlist(shortlist: Sequence[ShortlistItem]) -> str:
     return "\n".join(lines)
 
 
+def _finite(value: Optional[float]) -> Optional[float]:
+    """A number as is; None for NaN or infinity (not valid JSON, and a stored record must never fail on one)."""
+    return value if value is not None and math.isfinite(value) else None
+
+
 def candidate_record(item: ShortlistItem) -> Dict[str, Any]:
-    """The shortlist item as plain data for storage."""
+    """The shortlist item as plain data for storage (non-finite numbers become None)."""
     metrics = item.metrics
     return {"id": item.candidate_id, "family": item.candidate.family,
             "legs": [{"action": leg.action, "option_type": leg.option_type, "strike": leg.strike, "instrument": leg.instrument_name,
                       "entry_price_usd": leg.entry_price_usd} for leg in item.candidate.legs],
-            "entry_cash_usd": metrics.entry_cash_usd, "mid_cash_usd": item.candidate.mid_cash_usd, "max_loss_usd": metrics.max_loss_usd,
-            "max_profit_usd": metrics.max_profit_usd, "breakevens": list(metrics.breakevens), "spread_cost_usd": metrics.spread_cost_usd,
-            "trading_fees_usd": metrics.trading_fees_usd, "baseline_score": item.score,
-            "distributions": {name: {"probability_of_profit": result.probability_of_profit, "expected_pnl_usd": result.expected_pnl_usd,
-                                     "tail_loss_usd": result.tail_loss_usd} for name, result in metrics.by_distribution.items()}}
+            "entry_cash_usd": _finite(metrics.entry_cash_usd), "mid_cash_usd": _finite(item.candidate.mid_cash_usd),
+            "max_loss_usd": _finite(metrics.max_loss_usd), "max_profit_usd": _finite(metrics.max_profit_usd),
+            "breakevens": [_finite(value) for value in metrics.breakevens], "spread_cost_usd": _finite(metrics.spread_cost_usd),
+            "trading_fees_usd": _finite(metrics.trading_fees_usd), "baseline_score": _finite(item.score),
+            "distributions": {name: {"probability_of_profit": _finite(result.probability_of_profit),
+                                     "expected_pnl_usd": _finite(result.expected_pnl_usd), "tail_loss_usd": _finite(result.tail_loss_usd)}
+                              for name, result in metrics.by_distribution.items()}}
 
 
 @dataclass(frozen=True)

@@ -1584,10 +1584,11 @@ class DatabaseRepository:
                      "settlement_price", "outcomes")
 
     def get_strategy_picks(self, currency: str, mode: Optional[str] = None, evaluated: Optional[bool] = None,
-                           expiration: Optional[str] = None, as_of: Optional[datetime] = None) -> List[Dict[str, Any]]:
+                           expiration: Optional[str] = None, as_of: Optional[datetime] = None,
+                           as_of_since: Optional[datetime] = None) -> List[Dict[str, Any]]:
         """
         Stored picks of a currency, oldest instant first, optionally of one mode, only evaluated or only not yet evaluated ones, of one
-        expiry, or of one instant. Times are UTC-aware, numbers floats, JSON columns as Python data.
+        expiry, of one instant, or of an instant at or after ``as_of_since``. Times are UTC-aware, numbers floats, JSON columns as Python data.
         """
         conditions, parameters = ["currency = %s"], [currency]
         if mode is not None:
@@ -1601,6 +1602,9 @@ class DatabaseRepository:
         if as_of is not None:
             conditions.append("as_of = %s")
             parameters.append(as_of)
+        if as_of_since is not None:
+            conditions.append("as_of >= %s")
+            parameters.append(as_of_since)
         with self._db_cursor() as cursor:
             cursor.execute(f"SELECT {', '.join(self._PICK_COLUMNS)} FROM strategy_picks WHERE {' AND '.join(conditions)} ORDER BY as_of, expiration",
                            parameters)
@@ -1608,8 +1612,8 @@ class DatabaseRepository:
         return [self._row_dict(self._PICK_COLUMNS, row) for row in rows]
 
     def save_strategy_pick_evaluation(self, pick_id: int, evaluated_at: datetime, settlement_price: float, baseline_id: Optional[str],
-                                      outcomes: Dict[str, Any]) -> None:
-        """Store what the pick's candidates really earned (once, after settlement); an evaluation is never overwritten."""
+                                      outcomes: Dict[str, Any]) -> bool:
+        """Store what the pick's candidates really earned (once, after settlement); an evaluation is never overwritten. True when stored."""
         if evaluated_at.tzinfo is None:
             raise ValueError("evaluated_at must be timezone-aware (UTC)")
         with self._db_cursor() as cursor:
@@ -1617,6 +1621,7 @@ class DatabaseRepository:
                 "UPDATE strategy_picks SET evaluated_at = %s, settlement_price = %s, baseline_id = %s, outcomes = %s::jsonb "
                 "WHERE id = %s AND evaluated_at IS NULL",
                 (evaluated_at, settlement_price, baseline_id, json.dumps(outcomes, allow_nan=False), pick_id))
+            return cursor.rowcount > 0
 
     def get_total_model_spend(self) -> float:
         """What all stored model calls of the strategy features cost, in USD: free-form suggestions and picks together."""

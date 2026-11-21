@@ -42,15 +42,27 @@ def _number(value: Optional[float], digits: int = 3) -> str:
 
 def log_report(currency: str, repository: DatabaseRepository, mode: str) -> None:
     """Log the comparison of the model with the baselines over the evaluated picks."""
-    report = summarize_picks(repository.get_strategy_picks(currency, mode=mode, evaluated=True))
-    logger.info("%d evaluated %s picks, no trade in %s", report.picks, mode,
-                "n/a" if report.no_trade_share is None else f"{report.no_trade_share:.0%}")
+    report = summarize_picks(repository.get_strategy_picks(currency, mode=mode))
+    logger.info("%d evaluated %s picks (no trade in %s); %d refused or unusable answers and %d picks waiting for their expiry are not in the comparison",
+                report.picks, mode, "n/a" if report.no_trade_share is None else f"{report.no_trade_share:.0%}", report.unusable_answers,
+                report.not_yet_evaluated)
     logger.info("mean R (result in units of the maximum loss): model %s | baseline top-1 %s | shortlist average %s | all candidates average %s",
                 _number(report.mean_model_r), _number(report.mean_baseline_r), _number(report.mean_shortlist_r), _number(report.mean_all_r))
     logger.info("model minus baseline %s (t %s), minus shortlist average %s (t %s), minus all candidates %s (t %s); beat the baseline on %s",
                 _number(report.model_minus_baseline), _number(report.model_minus_baseline_t, 2), _number(report.model_minus_shortlist),
                 _number(report.model_minus_shortlist_t, 2), _number(report.model_minus_all), _number(report.model_minus_all_t, 2),
                 "n/a" if report.model_beat_baseline_share is None else f"{report.model_beat_baseline_share:.0%}")
+
+
+def evaluate_all(service: StrategyPickService, currency: str, mode: Optional[str] = None) -> int:
+    """Evaluate every stored pick that can be; one failing row is logged and does not stop the others. Returns how many were stored."""
+    stored = 0
+    for row in service.repository.get_strategy_picks(currency, mode=mode, evaluated=False):
+        try:
+            stored += bool(service.evaluate(row))
+        except Exception:
+            logger.exception("Evaluation of pick %s failed", row["id"])
+    return stored
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -84,8 +96,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                                   RiskBudget(arguments.capital, arguments.max_drawdown), model=arguments.model)
 
     if arguments.command == "evaluate":
-        evaluated = sum(service.evaluate(row) for row in repository.get_strategy_picks(arguments.currency, evaluated=False))
-        logger.info("%d picks evaluated", evaluated)
+        logger.info("%d picks evaluated", evaluate_all(service, arguments.currency))
         return 0
 
     if arguments.command == "live":
@@ -100,23 +111,29 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     while day <= arguments.last_day:
         days.append(day)
         day += timedelta(days=arguments.every_days)
-    days = days[:arguments.max_calls]
-    logger.info("Replay of up to %d instants, about %.2f USD each: at most %.2f USD", len(days), APPROXIMATE_COST_PER_CALL_USD,
-                len(days) * APPROXIMATE_COST_PER_CALL_USD)
+    logger.info("Replay of %d instants, at most %d paid calls (stored instants are free), about %.2f USD each: at most %.2f USD", len(days),
+                arguments.max_calls, APPROXIMATE_COST_PER_CALL_USD, arguments.max_calls * APPROXIMATE_COST_PER_CALL_USD)
     if not arguments.yes:
         logger.error("add --yes to run the paid calls")
         return 1
+    paid_calls = 0
     for day in days:
+        if paid_calls >= arguments.max_calls:
+            logger.info("Stopped at the cap of %d paid calls", arguments.max_calls)
+            break
         try:
             result = service.pick(arguments.currency, datetime.combine(day, time(ENTRY_HOUR_UTC), tzinfo=timezone.utc), MODE_REPLAY)
         except BudgetExceeded as error:
             logger.error("Budget reached: %s", error)
             break
+        except anthropic.APIError as error:
+            logger.error("%s: the call failed (not billed), continuing: %s", day, error)
+            continue
         if result is not None:
+            paid_calls += 0 if result.stored_before else 1
             logger.info("%s: %s, choice %s, cost %.4f USD%s", day, result.status, result.choice, result.cost_usd,
                         " (already stored)" if result.stored_before else "")
-    evaluated = sum(service.evaluate(row) for row in repository.get_strategy_picks(arguments.currency, mode=MODE_REPLAY, evaluated=False))
-    logger.info("%d picks evaluated", evaluated)
+    logger.info("%d picks evaluated", evaluate_all(service, arguments.currency, MODE_REPLAY))
     log_report(arguments.currency, repository, MODE_REPLAY)
     return 0
 
