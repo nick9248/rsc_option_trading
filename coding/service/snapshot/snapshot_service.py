@@ -108,6 +108,10 @@ class SnapshotService:
 
         progress(f"Filtered to {len(filtered_data)} instruments for selected expirations")
 
+        # Each instrument's own underlying is the future of ITS expiry; the injection below replaces it with one global value, so
+        # keep it for the Greeks.
+        own_forward = {item["instrument_name"]: item.get("underlying_price") for item in filtered_data}
+
         # Inject the true underlying price into every filtered instrument.
         # This replaces each instrument's own stale cached value.
         if true_underlying_price:
@@ -133,7 +137,7 @@ class SnapshotService:
         # and the collector). One ticker request per instrument was answered with HTTP 429 for most of the chain.
         if fetch_greeks and filtered_data:
             progress("Computing Greeks from mark IV...")
-            self._add_greeks(filtered_data)
+            self._add_greeks(filtered_data, own_forward)
 
         # Sort by instrument name
         filtered_data.sort(key=lambda x: x.get("instrument_name", ""))
@@ -141,18 +145,20 @@ class SnapshotService:
         return filtered_data
 
     @staticmethod
-    def _add_greeks(items: List[Dict]) -> None:
+    def _add_greeks(items: List[Dict], own_forward: Dict[str, Optional[float]]) -> None:
         """
         Add delta, gamma, vega, theta and rho to every item, in place.
 
-        Delta, vega, theta and rho use the instrument's own underlying (its future); gamma uses the index price, as in the
-        analysis. An instrument that cannot be computed (no mark IV, expired) gets None for all five, never 0.
+        Delta, vega, theta and rho use the future of the instrument's own expiry (``own_forward``, the book summary's value before
+        the global underlying was injected); gamma uses the index price, as in the analysis. An instrument that cannot be computed
+        (no mark IV, no forward, expired) gets None for all five, never 0. One summary warning counts those.
         """
         calculator = BlackScholesCalculator()
         now_utc = datetime.now(timezone.utc).replace(tzinfo=None)             # the calculator works with naive UTC
+        without_greeks = 0
         for item in items:
             mark_iv = item.get("mark_iv")
-            forward = item.get("underlying_price")
+            forward = own_forward.get(item.get("instrument_name"))
             index = item.get("index_price") or forward
             parts = str(item.get("instrument_name", "")).split("-")           # BTC-27NOV26-58000-C
             if len(parts) != 4 or not parts[2].replace(".", "", 1).isdigit():
@@ -167,7 +173,10 @@ class SnapshotService:
             item["rho"] = at_forward["rho"] if at_forward else None
             item["gamma"] = at_index["gamma"] if at_index else None
             if at_forward is None:
-                logger.warning(f"No Greeks for {item.get('instrument_name')}: mark IV or underlying missing, or expired")
+                item["gamma"] = None                      # all five or none: a partial set would look complete
+                without_greeks += 1
+        if without_greeks:
+            logger.warning(f"{without_greeks} of {len(items)} instruments have no Greeks (no mark IV or forward, or expired)")
 
     def _extract_underlying_price(self, all_data: List[Dict]) -> float:
         """

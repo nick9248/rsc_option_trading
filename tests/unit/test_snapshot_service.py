@@ -145,6 +145,20 @@ class TestLocalGreeks:
         assert -1.0 < by_name["BTC-28AUG27-64000-P"]["delta"] < 0.0
         assert by_name["BTC-28AUG27-64000-C"]["gamma"] > 0 and by_name["BTC-28AUG27-64000-C"]["vega"] > 0
 
+    def test_each_expiry_uses_the_future_of_its_own_expiry_not_one_global_value(self):
+        near = {**_instrument("BTC-28DEC26-64000-C", underlying_price=64100.0, volume=50.0), "mark_iv": 55.0}
+        far = {**_instrument("BTC-28AUG27-64000-C", underlying_price=66000.0, volume=1.0), "mark_iv": 55.0}
+        service, _ = self._service([near, far])
+
+        result = {item["instrument_name"]: item for item in
+                  service.get_filtered_instruments("BTC", ["28DEC26", "28AUG27"], fetch_greeks=True)}
+
+        # the same strike and IV: the far option sits further below its (higher) future, so its delta is lower than if it used the near one
+        reference = SnapshotService()
+        probe = [{**far, "underlying_price": 64100.0, "index_price": 64000.0}]
+        reference._add_greeks(probe, {far["instrument_name"]: 64100.0})
+        assert result["BTC-28AUG27-64000-C"]["delta"] != probe[0]["delta"]
+
     def test_an_instrument_without_mark_iv_gets_none_not_zero(self):
         item = {**_instrument("BTC-28AUG27-64000-C"), "mark_iv": None}
         service, _ = self._service([item])

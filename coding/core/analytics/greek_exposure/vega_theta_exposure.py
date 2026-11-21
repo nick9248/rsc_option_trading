@@ -4,9 +4,9 @@ Vega and theta exposure of the open interest of one expiry.
 Vega is the change in value for one volatility point, theta the change in value per day, both in USD per contract (Deribit
 convention, a contract is one coin). The exposure is the sum over the options of open interest x greek.
 
-Holder side: the people holding the open interest. Every holder is long both calls and puts, so the holder vega is positive and the
-holder theta negative. Assumed dealer: the opposite sign (the same unverified convention as the dealer gamma: dealers are short
-what the holders hold).
+This is a convention, not a measured position: open interest has a long and a short side for every contract. "Holder side" assumes
+the holders are long every option (vega positive, theta negative); "assumed dealer" is the opposite sign, the same unverified
+convention as the dealer gamma (dealers short what the holders hold).
 """
 
 from dataclasses import dataclass

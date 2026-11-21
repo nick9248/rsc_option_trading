@@ -256,8 +256,12 @@ def format_context_section(
     # spec.md section 9: replaces the full CALLS/PUTS/COMBINED TOTALS block
     # and the hard-coded oi_skew label).
     money = analysis.moneyness
-    if money.calls.itm_pct is None or money.puts.itm_pct is None:
-        lines.append("Moneyness: N/A (no open interest)" if pcr.ratio is None else "Moneyness: N/A (calls or puts have no open interest)")
+    if pcr.ratio is None:
+        lines.append("Moneyness: N/A (no open interest)")
+    elif money.calls.itm_pct is None or money.puts.itm_pct is None:
+        calls = f"{money.calls.itm_pct:.1f}%" if money.calls.itm_pct is not None else "N/A"
+        puts = f"{money.puts.itm_pct:.1f}%" if money.puts.itm_pct is not None else "N/A"
+        lines.append(f"Moneyness: ITM calls {calls}  |  ITM puts {puts}")
     else:
         lines.append(
             f"Moneyness: ITM calls {money.calls.itm_pct:.1f}%  |  "
