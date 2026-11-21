@@ -307,6 +307,6 @@ table.scenarios ul{margin:0;padding-left:16px}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 
 /* tooltip hints: a dotted underline on what has an explanation; a visible focus ring for keyboard users */
-.has-tip{cursor:help}
-.tile.has-tip .t-k,.card-title.has-tip h3{text-decoration:underline dotted var(--soft);text-underline-offset:3px}
+.has-tip,.chip[data-tip]{cursor:help}
+.tile.has-tip .t-k,.card-title.has-tip h3,.gauge.has-tip figcaption,.chip[data-tip]{text-decoration:underline dotted var(--soft);text-underline-offset:3px}
 .has-tip:focus-visible,.chip[data-tip]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:8px}

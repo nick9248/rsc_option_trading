@@ -92,7 +92,7 @@ TOOLTIPS: Dict[str, Tooltip] = {
     # ---- cards
     "card_price_map": Tooltip(
         "Price levels within 20% of the price where open interest, dealer hedging or flow concentrate: call resistance, put support, max pain, zero gamma and others.",
-        "Levels are where positioning concentrates, not predictions. The more sources agree on one price, the more notable it is.",
+        "Levels are where positioning concentrates, not predictions. The more sources agree on one price, the more notable it is. This list reaches 20% from the price; the decision engine's own map reaches only 15%.",
         "Put support 53,000 and call resistance 63,000 frame the range where dealer hedging is largest."),
     "card_gamma": Tooltip(
         "Net gamma exposure of each expiry in USD per 1% move (assumed dealer view): bars left of the middle are short gamma, right are long.",
