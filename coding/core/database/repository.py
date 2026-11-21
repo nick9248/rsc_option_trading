@@ -1417,6 +1417,26 @@ class DatabaseRepository:
                 """, row)
             return cursor.fetchone()[0]
 
+    def get_latest_strategy_suggestions(self, currency: str) -> List[Dict[str, Any]]:
+        """
+        The newest stored suggestion of each expiry of a currency (migration 038), in no particular order. Each row is a dict with
+        expiration, computed_at and facts_as_of (timezone-aware UTC; facts_as_of None on a row older than migration 039),
+        reference_price, model, status, response and net_premium_usd (None when not priceable).
+        """
+        with self._db_cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT DISTINCT ON (expiration) expiration, computed_at, facts_as_of, reference_price, model, status, response,
+                       net_premium_usd
+                FROM strategy_suggestions WHERE currency = %s
+                ORDER BY expiration, computed_at DESC
+                """, (currency,))
+            rows = cursor.fetchall()
+        return [{"expiration": row[0], "computed_at": row[1].astimezone(timezone.utc),
+                 "facts_as_of": None if row[2] is None else row[2].astimezone(timezone.utc), "reference_price": float(row[3]),
+                 "model": row[4], "status": row[5], "response": row[6],
+                 "net_premium_usd": None if row[7] is None else float(row[7])} for row in rows]
+
     def get_strategy_suggestion_total_cost(self) -> float:
         """What all stored strategy suggestion calls cost, in USD (0.0 when there are none)."""
         with self._db_cursor() as cursor:
