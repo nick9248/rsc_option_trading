@@ -5,6 +5,7 @@ Provides base methods for connecting to APIs, making requests, and handling resp
 """
 
 import logging
+import time
 from typing import Any, Dict, Optional
 
 import requests
@@ -19,6 +20,11 @@ from coding.core.endpoints.endpoint_definition import EndpointDefinition, HttpMe
 
 
 logger = logging.getLogger(__name__)
+
+RATE_LIMIT_STATUS = 429
+RATE_LIMIT_BACKOFF_SECONDS = 1.0
+"""Waited after a 429 (Too Many Requests) before the next attempt, times the attempt number: 1 s, then 2 s. Retrying within
+milliseconds (as before) cannot succeed, the limit has not recovered."""
 
 
 class ApiConnection:
@@ -130,6 +136,9 @@ class ApiConnection:
 
             except RequestException as error:
                 logger.warning(f"Request failed (attempt {attempt}/{self.max_retries}): {error}")
+                status = getattr(error.response, "status_code", None) if hasattr(error, "response") else None
+                if status == RATE_LIMIT_STATUS and attempt < self.max_retries:
+                    time.sleep(RATE_LIMIT_BACKOFF_SECONDS * attempt)
                 if attempt == self.max_retries:
                     status_code = getattr(error.response, "status_code", None) if hasattr(error, "response") else None
                     raise RequestError(

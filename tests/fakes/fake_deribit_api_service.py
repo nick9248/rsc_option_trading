@@ -101,9 +101,26 @@ class FakeDeribitApiService:
     def get_book_summary(
         self, currency: str = "ETH", kind: Optional[str] = "option", save_to_csv: bool = False
     ) -> List[Dict[str, Any]]:
+        if kind == "future":
+            return self._futures_book_summary(currency)
         return self._lookup(
             self._book_summary_calls, "get_book_summary", {"currency": currency, "kind": kind}
         )
+
+    def _futures_book_summary(self, currency: str) -> List[Dict[str, Any]]:
+        """
+        The book summary of the futures, built from the futures instruments and tickers the fixture already recorded (the
+        recording script predates the one-call futures summary). Same values the ticker path used: the mark price, the ticker's
+        index price as the estimated delivery price, and open interest and funding of the perpetual.
+        """
+        summary = []
+        for instrument in self.get_instruments(currency=currency, kind="future", expired=False):
+            ticker = self.get_ticker(instrument["instrument_name"])
+            summary.append({
+                "instrument_name": instrument["instrument_name"], "mark_price": ticker.get("mark_price"),
+                "estimated_delivery_price": ticker.get("index_price"), "open_interest": ticker.get("open_interest"),
+                "current_funding": ticker.get("current_funding"), "funding_8h": ticker.get("funding_8h")})
+        return summary
 
     def get_ticker(self, instrument_name: str, save_to_csv: bool = False) -> Dict[str, Any]:
         try:
