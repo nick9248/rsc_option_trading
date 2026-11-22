@@ -15,15 +15,14 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence
 from coding.core.analytics.backtest.engine import simulate_trade
 from coding.core.analytics.backtest.structures import Leg
 from coding.core.analytics.candidates.distribution import LognormalDistribution, StudentTDistribution
-from coding.core.analytics.har_volatility import har_annual_volatility
 from coding.core.analytics.candidates.generator import CandidateLimits, generate_candidates
 from coding.core.analytics.candidates.metrics import compute_metrics, metrics_at_venue_size
-from coding.core.analytics.candidates.scoring import HAR_T, IMPLIED_T, REALISED
+from coding.core.analytics.candidates.scoring import HAR_T, IMPLIED_T, REALISED, robust_expected_per_risk
+from coding.core.analytics.har_volatility import har_annual_volatility
 from coding.core.analytics.menthorq_replication_calculator import parse_expiry_settlement
 from coding.core.analytics.risk.budget import RiskBudget, size_position
 from coding.core.analytics.risk.venue import DERIVE_TAKER_FEES, Venue
 from coding.core.analytics.strategy_pipeline.facts import render_facts
-from coding.core.analytics.candidates.scoring import robust_expected_per_risk
 from coding.core.analytics.strategy_pipeline.shortlist import (
     MAX_COST_FRACTION_OF_RISK, NO_TRADE, PICK_SCHEMA, SYSTEM_PROMPT, ShortlistItem, Pick, baseline_id, build_shortlist, candidate_record, parse_pick, render_shortlist)
 from coding.core.database.repository import DatabaseRepository
@@ -37,8 +36,8 @@ logger = logging.getLogger(__name__)
 METHOD_VERSION = "pipeline-4"
 """pipeline-1: the shortlist showed a flat-volatility "implied view" that ignored skew (the model read it as fair value and leaned to put structures);
 pipeline-2: the market view is exact (minus costs);
-pipeline-4: the ranking rule is the lowest expected PnL per risk over three models (realised lognormal, implied Student-t, HAR Student-t), single long options are excluded;
-pipeline-3: live picks are built for a venue (Derive: minimum order size, fees with the base fee per order, narrow spreads tried, size shown in the prompt)."""
+pipeline-3: live picks are built for a venue (Derive: minimum order size, fees with the base fee per order, narrow spreads tried, size shown in the prompt);
+pipeline-4: the ranking rule is the lowest expected PnL per risk over three models (realised lognormal, implied Student-t, HAR Student-t), single long options are excluded."""
 VENUE_CANDIDATE_LIMITS = CandidateLimits(short_delta_range=(0.02, 0.60), long_delta_range=(0.02, 0.70),
                                          width_fractions=(0.004, 0.006, 0.008, 0.01, 0.015, 0.02, 0.03, 0.04, 0.06, 0.10))
 """With a venue the loss budget of a small account is a few USD: spreads from 0.4% of spot wide are tried too (the research default starts at 2%)."""

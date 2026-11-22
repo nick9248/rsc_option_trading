@@ -148,3 +148,10 @@ def test_the_baseline_ranks_by_the_lowest_expected_result_over_the_three_models_
     only_two = {name: result for name, result in item.metrics.by_distribution.items() if name != "har_t"}
     from dataclasses import replace
     assert robust_expected_per_risk(replace(item.metrics, by_distribution=only_two)) is None
+
+
+def test_a_candidate_without_a_maximum_loss_has_no_robust_score_instead_of_crashing():
+    from dataclasses import replace
+    from coding.core.analytics.candidates.scoring import robust_expected_per_risk
+    item = build_shortlist(scored())[0]
+    assert robust_expected_per_risk(replace(item.metrics, max_loss_usd=0.0)) is None

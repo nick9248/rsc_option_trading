@@ -1,7 +1,8 @@
 """
 HAR-RV volatility forecast (Corsi 2009), pure numpy: next-period variance regressed on the last day, week and month of squared daily returns.
 
-Fitted by ordinary least squares on the history that is passed in (the caller passes only what was known at the forecast instant).
+Fitted by ordinary least squares on the history that is passed in (the caller passes only what was known at the forecast instant). The returns must be
+consecutive days: a caller with gaps passes the longest unbroken stretch.
 """
 
 import math
@@ -20,7 +21,7 @@ def har_annual_volatility(daily_log_returns: Sequence[float], horizon_days: int)
     Annualised volatility forecast for the mean daily variance of the next ``horizon_days`` days.
 
     Returns:
-        A fraction (0.55 for 55%), or None with fewer than ``MINIMUM_RETURNS`` returns or a non-positive horizon.
+        A fraction (0.55 for 55%), or None when the fitted variance is not positive (never a floor that invents a quiet market) or with fewer than ``MINIMUM_RETURNS`` returns or a non-positive horizon.
     """
     returns = np.asarray(daily_log_returns, dtype=float)
     if horizon_days < 1 or len(returns) < MINIMUM_RETURNS:
@@ -33,4 +34,4 @@ def har_annual_volatility(daily_log_returns: Sequence[float], horizon_days: int)
     coefficients, *_ = np.linalg.lstsq(np.array(rows), np.array(targets), rcond=None)
     latest = np.array([1.0, squared[-1], squared[-WEEK:].mean(), squared[-MONTH:].mean()])
     variance = float(latest @ coefficients)
-    return math.sqrt(max(variance, 1e-8) * 365.0)
+    return math.sqrt(variance * 365.0) if variance > 0 else None

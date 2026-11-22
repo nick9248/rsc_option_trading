@@ -55,8 +55,8 @@ def test_calibration_of_a_perfect_forecaster_matches_and_a_bin_with_few_cases_is
     rng = np.random.default_rng(4)
     p = rng.uniform(0, 1, 20000)
     happened = rng.uniform(0, 1, 20000) < p
-    for mean_predicted, observed, _, count in calibration_table(p, happened):
-        assert abs(mean_predicted - observed) < 0.03 and count >= 30
+    for row in calibration_table(p, happened):
+        assert abs(row.mean_predicted - row.observed_frequency) < 0.03 and row.count >= 30
     assert calibration_table([0.5] * 10, [True] * 10) == []
 
 
@@ -72,3 +72,9 @@ def test_the_used_risk_is_a_small_shrunk_fraction_of_kelly_and_never_above_the_c
     assert fractional_kelly_risk(0.2, fraction=1.0, shrink=1.0, cap=0.05) == 0.05
     with pytest.raises(ValueError):
         fractional_kelly_risk(-0.1)
+
+
+def test_har_gives_none_instead_of_an_invented_quiet_market_when_the_fit_is_not_positive(monkeypatch):
+    import coding.core.analytics.har_volatility as har
+    monkeypatch.setattr(har.np.linalg, "lstsq", lambda a, b, rcond=None: (np.array([-1.0, 0.0, 0.0, 0.0]), None, None, None))
+    assert har.har_annual_volatility(np.full(300, 0.01), 7) is None

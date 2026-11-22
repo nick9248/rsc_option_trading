@@ -7,7 +7,7 @@ each trade (the Kelly criterion's objective): it punishes lotteries (rare huge w
 """
 
 from dataclasses import dataclass
-from typing import Callable, Optional, Sequence, Tuple
+from typing import Callable, List, Optional, Sequence
 
 import numpy as np
 
@@ -57,7 +57,7 @@ def cluster_bootstrap(values: Sequence[float], clusters: Sequence[object], stati
         ValueError: for mismatched lengths or fewer than 2 clusters (no interval can be formed).
     """
     values_array = np.asarray(values, dtype=float)
-    labels = np.asarray([str(label) for label in clusters])
+    labels = np.asarray(clusters)
     if len(values_array) != len(labels):
         raise ValueError("one cluster label per value")
     names = sorted(set(labels))
@@ -73,8 +73,18 @@ def cluster_bootstrap(values: Sequence[float], clusters: Sequence[object], stati
     return ClusterInterval(float(statistic(values_array)), float(low), float(high), len(names))
 
 
+@dataclass(frozen=True)
+class CalibrationBin:
+    """One probability bin: the mean forecast, how often it happened, the bin's lower edge and the number of cases."""
+
+    mean_predicted: float
+    observed_frequency: float
+    lower_edge: float
+    count: int
+
+
 def calibration_table(predicted: Sequence[float], happened: Sequence[bool], edges: Sequence[float] = (0.0, 0.2, 0.4, 0.6, 0.8, 0.95, 1.0001),
-                      minimum_count: int = 30) -> Sequence[Tuple[float, float, float, int]]:
+                      minimum_count: int = 30) -> List[CalibrationBin]:
     """
     (mean predicted, observed frequency, bin lower edge, count) per probability bin with at least ``minimum_count`` cases.
     A calibrated forecaster has the first two equal.
@@ -85,7 +95,7 @@ def calibration_table(predicted: Sequence[float], happened: Sequence[bool], edge
     for low, high in zip(edges[:-1], edges[1:]):
         selected = (p >= low) & (p < high)
         if selected.sum() >= minimum_count:
-            rows.append((float(p[selected].mean()), float(y[selected].mean()), float(low), int(selected.sum())))
+            rows.append(CalibrationBin(float(p[selected].mean()), float(y[selected].mean()), float(low), int(selected.sum())))
     return rows
 
 
