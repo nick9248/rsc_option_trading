@@ -20,6 +20,8 @@ from coding.core.analytics.report.report_page import format_utc, paragraph_fragm
 
 STALE_AFTER_HOURS = 4.0
 """A pick older than this is marked: the market has moved. The check is by time only; the spot of the pick is shown next to the age."""
+RISK_PER_TRADE_OF_ACCOUNT = 0.05
+"""Share of the account one trade may lose: the 20% drawdown limit over 4 losses in a row (see risk/budget.py)."""
 MAX_SELECTED_TRADES = 2
 """At most this many picks are marked as the trades to take: the expiries share one view of the market, so more of them is the same bet again."""
 ASKED_NOTE = ("The model is asked about the expiries nearest 3, 7, 14 and 30 days only (each ask costs about 0.05 USD); every other expiry is not asked, "
@@ -162,10 +164,14 @@ def _minimum_order_text(pick: StoredPick, chosen: Dict[str, Any], currency: str 
     if venue is None:
         return ""
     quantity = venue.minimum_amount
+    per_coin_loss = chosen.get("max_loss_usd")
+    if not per_coin_loss or per_coin_loss <= 0:
+        return "Derive's smallest order: not computed (the maximum loss is missing)."
     fees = sum(venue.taker_fees.fee_per_coin_usd(pick.spot, leg["entry_price_usd"], quantity) * quantity for leg in chosen["legs"])
-    loss = chosen["max_loss_usd"] * quantity
+    loss = per_coin_loss * quantity
     return (f"At Derive's smallest order ({quantity:g} coins per leg): entry {_entry_text(chosen['entry_cash_usd'], quantity)}, maximum loss {loss:,.2f} USD, "
-            f"taker fees about {fees:,.2f} USD ({fees / loss:.0%} of the loss), account needed at 5% risk per trade about {loss / 0.05:,.0f} USD.")
+            f"taker fees about {fees:,.2f} USD ({fees / loss:.0%} of the loss), account needed at {RISK_PER_TRADE_OF_ACCOUNT:.0%} risk per trade about {loss / RISK_PER_TRADE_OF_ACCOUNT:,.0f} USD. "
+            "The ranking itself uses Deribit-style fees per coin: a fixed fee this large can turn a small edge negative at this size.")
 
 
 def _card(pick: StoredPick, now_utc: datetime, role: str = "", currency: str = "BTC") -> Tuple[str, Dict[str, Dict[str, Any]]]:
@@ -194,7 +200,9 @@ def _card(pick: StoredPick, now_utc: datetime, role: str = "", currency: str = "
                 if abs(pick.quantity - 1.0) < 1e-9:
                     parsed += paragraph_fragment(f"Per 1 coin per leg (scale-free: take your own fraction): entry {_entry_text(chosen['entry_cash_usd'], 1.0)}; "
                                                  f"maximum loss {_usd(pick.max_loss_usd)} USD.", "note-s")
-                    parsed += paragraph_fragment(_minimum_order_text(pick, chosen, currency), "note-s")
+                    minimum_text = _minimum_order_text(pick, chosen, currency)
+                    if minimum_text:
+                        parsed += paragraph_fragment(minimum_text, "note-s")
                 else:
                     parsed += paragraph_fragment(f"Size from the loss budget: {pick.quantity:.4f} coins per leg; entry {_entry_text(chosen['entry_cash_usd'], pick.quantity)}; "
                                                  f"maximum loss {_usd(pick.max_loss_usd)} USD (risk per trade {_usd(pick.risk_per_trade_usd)} USD).", "note-s")

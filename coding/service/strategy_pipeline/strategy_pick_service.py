@@ -78,7 +78,7 @@ class StrategyPickService:
             budget_usd: Stop when the stored model calls have cost this much.
             unit_quantity: When set, every pick is stored at this many coins per leg (1.0: "per coin", scale-free: the reader takes his own fraction) instead of
                 being sized from the loss budget.
-            venues: Per currency, where positions are placed. Used for LIVE picks only: candidates the venue cannot place within the loss budget
+            venues: Per currency, where positions are placed (not used by the live runner any more: its picks are scale-free via unit_quantity). Used for LIVE picks only: candidates the venue cannot place within the loss budget
                 are dropped, fees are the venue's, and the size is the venue's allowed one. None (and every replay): fractions of a coin, Deribit fees.
 
         Raises:
@@ -117,7 +117,7 @@ class StrategyPickService:
         if missing:
             return "no " + ", ".join(missing) + " (a model of the ranking is missing)", None
         venue = self.venues.get(currency) if mode == MODE_LIVE else None
-        if mode == MODE_LIVE and venue is None:
+        if mode == MODE_LIVE and venue is None and self.venues:          # venues were given but not for this currency (no unit size either)
             logger.warning("No venue is configured for %s: the live pick uses the research rules (Deribit fees, fractions of a coin)", currency)
         if venue is None:
             scored = [(candidate, compute_metrics(candidate, entry.spot, distributions)) for candidate in generate_candidates(entry.quotes, entry.spot)]

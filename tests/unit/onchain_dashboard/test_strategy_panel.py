@@ -194,4 +194,11 @@ def test_a_per_coin_pick_shows_what_derives_smallest_order_means():
     html_text = build_strategy_panel([one_coin], NOW, "BTC").html
     assert "Per 1 coin per leg (scale-free" in html_text and "smallest order (0.01 coins per leg)" in html_text
     # hand calculation: loss 1,420 x 0.01 = 14.20; fees = 4 legs x (0.5 + min(0.0003 x 58,000 x 0.01 = 0.174, 12.5% x price x 0.01)); capital = 14.20 / 0.05 = 284
-    assert "maximum loss 14.20 USD" in html_text and "about 284 USD" in html_text
+    assert "maximum loss 14.20 USD" in html_text and "about 284 USD" in html_text and "Deribit-style fees" in html_text
+
+
+def test_a_per_coin_pick_without_a_maximum_loss_does_not_break_the_panel():
+    broken = StoredPick(**{**stored(quantity=1.0).__dict__, "max_loss_usd": 710.0})
+    broken.candidates[0]["max_loss_usd"] = None
+    html_text = build_strategy_panel([broken], NOW, "BTC").html
+    assert "Derive" in html_text
