@@ -12,12 +12,14 @@ import math
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from coding.core.analytics.candidates.generator import Candidate
+from coding.core.analytics.candidates.generator import LONG_CALL, LONG_PUT, Candidate
 from coding.core.analytics.candidates.metrics import CandidateMetrics
-from coding.core.analytics.candidates.scoring import REALISED, RULES
+from coding.core.analytics.candidates.scoring import REALISED, robust_expected_per_risk
 
-BASELINE_RULE = "expected_pnl_per_risk_realised_vol"
-"""The deterministic rule that orders the shortlist and defines the baseline pick the model is compared with."""
+BASELINE_RULE = "robust_expected_pnl_per_risk"
+"""Name of the deterministic rule that orders the shortlist and defines the baseline pick the model is compared with (it is not in the scoring lab's RULES: it needs three models)."""
+EXCLUDED_FAMILIES = (LONG_CALL, LONG_PUT)
+"""A single long option is a lottery (a win can be 50 times the risk): its mean is dominated by a few outcomes that 35 expiries a year cannot validate."""
 PER_FAMILY = 2
 MAX_COST_FRACTION_OF_RISK = 0.15
 """A candidate whose spread and fees exceed this share of its maximum loss is dropped (an illiquid quote, not a trade)."""
@@ -77,9 +79,11 @@ def build_shortlist(scored: Sequence[Tuple[Candidate, CandidateMetrics]], per_fa
     The candidates the model is shown: filtered, ranked by the baseline rule, the best ``per_family`` of each family, numbered C1, C2, ...
     by family and strikes (the order and the ids carry no ranking: the baseline's preference is not shown to the model).
     """
-    rule = RULES[BASELINE_RULE]
+    rule = robust_expected_per_risk
     by_family: Dict[str, List[ShortlistItem]] = {}
     for candidate, metrics in scored:
+        if candidate.family in EXCLUDED_FAMILIES:
+            continue
         if metrics.max_loss_usd <= 0 or (metrics.spread_cost_usd + metrics.trading_fees_usd) > max_cost_fraction * metrics.max_loss_usd:
             continue
         score = rule(metrics)

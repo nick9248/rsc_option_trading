@@ -14,10 +14,11 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from coding.core.analytics.backtest.engine import simulate_trade
 from coding.core.analytics.backtest.structures import Leg
-from coding.core.analytics.candidates.distribution import LognormalDistribution
+from coding.core.analytics.candidates.distribution import LognormalDistribution, StudentTDistribution
 from coding.core.analytics.candidates.generator import CandidateLimits, generate_candidates
 from coding.core.analytics.candidates.metrics import compute_metrics, metrics_at_venue_size
-from coding.core.analytics.candidates.scoring import IMPLIED, REALISED
+from coding.core.analytics.candidates.scoring import HAR_T, IMPLIED_T, REALISED, robust_expected_per_risk
+from coding.core.analytics.har_volatility import har_annual_volatility
 from coding.core.analytics.menthorq_replication_calculator import parse_expiry_settlement
 from coding.core.analytics.risk.budget import RiskBudget, size_position
 from coding.core.analytics.risk.venue import DERIVE_TAKER_FEES, Venue
@@ -32,10 +33,11 @@ from coding.service.strategy_pipeline.facts_service import FactsAsOfService
 
 logger = logging.getLogger(__name__)
 
-METHOD_VERSION = "pipeline-3"
+METHOD_VERSION = "pipeline-4"
 """pipeline-1: the shortlist showed a flat-volatility "implied view" that ignored skew (the model read it as fair value and leaned to put structures);
 pipeline-2: the market view is exact (minus costs);
-pipeline-3: live picks are built for a venue (Derive: minimum order size, fees with the base fee per order, narrow spreads tried, size shown in the prompt)."""
+pipeline-3: live picks are built for a venue (Derive: minimum order size, fees with the base fee per order, narrow spreads tried, size shown in the prompt);
+pipeline-4: the ranking rule is the lowest expected PnL per risk over three models (realised lognormal, implied Student-t, HAR Student-t), single long options are excluded."""
 VENUE_CANDIDATE_LIMITS = CandidateLimits(short_delta_range=(0.02, 0.60), long_delta_range=(0.02, 0.70),
                                          width_fractions=(0.004, 0.006, 0.008, 0.01, 0.015, 0.02, 0.03, 0.04, 0.06, 0.10))
 """With a venue the loss budget of a small account is a few USD: spreads from 0.4% of spot wide are tried too (the research default starts at 2%)."""
@@ -99,13 +101,17 @@ class StrategyPickService:
         """(facts, shortlist), or (reason, None) when the volatility needed for the view is missing."""
         facts = self.facts_service.build(currency, entry.expiration, as_of, entry.spot, entry.forward)
         days = (entry.settlement_at - entry.captured_at).total_seconds() / 86400.0
-        distributions: Dict[str, LognormalDistribution] = {}
+        distributions: Dict[str, Any] = {}
         if facts.realised_vol_30d:
             distributions[REALISED] = LognormalDistribution(entry.forward, facts.realised_vol_30d, days)
         if entry.atm_implied_volatility:
-            distributions[IMPLIED] = LognormalDistribution(entry.forward, entry.atm_implied_volatility, days)
-        if REALISED not in distributions:
-            return "no realised volatility", None
+            distributions[IMPLIED_T] = StudentTDistribution(entry.forward, entry.atm_implied_volatility, days)
+        har = har_annual_volatility(self.facts_service.daily_log_returns(currency, as_of), max(1, round(days)))
+        if har:
+            distributions[HAR_T] = StudentTDistribution(entry.forward, har, days)
+        missing = [name for name in (REALISED, IMPLIED_T, HAR_T) if name not in distributions]
+        if missing:
+            return "no " + ", ".join(missing) + " (a model of the ranking is missing)", None
         venue = self.venues.get(currency) if mode == MODE_LIVE else None
         if mode == MODE_LIVE and venue is None:
             logger.warning("No venue is configured for %s: the live pick uses the research rules (Deribit fees, fractions of a coin)", currency)
@@ -115,7 +121,7 @@ class StrategyPickService:
             scored = []
             for candidate in generate_candidates(entry.quotes, entry.spot, VENUE_CANDIDATE_LIMITS):
                 metrics = metrics_at_venue_size(candidate, entry.spot, distributions, venue, self.risk_budget.risk_per_trade_usd)
-                if metrics is not None and metrics.by_distribution[REALISED].expected_pnl_usd > 0:     # nothing worth asking the model about otherwise
+                if metrics is not None and (robust_expected_per_risk(metrics) or 0.0) > 0:     # nothing worth asking the model about otherwise
                     scored.append((candidate, metrics))
         return facts, build_shortlist(scored)
 

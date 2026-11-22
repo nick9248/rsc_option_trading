@@ -54,3 +54,14 @@ delivery fee is the Deribit rate (not confirmed for Derive). So costs are an upp
 - Only candidates with a positive expected result under the realised-volatility view stay; with none left, the model is not asked (no cost) and the tab says so.
 - On the 2026-11-21 chain with a 150 USD account (7.5 USD per trade) only single long calls and puts passed the 15% cost filter and all had a clearly negative
   expectation: the answer of the pipeline for such an account is "no trade". Replay (research, Deribit fees, fractions of a coin) is unchanged.
+
+## Robust ranking (method pipeline-4)
+Research of 2026-11-22 on 483 BTC and ETH entries (87,225 candidate outcomes, cluster bootstrap over 70 coin x expiry groups; log in the vault) found that the lognormal
+at the 30-day realised volatility was badly calibrated (outcomes 45 to 61% more spread out, 90% intervals covered 86 to 87%), had no predictive value for expected PnL
+(slope -0.09, interval -0.81 to +0.54) and cost about -0.55% log growth per trade at 5% risk. Realised volatility exceeded implied in the sample: no variance risk premium.
+- Models (all with the forward as mean): realised lognormal, implied Student-t (5 degrees of freedom) and HAR-RV Student-t (`har_volatility.py`, fitted on candles complete at the instant).
+- Baseline rule: the LOWEST expected PnL per unit of maximum loss over the three models (a candidate is as good as it looks under the least favourable model); a live pick needs it positive.
+- Single long calls and puts are never shortlisted (lottery: the mean is dominated by a few outcomes that cannot be validated with about 35 expiries a year).
+- `validation/edge_evaluation.py`: expected log growth, cluster bootstrap, calibration table, Kelly fraction and a shrunk fractional Kelly (a tenth of Kelly, halved, capped by the drawdown budget).
+  The Kelly sizing is not yet wired into the position size: the size is still the loss budget.
+- Honest limit: the best rules were at about +0.16% log growth per trade with a lower bound near -0.3%: no edge is proven. Real value comes from the forward test.

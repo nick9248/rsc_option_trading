@@ -7,8 +7,9 @@ after the sync) and a replay of any past instant.
 """
 
 import logging
+import math
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
 from coding.core.analytics.realised_volatility import last_completed_candle_start, realised_volatility
 from coding.core.analytics.strategy_pipeline.facts import MAX_SNAPSHOT_AGE_HOURS, FactsV1
@@ -123,6 +124,21 @@ class FactsAsOfService:
             return None, None
         latest = closes[-1]
         return latest, 100.0 * sum(1 for value in closes if value <= latest) / len(closes)
+
+    def daily_log_returns(self, currency: str, as_of: datetime) -> List[float]:
+        """
+        Daily log returns of the perpetual (since mid 2024) from the candles complete at ``as_of``: the NEWEST unbroken run of consecutive days, so that a
+        missing candle never joins the days on its two sides (the series is used by an autoregression).
+        """
+        end = last_completed_candle_start(as_of)
+        candles = self.repository.get_ohlcv_by_date_range(currency, datetime(2024, 7, 1), end)
+        run: List[float] = []
+        for first, second in zip(candles, candles[1:]):
+            if first["close"] > 0 and second["close"] > 0 and (second["date"] - first["date"]) == timedelta(days=1):
+                run.append(math.log(second["close"] / first["close"]))
+            else:
+                run = []                                                  # a gap or a bad close: start again after it
+        return run
 
     def _realised(self, currency: str, as_of: datetime, days: int) -> Optional[float]:
         """Realised volatility of the last ``days`` daily returns of the candles that were complete at ``as_of`` (the running candle is never used)."""

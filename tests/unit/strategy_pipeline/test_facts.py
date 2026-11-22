@@ -159,3 +159,12 @@ def test_the_facts_read_candles_up_to_the_last_complete_one_and_not_the_running_
     build(service)
     start, end = repository.get_ohlcv_by_date_range.call_args.args[1:3]
     assert end == AS_OF.replace(tzinfo=None) - timedelta(days=1, hours=1) and start < end
+
+
+def test_daily_returns_never_join_the_two_sides_of_a_missing_candle():
+    service, repository = make_service()
+    candles = daily_closes(100)
+    del candles[60]                                           # one missing day
+    repository.get_ohlcv_by_date_range.return_value = candles
+    returns = service.daily_log_returns("BTC", AS_OF)
+    assert len(returns) == 38                                  # only the 39 candles after the gap form an unbroken run: 38 returns

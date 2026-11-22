@@ -18,7 +18,7 @@ AS_OF = ENTRY
 
 def make_service(reply_choice="C1", spent=0.0, stored=None, mode_reply=None):
     repository = make_repository()
-    repository.get_ohlcv_by_date_range.return_value = daily_closes()
+    repository.get_ohlcv_by_date_range.return_value = daily_closes(300)
     repository.get_onchain_analysis_snapshot_at_or_before.return_value = analysis_row(hour=AS_OF - timedelta(hours=1))
     repository.get_onchain_volatility_snapshot_at_or_before.return_value = volatility_row(hour=AS_OF - timedelta(hours=1))
     repository.get_flow_delta_window.return_value = {"hours_present": 24, "newest_hour": AS_OF - timedelta(hours=1), "hiro_usd": 1.0,

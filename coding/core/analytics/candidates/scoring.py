@@ -17,6 +17,10 @@ from coding.core.analytics.candidates.metrics import CandidateMetrics
 REALISED = "realised"
 IMPLIED = "implied"
 """Names of the two distributions the lab computes: a lognormal with the recent realised volatility, and one with the market's implied."""
+IMPLIED_T = "implied_t"
+HAR_T = "har_t"
+ROBUST_MODELS = (REALISED, IMPLIED_T, HAR_T)
+"""The three distributions of the robust ranking of the strategy pipeline: realised lognormal, implied Student-t, HAR Student-t."""
 
 
 def _distribution(metrics: CandidateMetrics, name: str):
@@ -28,6 +32,20 @@ def _expected_per_risk(name: str) -> Callable[[CandidateMetrics], Optional[float
         result = _distribution(metrics, name)
         return None if result is None else result.expected_pnl_usd / metrics.max_loss_usd
     return score
+
+
+def robust_expected_per_risk(metrics: CandidateMetrics) -> Optional[float]:
+    """The LOWEST expected PnL per risk over the robust models (realised lognormal, implied Student-t, HAR Student-t); None unless all are present.
+    A candidate is only as good as it looks under the least favourable model."""
+    if metrics.max_loss_usd <= 0:
+        return None
+    values = []
+    for name in ROBUST_MODELS:
+        result = _distribution(metrics, name)
+        if result is None:
+            return None
+        values.append(result.expected_pnl_usd / metrics.max_loss_usd)
+    return min(values)
 
 
 def _probability(metrics: CandidateMetrics) -> Optional[float]:

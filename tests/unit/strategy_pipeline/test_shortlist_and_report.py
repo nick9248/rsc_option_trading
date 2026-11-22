@@ -5,23 +5,24 @@ from datetime import datetime, timezone
 
 import pytest
 
-from coding.core.analytics.candidates.distribution import LognormalDistribution
+from coding.core.analytics.candidates.distribution import LognormalDistribution, StudentTDistribution
 from coding.core.analytics.candidates.generator import FAMILIES, generate_candidates
 from coding.core.analytics.candidates.metrics import compute_metrics
 from coding.core.analytics.strategy_pipeline.pick_report import summarize_picks
 from coding.core.analytics.strategy_pipeline.shortlist import (
-    BASELINE_RULE, NO_TRADE, PER_FAMILY, baseline_id, build_shortlist, candidate_record, parse_pick, render_shortlist)
+    BASELINE_RULE, EXCLUDED_FAMILIES, NO_TRADE, PER_FAMILY, baseline_id, build_shortlist, candidate_record, parse_pick, render_shortlist)
 from tests.unit.candidates.test_candidates import DAYS, FORWARD, VOL, chain
 
 
 def scored(half_spread=2.0, realised_vol=0.40):
-    distributions = {"realised": LognormalDistribution(FORWARD, realised_vol, DAYS), "implied": LognormalDistribution(FORWARD, VOL, DAYS)}
+    distributions = {"realised": LognormalDistribution(FORWARD, realised_vol, DAYS), "implied_t": StudentTDistribution(FORWARD, VOL, DAYS),
+                     "har_t": StudentTDistribution(FORWARD, realised_vol * 1.1, DAYS)}
     return [(candidate, compute_metrics(candidate, FORWARD, distributions)) for candidate in generate_candidates(chain(half_spread=half_spread), FORWARD)]
 
 
 def test_the_shortlist_has_at_most_two_per_family_and_every_family():
     shortlist = build_shortlist(scored())
-    assert {item.candidate.family for item in shortlist} == set(FAMILIES)
+    assert {item.candidate.family for item in shortlist} == set(FAMILIES) - set(EXCLUDED_FAMILIES)      # single long options are never shortlisted
     for family in FAMILIES:
         assert sum(1 for item in shortlist if item.candidate.family == family) <= PER_FAMILY
     assert [item.candidate_id for item in shortlist] == [f"C{number}" for number in range(1, len(shortlist) + 1)]
@@ -52,12 +53,12 @@ def test_the_text_shows_legs_costs_and_both_views_and_stored_records_are_plain_d
     text = render_shortlist(shortlist)
     assert text.startswith("## Shortlist") and "C1 " in text and "realised-vol view: P(profit)" in text
     assert "market view: expected PnL" in text and "implied-vol view" not in text            # exact, no flat-volatility artefact
-    assert "max profit unlimited" in text
+    assert "max profit unlimited" not in text and "long_call" not in text and "long_put" not in text          # a lottery is never shown
     json.dumps([candidate_record(item) for item in shortlist], allow_nan=False)
     for item in shortlist:
         record = candidate_record(item)
         assert record["market_expected_pnl_usd"] == pytest.approx(-(item.metrics.spread_cost_usd + item.metrics.trading_fees_usd))
-    assert BASELINE_RULE == "expected_pnl_per_risk_realised_vol"
+    assert BASELINE_RULE == "robust_expected_pnl_per_risk"
 
 
 IDS = ["C1", "C2", "C3"]
@@ -137,3 +138,20 @@ def test_the_market_view_agrees_with_the_numerical_expectation_on_a_chain_priced
         metrics = compute_metrics(candidate, FORWARD, distributions)
         numerical = metrics.by_distribution["implied"].expected_pnl_usd
         assert numerical == pytest.approx(metrics.market_expected_pnl_usd, abs=0.00015 * FORWARD * len(candidate.legs) + 2.0)
+
+
+def test_the_baseline_ranks_by_the_lowest_expected_result_over_the_three_models_and_needs_all_three():
+    from coding.core.analytics.candidates.scoring import robust_expected_per_risk
+    item = build_shortlist(scored())[0]
+    per_risk = [result.expected_pnl_usd / item.metrics.max_loss_usd for name, result in item.metrics.by_distribution.items()]
+    assert item.score == min(per_risk) == robust_expected_per_risk(item.metrics)
+    only_two = {name: result for name, result in item.metrics.by_distribution.items() if name != "har_t"}
+    from dataclasses import replace
+    assert robust_expected_per_risk(replace(item.metrics, by_distribution=only_two)) is None
+
+
+def test_a_candidate_without_a_maximum_loss_has_no_robust_score_instead_of_crashing():
+    from dataclasses import replace
+    from coding.core.analytics.candidates.scoring import robust_expected_per_risk
+    item = build_shortlist(scored())[0]
+    assert robust_expected_per_risk(replace(item.metrics, max_loss_usd=0.0)) is None
