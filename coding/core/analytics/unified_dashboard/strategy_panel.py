@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from coding.core.analytics.charts.payoff import PayoffLeg, payoff_figure, summarize_payoff
 from coding.core.analytics.market_wide_calculator import MarketWideCalculator
+from coding.core.analytics.risk.venue import DERIVE_VENUES
 from coding.core.analytics.report.figure_style import figure_json
 from coding.core.analytics.report.report_page import format_utc, paragraph_fragment, table_fragment
 
@@ -155,7 +156,19 @@ def _selection_text(selected: Sequence[StoredPick]) -> str:
     return paragraph_fragment(text)
 
 
-def _card(pick: StoredPick, now_utc: datetime, role: str = "") -> Tuple[str, Dict[str, Dict[str, Any]]]:
+def _minimum_order_text(pick: StoredPick, chosen: Dict[str, Any], currency: str = "BTC") -> str:
+    """What the smallest order Derive accepts would mean: its maximum loss, taker fees (0.5 USD per order and leg) and the account it needs at 5% risk per trade."""
+    venue = DERIVE_VENUES.get(currency)
+    if venue is None:
+        return ""
+    quantity = venue.minimum_amount
+    fees = sum(venue.taker_fees.fee_per_coin_usd(pick.spot, leg["entry_price_usd"], quantity) * quantity for leg in chosen["legs"])
+    loss = chosen["max_loss_usd"] * quantity
+    return (f"At Derive's smallest order ({quantity:g} coins per leg): entry {_entry_text(chosen['entry_cash_usd'], quantity)}, maximum loss {loss:,.2f} USD, "
+            f"taker fees about {fees:,.2f} USD ({fees / loss:.0%} of the loss), account needed at 5% risk per trade about {loss / 0.05:,.0f} USD.")
+
+
+def _card(pick: StoredPick, now_utc: datetime, role: str = "", currency: str = "BTC") -> Tuple[str, Dict[str, Dict[str, Any]]]:
     age_hours = max((now_utc - pick.as_of).total_seconds() / 3600.0, 0.0)
     warnings: List[str] = []
     if age_hours > STALE_AFTER_HOURS:
@@ -178,8 +191,13 @@ def _card(pick: StoredPick, now_utc: datetime, role: str = "") -> Tuple[str, Dic
                            + table_fragment(["Action", "Type", "Strike", "Fill price (USD per coin)"],
                                             [[leg["action"], leg["option_type"], f"{leg['strike']:,.0f}", f"{leg['entry_price_usd']:,.0f}"]
                                              for leg in chosen["legs"]], numeric_columns=(2, 3)))
-                parsed += paragraph_fragment(f"Size from the loss budget: {pick.quantity:.4f} coins per leg; entry {_entry_text(chosen['entry_cash_usd'], pick.quantity)}; "
-                                             f"maximum loss {_usd(pick.max_loss_usd)} USD (risk per trade {_usd(pick.risk_per_trade_usd)} USD).", "note-s")
+                if abs(pick.quantity - 1.0) < 1e-9:
+                    parsed += paragraph_fragment(f"Per 1 coin per leg (scale-free: take your own fraction): entry {_entry_text(chosen['entry_cash_usd'], 1.0)}; "
+                                                 f"maximum loss {_usd(pick.max_loss_usd)} USD.", "note-s")
+                    parsed += paragraph_fragment(_minimum_order_text(pick, chosen, currency), "note-s")
+                else:
+                    parsed += paragraph_fragment(f"Size from the loss budget: {pick.quantity:.4f} coins per leg; entry {_entry_text(chosen['entry_cash_usd'], pick.quantity)}; "
+                                                 f"maximum loss {_usd(pick.max_loss_usd)} USD (risk per trade {_usd(pick.risk_per_trade_usd)} USD).", "note-s")
                 chart_html, chart_figures = _chart(pick, chosen)
                 parsed += chart_html
                 if pick.baseline_id:
@@ -199,7 +217,7 @@ def _card(pick: StoredPick, now_utc: datetime, role: str = "") -> Tuple[str, Dic
         warnings.insert(0, "The model declined to answer this request.")
         body += paragraph_fragment(pick.response[:RAW_TEXT_LIMIT], "note-s")
     elif pick.status == "no_candidates":
-        warnings.insert(0, "No candidate fits this expiry: none could be placed within the loss budget and the venue minimum order with a positive expected result after fees. The model was not asked (no cost).")
+        warnings.insert(0, "No candidate fits this expiry: no structure has a positive expected result under all three price models after costs. The model was not asked (no cost).")
     else:
         warnings.insert(0, "The answer of the model was not usable (not in the expected form, or not a candidate of the shortlist).")
         body += paragraph_fragment(pick.response[:RAW_TEXT_LIMIT], "note-s")
@@ -250,7 +268,7 @@ def build_strategy_panel(picks: Sequence[StoredPick], now_utc: datetime, currenc
             return "SELECTED TRADE"
         return "alternative, not selected" if pick.status == "ok" and pick.choice != NO_TRADE else "no trade"
 
-    cards = [_card(pick, now, role(pick)) for pick in ordered]
+    cards = [_card(pick, now, role(pick), currency) for pick in ordered]
     figures: Dict[str, Dict[str, Any]] = {}
     for _, card_figures in cards:
         figures.update(card_figures)
