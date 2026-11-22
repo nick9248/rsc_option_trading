@@ -217,3 +217,16 @@ def test_a_venue_sized_pick_is_evaluated_with_the_venue_fees_at_its_stored_size_
     assert fee(1_000.0) == pytest.approx(DERIVE_TAKER_FEES.fee_per_coin_usd(60_000.0, 1_000.0, 0.02))
     assert fee(1_000.0) == pytest.approx(0.5 / 0.02 + 18.0)                      # base fee per coin at this size + 0.03% of 60,000
     assert StrategyPickService._leg_fee({"quantity": None}, 60_000.0) is None and StrategyPickService._leg_fee({}, 60_000.0) is None
+
+
+def test_a_unit_quantity_live_pick_is_stored_per_coin_with_the_metrics_maximum_loss_and_no_venue_warning(caplog):
+    service, client, repository = make_service()
+    service.unit_quantity = 1.0
+    reply, shortlist = reply_for(service)
+    client.messages.create.return_value = reply
+    with caplog.at_level("WARNING"):
+        result = run(service, mode=MODE_LIVE)
+    row = repository.save_strategy_pick.call_args.args[0]
+    chosen = next(item for item in shortlist if item.candidate_id == result.choice)
+    assert row["quantity"] == 1.0 and row["max_loss_usd"] == pytest.approx(chosen.metrics.max_loss_usd)
+    assert "No venue is configured" not in caplog.text

@@ -67,7 +67,8 @@ class StrategyPickService:
     """Builds the shortlist for one expiry at one instant, asks the model, stores the answer, and later evaluates it."""
 
     def __init__(self, repository: DatabaseRepository, client: Any, risk_budget: RiskBudget = RiskBudget(DEFAULT_RESEARCH_CAPITAL_USD),
-                 model: str = DEFAULT_MODEL, budget_usd: float = DEFAULT_BUDGET_USD, venues: Optional[Mapping[str, Venue]] = None):
+                 model: str = DEFAULT_MODEL, budget_usd: float = DEFAULT_BUDGET_USD, venues: Optional[Mapping[str, Venue]] = None,
+                 unit_quantity: Optional[float] = None):
         """
         Args:
             repository: Local database (picks and the running cost are stored there).
@@ -75,7 +76,9 @@ class StrategyPickService:
             risk_budget: The account the position is sized for; any fraction of a coin is allowed (Derive trades fractions).
             model: Model id; must have a price in ``PRICES_USD_PER_MILLION_TOKENS``.
             budget_usd: Stop when the stored model calls have cost this much.
-            venues: Per currency, where positions are placed. Used for LIVE picks only: candidates the venue cannot place within the loss budget
+            unit_quantity: When set, every pick is stored at this many coins per leg (1.0: "per coin", scale-free: the reader takes his own fraction) instead of
+                being sized from the loss budget.
+            venues: Per currency, where positions are placed (not used by the live runner any more: its picks are scale-free via unit_quantity). Used for LIVE picks only: candidates the venue cannot place within the loss budget
                 are dropped, fees are the venue's, and the size is the venue's allowed one. None (and every replay): fractions of a coin, Deribit fees.
 
         Raises:
@@ -89,6 +92,7 @@ class StrategyPickService:
         self.model = model
         self.budget_usd = budget_usd
         self.venues = dict(venues or {})
+        self.unit_quantity = unit_quantity
         self.backtest = BacktestService(repository)
         self.facts_service = FactsAsOfService(repository)
 
@@ -113,7 +117,7 @@ class StrategyPickService:
         if missing:
             return "no " + ", ".join(missing) + " (a model of the ranking is missing)", None
         venue = self.venues.get(currency) if mode == MODE_LIVE else None
-        if mode == MODE_LIVE and venue is None:
+        if mode == MODE_LIVE and venue is None and self.venues:          # venues were given but not for this currency (no unit size either)
             logger.warning("No venue is configured for %s: the live pick uses the research rules (Deribit fees, fractions of a coin)", currency)
         if venue is None:
             scored = [(candidate, compute_metrics(candidate, entry.spot, distributions)) for candidate in generate_candidates(entry.quotes, entry.spot)]
@@ -203,7 +207,9 @@ class StrategyPickService:
                 status = "no_trade" if parsed.choice == NO_TRADE else "ok"
                 if parsed.choice != NO_TRADE:
                     chosen = next(item for item in shortlist if item.candidate_id == parsed.choice)
-                    if chosen.metrics.quantity is not None:          # sized for the venue already (its minimum, step and fees)
+                    if self.unit_quantity is not None:
+                        quantity, max_loss = self.unit_quantity, self.unit_quantity * chosen.metrics.max_loss_usd
+                    elif chosen.metrics.quantity is not None:          # sized for the venue already (its minimum, step and fees)
                         quantity, max_loss = chosen.metrics.quantity, chosen.metrics.quantity * chosen.metrics.max_loss_usd
                     else:
                         sized = size_position(chosen.metrics.max_loss_usd, self.risk_budget)

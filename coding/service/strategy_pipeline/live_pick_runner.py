@@ -9,8 +9,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional, Set
 
-from coding.core.analytics.risk.budget import RiskBudget
-from coding.core.analytics.risk.venue import DERIVE_VENUES
 from coding.service.strategy_pipeline.strategy_pick_service import MODE_LIVE, StrategyPickService
 
 logger = logging.getLogger(__name__)
@@ -18,9 +16,8 @@ logger = logging.getLogger(__name__)
 LIVE_TARGET_DAYS = (3.0, 7.0, 14.0, 30.0)
 """The expiry nearest each of these many days away is picked (the same expiry for two targets is picked once)."""
 MINIMUM_DAYS_TO_EXPIRY = 1.0
-LIVE_CAPITAL_USD = 150.0
-"""The account the live picks are sized for (the owner starts with 100 to 200 USD); with the 20% drawdown limit and 4 losses in a row one trade
-may lose 7.5 USD. Change it here when the real account changes."""
+UNIT_QUANTITY = 1.0
+"""Live picks are scale-free: stored per 1 coin per leg, ranked without a capital or a venue minimum; the reader takes his own fraction (the tab shows what Derive's minimum order needs)."""
 
 
 class LivePickRunner:
@@ -92,5 +89,4 @@ def build_live_pick_runner() -> LivePickRunner:
     api_key = os.environ.get("claude_api_key")
     if not api_key:
         raise RuntimeError("claude_api_key is not set in .env")
-    return LivePickRunner(StrategyPickService(DatabaseRepository(), anthropic.Anthropic(api_key=api_key), risk_budget=RiskBudget(LIVE_CAPITAL_USD),
-                                                 venues=DERIVE_VENUES))
+    return LivePickRunner(StrategyPickService(DatabaseRepository(), anthropic.Anthropic(api_key=api_key), unit_quantity=UNIT_QUANTITY))

@@ -55,7 +55,6 @@ def test_a_stop_request_ends_the_run_before_the_next_paid_call_and_keeps_the_pic
     assert service.pick.call_count == 1 and summary == "1 expiries, 1 new picks, 0.045 USD (stopped by the user)"
 
 
-def test_the_live_account_gives_a_few_usd_of_risk_per_trade_not_the_research_default():
-    from coding.core.analytics.risk.budget import RiskBudget
-    from coding.service.strategy_pipeline.live_pick_runner import LIVE_CAPITAL_USD
-    assert RiskBudget(LIVE_CAPITAL_USD).risk_per_trade_usd == pytest.approx(7.5)              # 150 x 20% / 4 losses in a row
+def test_live_picks_are_stored_per_one_coin_without_a_venue_or_a_capital():
+    from coding.service.strategy_pipeline.live_pick_runner import UNIT_QUANTITY
+    assert UNIT_QUANTITY == 1.0
