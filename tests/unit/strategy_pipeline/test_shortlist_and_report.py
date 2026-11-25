@@ -10,7 +10,7 @@ from coding.core.analytics.candidates.generator import FAMILIES, generate_candid
 from coding.core.analytics.candidates.metrics import compute_metrics
 from coding.core.analytics.strategy_pipeline.pick_report import summarize_picks
 from coding.core.analytics.strategy_pipeline.shortlist import (
-    BASELINE_RULE, EXCLUDED_FAMILIES, NO_TRADE, PER_FAMILY, baseline_id, build_shortlist, candidate_record, parse_pick, render_shortlist)
+    BASELINE_RULE, EXCLUDED_FAMILIES, MODEL_LABELS, NO_TRADE, PER_FAMILY, baseline_id, build_shortlist, candidate_record, parse_pick, render_shortlist)
 from tests.unit.candidates.test_candidates import DAYS, FORWARD, VOL, chain
 
 
@@ -48,11 +48,15 @@ def test_candidates_whose_costs_eat_the_risk_are_dropped():
         assert item.metrics.spread_cost_usd + item.metrics.trading_fees_usd <= 0.15 * item.metrics.max_loss_usd
 
 
-def test_the_text_shows_legs_costs_and_both_views_and_stored_records_are_plain_data():
+def test_the_text_shows_legs_costs_the_three_models_with_the_score_and_stored_records_are_plain_data():
     shortlist = build_shortlist(scored())
     text = render_shortlist(shortlist)
-    assert text.startswith("## Shortlist") and "C1 " in text and "realised-vol view: P(profit)" in text
+    assert text.startswith("## Shortlist") and "C1 " in text and "recent-volatility model: P(profit)" in text
     assert "market view: expected PnL" in text and "implied-vol view" not in text            # exact, no flat-volatility artefact
+    for item, line in zip(shortlist, text.splitlines()[1:]):                  # every candidate: all three results and its own score
+        assert line.startswith(item.candidate_id + " ") and line.endswith(f"score {item.score:+.3f}")
+        for name, label in MODEL_LABELS:
+            assert f"{label}: P(profit) {item.metrics.by_distribution[name].probability_of_profit:.0%}, expected PnL {item.metrics.by_distribution[name].expected_pnl_usd:+,.0f}" in line
     assert "max profit unlimited" not in text and "long_call" not in text and "long_put" not in text          # a lottery is never shown
     json.dumps([candidate_record(item) for item in shortlist], allow_nan=False)
     for item in shortlist:
@@ -155,3 +159,10 @@ def test_a_candidate_without_a_maximum_loss_has_no_robust_score_instead_of_crash
     from coding.core.analytics.candidates.scoring import robust_expected_per_risk
     item = build_shortlist(scored())[0]
     assert robust_expected_per_risk(replace(item.metrics, max_loss_usd=0.0)) is None
+
+
+def test_the_instructions_name_the_three_models_and_the_score_the_text_shows():
+    from coding.core.analytics.strategy_pipeline.shortlist import SYSTEM_PROMPT
+    for _, label in MODEL_LABELS:
+        assert label in SYSTEM_PROMPT
+    assert "LOWEST of the three" in SYSTEM_PROMPT and "not a proven edge" in SYSTEM_PROMPT and "realised-volatility view" not in SYSTEM_PROMPT

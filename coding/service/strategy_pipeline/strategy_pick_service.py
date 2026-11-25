@@ -33,11 +33,12 @@ from coding.service.strategy_pipeline.facts_service import FactsAsOfService
 
 logger = logging.getLogger(__name__)
 
-METHOD_VERSION = "pipeline-4"
+METHOD_VERSION = "pipeline-5"
 """pipeline-1: the shortlist showed a flat-volatility "implied view" that ignored skew (the model read it as fair value and leaned to put structures);
 pipeline-2: the market view is exact (minus costs);
 pipeline-3: live picks are built for a venue (Derive: minimum order size, fees with the base fee per order, narrow spreads tried, size shown in the prompt);
-pipeline-4: the ranking rule is the lowest expected PnL per risk over three models (realised lognormal, implied Student-t, HAR Student-t), single long options are excluded."""
+pipeline-4: the ranking rule is the lowest expected PnL per risk over three models (realised lognormal, implied Student-t, HAR Student-t), single long options are excluded;
+pipeline-5: the model is shown all three models and the score, and a live pick offers only candidates with a positive score (none: the model is not asked)."""
 VENUE_CANDIDATE_LIMITS = CandidateLimits(short_delta_range=(0.02, 0.60), long_delta_range=(0.02, 0.70),
                                          width_fractions=(0.004, 0.006, 0.008, 0.01, 0.015, 0.02, 0.03, 0.04, 0.06, 0.10))
 """With a venue the loss budget of a small account is a few USD: spreads from 0.4% of spot wide are tried too (the research default starts at 2%)."""
@@ -125,8 +126,10 @@ class StrategyPickService:
             scored = []
             for candidate in generate_candidates(entry.quotes, entry.spot, VENUE_CANDIDATE_LIMITS):
                 metrics = metrics_at_venue_size(candidate, entry.spot, distributions, venue, self.risk_budget.risk_per_trade_usd)
-                if metrics is not None and (robust_expected_per_risk(metrics) or 0.0) > 0:     # nothing worth asking the model about otherwise
+                if metrics is not None:
                     scored.append((candidate, metrics))
+        if mode == MODE_LIVE:                     # nothing worth paying the model for otherwise; a replay keeps all, it is research on the ranking
+            scored = [(candidate, metrics) for candidate, metrics in scored if (robust_expected_per_risk(metrics) or 0.0) > 0]
         return facts, build_shortlist(scored)
 
     def pick(self, currency: str, as_of: datetime, mode: str = MODE_REPLAY, target_days_to_expiry: float = 7.0, minimum_days_to_expiry: float = 2.0,
