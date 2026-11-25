@@ -181,8 +181,8 @@ WantedBy=multi-user.target
 ### Step 8: Sync Script
 - `scripts/sync_from_vps.py` — runs on local PC
 - Opens SSH tunnel: local port 5434 → VPS port 5432
-- Syncs the 20 tables in `SYNC_TABLES` incrementally using watermark columns (12 when first set up)
-- Uses `ON CONFLICT DO NOTHING` for tables with unique constraints
+- Syncs the 19 tables in `SYNC_TABLES` using watermark columns (12 when first set up)
+- Tables the collector never rewrites are copied with `ON CONFLICT DO NOTHING`; tables it overwrites (`upsert_key` in `SYNC_TABLES`) are re-read (a recent window, or the whole table) and changed rows are updated locally
 - Also pulls `logs/vps_health.json` from VPS
 
 ### Step 9: VPS Health Monitor
@@ -224,28 +224,31 @@ The strategy finder (straddle, iron condor and butterfly scanners) and the forwa
 
 ## 7. Synced Tables
 
-The sync script pulls these 18 tables (`SYNC_TABLES` in `scripts/sync_from_vps.py`) from the VPS to the local PC. `health_check_runs` stays on the VPS.
+The sync script pulls these 19 tables (`SYNC_TABLES` in `scripts/sync_from_vps.py`) from the VPS to the local PC. `health_check_runs` stays on the VPS.
+
+"upsert" = the VPS overwrites rows: the last hours (`lookback_hours`) or the whole table are re-read and differing local rows are updated. A rewrite older than that window (a backfill run on the VPS) is not picked up: call `sync_table` once with a copy of the entry without `lookback_hours`. First check that no repair was made only on the PC, because the full re-read replaces every differing local row with the VPS row.
 
 | Table | Watermark Column | Conflict Handling |
 |-------|-----------------|-------------------|
 | `historical_trades` | `captured_at` | `(trade_id, trade_timestamp)` |
 | `snapshots` | `captured_at` | none |
-| `hourly_snapshots` | `snapshot_hour` | `(instrument_name, snapshot_hour)` |
-| `onchain_analysis_snapshots` | `snapshot_hour` | `(snapshot_hour, currency, expiration)` |
-| `flow_delta_hourly` | `snapshot_hour` | `(snapshot_hour, currency, expiration)` |
+| `hourly_snapshots` | `snapshot_hour` | upsert on `(instrument_name, snapshot_hour)`, 168 h |
+| `onchain_analysis_snapshots` | `snapshot_hour` | upsert on `(snapshot_hour, currency, expiration)`, 24 h |
+| `flow_delta_hourly` | `snapshot_hour` | upsert on `(snapshot_hour, currency, expiration)`, 24 h |
 | `funding_rate_history` | `date` | `(instrument_name, timestamp)` |
-| `ohlcv_history` | `date` | `(instrument_name, timestamp)` |
-| `onchain_volatility_snapshots` | `reconstructed_at` | `(snapshot_hour, currency, expiration)` |
-| `daily_oi_snapshots` | `created_at` | none |
+| `ohlcv_history` | `date` | upsert on `(instrument_name, timestamp)`, 72 h |
+| `onchain_volatility_snapshots` | `reconstructed_at` | upsert on `(snapshot_hour, currency, expiration)`, 24 h |
+| `daily_oi_snapshots` | `created_at` | upsert on `(snapshot_date, snapshot_hour_utc, currency, expiration, strike, option_type)`, 6 h |
 | `account_snapshots` | `snapshot_hour` | `(currency, snapshot_hour)` |
 | `position_snapshots` | `snapshot_hour` | `(snapshot_hour, instrument_name)` |
 | `user_trades` | `trade_time` | `(trade_id)` |
 | `settlements` | `settled_at` | `(currency, settled_at, type, instrument_name)` |
-| `orders` | `last_update_at` | none |
+| `orders` | `last_update_at` | upsert on `(order_id)`, whole table |
 | `futures_basis` | `timestamp` | `(futures_instrument, timestamp)` |
-| `dvol_history` | `timestamp` | none |
-| `volatility_skew_history` | `snapshot_hour` | none |
-| `menthorq_level_snapshots` | `computed_at` | `(currency, mode, expiry_universe, gamma_underlying, as_of_utc)` |
+| `dvol_history` | `timestamp` | upsert on `(asset, timestamp)`, 72 h |
+| `volatility_skew_history` | `snapshot_hour` | upsert on `(snapshot_hour, currency, expiration)`, 6 h |
+| `menthorq_level_snapshots` | `computed_at` | `(currency, mode, expiry_universe, gamma_underlying, as_of_utc)`; a not-computed row is replaced by a computed one |
+| `taker_flow_hourly` | `collected_at` | `(symbol, hour_utc)` |
 
 ---
 
