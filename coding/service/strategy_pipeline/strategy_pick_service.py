@@ -164,6 +164,8 @@ class StrategyPickService:
                   if mode == MODE_REPLAY else
                   self.repository.get_strategy_picks(currency, mode=mode, expiration=entry.expiration, as_of_since=as_of - timedelta(hours=1),
                                                      method_version=METHOD_VERSION))
+        if mode == MODE_LIVE:
+            stored = [row for row in stored if row["status"] != "no_candidates"]          # a free "no candidates" row never blocks a new look (the code or the chain may have changed)
         if stored:
             row = stored[-1]
             return PickResult(row["id"], row["status"], row["choice"], None, [], row["quantity"], 0.0, True, entry.expiration)

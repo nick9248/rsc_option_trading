@@ -230,3 +230,14 @@ def test_a_unit_quantity_live_pick_is_stored_per_coin_with_the_metrics_maximum_l
     chosen = next(item for item in shortlist if item.candidate_id == result.choice)
     assert row["quantity"] == 1.0 and row["max_loss_usd"] == pytest.approx(chosen.metrics.max_loss_usd)
     assert "No venue is configured" not in caplog.text
+
+
+def test_a_stored_no_candidates_live_row_does_not_block_a_new_pick_within_the_hour_but_a_paid_one_does():
+    free = {"id": 5, "status": "no_candidates", "choice": None, "quantity": None}
+    paid = {"id": 6, "status": "ok", "choice": "C1", "quantity": 1.0}
+    service, client, repository = make_service(stored=[free])
+    reply, _ = reply_for(service)
+    client.messages.create.return_value = reply
+    assert run(service, mode=MODE_LIVE).stored_before is False and client.messages.create.call_count == 1
+    service, client, repository = make_service(stored=[free, paid])
+    assert run(service, mode=MODE_LIVE).stored_before is True and client.messages.create.call_count == 0
