@@ -153,7 +153,7 @@ def test_the_service_reads_the_live_picks_of_the_current_method_and_survives_a_d
     panel = UnifiedDashboardService(lambda: repository)._strategy_panel("BTC")
     assert "Chosen: C1" in panel.html
     kwargs = repository.get_strategy_picks.call_args.kwargs
-    assert kwargs["mode"] == "live" and kwargs["method_version"] == "pipeline-5"
+    assert kwargs["mode"] == "live" and kwargs["method_version"] == "pipeline-6"
     repository.get_strategy_picks.side_effect = RuntimeError("down")
     assert "could not be read: RuntimeError: down" in UnifiedDashboardService(lambda: repository)._strategy_panel("BTC").html
     assert UnifiedDashboardService()._strategy_panel("BTC") is None

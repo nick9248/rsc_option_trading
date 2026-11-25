@@ -6,7 +6,9 @@ migration 040 (`strategy_picks`).
 
 ## Steps
 1. **Facts** (`FactsAsOfService`): the numbers the collector stores every hour per expiry (max pain, put/call, GEX/DEX totals, walls; ATM IV, skew,
-   expected moves, vanna/charm; 24 h delta flow) plus DVOL and realised volatility from daily candles. Everything is read as of the instant:
+   expected moves, vanna/charm; 24 h delta flow) plus DVOL and realised volatility from daily candles. The at-the-money and 25-delta implied volatility
+   come from `volatility_skew_history` (full chain, since 2026-08-25), not from the older columns of `onchain_volatility_snapshots`, which were built from
+   a few traded instruments (migration 018). The IV percentile, variance risk premium, expected moves and vanna/charm still come from that older table. Everything is read as of the instant:
    a stored row counts once it was written (or its hour had ended), a row older than 3 hours is missing, and what was not recorded is
    "not recorded", never 0 (the collector zero-fills empty buckets; those are treated as missing). Coverage: levels since 2026-03-15,
    volatility since 2026-07-14, flow since 2026-08-25.

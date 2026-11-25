@@ -48,12 +48,14 @@ class FactsV1:
     hvl_level: Optional[float] = None
     itm_call_oi_pct: Optional[float] = None
     itm_put_oi_pct: Optional[float] = None
-    # volatility (hourly volatility snapshot)
-    volatility_hour: Optional[datetime] = None
+    # implied volatility of the full chain (hourly skew history)
+    chain_volatility_hour: Optional[datetime] = None
     atm_iv_pct: Optional[float] = None
     skew_25d: Optional[float] = None
     put_25d_iv_pct: Optional[float] = None
     call_25d_iv_pct: Optional[float] = None
+    # other volatility figures (hourly volatility snapshot)
+    volatility_hour: Optional[datetime] = None
     vrp_absolute_points: Optional[float] = None
     """Implied minus realised volatility of the stored analysis, in vol points."""
     iv_percentile_365d: Optional[float] = None
@@ -100,10 +102,13 @@ def render_facts(facts: FactsV1) -> str:
               _line("Calls in the money, share of open interest", facts.itm_call_oi_pct, "%", 1),
               _line("Puts in the money, share of open interest", facts.itm_put_oi_pct, "%", 1), ""]
 
-    lines.append(f"## Volatility of this expiry (stored hourly analysis of {'not available' if facts.volatility_hour is None else format_utc(facts.volatility_hour)})")
-    lines += [_line("ATM implied volatility", facts.atm_iv_pct, "%", 1), _line("25-delta skew (put IV minus call IV)", facts.skew_25d),
-              _line("25-delta put IV", facts.put_25d_iv_pct, "%", 1), _line("25-delta call IV", facts.call_25d_iv_pct, "%", 1),
-              _line("Variance risk premium of the stored analysis (implied minus realised, vol points)", facts.vrp_absolute_points, "", 1),
+    lines.append(f"## Implied volatility of this expiry (full chain, hour {'not available' if facts.chain_volatility_hour is None else format_utc(facts.chain_volatility_hour)})")
+    lines += [_line("ATM implied volatility", facts.atm_iv_pct, "%", 1),
+              _line("25-delta skew (put IV minus call IV, vol points)", facts.skew_25d, "", 1),
+              _line("25-delta put IV", facts.put_25d_iv_pct, "%", 1), _line("25-delta call IV", facts.call_25d_iv_pct, "%", 1), ""]
+
+    lines.append(f"## Other volatility figures of this expiry (stored hourly analysis of {'not available' if facts.volatility_hour is None else format_utc(facts.volatility_hour)})")
+    lines += [_line("Variance risk premium of the stored analysis (implied minus realised, vol points)", facts.vrp_absolute_points, "", 1),
               _line("IV percentile over 365 days", facts.iv_percentile_365d, "%", 0),
               _line("Expected daily move", facts.expected_daily_move_usd, " USD", 0), _line("Expected weekly move", facts.expected_weekly_move_usd, " USD", 0),
               _line("Put/call ratio at the money", facts.pc_atm_ratio), _line("Put/call ratio, 5-15% out of the money", facts.pc_near_otm_ratio),

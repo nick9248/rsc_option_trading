@@ -52,6 +52,8 @@ class FactsAsOfService:
 
         analysis = self._fresh(self.repository.get_onchain_analysis_snapshot_at_or_before(currency, expiration, as_of), as_of)
         volatility = self._fresh(self.repository.get_onchain_volatility_snapshot_at_or_before(currency, expiration, as_of), as_of)
+        chain_volatility = self._fresh(self.repository.get_volatility_skew_at_or_before(currency, expiration, as_of), as_of) or {}
+        put_25d, call_25d = chain_volatility.get("put_25d_iv"), chain_volatility.get("call_25d_iv")
         flow = self.repository.get_flow_delta_window(currency, expiration, as_of)
         if flow["newest_hour"] is None or as_of - flow["newest_hour"] > timedelta(hours=MAX_SNAPSHOT_AGE_HOURS + 1):
             flow = {**flow, "hours_present": 0, "hiro_usd": None, "premium_usd": None, "gross_delta_usd": None, "trade_count": None}  # stale
@@ -69,8 +71,9 @@ class FactsAsOfService:
             total_net_gex_usd=analysis.get("total_net_gex"), total_net_dex=analysis.get("total_net_dex"),
             call_resistance_strike=analysis.get("call_resistance_strike"), put_support_strike=analysis.get("put_support_strike"),
             hvl_level=analysis.get("hvl_level"), itm_call_oi_pct=analysis.get("itm_call_oi_pct"), itm_put_oi_pct=analysis.get("itm_put_oi_pct"),
-            volatility_hour=volatility.get("snapshot_hour"), atm_iv_pct=volatility.get("atm_iv"), skew_25d=volatility.get("skew_25d"),
-            put_25d_iv_pct=volatility.get("put_25d_iv"), call_25d_iv_pct=volatility.get("call_25d_iv"),
+            chain_volatility_hour=chain_volatility.get("snapshot_hour"), atm_iv_pct=chain_volatility.get("atm_iv_interp"),
+            skew_25d=None if put_25d is None or call_25d is None else put_25d - call_25d, put_25d_iv_pct=put_25d, call_25d_iv_pct=call_25d,
+            volatility_hour=volatility.get("snapshot_hour"),
             # stored as a fraction: on 2026-10-20 08:00 the 30OCT26 row has vrp_absolute 0.0455 and vrp_percentage 14.70, and
             # 0.0455 / realized_vol 0.3097 = 14.7%, so 0.0455 is 4.55 vol points
             vrp_absolute_points=None if volatility.get("vrp_absolute") is None else volatility["vrp_absolute"] * 100.0,

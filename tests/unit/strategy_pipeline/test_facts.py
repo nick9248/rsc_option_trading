@@ -26,6 +26,11 @@ def volatility_row(hour=AS_OF - timedelta(hours=1), **overrides):
             "pc_near_otm_ratio": 2.93, "pc_far_otm_ratio": None, "net_vanna": -848.0, "net_charm": 13968.0, **overrides}
 
 
+def skew_row(hour=AS_OF - timedelta(hours=1), **overrides):
+    """A row of the full-chain table: the stored numbers of 4DEC26 at 2026-11-25 21:00 UTC."""
+    return {"snapshot_hour": hour, "atm_iv_interp": 51.6157, "call_25d_iv": 49.1596, "put_25d_iv": 56.6873, **overrides}
+
+
 def daily_closes(count=45):
     closes, price = [], 80000.0
     for index in range(count):
@@ -34,8 +39,9 @@ def daily_closes(count=45):
     return closes
 
 
-def make_service(analysis=None, volatility=None, flow=None, dvol=None):
+def make_service(analysis=None, volatility=None, flow=None, dvol=None, skew=None):
     repository = MagicMock()
+    repository.get_volatility_skew_at_or_before.return_value = skew_row() if skew is None else skew or None
     repository.get_onchain_analysis_snapshot_at_or_before.return_value = analysis_row() if analysis is None else analysis or None
     repository.get_onchain_volatility_snapshot_at_or_before.return_value = volatility_row() if volatility is None else volatility or None
     repository.get_flow_delta_window.return_value = flow or {"hours_present": 24, "newest_hour": AS_OF - timedelta(hours=1), "hiro_usd": -33770066.0,
@@ -53,7 +59,7 @@ def build(service):
 def test_the_facts_carry_the_stored_numbers():
     service, _ = make_service()
     facts = build(service)
-    assert facts.max_pain_strike == 78000.0 and facts.total_call_oi == 98828.0 and facts.atm_iv_pct == 34.96
+    assert facts.max_pain_strike == 78000.0 and facts.total_call_oi == 98828.0 and facts.atm_iv_pct == 51.6157
     assert facts.dvol == 38.0 and facts.dvol_percentile_365d == pytest.approx(75.0)                 # 38 is at or above 3 of 4 closes
     assert facts.flow_hours == 24 and facts.flow_hiro_usd == -33770066.0 and facts.days_to_expiry == pytest.approx(9.0 + 23.0 / 24.0)         # 20 Oct 09:00 to 30 Oct 08:00 UTC
     assert facts.realised_vol_30d is not None and facts.realised_vol_10d is not None
@@ -71,13 +77,15 @@ def test_nothing_newer_than_as_of_is_asked_for():
 
 
 def test_a_stored_row_older_than_three_hours_is_treated_as_missing():
-    service, _ = make_service(analysis=analysis_row(hour=AS_OF - timedelta(hours=5)), volatility=volatility_row(hour=AS_OF - timedelta(hours=4)))
+    service, _ = make_service(analysis=analysis_row(hour=AS_OF - timedelta(hours=5)), volatility=volatility_row(hour=AS_OF - timedelta(hours=4)),
+                              skew=skew_row(hour=AS_OF - timedelta(hours=4)))
     facts = build(service)
     assert facts.analysis_hour is None and facts.max_pain_strike is None and facts.volatility_hour is None and facts.atm_iv_pct is None
+    assert facts.chain_volatility_hour is None
 
 
 def test_a_missing_row_gives_none_not_zero():
-    service, _ = make_service(analysis=False, volatility=False)
+    service, _ = make_service(analysis=False, volatility=False, skew=False)
     facts = build(service)
     assert facts.max_pain_strike is None and facts.atm_iv_pct is None and facts.put_call_ratio_oi is None
 
@@ -129,7 +137,7 @@ def test_a_naive_instant_and_a_closed_expiry_are_refused():
 
 
 def test_the_text_says_what_was_not_recorded_and_shows_what_was():
-    service, _ = make_service(volatility=False, flow={"hours_present": 3, "newest_hour": AS_OF - timedelta(hours=1), "hiro_usd": 1.0, "premium_usd": 1.0, "gross_delta_usd": 1.0, "trade_count": 5})
+    service, _ = make_service(volatility=False, skew=False, flow={"hours_present": 3, "newest_hour": AS_OF - timedelta(hours=1), "hiro_usd": 1.0, "premium_usd": 1.0, "gross_delta_usd": 1.0, "trade_count": 5})
     text = render_facts(build(service))
     assert "expiry 30OCT26, facts as of 2026-10-20 09:00 UTC" in text and "Max pain strike: 78,000" in text
     assert "ATM implied volatility: not recorded" in text and "not available" in text
@@ -168,3 +176,23 @@ def test_daily_returns_never_join_the_two_sides_of_a_missing_candle():
     repository.get_ohlcv_by_date_range.return_value = candles
     returns = service.daily_log_returns("BTC", AS_OF)
     assert len(returns) == 38                                  # only the 39 candles after the gap form an unbroken run: 38 returns
+
+
+def test_the_implied_volatility_comes_from_the_full_chain_table_and_the_skew_is_put_minus_call():
+    service, repository = make_service()
+    facts = build(service)
+    assert (facts.atm_iv_pct, facts.put_25d_iv_pct, facts.call_25d_iv_pct) == (51.6157, 56.6873, 49.1596)
+    assert facts.skew_25d == pytest.approx(7.5277)                                    # 56.6873 - 49.1596: the table's risk reversal (call - put) is -7.5277
+    assert repository.get_volatility_skew_at_or_before.call_args.args == ("BTC", EXPIRY, AS_OF)
+    text = render_facts(facts)
+    assert "Implied volatility of this expiry (full chain" in text and "25-delta skew (put IV minus call IV, vol points): 7.5" in text
+    assert "ATM implied volatility: 51.6%" in text and "34.96" not in text and "35.0%" not in text          # never the degenerate columns of the other table
+
+
+@pytest.mark.parametrize("skew, expected_atm", [(False, None), (skew_row(hour=AS_OF - timedelta(hours=5)), None), (skew_row(put_25d_iv=None), 51.6157)])
+def test_a_missing_stale_or_incomplete_chain_row_is_not_recorded_and_never_filled_from_the_other_table(skew, expected_atm):
+    service, _ = make_service(skew=skew)
+    facts = build(service)
+    assert facts.atm_iv_pct == expected_atm and facts.skew_25d is None and facts.put_25d_iv_pct is None
+    assert "25-delta skew (put IV minus call IV, vol points): not recorded" in render_facts(facts)
+    assert facts.iv_percentile_365d == 24.0                                           # the other volatility figures are still read
