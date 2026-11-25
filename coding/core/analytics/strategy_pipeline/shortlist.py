@@ -60,6 +60,11 @@ fees), so its expected PnL there is that, for every structure; it carries no opi
 short-premium structures.
   * implied fat-tail model: Student-t at the chain's own at-the-money volatility (the market's level of movement, with fatter tails).
   * forecast fat-tail model: Student-t at a volatility forecast from recent daily moves (HAR).
+- IMPORTANT: none of the three models has skew. Each uses ONE volatility for all strikes and a symmetric distribution, while the chain prices \
+strikes at different volatilities (usually low strikes higher). A structure that sells a strike priced at a higher volatility and buys one priced \
+lower can show a positive result under all three for that reason alone. The score is then a bet that the market's skew is wrong, not a \
+mispricing the models found; the implied fat-tail model is not the market's own view. The market view above is the one that includes skew. Say \
+for your choice whether its score depends on skew, and treat such a score as possibly no edge at all.
 - The score of a candidate is the LOWEST of the three expected PnL figures divided by its maximum loss. Code ranks by it. A positive score means \
 the candidate does not lose on average under any of the three; it is not a proven edge, and differences of a few percent of the risk are within \
 the uncertainty of the models. Choose "no_trade" when the score is too small to be worth the risk.

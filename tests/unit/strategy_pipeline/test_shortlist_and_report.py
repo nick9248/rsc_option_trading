@@ -166,6 +166,7 @@ def test_the_instructions_name_the_three_models_and_the_score_the_text_shows():
     for _, label in MODEL_LABELS:
         assert label in SYSTEM_PROMPT
     assert "LOWEST of the three" in SYSTEM_PROMPT and "not a proven edge" in SYSTEM_PROMPT and "realised-volatility view" not in SYSTEM_PROMPT
+    assert "none of the three models has skew" in SYSTEM_PROMPT and "bet that the market's skew is wrong" in SYSTEM_PROMPT
     lowered = SYSTEM_PROMPT.lower()                                       # a replay sends this text for past instants: nothing measured later
     assert "past data" not in lowered and "past outcomes" not in lowered and "calibrat" not in lowered
 

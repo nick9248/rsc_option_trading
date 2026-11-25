@@ -108,7 +108,8 @@ def _shortlist_table(pick: StoredPick) -> str:
                      "n/a" if probability is None else f"{probability:.0%}", _expected_text(candidate, "realised"),
                      _expected_text(candidate, "implied_t"), _expected_text(candidate, "har_t")])
     explanation = paragraph_fragment("Score: the lowest of the three expected PnL figures (recent volatility, implied fat tails, forecast fat tails) divided "
-                                     "by the maximum loss. Scroll the table sideways for the three figures.", "note-s")
+                                     "by the maximum loss. Scroll the table sideways for the three figures. None of the three models has skew (one volatility for all strikes), so a "
+                                     "positive score can come from the market pricing strikes at different volatilities alone: it is then a bet against the skew, not a proven edge.", "note-s")
     return explanation + table_fragment(["Rank", "Candidate", "Score", "Structure", "Legs", "Entry cash", "Max loss", "P(profit), implied fat tails",
                                          "Expected PnL, recent volatility",
                                          "Expected PnL, implied fat tails", "Expected PnL, forecast fat tails"], rows,
@@ -288,6 +289,8 @@ def build_strategy_panel(picks: Sequence[StoredPick], now_utc: datetime, currenc
             return "SELECTED TRADE"
         if pick.status == "no_candidates":
             return "not asked"
+        if pick.status not in ("ok", "no_trade"):
+            return "no usable answer"                                  # refused or not in the expected form: not the model advising against a trade
         return "alternative, not selected" if pick.status == "ok" and pick.choice != NO_TRADE else "no trade"
 
     cards = [_card(pick, now, role(pick), currency) for pick in ordered]

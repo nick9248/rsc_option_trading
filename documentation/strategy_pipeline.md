@@ -69,6 +69,11 @@ at the 30-day realised volatility was badly calibrated (outcomes 45 to 61% more 
   only the realised view), so the model's choice is no longer independent of the baseline's: read "model against baseline" with that in mind.
 - The three models and the score were chosen on data up to 2026-11-22: a replay of earlier instants is in-sample for that choice. The instructions to the
   model describe the models only and quote no result measured on stored data, so a replay gets no later knowledge through them.
+- **No model has skew** (one volatility for all strikes, symmetric distribution), so a positive score can be the skew alone. Measured on the chain of 2026-11-25
+  21:01 UTC: for the best offered candidate of 4, 11 and 25 December the value of the legs at one at-the-money volatility exceeded their market mid by +109,
+  +206 and +206 USD per coin (costs 41, 111, 96; implied fat-tail expected result +43, +91, +110), and every one of the 12 offered candidates had such a gain:
+  without it none would have a positive expected result. The score is therefore a bet that the market's skew is wrong. Not proven either way; a skew-aware
+  base distribution is open.
 - Single long calls and puts are never shortlisted (lottery: the mean is dominated by a few outcomes that cannot be validated with about 35 expiries a year).
 - `validation/edge_evaluation.py`: expected log growth, cluster bootstrap, calibration table, Kelly fraction and a shrunk fractional Kelly (a tenth of Kelly, halved, capped by the drawdown budget).
   The Kelly sizing is not wired into any position size.

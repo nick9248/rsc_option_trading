@@ -214,7 +214,7 @@ def test_selection_follows_the_score_not_the_recent_volatility_view_and_the_tabl
     assert select_trades([without_score], NOW) == []
     html_text = build_strategy_panel([modest], NOW, "BTC").html
     for text in ("Score", "+0.0300", "P(profit), implied fat tails", "60%", "Expected PnL, recent volatility", "Expected PnL, implied fat tails", "Expected PnL, forecast fat tails", "+14", "+38",
-                 "best score", "per 1 coin per leg"):
+                 "best score", "per 1 coin per leg", "None of the three models has skew"):
         assert text in html_text, text
     assert "realised view" not in html_text
 
@@ -232,3 +232,9 @@ def test_the_loss_total_of_per_coin_picks_says_it_is_at_one_coin_per_leg():
     sized = with_score(stored(quantity=0.5), 0.02, "27NOV26")
     assert "lose the whole maximum at 1 coin per leg (scale it to your own size), 710 USD is lost" in build_strategy_panel([one_coin], NOW, "BTC").html
     assert "lose the whole maximum, 710 USD is lost" in build_strategy_panel([sized], NOW, "BTC").html
+
+
+@pytest.mark.parametrize("status", ["refused", "invalid_response"])
+def test_a_refused_or_unusable_answer_is_not_titled_no_trade(status):
+    html_text = build_strategy_panel([stored(status=status, choice=None, quantity=None, response="raw words")], NOW, "BTC").html
+    assert "27NOV26 - no usable answer" in html_text and "27NOV26 - no trade" not in html_text
