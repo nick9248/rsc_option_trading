@@ -28,6 +28,7 @@ from coding.core.analytics.strategy_pipeline.pick_report import summarize_picks
 from coding.core.database.repository import DatabaseRepository
 from coding.core.logging.logging_setup import init_logging
 from coding.service.strategy.strategy_suggestion_service import BudgetExceeded, DEFAULT_MODEL
+from coding.service.strategy_pipeline.live_pick_runner import UNIT_QUANTITY
 from coding.service.strategy_pipeline.strategy_pick_service import (
     DEFAULT_RESEARCH_CAPITAL_USD, METHOD_VERSION, MODE_LIVE, MODE_REPLAY, StrategyPickService)
 
@@ -43,9 +44,9 @@ def _number(value: Optional[float], digits: int = 3) -> str:
 def log_report(currency: str, repository: DatabaseRepository, mode: str, method_version: str) -> None:
     """Log the comparison of the model with the baselines over the picks of one method version."""
     report = summarize_picks(repository.get_strategy_picks(currency, mode=mode, method_version=method_version))
-    logger.info("%s: %d evaluated %s picks (no trade in %s); %d refused or unusable answers and %d picks waiting for their expiry are not in the comparison",
+    logger.info("%s: %d evaluated %s picks (no trade in %s); %d refused or unusable answers, %d picks waiting for their expiry and %d expiry-days with nothing to offer are not in the comparison",
                 method_version, report.picks, mode, "n/a" if report.no_trade_share is None else f"{report.no_trade_share:.0%}", report.unusable_answers,
-                report.not_yet_evaluated)
+                report.not_yet_evaluated, report.nothing_offered)
     logger.info("mean R (result in units of the maximum loss): model %s | baseline top-1 %s | shortlist average %s | all candidates average %s",
                 _number(report.mean_model_r), _number(report.mean_baseline_r), _number(report.mean_shortlist_r), _number(report.mean_all_r))
     logger.info("model minus baseline %s (t %s), minus shortlist average %s (t %s), minus all candidates %s (t %s); beat the baseline on %s",
@@ -75,7 +76,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--to", dest="last_day", type=date.fromisoformat, default=None)
     parser.add_argument("--every-days", type=int, default=5)
     parser.add_argument("--max-calls", type=int, default=30)
-    parser.add_argument("--capital", type=float, default=DEFAULT_RESEARCH_CAPITAL_USD, help="notional account in USD (research results are in R)")
+    parser.add_argument("--capital", type=float, default=DEFAULT_RESEARCH_CAPITAL_USD, help="replay: notional account in USD (research results are in R; a live pick is per coin)")
     parser.add_argument("--max-drawdown", type=float, default=0.20)
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--method-version", action="append", help="report: the method version(s) to show (default: every version that has stored picks)")
@@ -96,7 +97,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         logger.error("claude_api_key is not set in .env")
         return 1
     service = StrategyPickService(repository, anthropic.Anthropic(api_key=api_key) if api_key else None,
-                                  RiskBudget(arguments.capital, arguments.max_drawdown), model=arguments.model)
+                                  RiskBudget(arguments.capital, arguments.max_drawdown), model=arguments.model,
+                                  unit_quantity=UNIT_QUANTITY if arguments.command == "live" else None)       # a live pick is per coin, as in the Analysis tab
 
     if arguments.command == "evaluate":
         logger.info("%d picks evaluated", evaluate_all(service, arguments.currency))

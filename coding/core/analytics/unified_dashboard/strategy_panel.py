@@ -2,7 +2,7 @@
 The Strategy tab of the unified dashboard: the newest stored live pick of each expiry, one card per expiry (pure: no files, no network).
 
 A pick is the answer of a language model that could only choose among candidate structures built and priced by code, from facts of an analysis at
-``as_of``. A live pick is stored per 1 coin per leg (a research pick is sized from a loss budget) and not yet scored against what happens. The card shows what was chosen, why, how it pays at
+``as_of``. A live pick is stored per 1 coin per leg (a replay pick is sized from a loss budget) and not yet scored against what happens. The card shows what was chosen, why, how it pays at
 expiry, and the whole shortlist in the model's own order, so the choice can be judged against the alternatives.
 """
 
@@ -94,7 +94,7 @@ def _expected_text(candidate: Dict[str, Any], model: str) -> str:
 
 
 def _shortlist_table(pick: StoredPick) -> str:
-    """The shortlist in the model's own order (best first), with the numbers the model was shown."""
+    """The shortlist in the model's own order (best first): the score, the implied fat-tail probability of profit and the three expected results."""
     by_id = {candidate["id"]: candidate for candidate in pick.candidates}
     order = [identifier for identifier in (pick.ranking or []) if identifier in by_id] or list(by_id)
     rows = []
@@ -102,14 +102,17 @@ def _shortlist_table(pick: StoredPick) -> str:
         candidate = by_id[identifier]
         score = candidate.get("baseline_score")
         marks = " (chosen)" if identifier == pick.choice else " (baseline)" if identifier == pick.baseline_id else ""
-        rows.append([str(rank), identifier + marks, "n/a" if score is None else f"{score:+.3f}", candidate["family"].replace("_", " "),
-                     _legs_text(candidate), _usd(candidate["entry_cash_usd"]), _usd(candidate["max_loss_usd"]), _expected_text(candidate, "realised"),
+        probability = candidate.get("distributions", {}).get("implied_t", {}).get("probability_of_profit")
+        rows.append([str(rank), identifier + marks, "n/a" if score is None else f"{score:+.4f}", candidate["family"].replace("_", " "),
+                     _legs_text(candidate), _usd(candidate["entry_cash_usd"]), _usd(candidate["max_loss_usd"]),
+                     "n/a" if probability is None else f"{probability:.0%}", _expected_text(candidate, "realised"),
                      _expected_text(candidate, "implied_t"), _expected_text(candidate, "har_t")])
     explanation = paragraph_fragment("Score: the lowest of the three expected PnL figures (recent volatility, implied fat tails, forecast fat tails) divided "
                                      "by the maximum loss. Scroll the table sideways for the three figures.", "note-s")
-    return explanation + table_fragment(["Rank", "Candidate", "Score", "Structure", "Legs", "Entry cash", "Max loss", "Expected PnL, recent volatility",
+    return explanation + table_fragment(["Rank", "Candidate", "Score", "Structure", "Legs", "Entry cash", "Max loss", "P(profit), implied fat tails",
+                                         "Expected PnL, recent volatility",
                                          "Expected PnL, implied fat tails", "Expected PnL, forecast fat tails"], rows,
-                                        numeric_columns=(0, 2, 5, 6, 7, 8, 9), caption="Shortlist in the model's order, one coin per leg, USD")
+                                        numeric_columns=(0, 2, 5, 6, 7, 8, 9, 10), caption="Shortlist in the model's order, one coin per leg, USD")
 
 
 def _chart(pick: StoredPick, chosen: Dict[str, Any]) -> Tuple[str, Dict[str, Dict[str, Any]]]:
@@ -231,7 +234,8 @@ def _card(pick: StoredPick, now_utc: datetime, role: str = "", currency: str = "
         warnings.insert(0, "The model declined to answer this request.")
         body += paragraph_fragment(pick.response[:RAW_TEXT_LIMIT], "note-s")
     elif pick.status == "no_candidates":
-        warnings.insert(0, "No candidate fits this expiry: no structure has a positive expected result under all three price models after costs. The model was not asked (no cost).")
+        warnings.insert(0, "No candidate fits this expiry: no eligible structure (defined risk, not a single long option, costs at most 15% of the maximum loss) "
+                           "has a positive score, that is a positive expected result under all three price models after costs. The model was not asked (no cost).")
     else:
         warnings.insert(0, "The answer of the model was not usable (not in the expected form, or not a candidate of the shortlist).")
         body += paragraph_fragment(pick.response[:RAW_TEXT_LIMIT], "note-s")

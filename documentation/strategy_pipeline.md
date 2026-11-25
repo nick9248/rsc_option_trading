@@ -38,7 +38,8 @@ the event, but the instants are labelled. Take the replay as a test of consisten
 30 days (one pick each, an expiry met twice once; a pick that asked the model is not repeated within the hour for the same expiry; a free "no candidates" result is looked at again), on the newest stored chain (the run has just
 synced). The Strategy tab of the unified dashboard shows the newest live pick of each open expiry: the choice, its size, the PnL-at-expiry chart, the reasons,
 risks and invalidation, and the shortlist in the model's order with each score and the three model results, the baseline marked. At most two picks are
-marked "selected trade": fresh ones (4 h) with the best positive score. Without the tick the tab shows the picks already stored and nothing is
+marked "selected trade": fresh ones (4 h) with the best positive score. The report counts the expiry-days with nothing to offer apart: its results cover only
+the looks that had a candidate. Without the tick the tab shows the picks already stored and nothing is
 paid. A missing key, an exhausted budget or an API error fails only that step; the dashboard is still built.
 
 ## Method versions

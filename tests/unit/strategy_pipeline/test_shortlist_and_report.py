@@ -54,7 +54,7 @@ def test_the_text_shows_legs_costs_the_three_models_with_the_score_and_stored_re
     assert text.startswith("## Shortlist") and "C1 " in text and "recent-volatility model: P(profit)" in text
     assert "market view: expected PnL" in text and "implied-vol view" not in text            # exact, no flat-volatility artefact
     for item, line in zip(shortlist, text.splitlines()[1:]):                  # every candidate: all three results and its own score
-        assert line.startswith(item.candidate_id + " ") and line.endswith(f"score {item.score:+.3f}")
+        assert line.startswith(item.candidate_id + " ") and line.endswith(f"score {item.score:+.4f}")
         for name, label in MODEL_LABELS:
             assert f"{label}: P(profit) {item.metrics.by_distribution[name].probability_of_profit:.0%}, expected PnL {item.metrics.by_distribution[name].expected_pnl_usd:+,.0f}" in line
     assert "max profit unlimited" not in text and "long_call" not in text and "long_put" not in text          # a lottery is never shown
@@ -166,3 +166,12 @@ def test_the_instructions_name_the_three_models_and_the_score_the_text_shows():
     for _, label in MODEL_LABELS:
         assert label in SYSTEM_PROMPT
     assert "LOWEST of the three" in SYSTEM_PROMPT and "not a proven edge" in SYSTEM_PROMPT and "realised-volatility view" not in SYSTEM_PROMPT
+
+
+def test_the_report_counts_expiry_days_with_nothing_to_offer_once_each():
+    from datetime import datetime, timezone
+    morning, evening = datetime(2026, 11, 25, 8, tzinfo=timezone.utc), datetime(2026, 11, 25, 20, tzinfo=timezone.utc)
+    rows = [{"status": "no_candidates", "expiration": "29NOV26", "as_of": morning}, {"status": "no_candidates", "expiration": "29NOV26", "as_of": evening},
+            {"status": "no_candidates", "expiration": "4DEC26", "as_of": evening}]
+    report = summarize_picks(rows)
+    assert report.nothing_offered == 2 and report.picks == 0 and report.unusable_answers == 0 and report.not_yet_evaluated == 0

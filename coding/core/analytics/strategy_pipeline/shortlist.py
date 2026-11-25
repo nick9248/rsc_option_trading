@@ -131,7 +131,7 @@ def render_shortlist(shortlist: Sequence[ShortlistItem]) -> str:
             if result is not None:
                 views.append(f"{label}: P(profit) {result.probability_of_profit:.0%}, expected PnL {result.expected_pnl_usd:+,.0f}, "
                              f"tail loss {_usd(result.tail_loss_usd)}")
-        views.append(f"score {item.score:+.3f}")
+        views.append(f"score {item.score:+.4f}")
         lines.append(f"{item.candidate_id} {candidate.family}: {legs} | {entry} | max loss {_usd(metrics.max_loss_usd)}, max profit {profit}, "
                      f"breakeven {breakevens} | costs: spread {_usd(metrics.spread_cost_usd)} + fees {_usd(metrics.trading_fees_usd)} | "
                      + " | ".join(views)

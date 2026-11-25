@@ -97,7 +97,7 @@ def test_no_trade_has_no_chart_and_still_shows_the_shortlist():
     assert "chose no trade" in panel.html and "Shortlist in the model" in panel.html and panel.figures == {}
 
 
-@pytest.mark.parametrize("status, text", [("refused", "declined"), ("invalid_response", "not usable"), ("no_candidates", "No candidate fits this expiry")])
+@pytest.mark.parametrize("status, text", [("refused", "declined"), ("invalid_response", "not usable"), ("no_candidates", "no eligible structure")])
 def test_a_refused_unusable_or_empty_pick_is_stated(status, text):
     panel = build_strategy_panel([stored(status=status, choice=None, quantity=None, response="raw words <i>here</i>")], NOW, "BTC")
     assert text in panel.html and "<i>here</i>" not in panel.html and panel.figures == {}
@@ -213,7 +213,7 @@ def test_selection_follows_the_score_not_the_recent_volatility_view_and_the_tabl
     without_score = StoredPick(**{**modest.__dict__, "candidates": [{k: v for k, v in c.items() if k != "baseline_score"} for c in modest.candidates]})
     assert select_trades([without_score], NOW) == []
     html_text = build_strategy_panel([modest], NOW, "BTC").html
-    for text in ("Score", "+0.030", "Expected PnL, recent volatility", "Expected PnL, implied fat tails", "Expected PnL, forecast fat tails", "+14", "+38",
+    for text in ("Score", "+0.0300", "P(profit), implied fat tails", "60%", "Expected PnL, recent volatility", "Expected PnL, implied fat tails", "Expected PnL, forecast fat tails", "+14", "+38",
                  "best score", "per 1 coin per leg"):
         assert text in html_text, text
     assert "realised view" not in html_text
