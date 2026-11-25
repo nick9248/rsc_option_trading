@@ -208,7 +208,14 @@ def report_lines(entries: Sequence[Dict[str, Any]], draws: int = BOOTSTRAP_DRAWS
         lines.append(f"  slope of realised R on the {label} score: {value.estimate:+.2f} [{value.low:+.2f}, {value.high:+.2f}] (1 = means what it says)")
     lines.append("  win probability, mean absolute calibration gap: " + ", ".join(f"{model} {win_calibration(entries, model):.3f}" for model in ALL_MODELS))
     own = rule_result(entries, CANDIDATE_MODELS, draws).log_growth
-    lines += ["", f"DECISION: {'ADOPT' if first.passed and second and third else 'DO NOT ADOPT'} the market-smile models "
-                  f"(C1 {'passed' if first.passed else 'failed'}, C2 {'passed' if second else 'failed'}, C3 {'passed' if third else 'failed'})",
-              f"EDGE: {'the candidate rule is above zero with 95% confidence' if own.low > 0 else 'not shown (the interval of the candidate rule includes zero or lies below it)'}"]
+    if own.low > 0:
+        edge = "the candidate rule is above zero with 95% confidence"
+    elif own.high < 0:
+        edge = "none: the candidate rule LOSES against not trading with 95% confidence (C3 only compares it with the current rule)"
+    else:
+        edge = "not shown (the interval of the candidate rule includes zero)"
+    lines += ["", f"DECISION by C1 to C3: {'ADOPT' if first.passed and second and third else 'DO NOT ADOPT'} the market-smile models "
+                  f"(C1 {'passed' if first.passed else 'failed'}, C2 {'passed' if second else 'failed'}, C3 {'passed' if third else 'failed'}). "
+                  "It binds only for the run the criteria were written for.",
+              f"EDGE: {edge}"]
     return lines

@@ -55,7 +55,7 @@ def test_the_report_states_the_three_criteria_the_decision_and_that_an_edge_is_n
     rng = np.random.default_rng(0)
     entries = [entry(i, [candidate(0.01, 0.02, float(rng.choice([-1.0, 1.0])))]) for i in range(60)]
     text = "\n".join(report_lines(entries, draws=100))
-    for wanted in ("C1 PASSED", "C2 PASSED", "C3 PASSED", "DECISION: ADOPT", "EDGE: not shown"):
+    for wanted in ("C1 PASSED", "C2 PASSED", "C3 PASSED", "DECISION by C1 to C3: ADOPT", "EDGE: not shown"):
         assert wanted in text, wanted
     assert report_lines([]) == ["No entries from at least two currency x expiry clusters: nothing to compare."]
     assert report_lines([entry(0, [candidate(0.01, 0.02, 1.0)])]) == report_lines([])                  # one cluster: no interval can be formed
@@ -65,4 +65,5 @@ def test_the_report_states_the_three_criteria_the_decision_and_that_an_edge_is_n
 def test_a_clearly_worse_candidate_rule_fails_the_third_criterion():
     good_then_bad = [candidate(0.02, -0.01, 1.0), candidate(-0.01, 0.02, -1.0)]
     text = "\n".join(report_lines([entry(i, good_then_bad) for i in range(60)], draws=100))
-    assert "C3 FAILED" in text and "DECISION: DO NOT ADOPT" in text
+    assert "C3 FAILED" in text and "DECISION by C1 to C3: DO NOT ADOPT" in text
+    assert "EDGE: none: the candidate rule LOSES against not trading" in text            # every candidate pick loses everything

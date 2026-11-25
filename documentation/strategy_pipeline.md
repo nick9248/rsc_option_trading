@@ -81,7 +81,8 @@ at the 30-day realised volatility was badly calibrated (outcomes 45 to 61% more 
   21:01 UTC: for the best offered candidate of 4, 11 and 25 December the value of the legs at one at-the-money volatility exceeded their market mid by +109,
   +206 and +206 USD per coin (costs 41, 111, 96; implied fat-tail expected result +43, +91, +110), and every one of the 12 offered candidates had such a gain:
   without it none would have a positive expected result. The score is therefore a bet that the market's skew is wrong. Not proven either way; a skew-aware
-  base distribution was tested on 2026-11-25 and NOT adopted: it forecasts no better and its ranking loses significantly (see
+  base distribution was tested on 2026-11-25 and NOT adopted: it forecasts no significantly better and its ranking loses against not trading, also after
+  corrections made following a review (exploratory); see
   `documentation/research/skew_model_test_2026-11-25.md`). The market's own probabilities are the best calibrated; no ranking shows an edge.
 - Single long calls and puts are never shortlisted (lottery: the mean is dominated by a few outcomes that cannot be validated with about 35 expiries a year).
 - `validation/edge_evaluation.py`: expected log growth, cluster bootstrap, calibration table, Kelly fraction and a shrunk fractional Kelly (a tenth of Kelly, halved, capped by the drawdown budget).

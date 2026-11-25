@@ -102,3 +102,77 @@ EDGE: not shown (the interval of the candidate rule includes zero or lies below 
 - The current ranking (three one-volatility models, a known skew artefact) trades 27% of entries at -0.16% [-0.48, +0.14]: not distinguishable from zero,
   and not different from a gain or a small loss. Its picks won about as often as the market's probabilities said.
 - Limits: eight months, one market regime, overlapping entries (handled by the cluster bootstrap), Deribit quotes at one hour of the day, fees as modelled.
+
+---
+
+## Exploratory second run (2026-11-26, after the result above was seen: it decides nothing)
+A code review of the first version found three weaknesses. The first run above used the code of commit 737ff17; this one uses the corrected code.
+1. The width-scaled smiles were about 13% wider than the volatility they are named for (the factor divided by the at-the-money volatility, but the
+   smile's own deviation is larger). Now the standard deviation of the log return equals the view.
+2. Fitted curves implying negative probabilities were silently repaired. A repair above 0.01 now gives no smile (23 looks), and a quote without a
+   volatility spread is left out instead of getting an assumed weight.
+3. C1's candidate test uses a signed median, which the flawed implied model would also pass (+6.0 USD against a threshold of 7.5). The median absolute
+   gap, now reported, separates them: 22.3 USD for the implied Student-t, 2.9 USD for the market smile.
+
+```
+BTC: 918 entries; looks without an entry: {'no snapshot': 4, 'no smile': 17, 'no index price at the snapshot': 4, 'expiry not settled yet': 64}
+ETH: 933 entries; looks without an entry: {'no snapshot': 4, 'no smile': 6, 'expiry not settled yet': 64}
+Entries 1851, candidates 446,182, clusters (currency x expiry) 491
+
+C1 correctness (market smile at its own width)
+  option value minus mid: median 2.53 USD against a median half-spread of 12.08 USD
+  candidate expected PnL minus (minus costs): median -0.2831 USD (costs 74.61); current implied one-volatility model: +5.993 USD
+  C1 PASSED
+
+C2 forecast of the settlement (CRPS of the log return, lower is better; coverage of the central 50/80/90%)
+  realised   CRPS 0.05273  coverage 0.52 / 0.77 / 0.83
+  implied_t  CRPS 0.05138  coverage 0.44 / 0.75 / 0.83
+  har_t      CRPS 0.05033  coverage 0.54 / 0.81 / 0.88
+  smile      CRPS 0.05116  coverage 0.47 / 0.77 / 0.85
+  smile_rv   CRPS 0.05279  coverage 0.43 / 0.71 / 0.81
+  smile_har  CRPS 0.05038  coverage 0.52 / 0.80 / 0.88
+  smile_rv minus realised: +0.00006  95% [-0.00070, +0.00082]
+  smile_har minus har_t: +0.00004  95% [-0.00067, +0.00079]
+  C2 PASSED
+
+C3 ranking (take the top candidate only if its score is positive; expected log growth per entry at 5% risk)
+  all              current   traded   27%  mean R of trades -0.101  log growth -0.1591% [-0.4660, +0.1394]  (n=1851)
+  all              candidate traded   27%  mean R of trades -0.193  log growth -0.2975% [-0.5259, -0.0964]  (n=1851)
+  3-day expiries   current   traded   17%  mean R of trades +0.047  log growth +0.0333% [-0.0632, +0.1379]  (n=490)
+  3-day expiries   candidate traded   34%  mean R of trades -0.233  log growth -0.4643% [-0.7578, -0.1517]  (n=490)
+  7-day expiries   current   traded   23%  mean R of trades +0.080  log growth +0.0771% [-0.1293, +0.2877]  (n=485)
+  7-day expiries   candidate traded   23%  mean R of trades -0.156  log growth -0.1997% [-0.4862, +0.0574]  (n=485)
+  14-day expiries  current   traded   29%  mean R of trades -0.123  log growth -0.2064% [-0.6216, +0.2026]  (n=475)
+  14-day expiries  candidate traded   23%  mean R of trades -0.138  log growth -0.1940% [-0.5428, +0.1175]  (n=475)
+  30-day expiries  current   traded   42%  mean R of trades -0.279  log growth -0.6237% [-1.6341, +0.3492]  (n=401)
+  30-day expiries  candidate traded   27%  mean R of trades -0.227  log growth -0.3344% [-0.9310, +0.1730]  (n=401)
+  BTC              current   traded   34%  mean R of trades -0.100  log growth -0.1954% [-0.7202, +0.2938]  (n=918)
+  BTC              candidate traded   30%  mean R of trades -0.122  log growth -0.2080% [-0.4376, -0.0037]  (n=918)
+  ETH              current   traded   20%  mean R of trades -0.104  log growth -0.1233% [-0.4845, +0.2252]  (n=933)
+  ETH              candidate traded   24%  mean R of trades -0.279  log growth -0.3855% [-0.7964, -0.0299]  (n=933)
+  first half       current   traded   46%  mean R of trades -0.150  log growth -0.3824% [-0.9732, +0.1826]  (n=920)
+  first half       candidate traded   33%  mean R of trades +0.090  log growth +0.1200% [-0.1038, +0.3452]  (n=920)
+  second half      current   traded    8%  mean R of trades +0.175  log growth +0.0616% [-0.1116, +0.2424]  (n=931)
+  second half      candidate traded   21%  mean R of trades -0.618  log growth -0.7100% [-1.0636, -0.3963]  (n=931)
+  benchmark: the average candidate of each entry, always traded: log growth -0.3861%
+  candidate minus current: -0.1384%  95% [-0.5091, +0.2204]
+  C3 PASSED
+
+Reported, not criteria
+  median ABSOLUTE gap between the expected PnL under implied_t and minus costs: 22.27 USD
+  median ABSOLUTE gap between the expected PnL under smile and minus costs: 2.916 USD
+  slope of realised R on the current score: +0.38 [-0.08, +0.79] (1 = means what it says)
+  slope of realised R on the candidate score: +0.20 [-0.26, +0.64] (1 = means what it says)
+  win probability, mean absolute calibration gap: realised 0.044, implied_t 0.030, har_t 0.031, smile 0.010, smile_rv 0.064, smile_har 0.016
+
+DECISION by C1 to C3: ADOPT the market-smile models (C1 passed, C2 passed, C3 passed). It binds only for the run the criteria were written for.
+EDGE: none: the candidate rule LOSES against not trading with 95% confidence (C3 only compares it with the current rule)
+```
+
+### Why the app is still unchanged
+- This run was made after seeing results, so by the rule written above it is exploratory. All three criteria passing here is not an adoption.
+- **C3 was too weak a criterion**: it asks only "not significantly worse than the current rule". The corrected candidate rule still loses against not
+  trading with 95% confidence (-0.30% log growth per entry, [-0.53, -0.10]); it gained in the first half (+0.12%, includes zero) and lost in the
+  second (-0.71%). A next test must also require the rule not to lose against not trading, on data after 2026-11-26.
+- What holds in both runs: the market's own distribution predicts win probabilities best (calibration gap 0.010); no ranking shows an edge.
+- Worth a new, pre-registered test: the corrected HAR-width smile was better calibrated than the HAR Student-t (0.016 against 0.031).
