@@ -217,3 +217,18 @@ def test_selection_follows_the_score_not_the_recent_volatility_view_and_the_tabl
                  "best score", "per 1 coin per leg"):
         assert text in html_text, text
     assert "realised view" not in html_text
+
+
+def test_an_expiry_with_nothing_to_offer_is_shown_as_not_asked_never_as_asked_or_no_trade():
+    empty = stored("27NOV26", status="no_candidates", choice=None, quantity=None, response="")
+    html_text = build_strategy_panel([empty, with_score(stored(), 0.02, "4DEC26")], NOW, "BTC").html
+    assert "27NOV26 - not asked" in html_text and "27NOV26 - no trade" not in html_text
+    assert "Asked in this view: 4DEC26." in html_text and "not asked, because no eligible structure had a positive score: 27NOV26." in html_text
+    assert "Asked in this view: none." in build_strategy_panel([empty], NOW, "BTC").html
+
+
+def test_the_loss_total_of_per_coin_picks_says_it_is_at_one_coin_per_leg():
+    one_coin = with_score(stored(quantity=1.0), 0.02, "27NOV26")
+    sized = with_score(stored(quantity=0.5), 0.02, "27NOV26")
+    assert "lose the whole maximum at 1 coin per leg (scale it to your own size), 710 USD is lost" in build_strategy_panel([one_coin], NOW, "BTC").html
+    assert "lose the whole maximum, 710 USD is lost" in build_strategy_panel([sized], NOW, "BTC").html

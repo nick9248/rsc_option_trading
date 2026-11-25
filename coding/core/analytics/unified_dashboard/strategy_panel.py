@@ -159,8 +159,10 @@ def _selection_text(selected: Sequence[StoredPick]) -> str:
     names = ", ".join(f"{pick.expiration} (max loss {_usd(pick.max_loss_usd)} USD)" for pick in selected)
     total = None if any(pick.max_loss_usd is None for pick in selected) else sum(pick.max_loss_usd for pick in selected)
     families = [next((c.get("family") for c in pick.candidates if c["id"] == pick.choice), None) for pick in selected]
+    per_coin = all(pick.quantity is not None and abs(pick.quantity - 1.0) < 1e-9 for pick in selected)
+    unit = " at 1 coin per leg (scale it to your own size)" if per_coin else ""
     text = (f"Selected trades (best score among picks younger than {STALE_AFTER_HOURS:g} h, at most {MAX_SELECTED_TRADES}): {names}. "
-            f"If all of them lose the whole maximum, {'not computed' if total is None else _usd(total) + ' USD'} is lost. "
+            f"If all of them lose the whole maximum{unit}, {'not computed' if total is None else _usd(total) + ' USD'} is lost. "
             "The other picks are not additional trades.")
     if len(selected) > 1 and None not in families and len(set(families)) == 1:
         text += " The selected trades are the same structure on the same view of the market: treat them as one bet, not as diversification."
@@ -284,11 +286,18 @@ def build_strategy_panel(picks: Sequence[StoredPick], now_utc: datetime, currenc
     def role(pick: StoredPick) -> str:
         if id(pick) in chosen_ids:
             return "SELECTED TRADE"
+        if pick.status == "no_candidates":
+            return "not asked"
         return "alternative, not selected" if pick.status == "ok" and pick.choice != NO_TRADE else "no trade"
 
     cards = [_card(pick, now, role(pick), currency) for pick in ordered]
     figures: Dict[str, Dict[str, Any]] = {}
     for _, card_figures in cards:
         figures.update(card_figures)
-    coverage = paragraph_fragment(ASKED_NOTE + " Asked in this view: " + ", ".join(pick.expiration for pick in ordered) + ".", "note-s")
+    asked = [pick.expiration for pick in ordered if pick.status != "no_candidates"]
+    nothing = [pick.expiration for pick in ordered if pick.status == "no_candidates"]
+    coverage_text = ASKED_NOTE + " Asked in this view: " + (", ".join(asked) or "none") + "."
+    if nothing:
+        coverage_text += " Looked at but not asked, because no eligible structure had a positive score: " + ", ".join(nothing) + "."
+    coverage = paragraph_fragment(coverage_text, "note-s")
     return StrategyPanel(intro + _selection_text(selected) + coverage + '<div class="cards">' + "".join(card for card, _ in cards) + "</div>", figures)

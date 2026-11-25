@@ -28,8 +28,6 @@ MODEL_LABELS = ((REALISED, "recent-volatility model"), (IMPLIED_T, "implied fat-
 """The three price models of the ranking as the model reads them (and their order in the text)."""
 VIEWS = ("bullish", "bearish", "range_bound", "long_volatility", "short_volatility", "no_trade")
 
-# The instructions describe the models; they carry no result measured on stored data, because a replay sends the same text for past instants
-# (point in time: no later knowledge).
 PICK_SCHEMA: Dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -45,6 +43,8 @@ PICK_SCHEMA: Dict[str, Any] = {
     "additionalProperties": False,
 }
 
+# The instructions describe the models; they carry no result measured on stored data, because a replay sends the same text for past instants
+# (point in time: no later knowledge).
 SYSTEM_PROMPT = """You are an options strategist reviewing ONE expiry of crypto options for a human trader. Code gives you (1) facts about the market \
 and the expiry and (2) a shortlist of candidate structures that code built from the live chain and priced at the bid and ask. You choose one \
 candidate by its id, or "no_trade".
