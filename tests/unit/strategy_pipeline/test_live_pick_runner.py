@@ -58,3 +58,11 @@ def test_a_stop_request_ends_the_run_before_the_next_paid_call_and_keeps_the_pic
 def test_live_picks_are_stored_per_one_coin_without_a_venue_or_a_capital():
     from coding.service.strategy_pipeline.live_pick_runner import UNIT_QUANTITY
     assert UNIT_QUANTITY == 1.0
+
+
+def test_a_free_no_candidates_result_is_not_counted_as_a_paid_pick():
+    service = MagicMock()
+    service.pick.side_effect = [result("27NOV26", status="no_candidates", choice=None, cost=0.0), result("4DEC26"),
+                                result("11DEC26", status="no_candidates", choice=None, cost=0.0), result("25DEC26", status="no_candidates", choice=None, cost=0.0)]
+    summary = LivePickRunner(service).run("BTC", lambda line: None, now_utc=NOW)
+    assert summary == "4 expiries, 1 new picks, 0.045 USD"
