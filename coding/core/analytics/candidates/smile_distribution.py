@@ -5,7 +5,7 @@ An option chain prices strikes at different volatilities (skew) and gives large 
 that smile with SVI (Gatheral: total variance w(k) = a + b (rho (k - m) + sqrt((k - m)^2 + sigma^2)), k = ln(strike / forward)) to the mid prices
 of the out-of-the-money options, reads the distribution of the settlement price from it (the probability of finishing at or below K is
 1 + dC/dK of the call price, Breeden and Litzenberger), and can widen or narrow it: each log return's distance from the mean log return is
-multiplied by (view volatility / at-the-money volatility), and the mean price stays the forward.
+multiplied by (view volatility x sqrt(years) / the market distribution's own standard deviation), and the mean price stays the forward.
 
 Without a view this is the market's distribution: every option is worth about its mid, so a structure's expected result is minus its costs. A view
 volatility sets the standard deviation of the log return (annualised) to the view, keeping the shape: it expresses one view only, that the
