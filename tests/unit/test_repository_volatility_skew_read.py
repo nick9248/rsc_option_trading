@@ -25,14 +25,15 @@ def repository():
     with admin.cursor() as cursor:
         cursor.execute(f"CREATE DATABASE {name}")
     scratch = dict(base_connection, database=name)
-    with psycopg2.connect(**scratch) as connection:
-        with connection.cursor() as cursor:
+    try:
+        connection = psycopg2.connect(**scratch)
+        with connection, connection.cursor() as cursor:
             cursor.execute((Path(__file__).parents[2] / "migrations" / "018_add_volatility_skew_history.sql").read_text(encoding="utf-8"))
             for hour, written, atm in (("2026-11-25 20:00", "2026-11-25 20:19", 52.0), ("2026-11-25 21:00", "2026-11-25 21:19", 51.6)):
                 cursor.execute("INSERT INTO volatility_skew_history (snapshot_hour, currency, expiration, atm_iv_interp, call_25d_iv, put_25d_iv, created_at) "
                                "VALUES (%s, 'BTC', '4DEC26', %s, 49.16, NULL, %s)", (hour, atm, written))
-    ConnectionPool().close_all()
-    try:
+        connection.close()
+        ConnectionPool().close_all()
         yield DatabaseRepository(config=DatabaseConfig(host=scratch["host"], port=scratch["port"], database=name, user=scratch["user"],
                                                        password=scratch["password"]))
     finally:
@@ -46,9 +47,9 @@ def at(hour, minute):
     return datetime(2026, 11, 25, hour, minute, tzinfo=timezone.utc)
 
 
-def test_only_a_row_written_by_the_instant_is_read_and_a_missing_value_stays_none(repository):
-    assert repository.get_volatility_skew_at_or_before("BTC", "4DEC26", at(20, 18)) is None                  # nothing written yet
-    earlier = repository.get_volatility_skew_at_or_before("BTC", "4DEC26", at(21, 18))                       # the 21:00 hour is written at 21:19
+def test_only_a_row_written_by_the_instant_whose_hour_is_over_is_read_and_a_missing_value_stays_none(repository):
+    assert repository.get_volatility_skew_at_or_before("BTC", "4DEC26", at(20, 59)) is None                  # written 20:19, but its hour still runs
+    earlier = repository.get_volatility_skew_at_or_before("BTC", "4DEC26", at(21, 30))                       # 21:00 is written but could still be overwritten
     assert earlier == {"snapshot_hour": at(20, 0), "atm_iv_interp": 52.0, "call_25d_iv": 49.16, "put_25d_iv": None}
-    assert repository.get_volatility_skew_at_or_before("BTC", "4DEC26", at(21, 19))["atm_iv_interp"] == 51.6
+    assert repository.get_volatility_skew_at_or_before("BTC", "4DEC26", at(22, 0))["atm_iv_interp"] == 51.6
     assert repository.get_volatility_skew_at_or_before("ETH", "4DEC26", at(22, 0)) is None

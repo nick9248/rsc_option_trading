@@ -96,11 +96,6 @@ def test_an_empty_bucket_stored_as_zero_is_not_a_measured_zero():
     assert facts.pc_atm_ratio is None and facts.pc_near_otm_ratio == 2.93 and facts.total_net_gex_usd is None
 
 
-def test_the_stored_variance_risk_premium_is_shown_in_vol_points():
-    service, _ = make_service()
-    assert build(service).vrp_absolute_points == pytest.approx(4.55)
-
-
 def test_other_zero_filled_columns_are_not_recorded_either():
     service, _ = make_service(analysis=analysis_row(total_call_oi=0.0, total_put_oi=0.0, put_call_ratio_oi=0.0, total_net_dex=0.0, total_volume=0.0,
                                                     put_call_ratio_volume=0.0, max_pain_strike=51000.0, itm_call_oi_pct=0.0),
@@ -196,3 +191,12 @@ def test_a_missing_stale_or_incomplete_chain_row_is_not_recorded_and_never_fille
     assert facts.atm_iv_pct == expected_atm and facts.skew_25d is None and facts.put_25d_iv_pct is None
     assert "25-delta skew (put IV minus call IV, vol points): not recorded" in render_facts(facts)
     assert facts.iv_percentile_365d == 24.0                                           # the other volatility figures are still read
+
+
+def test_the_variance_risk_premium_is_computed_from_the_two_numbers_shown_and_never_taken_from_the_other_table():
+    service, _ = make_service()
+    facts = build(service)
+    assert facts.vrp_absolute_points == pytest.approx(51.6157 - facts.realised_vol_30d * 100.0)
+    assert f"minus 30-day realised, vol points): {facts.vrp_absolute_points:,.1f}" in render_facts(facts)
+    without_chain, _ = make_service(skew=False)
+    assert build(without_chain).vrp_absolute_points is None                     # the old table's 4.55 is never used

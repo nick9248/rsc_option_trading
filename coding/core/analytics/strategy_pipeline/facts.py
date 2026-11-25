@@ -57,7 +57,7 @@ class FactsV1:
     # other volatility figures (hourly volatility snapshot)
     volatility_hour: Optional[datetime] = None
     vrp_absolute_points: Optional[float] = None
-    """Implied minus realised volatility of the stored analysis, in vol points."""
+    """At-the-money implied volatility of this expiry minus the 30-day realised volatility, in vol points."""
     iv_percentile_365d: Optional[float] = None
     expected_daily_move_usd: Optional[float] = None
     expected_weekly_move_usd: Optional[float] = None
@@ -105,15 +105,17 @@ def render_facts(facts: FactsV1) -> str:
     lines.append(f"## Implied volatility of this expiry (full chain, hour {'not available' if facts.chain_volatility_hour is None else format_utc(facts.chain_volatility_hour)})")
     lines += [_line("ATM implied volatility", facts.atm_iv_pct, "%", 1),
               _line("25-delta skew (put IV minus call IV, vol points)", facts.skew_25d, "", 1),
-              _line("25-delta put IV", facts.put_25d_iv_pct, "%", 1), _line("25-delta call IV", facts.call_25d_iv_pct, "%", 1), ""]
+              _line("25-delta put IV", facts.put_25d_iv_pct, "%", 1), _line("25-delta call IV", facts.call_25d_iv_pct, "%", 1),
+              _line("Variance risk premium (this ATM implied volatility minus 30-day realised, vol points)", facts.vrp_absolute_points, "", 1), ""]
 
     lines.append(f"## Other volatility figures of this expiry (stored hourly analysis of {'not available' if facts.volatility_hour is None else format_utc(facts.volatility_hour)})")
-    lines += [_line("Variance risk premium of the stored analysis (implied minus realised, vol points)", facts.vrp_absolute_points, "", 1),
-              _line("IV percentile over 365 days", facts.iv_percentile_365d, "%", 0),
+    lines += [_line("IV percentile over 365 days (DVOL)", facts.iv_percentile_365d, "%", 0),
               _line("Expected daily move", facts.expected_daily_move_usd, " USD", 0), _line("Expected weekly move", facts.expected_weekly_move_usd, " USD", 0),
-              _line("Put/call ratio at the money", facts.pc_atm_ratio), _line("Put/call ratio, 5-15% out of the money", facts.pc_near_otm_ratio),
-              _line("Put/call ratio, more than 15% out of the money", facts.pc_far_otm_ratio),
-              _line("Net vanna, holder side (USD per vol point)", facts.net_vanna, "", 0), _line("Net charm, holder side (USD per day)", facts.net_charm, "", 0), ""]
+              _line("Put/call ratio at the money (instruments traded in that hour only)", facts.pc_atm_ratio),
+              _line("Put/call ratio, 5-15% out of the money (traded only)", facts.pc_near_otm_ratio),
+              _line("Put/call ratio, more than 15% out of the money (traded only)", facts.pc_far_otm_ratio),
+              _line("Net vanna, holder side (USD per vol point, traded instruments only)", facts.net_vanna, "", 0),
+              _line("Net charm, holder side (USD per day, traded instruments only)", facts.net_charm, "", 0), ""]
 
     lines.append("## Option flow of the last 24 hours (delta-adjusted)")
     if facts.flow_hours < MINIMUM_FLOW_HOURS or facts.flow_hiro_usd is None:
