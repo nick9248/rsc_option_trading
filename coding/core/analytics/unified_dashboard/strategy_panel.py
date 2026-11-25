@@ -2,7 +2,7 @@
 The Strategy tab of the unified dashboard: the newest stored live pick of each expiry, one card per expiry (pure: no files, no network).
 
 A pick is the answer of a language model that could only choose among candidate structures built and priced by code, from facts of an analysis at
-``as_of``. It is sized by code from a loss budget and not yet scored against what happens. The card shows what was chosen, why, how it pays at
+``as_of``. A live pick is stored per 1 coin per leg (a replay pick is sized from a loss budget) and not yet scored against what happens. The card shows what was chosen, why, how it pays at
 expiry, and the whole shortlist in the model's own order, so the choice can be judged against the alternatives.
 """
 
@@ -87,22 +87,33 @@ def _entry_text(entry_cash_usd: float, quantity: float) -> str:
     return f"credit {_usd(cash)} USD" if cash >= 0 else f"debit {_usd(-cash)} USD"
 
 
+def _expected_text(candidate: Dict[str, Any], model: str) -> str:
+    """The stored expected PnL of a candidate under one price model, or "n/a"."""
+    expected = candidate.get("distributions", {}).get(model, {}).get("expected_pnl_usd")
+    return "n/a" if expected is None else f"{expected:+,.0f}"
+
+
 def _shortlist_table(pick: StoredPick) -> str:
-    """The shortlist in the model's own order (best first), with the numbers the model was shown."""
+    """The shortlist in the model's own order (best first): the score, the implied fat-tail probability of profit and the three expected results."""
     by_id = {candidate["id"]: candidate for candidate in pick.candidates}
     order = [identifier for identifier in (pick.ranking or []) if identifier in by_id] or list(by_id)
     rows = []
     for rank, identifier in enumerate(order, start=1):
         candidate = by_id[identifier]
-        realised = candidate.get("distributions", {}).get("realised", {})
-        probability = realised.get("probability_of_profit")
-        expected = realised.get("expected_pnl_usd")
+        score = candidate.get("baseline_score")
         marks = " (chosen)" if identifier == pick.choice else " (baseline)" if identifier == pick.baseline_id else ""
-        rows.append([str(rank), identifier + marks, candidate["family"].replace("_", " "), _legs_text(candidate), _usd(candidate["entry_cash_usd"]),
-                     _usd(candidate["max_loss_usd"]), "n/a" if probability is None else f"{probability:.0%}",
-                     "n/a" if expected is None else f"{expected:+,.0f}"])
-    return table_fragment(["Rank", "Candidate", "Structure", "Legs", "Entry cash", "Max loss", "P(profit), realised view", "Expected PnL, realised view"],
-                          rows, numeric_columns=(0, 4, 5, 6, 7), caption="Shortlist in the model's order, one coin per leg, USD")
+        probability = candidate.get("distributions", {}).get("implied_t", {}).get("probability_of_profit")
+        rows.append([str(rank), identifier + marks, "n/a" if score is None else f"{score:+.4f}", candidate["family"].replace("_", " "),
+                     _legs_text(candidate), _usd(candidate["entry_cash_usd"]), _usd(candidate["max_loss_usd"]),
+                     "n/a" if probability is None else f"{probability:.0%}", _expected_text(candidate, "realised"),
+                     _expected_text(candidate, "implied_t"), _expected_text(candidate, "har_t")])
+    explanation = paragraph_fragment("Score: the lowest of the three expected PnL figures (recent volatility, implied fat tails, forecast fat tails) divided "
+                                     "by the maximum loss. Scroll the table sideways for the three figures. None of the three models has skew (one volatility for all strikes), so a "
+                                     "positive score can come from the market pricing strikes at different volatilities alone: it is then a bet against the skew, not a proven edge.", "note-s")
+    return explanation + table_fragment(["Rank", "Candidate", "Score", "Structure", "Legs", "Entry cash", "Max loss", "P(profit), implied fat tails",
+                                         "Expected PnL, recent volatility",
+                                         "Expected PnL, implied fat tails", "Expected PnL, forecast fat tails"], rows,
+                                        numeric_columns=(0, 2, 5, 6, 7, 8, 9, 10), caption="Shortlist in the model's order, one coin per leg, USD")
 
 
 def _chart(pick: StoredPick, chosen: Dict[str, Any]) -> Tuple[str, Dict[str, Dict[str, Any]]]:
@@ -122,20 +133,18 @@ def _chart(pick: StoredPick, chosen: Dict[str, Any]) -> Tuple[str, Dict[str, Dic
 
 
 def _score(pick: StoredPick) -> Optional[float]:
-    """Expected PnL per unit of maximum loss of the chosen candidate under the realised-volatility view; None when there is no usable choice."""
+    """The stored score of the chosen candidate (the lowest expected PnL per unit of maximum loss over the three price models, the same number
+    the shortlist is ranked by); None when there is no usable choice or no score."""
     if pick.status != "ok" or not pick.quantity:
         return None
     chosen = next((candidate for candidate in pick.candidates if candidate["id"] == pick.choice), None)
-    if chosen is None or not chosen.get("max_loss_usd"):
-        return None
-    expected = chosen.get("distributions", {}).get("realised", {}).get("expected_pnl_usd")
-    return None if expected is None else expected / chosen["max_loss_usd"]
+    return None if chosen is None else chosen.get("baseline_score")
 
 
 def select_trades(picks: Sequence[StoredPick], now_utc: datetime) -> List[StoredPick]:
     """
-    The picks to take: the best ones by expected PnL per risk, at most ``MAX_SELECTED_TRADES``. Never a pick without a usable choice, with a
-    non-positive expectation, or older than ``STALE_AFTER_HOURS`` (the market has moved).
+    The picks to take: the best ones by score, at most ``MAX_SELECTED_TRADES``. Never a pick without a usable choice, with a
+    non-positive score, or older than ``STALE_AFTER_HOURS`` (the market has moved).
     """
     fresh = [pick for pick in picks if (now_utc - pick.as_of).total_seconds() <= STALE_AFTER_HOURS * 3600.0]
     scored = [(score, pick) for pick in fresh for score in [_score(pick)] if score is not None and score > 0]
@@ -146,12 +155,15 @@ def select_trades(picks: Sequence[StoredPick], now_utc: datetime) -> List[Stored
 def _selection_text(selected: Sequence[StoredPick]) -> str:
     """The plain statement of what to trade and how much is at risk."""
     if not selected:
-        return paragraph_fragment("No pick is selected as a trade: none that is fresh has a usable choice and a positive expected PnL under the realised-volatility view.", "note-s")
+        return paragraph_fragment("No pick is selected as a trade: none that is fresh has a usable choice with a positive score (the lowest expected PnL per unit "
+                                  "of risk over the three price models).", "note-s")
     names = ", ".join(f"{pick.expiration} (max loss {_usd(pick.max_loss_usd)} USD)" for pick in selected)
     total = None if any(pick.max_loss_usd is None for pick in selected) else sum(pick.max_loss_usd for pick in selected)
     families = [next((c.get("family") for c in pick.candidates if c["id"] == pick.choice), None) for pick in selected]
-    text = (f"Selected trades (best expected PnL per risk among picks younger than {STALE_AFTER_HOURS:g} h, at most {MAX_SELECTED_TRADES}): {names}. "
-            f"If all of them lose the whole maximum, {'not computed' if total is None else _usd(total) + ' USD'} is lost. "
+    per_coin = all(pick.quantity is not None and abs(pick.quantity - 1.0) < 1e-9 for pick in selected)
+    unit = " at 1 coin per leg (scale it to your own size)" if per_coin else ""
+    text = (f"Selected trades (best score among picks younger than {STALE_AFTER_HOURS:g} h, at most {MAX_SELECTED_TRADES}): {names}. "
+            f"If all of them lose the whole maximum{unit}, {'not computed' if total is None else _usd(total) + ' USD'} is lost. "
             "The other picks are not additional trades.")
     if len(selected) > 1 and None not in families and len(set(families)) == 1:
         text += " The selected trades are the same structure on the same view of the market: treat them as one bet, not as diversification."
@@ -210,7 +222,7 @@ def _card(pick: StoredPick, now_utc: datetime, role: str = "", currency: str = "
                 parsed += chart_html
                 if pick.baseline_id:
                     same = pick.baseline_id == pick.choice
-                    parsed += paragraph_fragment("The deterministic baseline (best expected PnL per risk under the realised volatility) " +
+                    parsed += paragraph_fragment("The deterministic baseline (the best score) " +
                                                  ("chose the same candidate." if same else f"preferred {pick.baseline_id}."), "note-s")
             else:
                 raise ValueError("the chosen candidate is missing")
@@ -225,7 +237,8 @@ def _card(pick: StoredPick, now_utc: datetime, role: str = "", currency: str = "
         warnings.insert(0, "The model declined to answer this request.")
         body += paragraph_fragment(pick.response[:RAW_TEXT_LIMIT], "note-s")
     elif pick.status == "no_candidates":
-        warnings.insert(0, "No candidate fits this expiry: no structure has a positive expected result under all three price models after costs. The model was not asked (no cost).")
+        warnings.insert(0, "No candidate fits this expiry: no eligible structure (defined risk, not a single long option, costs at most 15% of the maximum loss) "
+                           "has a positive score, that is a positive expected result under all three price models after costs. The model was not asked (no cost).")
     else:
         warnings.insert(0, "The answer of the model was not usable (not in the expected form, or not a candidate of the shortlist).")
         body += paragraph_fragment(pick.response[:RAW_TEXT_LIMIT], "note-s")
@@ -252,7 +265,7 @@ def build_strategy_panel(picks: Sequence[StoredPick], now_utc: datetime, currenc
     now = now_utc.astimezone(timezone.utc)
     intro = (f'<div class="panel-head"><h2>Strategy picks, {_e(currency)}</h2></div>'
              + paragraph_fragment("The answer of a language model that could only choose among candidate structures built and priced by code (a buy at the "
-                                  "ask, a sell at the bid), from the facts of an analysis. The position is sized by code from a loss budget. These picks are "
+                                  "ask, a sell at the bid), from the facts of an analysis. Sizes are per 1 coin per leg unless a card says otherwise: take your own fraction. These picks are "
                                   "not scored against what happened yet, some inputs are conventions (assumed dealer positioning), and nothing here "
                                   "places an order. Picks are made when 'Ask Claude for strategies' is ticked in the Analysis tab (about 0.05 USD per "
                                   "expiry); never otherwise.", "note-s"))
@@ -274,11 +287,20 @@ def build_strategy_panel(picks: Sequence[StoredPick], now_utc: datetime, currenc
     def role(pick: StoredPick) -> str:
         if id(pick) in chosen_ids:
             return "SELECTED TRADE"
+        if pick.status == "no_candidates":
+            return "not asked"
+        if pick.status not in ("ok", "no_trade"):
+            return "no usable answer"                                  # refused or not in the expected form: not the model advising against a trade
         return "alternative, not selected" if pick.status == "ok" and pick.choice != NO_TRADE else "no trade"
 
     cards = [_card(pick, now, role(pick), currency) for pick in ordered]
     figures: Dict[str, Dict[str, Any]] = {}
     for _, card_figures in cards:
         figures.update(card_figures)
-    coverage = paragraph_fragment(ASKED_NOTE + " Asked in this view: " + ", ".join(pick.expiration for pick in ordered) + ".", "note-s")
+    asked = [pick.expiration for pick in ordered if pick.status != "no_candidates"]
+    nothing = [pick.expiration for pick in ordered if pick.status == "no_candidates"]
+    coverage_text = ASKED_NOTE + " Asked in this view: " + (", ".join(asked) or "none") + "."
+    if nothing:
+        coverage_text += " Looked at but not asked, because no eligible structure had a positive score: " + ", ".join(nothing) + "."
+    coverage = paragraph_fragment(coverage_text, "note-s")
     return StrategyPanel(intro + _selection_text(selected) + coverage + '<div class="cards">' + "".join(card for card, _ in cards) + "</div>", figures)

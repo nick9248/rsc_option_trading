@@ -16,6 +16,12 @@ from tests.unit.strategy_pipeline.test_facts import analysis_row, daily_closes, 
 AS_OF = ENTRY
 
 
+@pytest.fixture
+def every_score_positive(monkeypatch):
+    """A live pick offers only candidates with a positive score; the fake chain has too few, so the filter is made to pass them all."""
+    monkeypatch.setattr("coding.service.strategy_pipeline.strategy_pick_service.robust_expected_per_risk", lambda metrics: 1.0)
+
+
 def make_service(reply_choice="C1", spent=0.0, stored=None, mode_reply=None):
     repository = make_repository()
     repository.get_ohlcv_by_date_range.return_value = daily_closes(300)
@@ -136,7 +142,7 @@ def test_the_budget_stops_the_call_before_it_is_made():
     client.messages.create.assert_not_called()
 
 
-def test_a_live_pick_does_not_look_at_the_settlement():
+def test_a_live_pick_does_not_look_at_the_settlement(every_score_positive):
     service, client, repository = make_service()
     reply, _ = reply_for(service)
     client.messages.create.return_value = reply
@@ -219,7 +225,7 @@ def test_a_venue_sized_pick_is_evaluated_with_the_venue_fees_at_its_stored_size_
     assert StrategyPickService._leg_fee({"quantity": None}, 60_000.0) is None and StrategyPickService._leg_fee({}, 60_000.0) is None
 
 
-def test_a_unit_quantity_live_pick_is_stored_per_coin_with_the_metrics_maximum_loss_and_no_venue_warning(caplog):
+def test_a_unit_quantity_live_pick_is_stored_per_coin_with_the_metrics_maximum_loss_and_no_venue_warning(every_score_positive, caplog):
     service, client, repository = make_service()
     service.unit_quantity = 1.0
     reply, shortlist = reply_for(service)
@@ -232,7 +238,7 @@ def test_a_unit_quantity_live_pick_is_stored_per_coin_with_the_metrics_maximum_l
     assert "No venue is configured" not in caplog.text
 
 
-def test_a_free_row_of_an_earlier_instant_does_not_block_a_new_live_pick_but_a_paid_row_does_even_behind_a_newer_free_one():
+def test_a_free_row_of_an_earlier_instant_does_not_block_a_new_live_pick_but_a_paid_row_does_even_behind_a_newer_free_one(every_score_positive):
     free = {"id": 5, "status": "no_candidates", "choice": None, "quantity": None, "as_of": AS_OF - timedelta(minutes=10)}
     paid = {"id": 6, "status": "ok", "choice": "C1", "quantity": 1.0, "as_of": AS_OF - timedelta(minutes=30)}
     service, client, repository = make_service(stored=[free])
@@ -250,3 +256,26 @@ def test_a_free_row_of_the_same_instant_blocks_because_a_second_answer_could_not
     result = run(service, mode=MODE_LIVE)
     assert result.stored_before is True and result.row_id == 7
     assert client.messages.create.call_count == 0 and repository.save_strategy_pick.call_count == 0
+
+
+def test_a_live_pick_with_no_positive_score_asks_nothing_costs_nothing_and_is_stored_as_no_candidates(monkeypatch):
+    monkeypatch.setattr("coding.service.strategy_pipeline.strategy_pick_service.robust_expected_per_risk", lambda metrics: -0.001)
+    service, client, repository = make_service()
+    result = run(service, mode=MODE_LIVE)
+    assert result.status == "no_candidates" and result.cost_usd == 0.0 and client.messages.create.call_count == 0
+    row = repository.save_strategy_pick.call_args.args[0]
+    assert row["status"] == "no_candidates" and row["candidates"] == [] and row["cost_usd"] == 0.0
+
+
+def test_a_live_shortlist_offers_only_positive_scores_and_a_replay_keeps_all(monkeypatch):
+    service, _, _ = make_service()
+    entry, _ = service._entry_for("BTC", AS_OF, MODE_REPLAY, 7.0, 2.0, None, NOW)
+    _, replay = service._shortlist_for("BTC", AS_OF, entry, NOW, MODE_REPLAY)
+    assert any(item.candidate.family != "iron_condor" for item in replay)
+    # stand-in score: positive only for the largest maximum losses (on this fake chain, the iron condors), so the filter has something to remove
+    threshold = min(item.metrics.max_loss_usd for item in replay if item.candidate.family == "iron_condor")
+    assert any(item.metrics.max_loss_usd < threshold for item in replay)
+    monkeypatch.setattr("coding.service.strategy_pipeline.strategy_pick_service.robust_expected_per_risk",
+                        lambda metrics: 0.01 if metrics.max_loss_usd >= threshold else -0.01)
+    _, live = service._shortlist_for("BTC", AS_OF, entry, NOW, MODE_LIVE)
+    assert live and {item.candidate.family for item in live} == {"iron_condor"}

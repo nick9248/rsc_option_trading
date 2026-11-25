@@ -2,9 +2,9 @@
 From every candidate of an expiry to the few the model is shown, and the text and schema of its answer (pure).
 
 The shortlist is built by code and is the only choice the model has: it cannot propose a structure that is not on it. Hard filters remove
-candidates whose costs eat too much of their risk; the rest are ranked by one deterministic rule (expected PnL per unit of maximum loss under
-the realised-volatility distribution) and the best few of each family are kept, so the model sees different kinds of structure, not ten
-copies of one.
+candidates whose costs eat too much of their risk; the rest are ranked by one deterministic rule (the LOWEST expected PnL per unit of maximum
+loss over three price models) and the best few of each family are kept, so the model sees different kinds of structure, not ten copies of one.
+The model is shown the result of each of the three models and that score.
 """
 
 import json
@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from coding.core.analytics.candidates.generator import LONG_CALL, LONG_PUT, Candidate
 from coding.core.analytics.candidates.metrics import CandidateMetrics
-from coding.core.analytics.candidates.scoring import REALISED, robust_expected_per_risk
+from coding.core.analytics.candidates.scoring import HAR_T, IMPLIED_T, REALISED, robust_expected_per_risk
 
 BASELINE_RULE = "robust_expected_pnl_per_risk"
 """Name of the deterministic rule that orders the shortlist and defines the baseline pick the model is compared with (it is not in the scoring lab's RULES: it needs three models)."""
@@ -24,6 +24,8 @@ PER_FAMILY = 2
 MAX_COST_FRACTION_OF_RISK = 0.15
 """A candidate whose spread and fees exceed this share of its maximum loss is dropped (an illiquid quote, not a trade)."""
 NO_TRADE = "no_trade"
+MODEL_LABELS = ((REALISED, "recent-volatility model"), (IMPLIED_T, "implied fat-tail model"), (HAR_T, "forecast fat-tail model"))
+"""The three price models of the ranking as the model reads them (and their order in the text)."""
 VIEWS = ("bullish", "bearish", "range_bound", "long_volatility", "short_volatility", "no_trade")
 
 PICK_SCHEMA: Dict[str, Any] = {
@@ -41,18 +43,32 @@ PICK_SCHEMA: Dict[str, Any] = {
     "additionalProperties": False,
 }
 
+# The instructions describe the models; they carry no result measured on stored data, because a replay sends the same text for past instants
+# (point in time: no later knowledge).
 SYSTEM_PROMPT = """You are an options strategist reviewing ONE expiry of crypto options for a human trader. Code gives you (1) facts about the market \
 and the expiry and (2) a shortlist of candidate structures that code built from the live chain and priced at the bid and ask. You choose one \
 candidate by its id, or "no_trade".
 
 Rules:
 - You may only choose an id that is on the shortlist. Never propose another structure or other strikes.
-- All candidate numbers are for one coin per leg. A buy fills at the ask, a sell at the bid; the costs shown are real. Code sizes the position \
-from a loss budget, so do not discuss size.
-- Each candidate has two views. The market view is exact: at the chain's own prices a structure is worth minus its costs (the spread paid against
-the mid and the fees), so its expected PnL there is that, for every structure; it carries no opinion. The realised-volatility view is a lognormal with the
-recent realised volatility: it ignores skew and fat tails and flatters short-premium structures. A clearly positive expected PnL under it is a hypothesis
-that implied volatility is too high, not a fact; it is the only place a candidate can look better than its costs.
+- All candidate numbers are for one coin per leg. A buy fills at the ask, a sell at the bid; the costs shown are real. The size is decided \
+elsewhere, so do not discuss size.
+- The market view of a candidate is exact: at the chain's own prices a structure is worth minus its costs (the spread paid against the mid and the \
+fees), so its expected PnL there is that, for every structure; it carries no opinion.
+- Three price models then say what the candidate would earn. All three centre the price on the forward and differ in how far it may move:
+  * recent-volatility model: lognormal with the volatility of the last 30 days. It has no fat tails and no skew, so it tends to flatter \
+short-premium structures.
+  * implied fat-tail model: Student-t at the chain's own at-the-money volatility (the market's level of movement, with fatter tails).
+  * forecast fat-tail model: Student-t at a volatility forecast from recent daily moves (HAR).
+- IMPORTANT: none of the three models has skew. Each uses ONE volatility for all strikes and a symmetric distribution, while the chain prices \
+strikes at different volatilities (usually low strikes higher). A structure that sells a strike priced at a higher volatility and buys one priced \
+lower can show a positive result under all three for that reason alone. The score is then a bet that the market's skew is wrong, not a \
+mispricing the models found; the implied fat-tail model is not the market's own view. The market view above is the one that includes skew. Say \
+for your choice whether its score depends on skew, and treat such a score as possibly no edge at all.
+- The score of a candidate is the LOWEST of the three expected PnL figures divided by its maximum loss. Code ranks by it. A positive score means \
+the candidate does not lose on average under any of the three; it is not a proven edge, and differences of a few percent of the risk are within \
+the uncertainty of the models. Choose "no_trade" when the score is too small to be worth the risk.
+- When the three models disagree strongly, say so: the answer then depends on which volatility proves right.
 - Use the facts to decide whether the situation favours a structure: say which facts you rely on, by label and value. Several facts are \
 conventions, not measurements (assumed dealer positioning, GEX signs). A fact marked "not recorded" is unknown; do not guess it.
 - "ranking" lists every shortlisted id in your order of preference, best first. "choice" must equal the first entry of the ranking, or be \
@@ -77,7 +93,7 @@ def build_shortlist(scored: Sequence[Tuple[Candidate, CandidateMetrics]], per_fa
                     max_cost_fraction: float = MAX_COST_FRACTION_OF_RISK) -> List[ShortlistItem]:
     """
     The candidates the model is shown: filtered, ranked by the baseline rule, the best ``per_family`` of each family, numbered C1, C2, ...
-    by family and strikes (the order and the ids carry no ranking: the baseline's preference is not shown to the model).
+    by family and strikes (the order and the ids carry no ranking; the score itself is shown with each candidate).
     """
     rule = robust_expected_per_risk
     by_family: Dict[str, List[ShortlistItem]] = {}
@@ -93,7 +109,7 @@ def build_shortlist(scored: Sequence[Tuple[Candidate, CandidateMetrics]], per_fa
     chosen: List[ShortlistItem] = []
     for family in sorted(by_family):
         chosen += sorted(by_family[family], key=lambda item: -item.score)[:per_family]
-    # Grouped by family and ordered by strikes: the order must not reveal the baseline's ranking to the model.
+    # Grouped by family and ordered by strikes: the position in the list says nothing about the ranking.
     chosen.sort(key=lambda item: (item.candidate.family, sorted(leg.strike for leg in item.candidate.legs)))
     return [ShortlistItem(f"C{number}", item.candidate, item.metrics, item.score) for number, item in enumerate(chosen, start=1)]
 
@@ -117,10 +133,12 @@ def render_shortlist(shortlist: Sequence[ShortlistItem]) -> str:
         profit = "unlimited" if metrics.max_profit_usd is None else _usd(metrics.max_profit_usd)
         breakevens = ", ".join(_usd(value) for value in metrics.breakevens) or "none"
         views = [f"market view: expected PnL {metrics.market_expected_pnl_usd:+,.0f} (minus its costs)"]
-        result = metrics.by_distribution.get(REALISED)
-        if result is not None:
-            views.append(f"realised-vol view: P(profit) {result.probability_of_profit:.0%}, expected PnL {result.expected_pnl_usd:+,.0f}, "
-                         f"tail loss {_usd(result.tail_loss_usd)}")
+        for name, label in MODEL_LABELS:
+            result = metrics.by_distribution.get(name)
+            if result is not None:
+                views.append(f"{label}: P(profit) {result.probability_of_profit:.0%}, expected PnL {result.expected_pnl_usd:+,.0f}, "
+                             f"tail loss {_usd(result.tail_loss_usd)}")
+        views.append(f"score {item.score:+.4f}")
         lines.append(f"{item.candidate_id} {candidate.family}: {legs} | {entry} | max loss {_usd(metrics.max_loss_usd)}, max profit {profit}, "
                      f"breakeven {breakevens} | costs: spread {_usd(metrics.spread_cost_usd)} + fees {_usd(metrics.trading_fees_usd)} | "
                      + " | ".join(views)
