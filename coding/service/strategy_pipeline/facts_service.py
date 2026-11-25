@@ -78,7 +78,6 @@ class FactsAsOfService:
             volatility_hour=volatility.get("snapshot_hour"),
             # computed here from the two numbers shown, so it cannot contradict them (the stored one averages the few traded instruments)
             vrp_absolute_points=None if atm_iv is None or realised_30d is None else atm_iv - realised_30d * 100.0,
-            iv_percentile_365d=volatility.get("iv_percentile_365d"),
             expected_daily_move_usd=volatility.get("expected_daily_move"), expected_weekly_move_usd=volatility.get("expected_weekly_move"),
             pc_atm_ratio=volatility.get("pc_atm_ratio"), pc_near_otm_ratio=volatility.get("pc_near_otm_ratio"),
             pc_far_otm_ratio=volatility.get("pc_far_otm_ratio"), net_vanna=volatility.get("net_vanna"), net_charm=volatility.get("net_charm"),

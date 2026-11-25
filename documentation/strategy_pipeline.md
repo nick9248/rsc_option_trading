@@ -9,8 +9,8 @@ migration 040 (`strategy_picks`).
    expected moves, vanna/charm; 24 h delta flow) plus DVOL and realised volatility from daily candles. The at-the-money and 25-delta implied volatility
    come from `volatility_skew_history` (full chain, since 2026-08-25), not from the older columns of `onchain_volatility_snapshots`, which were built from
    a few traded instruments (migration 018). The variance risk premium is computed from that implied volatility and the 30-day realised one. From the older
-   table: the IV percentile and expected moves (both from DVOL), and the put/call ratios by moneyness, vanna and charm, which cover only the instruments
-   traded in the hour (the facts say so). Everything is read as of the instant:
+   table: the expected moves (from DVOL), and the put/call ratios by moneyness, vanna and charm, which cover only the instruments traded in the hour
+   (the facts say so). The DVOL percentile is computed as of the instant. Everything is read as of the instant:
    a stored row counts once it was written (or its hour had ended; the full-chain implied volatility needs both, with 15 minutes after the hour's end,
    because a later collector run overwrites the row), a row older than 3 hours is missing, and what was not recorded is
    "not recorded", never 0 (the collector zero-fills empty buckets; those are treated as missing). Coverage: levels since 2026-03-15,
@@ -81,7 +81,9 @@ at the 30-day realised volatility was badly calibrated (outcomes 45 to 61% more 
   21:01 UTC: for the best offered candidate of 4, 11 and 25 December the value of the legs at one at-the-money volatility exceeded their market mid by +109,
   +206 and +206 USD per coin (costs 41, 111, 96; implied fat-tail expected result +43, +91, +110), and every one of the 12 offered candidates had such a gain:
   without it none would have a positive expected result. The score is therefore a bet that the market's skew is wrong. Not proven either way; a skew-aware
-  base distribution is open.
+  base distribution was tested on 2026-11-25 and NOT adopted: it does not forecast significantly better and its ranking loses against not trading, also after
+  corrections made following a review (exploratory); see
+  `documentation/research/skew_model_test_2026-11-25.md`. The market's own probabilities are the best calibrated; no ranking shows an edge.
 - Single long calls and puts are never shortlisted (lottery: the mean is dominated by a few outcomes that cannot be validated with about 35 expiries a year).
 - `validation/edge_evaluation.py`: expected log growth, cluster bootstrap, calibration table, Kelly fraction and a shrunk fractional Kelly (a tenth of Kelly, halved, capped by the drawdown budget).
   The Kelly sizing is not wired into any position size.
