@@ -11,7 +11,7 @@ from coding.core.analytics.risk.budget import RiskBudget
 from coding.service.strategy.strategy_suggestion_service import BudgetExceeded
 from coding.service.strategy_pipeline.strategy_pick_service import METHOD_VERSION, MODE_LIVE, MODE_REPLAY, StrategyPickService
 from tests.unit.backtest.test_backtest_service import ENTRY, NOW, make_repository
-from tests.unit.strategy_pipeline.test_facts import analysis_row, daily_closes, volatility_row
+from tests.unit.strategy_pipeline.test_facts import analysis_row, daily_closes, skew_row, volatility_row
 
 AS_OF = ENTRY
 
@@ -27,6 +27,7 @@ def make_service(reply_choice="C1", spent=0.0, stored=None, mode_reply=None):
     repository.get_ohlcv_by_date_range.return_value = daily_closes(300)
     repository.get_onchain_analysis_snapshot_at_or_before.return_value = analysis_row(hour=AS_OF - timedelta(hours=1))
     repository.get_onchain_volatility_snapshot_at_or_before.return_value = volatility_row(hour=AS_OF - timedelta(hours=1))
+    repository.get_volatility_skew_at_or_before.return_value = skew_row(hour=AS_OF - timedelta(hours=1))
     repository.get_flow_delta_window.return_value = {"hours_present": 24, "newest_hour": AS_OF - timedelta(hours=1), "hiro_usd": 1.0,
                                                      "premium_usd": 1.0, "gross_delta_usd": 1.0, "trade_count": 3}
     repository.get_dvol_history_before.return_value = [40.0, 45.0, 50.0]

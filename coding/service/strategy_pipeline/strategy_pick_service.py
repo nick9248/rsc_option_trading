@@ -33,12 +33,13 @@ from coding.service.strategy_pipeline.facts_service import FactsAsOfService
 
 logger = logging.getLogger(__name__)
 
-METHOD_VERSION = "pipeline-5"
+METHOD_VERSION = "pipeline-6"
 """pipeline-1: the shortlist showed a flat-volatility "implied view" that ignored skew (the model read it as fair value and leaned to put structures);
 pipeline-2: the market view is exact (minus costs);
 pipeline-3: live picks are built for a venue (Derive: minimum order size, fees with the base fee per order, narrow spreads tried, size shown in the prompt);
 pipeline-4: the ranking rule is the lowest expected PnL per risk over three models (realised lognormal, implied Student-t, HAR Student-t), single long options are excluded;
-pipeline-5: the model is shown all three models and the score, and a live pick offers only candidates with a positive score (none: the model is not asked)."""
+pipeline-5: the model is shown all three models and the score, and a live pick offers only candidates with a positive score (none: the model is not asked);
+pipeline-6: the facts take the at-the-money and 25-delta implied volatility from the full-chain table (the former source was degenerate and mostly empty)."""
 VENUE_CANDIDATE_LIMITS = CandidateLimits(short_delta_range=(0.02, 0.60), long_delta_range=(0.02, 0.70),
                                          width_fractions=(0.004, 0.006, 0.008, 0.01, 0.015, 0.02, 0.03, 0.04, 0.06, 0.10))
 """With a venue the loss budget of a small account is a few USD: spreads from 0.4% of spot wide are tried too (the research default starts at 2%)."""

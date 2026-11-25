@@ -6,10 +6,15 @@ migration 040 (`strategy_picks`).
 
 ## Steps
 1. **Facts** (`FactsAsOfService`): the numbers the collector stores every hour per expiry (max pain, put/call, GEX/DEX totals, walls; ATM IV, skew,
-   expected moves, vanna/charm; 24 h delta flow) plus DVOL and realised volatility from daily candles. Everything is read as of the instant:
-   a stored row counts once it was written (or its hour had ended), a row older than 3 hours is missing, and what was not recorded is
+   expected moves, vanna/charm; 24 h delta flow) plus DVOL and realised volatility from daily candles. The at-the-money and 25-delta implied volatility
+   come from `volatility_skew_history` (full chain, since 2026-08-25), not from the older columns of `onchain_volatility_snapshots`, which were built from
+   a few traded instruments (migration 018). The variance risk premium is computed from that implied volatility and the 30-day realised one. From the older
+   table: the IV percentile and expected moves (both from DVOL), and the put/call ratios by moneyness, vanna and charm, which cover only the instruments
+   traded in the hour (the facts say so). Everything is read as of the instant:
+   a stored row counts once it was written (or its hour had ended; the full-chain implied volatility needs both, with 15 minutes after the hour's end,
+   because a later collector run overwrites the row), a row older than 3 hours is missing, and what was not recorded is
    "not recorded", never 0 (the collector zero-fills empty buckets; those are treated as missing). Coverage: levels since 2026-03-15,
-   volatility since 2026-07-14, flow since 2026-08-25.
+   implied volatility and skew since 2026-08-25 (other volatility figures since 2026-07-14), flow since 2026-08-25.
 2. **Candidates and metrics**: every defined-risk structure the stored chain offers (see scoring_lab.md), with exact costs and the expected
    result under three price models (see "Robust ranking").
 3. **Shortlist**: single long options and costs above 15% of the maximum loss are dropped, the rest ranked by the **score** (the lowest expected PnL
@@ -46,6 +51,9 @@ paid. A missing key, an exhausted budget or an API error fails only that step; t
 pipeline-1: the shortlist showed a flat-volatility "implied view" that ignored skew (the model read it as fair value). pipeline-2: the market view is exact
 (minus costs). Replay of 30 instants (2026-08-30 to 10-27): pipeline-1 model -0.27 R, pipeline-2 -0.36 R, average candidate -0.04, baseline top-1 -0.54 to -0.59:
 no evidence yet that the model beats the average candidate.
+
+pipeline-3 to pipeline-5: see the sections below. pipeline-6: the facts take the at-the-money and 25-delta implied volatility, the skew and the variance risk
+premium from the full-chain table.
 
 ## Venue (Derive) and method pipeline-3
 Since the scale-free change of 2026-11-22 the live runner passes no venue: the following describes the venue path the service still offers, not the Analysis tab.

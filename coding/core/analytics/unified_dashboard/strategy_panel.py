@@ -279,7 +279,7 @@ def build_strategy_panel(picks: Sequence[StoredPick], now_utc: datetime, currenc
             open_picks[pick.expiration] = pick
             days_left[pick.expiration] = days
     if not open_picks:
-        return StrategyPanel(intro + paragraph_fragment("No stored pick for an expiry that is still open.", "note-s"))
+        return StrategyPanel(intro + paragraph_fragment("No stored pick of the current method version for an expiry that is still open (picks of earlier versions are not shown).", "note-s"))
     ordered = sorted(open_picks.values(), key=lambda stored: days_left[stored.expiration])
     selected = select_trades(ordered, now)
     chosen_ids = {id(pick) for pick in selected}
