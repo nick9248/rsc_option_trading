@@ -102,15 +102,14 @@ def render_facts(facts: FactsV1) -> str:
               _line("Calls in the money, share of open interest", facts.itm_call_oi_pct, "%", 1),
               _line("Puts in the money, share of open interest", facts.itm_put_oi_pct, "%", 1), ""]
 
-    lines.append(f"## Implied volatility of this expiry (full chain, last finished hour {'not available' if facts.chain_volatility_hour is None else format_utc(facts.chain_volatility_hour)})")
+    lines.append(f"## Implied volatility of this expiry (full chain, stored hour {'not available' if facts.chain_volatility_hour is None else format_utc(facts.chain_volatility_hour)})")
     lines += [_line("ATM implied volatility", facts.atm_iv_pct, "%", 1),
               _line("25-delta skew (put IV minus call IV, vol points)", facts.skew_25d, "", 1),
               _line("25-delta put IV", facts.put_25d_iv_pct, "%", 1), _line("25-delta call IV", facts.call_25d_iv_pct, "%", 1),
               _line("Variance risk premium (this ATM implied volatility minus 30-day realised, vol points)", facts.vrp_absolute_points, "", 1), ""]
 
     lines.append(f"## Other volatility figures of this expiry (stored hourly analysis of {'not available' if facts.volatility_hour is None else format_utc(facts.volatility_hour)})")
-    lines += [_line("DVOL percentile over 365 days at that hour (whole market, not this expiry)", facts.iv_percentile_365d, "%", 0),
-              _line("Expected daily move (from DVOL, whole market)", facts.expected_daily_move_usd, " USD", 0),
+    lines += [_line("Expected daily move (from DVOL, whole market)", facts.expected_daily_move_usd, " USD", 0),
               _line("Expected weekly move (from DVOL, whole market)", facts.expected_weekly_move_usd, " USD", 0),
               _line("Put/call ratio at the money (instruments traded in that hour only)", facts.pc_atm_ratio),
               _line("Put/call ratio, 5-15% out of the money (traded only)", facts.pc_near_otm_ratio),
