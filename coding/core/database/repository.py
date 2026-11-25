@@ -1485,12 +1485,15 @@ class DatabaseRepository:
         return None if row is None else self._row_dict(self._ANALYSIS_COLUMNS, row)
 
     _SKEW_COLUMNS = ("snapshot_hour", "atm_iv_interp", "call_25d_iv", "put_25d_iv")
+    SKEW_SETTLE_MINUTES = 15
+    """Minutes after an hour's end before its row counts as final: a collector run that started just before the end still writes to that hour."""
 
     def get_volatility_skew_at_or_before(self, currency: str, expiration: str, as_of: datetime) -> Optional[Dict[str, Any]]:
         """
         The newest hourly full-chain implied volatility of one expiry (at the money, 25-delta call and put, in percent) that is certainly known
-        at ``as_of``: written by then (``created_at``, stored in UTC on the collector's server) AND its hour over. The second condition is needed
-        because a second collector run of the same hour overwrites the values and keeps ``created_at``: a running hour could show later values.
+        at ``as_of``: written by then (``created_at``, stored in UTC on the collector's server) AND its hour over for ``SKEW_SETTLE_MINUTES``.
+        The second condition is needed because a later collector run of the same hour overwrites the values and keeps ``created_at``, also a run
+        that started just before the hour ended.
 
         This table (``volatility_skew_history``, migration 018) replaced the 25-delta and at-the-money columns of
         ``onchain_volatility_snapshots``, which come from a few traded instruments and are degenerate.
@@ -1499,9 +1502,9 @@ class DatabaseRepository:
         with self._db_cursor() as cursor:
             cursor.execute(
                 f"SELECT {', '.join(self._SKEW_COLUMNS)} FROM volatility_skew_history "
-                "WHERE currency = %s AND expiration = %s AND created_at <= %s AND snapshot_hour + interval '1 hour' <= %s "
-                "ORDER BY snapshot_hour DESC LIMIT 1",
-                (currency, expiration, as_of_naive, as_of_naive))
+                "WHERE currency = %s AND expiration = %s AND created_at <= %s "
+                "AND snapshot_hour + interval '1 hour' + make_interval(mins => %s) <= %s ORDER BY snapshot_hour DESC LIMIT 1",
+                (currency, expiration, as_of_naive, self.SKEW_SETTLE_MINUTES, as_of_naive))
             row = cursor.fetchone()
         return None if row is None else self._row_dict(self._SKEW_COLUMNS, row)
 

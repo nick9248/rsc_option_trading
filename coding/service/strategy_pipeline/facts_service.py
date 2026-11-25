@@ -2,8 +2,8 @@
 Builds the facts of one expiry as of any instant, from stored data only (read only, point in time).
 
 Nothing here looks at data that did not exist at ``as_of``: each stored hourly row is used only once it was written (or, for tables without a
-write time, once its hour had ended), and a row older than three hours is treated as missing. The same code serves a live run (as_of = now,
-after the sync) and a replay of any past instant.
+write time, once its hour had ended; the full-chain implied volatility needs both conditions), and a row older than three hours is treated as
+missing. The same code serves a live run (as_of = now, after the sync) and a replay of any past instant.
 """
 
 import logging
