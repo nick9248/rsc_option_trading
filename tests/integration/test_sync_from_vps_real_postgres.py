@@ -469,3 +469,34 @@ def test_migration_027_guard_ignores_the_hour_still_forming_but_blocks_real_gaps
         cursor.execute(migration)
         cursor.execute("SELECT to_regclass('public.volatility_index_history') IS NULL")
         assert cursor.fetchone()[0] is True
+
+
+def test_a_daily_candle_copied_mid_day_gets_its_final_values_at_the_next_sync(source_and_copy):
+    """The bug of 2026-11-25: with DO NOTHING the local copy kept the candle as it was when first copied. Uses the real SYNC_TABLES entry."""
+    import re
+    from datetime import datetime
+    from pathlib import Path
+
+    source, copy = source_and_copy
+    base = (Path(__file__).parents[2] / "migrations" / "000_base_schema.sql").read_text(encoding="utf8")
+    create = re.search(r"CREATE TABLE IF NOT EXISTS ohlcv_history \(.*?\);", base, re.DOTALL).group(0)
+    for connection in (source, copy):
+        with connection.cursor() as cursor:
+            cursor.execute(create)
+        connection.commit()
+    table = next(entry for entry in sync_from_vps.SYNC_TABLES if entry["name"] == "ohlcv_history")
+    insert = ("INSERT INTO ohlcv_history (currency, instrument_name, timestamp, date, open, high, low, close, volume) "
+              "VALUES ('BTC', 'BTC-PERPETUAL', %s, %s, 60363, 60400, 60300, %s, %s)")
+    with source.cursor() as cursor:
+        cursor.execute(insert, (1795248000000, datetime(2026, 11, 21, 8), 60363, 18851))       # the day is still running
+    sync_table(source, copy, table)
+
+    with source.cursor() as cursor:
+        cursor.execute("UPDATE ohlcv_history SET close = 59048, volume = 31566")                # the finished day
+        cursor.execute(insert, (1795334400000, datetime(2026, 11, 22, 8), 59100, 900))          # and the next one has started
+    count, _ = sync_table(source, copy, table)
+
+    with copy.cursor() as cursor:
+        cursor.execute("SELECT date, close, volume FROM ohlcv_history ORDER BY date")
+        assert cursor.fetchall() == [(datetime(2026, 11, 21, 8), 59048, 31566), (datetime(2026, 11, 22, 8), 59100, 900)]
+    assert count == 2

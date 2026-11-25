@@ -74,6 +74,10 @@ TUNNEL_WAIT_SEC = 3          # Seconds to wait for tunnel to establish
 #                  the newest local watermark instead of the whole table. Use it when
 #                  rows are only ever changed shortly after insertion. Timestamp
 #                  watermarks only.
+# Every table the collector rewrites on the VPS (ON CONFLICT ... DO UPDATE) needs upsert_key: with
+# DO NOTHING the local copy keeps the first version for ever (found 2026-11-25: daily candles and
+# on-chain rows copied mid-hour stayed stale). A rewrite older than the lookback (a backfill script run
+# on the VPS) is not picked up: sync such a table once without lookback_hours.
 # optional       : optional, default False. True only for a table whose migration may
 #                  not be applied on the VPS yet: missing there, it is SKIPPED (logged).
 #                  Any other table missing on the VPS is an error (a schema fault).
@@ -95,13 +99,17 @@ SYNC_TABLES = [
         "name": "hourly_snapshots",
         "watermark_col": "snapshot_hour",
         "watermark_type": "timestamp",
-        "conflict_target": "(instrument_name, snapshot_hour) DO NOTHING",
+        "conflict_target": None,
+        "upsert_key": ["instrument_name", "snapshot_hour"],
+        "lookback_hours": 24,  # an hour is re-aggregated in place
     },
     {
         "name": "onchain_analysis_snapshots",
         "watermark_col": "snapshot_hour",
         "watermark_type": "timestamp",
-        "conflict_target": "(snapshot_hour, currency, expiration) DO NOTHING",
+        "conflict_target": None,
+        "upsert_key": ["snapshot_hour", "currency", "expiration"],
+        "lookback_hours": 24,  # the hour's second collector run overwrites it
     },
     {
         # institutional_metrics_spec.md section 6 / infra_spec.md section 2
@@ -115,7 +123,9 @@ SYNC_TABLES = [
         "name": "flow_delta_hourly",
         "watermark_col": "snapshot_hour",
         "watermark_type": "timestamp",
-        "conflict_target": "(snapshot_hour, currency, expiration) DO NOTHING",
+        "conflict_target": None,
+        "upsert_key": ["snapshot_hour", "currency", "expiration"],
+        "lookback_hours": 24,  # late trades refresh the hour in place
     },
     {
         "name": "funding_rate_history",
@@ -127,13 +137,17 @@ SYNC_TABLES = [
         "name": "ohlcv_history",
         "watermark_col": "date",
         "watermark_type": "timestamp",
-        "conflict_target": "(instrument_name, timestamp) DO NOTHING",
+        "conflict_target": None,
+        "upsert_key": ["instrument_name", "timestamp"],
+        "lookback_hours": 72,  # a day's candle changes until the day ends (the collector re-reads 2 days)
     },
     {
         "name": "onchain_volatility_snapshots",
         "watermark_col": "reconstructed_at",
         "watermark_type": "timestamp",
-        "conflict_target": "(snapshot_hour, currency, expiration) DO NOTHING",
+        "conflict_target": None,
+        "upsert_key": ["snapshot_hour", "currency", "expiration"],
+        "lookback_hours": 24,  # recomputed in place; reconstructed_at keeps its first value
     },
     {
         # The VPS rewrites open_interest/mark_iv/underlying_price in place when the

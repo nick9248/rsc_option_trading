@@ -182,7 +182,7 @@ WantedBy=multi-user.target
 - `scripts/sync_from_vps.py` — runs on local PC
 - Opens SSH tunnel: local port 5434 → VPS port 5432
 - Syncs the 20 tables in `SYNC_TABLES` incrementally using watermark columns (12 when first set up)
-- Uses `ON CONFLICT DO NOTHING` for tables with unique constraints
+- Tables the collector never rewrites are copied with `ON CONFLICT DO NOTHING`; tables it overwrites (`upsert_key` in `SYNC_TABLES`) are re-read over a recent window and changed rows are updated locally
 - Also pulls `logs/vps_health.json` from VPS
 
 ### Step 9: VPS Health Monitor
@@ -226,16 +226,18 @@ The strategy finder (straddle, iron condor and butterfly scanners) and the forwa
 
 The sync script pulls these 18 tables (`SYNC_TABLES` in `scripts/sync_from_vps.py`) from the VPS to the local PC. `health_check_runs` stays on the VPS.
 
+"upsert" = the VPS overwrites rows: the last hours (`lookback_hours`) or the whole table are re-read and differing local rows are updated. A rewrite older than that window (a backfill run on the VPS) is not picked up.
+
 | Table | Watermark Column | Conflict Handling |
 |-------|-----------------|-------------------|
 | `historical_trades` | `captured_at` | `(trade_id, trade_timestamp)` |
 | `snapshots` | `captured_at` | none |
-| `hourly_snapshots` | `snapshot_hour` | `(instrument_name, snapshot_hour)` |
-| `onchain_analysis_snapshots` | `snapshot_hour` | `(snapshot_hour, currency, expiration)` |
-| `flow_delta_hourly` | `snapshot_hour` | `(snapshot_hour, currency, expiration)` |
+| `hourly_snapshots` | `snapshot_hour` | upsert on `(instrument_name, snapshot_hour)`, 24 h |
+| `onchain_analysis_snapshots` | `snapshot_hour` | upsert on `(snapshot_hour, currency, expiration)`, 24 h |
+| `flow_delta_hourly` | `snapshot_hour` | upsert on `(snapshot_hour, currency, expiration)`, 24 h |
 | `funding_rate_history` | `date` | `(instrument_name, timestamp)` |
-| `ohlcv_history` | `date` | `(instrument_name, timestamp)` |
-| `onchain_volatility_snapshots` | `reconstructed_at` | `(snapshot_hour, currency, expiration)` |
+| `ohlcv_history` | `date` | upsert on `(instrument_name, timestamp)`, 72 h |
+| `onchain_volatility_snapshots` | `reconstructed_at` | upsert on `(snapshot_hour, currency, expiration)`, 24 h |
 | `daily_oi_snapshots` | `created_at` | none |
 | `account_snapshots` | `snapshot_hour` | `(currency, snapshot_hour)` |
 | `position_snapshots` | `snapshot_hour` | `(snapshot_hour, instrument_name)` |

@@ -34,10 +34,10 @@ class TestFlowDeltaHourlySyncEntry:
         assert entry["watermark_col"] == "snapshot_hour"
         assert entry["watermark_type"] == "timestamp"
 
-    def test_conflict_target_matches_the_table_s_unique_constraint(self):
+    def test_upsert_key_matches_the_table_s_unique_constraint(self):
         """Migration 021 (dbf6803): UNIQUE (snapshot_hour, currency, expiration)."""
         entry = _find("flow_delta_hourly")
-        assert entry["conflict_target"] == "(snapshot_hour, currency, expiration) DO NOTHING"
+        assert entry["upsert_key"] == ["snapshot_hour", "currency", "expiration"]
 
     def test_every_sync_table_entry_has_required_keys(self):
         """Sanity check the whole list still has the expected shape after
@@ -63,6 +63,12 @@ class TestLiveTablesAreSynced:
         "dvol_history": ["asset", "timestamp"],
         # An order changes while it is open.
         "orders": ["order_id"],
+        # The collector overwrites these too; copied before the last write, a DO NOTHING copy stayed stale.
+        "ohlcv_history": ["instrument_name", "timestamp"],
+        "hourly_snapshots": ["instrument_name", "snapshot_hour"],
+        "onchain_analysis_snapshots": ["snapshot_hour", "currency", "expiration"],
+        "onchain_volatility_snapshots": ["snapshot_hour", "currency", "expiration"],
+        "flow_delta_hourly": ["snapshot_hour", "currency", "expiration"],
     }
 
     def test_append_only_tables_are_present_with_a_do_nothing_conflict_target(self):
@@ -125,6 +131,9 @@ class TestLookbackWindows:
         assert _find("dvol_history")["lookback_hours"] == 72  # daemon repairs the last 48 h
         assert _find("daily_oi_snapshots")["lookback_hours"] == 6
         assert _find("volatility_skew_history")["lookback_hours"] == 6
+        assert _find("ohlcv_history")["lookback_hours"] == 72  # the collector rewrites the last 2 daily candles
+        for name in ("hourly_snapshots", "onchain_analysis_snapshots", "onchain_volatility_snapshots", "flow_delta_hourly"):
+            assert _find(name)["lookback_hours"] == 24, name
 
     def test_lookback_is_only_used_with_an_upsert_key_and_a_timestamp_watermark(self):
         for entry in SYNC_TABLES:
