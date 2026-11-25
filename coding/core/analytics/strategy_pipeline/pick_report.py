@@ -23,7 +23,8 @@ class PickReport:
     not_yet_evaluated: int
     """Usable picks whose expiry has not been settled and evaluated yet."""
     nothing_offered: int
-    """Expiry-days on which code offered no candidate (no positive score), so the model was not asked: the results cover only the other looks."""
+    """Expiry-days on which every look found no candidate to offer (live: none with a positive score; replay: none past the filters), so the model
+    was not asked about them: the results cover only the other expiry-days."""
     no_trade_share: Optional[float]
     mean_model_r: Optional[float]
     mean_baseline_r: Optional[float]
@@ -52,7 +53,9 @@ def summarize_picks(rows: Sequence[Dict[str, Any]]) -> PickReport:
     """
     unusable = sum(1 for row in rows if row.get("status") in ("invalid_response", "refused"))
     waiting = sum(1 for row in rows if row.get("status") in ("ok", "no_trade") and not row.get("outcomes"))
-    nothing_offered = len({(row["expiration"], row["as_of"].date()) for row in rows if row.get("status") == "no_candidates"})    # free rows repeat per run
+    empty = {(row["expiration"], row["as_of"].date()) for row in rows if row.get("status") == "no_candidates"}             # free rows repeat per run
+    offered = {(row["expiration"], row["as_of"].date()) for row in rows if row.get("status") not in (None, "no_candidates") and "as_of" in row}
+    nothing_offered = len(empty - offered)
     model: List[float] = []
     baseline: List[float] = []
     shortlist: List[float] = []

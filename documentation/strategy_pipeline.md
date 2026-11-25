@@ -67,6 +67,8 @@ at the 30-day realised volatility was badly calibrated (outcomes 45 to 61% more 
 - Models (all with the forward as mean): realised lognormal, implied Student-t (5 degrees of freedom) and HAR-RV Student-t (`har_volatility.py`, fitted on candles complete at the instant).
 - Baseline rule: the LOWEST expected PnL per unit of maximum loss over the three models (a candidate is as good as it looks under the least favourable model); a live pick offers only candidates where it is positive. Method pipeline-5 (2026-11-25) also shows the model all three results and the score (pipeline-4 showed
   only the realised view), so the model's choice is no longer independent of the baseline's: read "model against baseline" with that in mind.
+- The three models and the score were chosen on data up to 2026-11-22: a replay of earlier instants is in-sample for that choice. The instructions to the
+  model describe the models only and quote no result measured on stored data, so a replay gets no later knowledge through them.
 - Single long calls and puts are never shortlisted (lottery: the mean is dominated by a few outcomes that cannot be validated with about 35 expiries a year).
 - `validation/edge_evaluation.py`: expected log growth, cluster bootstrap, calibration table, Kelly fraction and a shrunk fractional Kelly (a tenth of Kelly, halved, capped by the drawdown budget).
   The Kelly sizing is not wired into any position size.

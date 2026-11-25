@@ -166,6 +166,8 @@ def test_the_instructions_name_the_three_models_and_the_score_the_text_shows():
     for _, label in MODEL_LABELS:
         assert label in SYSTEM_PROMPT
     assert "LOWEST of the three" in SYSTEM_PROMPT and "not a proven edge" in SYSTEM_PROMPT and "realised-volatility view" not in SYSTEM_PROMPT
+    lowered = SYSTEM_PROMPT.lower()                                       # a replay sends this text for past instants: nothing measured later
+    assert "past data" not in lowered and "past outcomes" not in lowered and "calibrat" not in lowered
 
 
 def test_the_report_counts_expiry_days_with_nothing_to_offer_once_each():
@@ -175,3 +177,6 @@ def test_the_report_counts_expiry_days_with_nothing_to_offer_once_each():
             {"status": "no_candidates", "expiration": "4DEC26", "as_of": evening}]
     report = summarize_picks(rows)
     assert report.nothing_offered == 2 and report.picks == 0 and report.unusable_answers == 0 and report.not_yet_evaluated == 0
+    later_offered = rows + [{"status": "ok", "expiration": "29NOV26", "as_of": evening, "choice": "C1"}]       # a later look the same day had a candidate
+    mixed = summarize_picks(later_offered)
+    assert mixed.nothing_offered == 1 and mixed.not_yet_evaluated == 1

@@ -28,6 +28,8 @@ MODEL_LABELS = ((REALISED, "recent-volatility model"), (IMPLIED_T, "implied fat-
 """The three price models of the ranking as the model reads them (and their order in the text)."""
 VIEWS = ("bullish", "bearish", "range_bound", "long_volatility", "short_volatility", "no_trade")
 
+# The instructions describe the models; they carry no result measured on stored data, because a replay sends the same text for past instants
+# (point in time: no later knowledge).
 PICK_SCHEMA: Dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -54,13 +56,13 @@ elsewhere, so do not discuss size.
 - The market view of a candidate is exact: at the chain's own prices a structure is worth minus its costs (the spread paid against the mid and the \
 fees), so its expected PnL there is that, for every structure; it carries no opinion.
 - Three price models then say what the candidate would earn. All three centre the price on the forward and differ in how far it may move:
-  * recent-volatility model: lognormal with the volatility of the last 30 days. In tests on past data it was badly calibrated (real outcomes were \
-much wider than it assumes) and, used alone, its expected PnL did not predict results. It flatters short-premium structures.
-  * implied fat-tail model: Student-t at the chain's own at-the-money volatility. Its probabilities of profit matched past outcomes best.
+  * recent-volatility model: lognormal with the volatility of the last 30 days. It has no fat tails and no skew, so it tends to flatter \
+short-premium structures.
+  * implied fat-tail model: Student-t at the chain's own at-the-money volatility (the market's level of movement, with fatter tails).
   * forecast fat-tail model: Student-t at a volatility forecast from recent daily moves (HAR).
 - The score of a candidate is the LOWEST of the three expected PnL figures divided by its maximum loss. Code ranks by it. A positive score means \
-the candidate does not lose on average under any of the three; it is not a proven edge: on past data no ranking was shown to beat costs, and \
-differences of a few percent of the risk are within the uncertainty. Choose "no_trade" when the score is too small to be worth the risk.
+the candidate does not lose on average under any of the three; it is not a proven edge, and differences of a few percent of the risk are within \
+the uncertainty of the models. Choose "no_trade" when the score is too small to be worth the risk.
 - When the three models disagree strongly, say so: the answer then depends on which volatility proves right.
 - Use the facts to decide whether the situation favours a structure: say which facts you rely on, by label and value. Several facts are \
 conventions, not measurements (assumed dealer positioning, GEX signs). A fact marked "not recorded" is unknown; do not guess it.

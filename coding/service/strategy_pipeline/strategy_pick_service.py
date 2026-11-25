@@ -1,6 +1,6 @@
 """
-The strategy pipeline: facts and candidates built by code, one model call that chooses among them, the position sized from a loss budget, and
-everything stored; later the choice is settled and compared with the baselines.
+The strategy pipeline: facts and candidates built by code, one model call that chooses among them, and everything stored; later the choice is
+settled and compared with the baselines. A replay pick is sized from a loss budget; the Analysis tab's live picks are stored per 1 coin per leg.
 
 The same code runs live (as_of = now, the expiry not yet settled) and as a replay of a past instant (mode "replay": the chain, the facts and
 the volatilities are those of that instant, and only the settlement price comes from the future, and only to evaluate). Every call is paid:

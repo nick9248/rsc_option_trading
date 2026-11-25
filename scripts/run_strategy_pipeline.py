@@ -1,6 +1,6 @@
 """
-The strategy pipeline: facts and candidates by code, the model chooses among them, the position is sized from a loss budget, and the choice is
-settled and compared with the baselines. Research only: places no orders. Every call is paid (about 0.08 USD).
+The strategy pipeline: facts and candidates by code, the model chooses among them, and the choice is settled and compared with the baselines
+(a replay pick is sized from a loss budget, a live pick is stored per 1 coin per leg). Research only: places no orders. Every call is paid (about 0.08 USD).
 
 Usage (from repo root; the local database should be synced first; the key is claude_api_key in .env):
     .venv\\Scripts\\python -m scripts.run_strategy_pipeline replay --from 2026-09-01 --to 2026-10-15 --every-days 5 --yes
