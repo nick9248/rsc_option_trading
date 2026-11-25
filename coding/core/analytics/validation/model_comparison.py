@@ -155,8 +155,8 @@ def win_calibration(entries: Sequence[Dict[str, Any]], model: str) -> float:
 
 def report_lines(entries: Sequence[Dict[str, Any]], draws: int = BOOTSTRAP_DRAWS) -> List[str]:
     """The whole comparison as plain text lines, ending with the three criteria and the decision."""
-    if not entries:
-        return ["No entries: nothing to compare."]
+    if len({entry["cluster"] for entry in entries}) < 2:
+        return ["No entries from at least two currency x expiry clusters: nothing to compare."]
     lines = [f"Entries {len(entries)}, candidates {sum(len(entry['candidates']) for entry in entries):,}, "
              f"clusters (currency x expiry) {len({entry['cluster'] for entry in entries})}"]
     first = correctness(entries)
@@ -199,6 +199,10 @@ def report_lines(entries: Sequence[Dict[str, Any]], draws: int = BOOTSTRAP_DRAWS
     lines += [f"  candidate minus current: {100 * difference.estimate:+.4f}%  95% [{100 * difference.low:+.4f}, {100 * difference.high:+.4f}]",
               f"  C3 {'PASSED' if third else 'FAILED'}"]
     lines += ["", "Reported, not criteria"]
+    candidates = [candidate for entry in entries for candidate in entry["candidates"]]
+    for model in ("implied_t", MARKET_MODEL):          # the signed median of C1 lets gains and losses cancel; the absolute one does not
+        gap = float(np.median([abs(candidate["expected_usd"][model] + candidate["costs_usd"]) for candidate in candidates]))
+        lines.append(f"  median ABSOLUTE gap between the expected PnL under {model} and minus costs: {gap:.4g} USD")
     for label, models in (("current", CURRENT_MODELS), ("candidate", CANDIDATE_MODELS)):
         value = slope(entries, models)
         lines.append(f"  slope of realised R on the {label} score: {value.estimate:+.2f} [{value.low:+.2f}, {value.high:+.2f}] (1 = means what it says)")

@@ -42,17 +42,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         entries, skipped = ModelComparisonService(DatabaseRepository()).collect(arguments.currency, arguments.first_day, arguments.last_day)
         OUTPUT_FOLDER.mkdir(parents=True, exist_ok=True)
         with open(OUTPUT_FOLDER / f"{arguments.currency}.pkl", "wb") as handle:
-            pickle.dump({"entries": entries, "skipped": dict(skipped)}, handle)
+            pickle.dump({"entries": entries, "skipped": dict(skipped), "range": (arguments.first_day, arguments.last_day)}, handle)
         logger.info("%s: %d entries; looks without an entry: %s", arguments.currency, len(entries), dict(skipped))
         return 0
     entries = []
+    ranges = {}
     for path in sorted(OUTPUT_FOLDER.glob("*.pkl")):
         with open(path, "rb") as handle:
             stored = pickle.load(handle)
+        ranges[path.stem] = stored.get("range")
         entries += stored["entries"]
         logger.info("%s: %d entries; looks without an entry: %s", path.stem, len(stored["entries"]), stored["skipped"])
-    if not entries:
-        logger.error("nothing collected yet: run collect first")
+    if set(ranges) != {"BTC", "ETH"} or len(set(ranges.values())) != 1 or None in ranges.values():
+        logger.error("collect BTC and ETH over the same range first (found: %s)", ranges)
         return 1
     for line in report_lines(entries):
         logger.info("%s", line)

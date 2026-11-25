@@ -58,7 +58,6 @@ class FactsV1:
     """At-the-money implied volatility of this expiry minus the 30-day realised volatility, in vol points."""
     # other volatility figures (hourly volatility snapshot)
     volatility_hour: Optional[datetime] = None
-    iv_percentile_365d: Optional[float] = None
     expected_daily_move_usd: Optional[float] = None
     expected_weekly_move_usd: Optional[float] = None
     pc_atm_ratio: Optional[float] = None

@@ -70,20 +70,29 @@ def test_at_the_markets_own_width_a_skewed_spread_has_no_gain_that_a_one_volatil
 
 def test_a_wider_view_scales_the_spread_of_log_returns_and_keeps_the_forward():
     smile = fit_market_smile(chain(), FORWARD, YEARS)
-    atm = smile.at_the_money_volatility
-
     def spread(distribution):
         prices, weights = distribution.grid()
         returns = np.log(prices / FORWARD)
         mean = (returns * weights).sum()
         return math.sqrt(((returns - mean) ** 2 * weights).sum())
-    market, wider, narrower = smile.distribution(), smile.distribution(atm * 1.5), smile.distribution(atm * 0.5)
-    assert spread(wider) == pytest.approx(1.5 * spread(market), rel=1e-9) and spread(narrower) == pytest.approx(0.5 * spread(market), rel=1e-9)
-    for distribution in (market, wider, narrower, smile.distribution(atm)):
+    market = smile.distribution()
+    wider, narrower = smile.distribution(0.9), smile.distribution(0.3)
+    for view, distribution in ((0.9, wider), (0.3, narrower)):                       # the log return has exactly the annualised deviation asked for
+        assert spread(distribution) == pytest.approx(view * math.sqrt(YEARS), rel=1e-9)
+    assert spread(market) > smile.at_the_money_volatility * math.sqrt(YEARS)          # the tails make the market wider than its at-the-money volatility
+    own = spread(market) / math.sqrt(YEARS)
+    assert np.allclose(smile.distribution(own).grid()[0], market.grid()[0])
+    for distribution in (market, wider, narrower):
         prices, weights = distribution.grid()
         assert float((prices * weights).sum()) == pytest.approx(FORWARD, rel=1e-9)
-    assert np.allclose(smile.distribution(atm).grid()[0], market.grid()[0])
     assert expected(wider, 60_000, "call") > expected(market, 60_000, "call") > expected(narrower, 60_000, "call")
+
+
+def test_a_curve_that_implies_negative_probabilities_is_refused(monkeypatch):
+    smile = fit_market_smile(chain(), FORWARD, YEARS)
+    assert smile.probability_repair < 0.001
+    monkeypatch.setattr("coding.core.analytics.candidates.smile_distribution.MAXIMUM_PROBABILITY_REPAIR", -1.0)      # any curve now needs too much
+    assert fit_market_smile(chain(), FORWARD, YEARS) is None
 
 
 def test_too_few_quotes_one_sided_quotes_or_a_curve_the_fit_cannot_follow_give_no_smile():

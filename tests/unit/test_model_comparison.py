@@ -57,7 +57,9 @@ def test_the_report_states_the_three_criteria_the_decision_and_that_an_edge_is_n
     text = "\n".join(report_lines(entries, draws=100))
     for wanted in ("C1 PASSED", "C2 PASSED", "C3 PASSED", "DECISION: ADOPT", "EDGE: not shown"):
         assert wanted in text, wanted
-    assert report_lines([]) == ["No entries: nothing to compare."]
+    assert report_lines([]) == ["No entries from at least two currency x expiry clusters: nothing to compare."]
+    assert report_lines([entry(0, [candidate(0.01, 0.02, 1.0)])]) == report_lines([])                  # one cluster: no interval can be formed
+    assert "median ABSOLUTE gap between the expected PnL under smile and minus costs" in text
 
 
 def test_a_clearly_worse_candidate_rule_fails_the_third_criterion():

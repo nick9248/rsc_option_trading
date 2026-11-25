@@ -98,3 +98,6 @@ output/taker_flow/
 output/decision_maker/
 output/backups/
 output/reference_images/
+
+# generated research data
+output/research/

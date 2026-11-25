@@ -7,8 +7,10 @@ of the out-of-the-money options, reads the distribution of the settlement price 
 1 + dC/dK of the call price, Breeden and Litzenberger), and can widen or narrow it: each log return's distance from the mean log return is
 multiplied by (view volatility / at-the-money volatility), and the mean price stays the forward.
 
-At the at-the-money volatility itself this is the market's distribution: every option is worth about its mid, so a structure's expected result is
-minus its costs. Another volatility expresses one view only: the market's SHAPE is right and its WIDTH is not. Nothing here can find a gain from
+Without a view this is the market's distribution: every option is worth about its mid, so a structure's expected result is minus its costs. A view
+volatility sets the standard deviation of the log return (annualised) to the view, keeping the shape: it expresses one view only, that the
+market's SHAPE is right and its WIDTH is not. (The market's own width is larger than its at-the-money volatility, by about 13% on stored data,
+because of the tails: the first version divided by the at-the-money volatility and was that much wider than named.) Nothing here can find a gain from
 skew alone, which three one-volatility models did (see documentation/strategy_pipeline.md).
 """
 
@@ -30,6 +32,8 @@ MAXIMUM_MEDIAN_ERROR = 0.03
 VOLATILITY_BOUNDS = (0.01, 5.0)
 SPREAD_FLOOR = 0.005
 """Smallest volatility spread used to weight a quote (a locked or very tight quote must not dominate the fit)."""
+MAXIMUM_PROBABILITY_REPAIR = 0.01
+"""A fitted curve whose cumulative probability must be corrected by more than this (it implies negative probabilities) is no distribution."""
 GRID_POINTS = 2001
 GRID_MINIMUM_LOG_RANGE = 1.5
 GRID_TOTAL_VOLATILITIES = 10.0
@@ -93,34 +97,45 @@ class MarketSmile:
         """The fitted volatility at the forward."""
         return self.volatility(self.forward)
 
+    def _market_probabilities(self) -> Tuple[np.ndarray, np.ndarray, float]:
+        """(log returns, probabilities, largest correction): the market's own distribution read from the fitted curve."""
+        total_at_the_money = math.sqrt(max(float(_svi_total_variance(self.parameters, np.zeros(1))[0]), 1e-12))
+        reach = max(GRID_TOTAL_VOLATILITIES * total_at_the_money, GRID_MINIMUM_LOG_RANGE)
+        k = np.linspace(-reach, reach, GRID_POINTS)
+        strikes = self.forward * np.exp(k)
+        total = np.sqrt(np.maximum(_svi_total_variance(self.parameters, k), 1e-12))
+        first = (-k + 0.5 * total * total) / total
+        calls = self.forward * norm.cdf(first) - strikes * norm.cdf(first - total)
+        raw = 1.0 + np.diff(calls) / np.diff(strikes)                                 # 1 + dC/dK between neighbouring strikes
+        cumulative = np.clip(np.maximum.accumulate(raw), 0.0, 1.0)                    # never decreasing: no negative probability
+        probabilities = np.diff(np.concatenate(([0.0], cumulative, [1.0])))          # includes the mass beyond both ends
+        middles = np.sqrt(strikes[:-1] * strikes[1:])
+        prices = np.concatenate(([strikes[0]], 0.5 * (middles[:-1] + middles[1:]), [strikes[-1]]))
+        return np.log(prices / self.forward), probabilities / probabilities.sum(), float(np.max(np.abs(cumulative - raw)))
+
+    @property
+    def probability_repair(self) -> float:
+        """The largest correction the cumulative probability needed (0 for a curve without arbitrage)."""
+        return self._market_probabilities()[2]
+
     def distribution(self, view_volatility: Optional[float] = None) -> PriceGrid:
         """
         The distribution of the settlement price.
 
         Args:
-            view_volatility: The width wanted (a fraction, comparable with the at-the-money volatility); None: the market's own.
+            view_volatility: The annualised standard deviation wanted for the log return (a fraction); None: the market's own distribution.
 
         Raises:
             ValueError: for a view volatility that is not positive.
         """
         if view_volatility is not None and view_volatility <= 0:
             raise ValueError("the view volatility must be positive")
-        atm_total = math.sqrt(max(float(_svi_total_variance(self.parameters, np.zeros(1))[0]), 1e-12))
-        reach = max(GRID_TOTAL_VOLATILITIES * atm_total, GRID_MINIMUM_LOG_RANGE)
-        k = np.linspace(-reach, reach, GRID_POINTS)
-        strikes = self.forward * np.exp(k)
-        total = np.sqrt(np.maximum(_svi_total_variance(self.parameters, k), 1e-12))
-        first = (-k + 0.5 * total * total) / total
-        calls = self.forward * norm.cdf(first) - strikes * norm.cdf(first - total)
-        slopes = np.diff(calls) / np.diff(strikes)                                    # dC/dK between neighbouring strikes
-        cumulative = np.clip(np.maximum.accumulate(1.0 + slopes), 0.0, 1.0)           # never decreasing: no negative probability
-        probabilities = np.diff(np.concatenate(([0.0], cumulative, [1.0])))          # includes the mass beyond both ends
-        middles = np.sqrt(strikes[:-1] * strikes[1:])
-        prices = np.concatenate(([strikes[0]], 0.5 * (middles[:-1] + middles[1:]), [strikes[-1]]))
-        probabilities = probabilities / probabilities.sum()
-        log_returns = np.log(prices / self.forward)
-        factor = 1.0 if view_volatility is None else view_volatility / self.at_the_money_volatility
+        log_returns, probabilities, _ = self._market_probabilities()
         mean = float((probabilities * log_returns).sum())
+        factor = 1.0
+        if view_volatility is not None:
+            own = math.sqrt(float((probabilities * (log_returns - mean) ** 2).sum()))
+            factor = view_volatility * math.sqrt(self.years) / own
         scaled = np.exp(mean + factor * (log_returns - mean))
         return PriceGrid(self.forward * scaled / float((probabilities * scaled).sum()), probabilities)     # the mean price is the forward
 
@@ -129,8 +144,10 @@ def fit_market_smile(quotes: Sequence[Quote], forward: float, years: float) -> O
     """
     Fit the smile of one expiry to the mids of its two-sided out-of-the-money options (puts at or below the forward, calls above it).
 
-    Each quote is weighted by one over its volatility spread (a tight quote says more). Returns None, never a made-up curve, when there are too
-    few quotes, too few on one side, or the fit misses the quotes by more than ``MAXIMUM_MEDIAN_ERROR``.
+    Each quote is weighted by one over its volatility spread (a tight quote says more); a quote whose spread cannot be expressed in volatility is
+    left out rather than given an assumed weight. Returns None, never a made-up curve, when there are too few quotes, too few on one side, the fit
+    misses the quotes by more than ``MAXIMUM_MEDIAN_ERROR``, or the curve implies probabilities that need a correction above
+    ``MAXIMUM_PROBABILITY_REPAIR``.
 
     Raises:
         ValueError: for a forward or time that is not positive.
@@ -148,15 +165,15 @@ def fit_market_smile(quotes: Sequence[Quote], forward: float, years: float) -> O
             continue
         bid = implied_volatility(quote.bid_usd, forward, quote.strike, years, quote.option_type)
         ask = implied_volatility(quote.ask_usd, forward, quote.strike, years, quote.option_type)
-        spread = (ask - bid) if bid is not None and ask is not None else None
-        points.append((math.log(quote.strike / forward), mid, spread))
+        if bid is None or ask is None:
+            continue
+        points.append((math.log(quote.strike / forward), mid, ask - bid))
     below = sum(1 for k, _, _ in points if k <= 0)
     if len(points) < MINIMUM_SMILE_QUOTES or below < MINIMUM_QUOTES_PER_SIDE or len(points) - below < MINIMUM_QUOTES_PER_SIDE:
         return None
     k = np.array([point[0] for point in points])
     volatilities = np.array([point[1] for point in points])
-    widest = max((point[2] for point in points if point[2] is not None), default=0.05)
-    scales = np.array([max(point[2] if point[2] is not None else widest, SPREAD_FLOOR) for point in points])
+    scales = np.array([max(point[2], SPREAD_FLOOR) for point in points])
     level = float(np.median(volatilities) ** 2 * years)
 
     def residuals(parameters: np.ndarray) -> np.ndarray:
@@ -175,4 +192,5 @@ def fit_market_smile(quotes: Sequence[Quote], forward: float, years: float) -> O
     error = float(np.median(np.abs(fitted - volatilities)))
     if error > MAXIMUM_MEDIAN_ERROR:
         return None
-    return MarketSmile(forward, years, tuple(float(value) for value in best.x), error, len(points))
+    smile = MarketSmile(forward, years, tuple(float(value) for value in best.x), error, len(points))
+    return None if smile.probability_repair > MAXIMUM_PROBABILITY_REPAIR else smile

@@ -190,7 +190,7 @@ def test_a_missing_stale_or_incomplete_chain_row_is_not_recorded_and_never_fille
     facts = build(service)
     assert facts.atm_iv_pct == expected_atm and facts.skew_25d is None and facts.put_25d_iv_pct is None
     assert "25-delta skew (put IV minus call IV, vol points): not recorded" in render_facts(facts)
-    assert facts.iv_percentile_365d == 24.0                                           # the other volatility figures are still read
+    assert facts.expected_daily_move_usd == 1613.0                                    # the other volatility figures are still read
 
 
 def test_the_variance_risk_premium_is_computed_from_the_two_numbers_shown_and_never_taken_from_the_other_table():
