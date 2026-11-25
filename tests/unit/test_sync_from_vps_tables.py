@@ -132,7 +132,8 @@ class TestLookbackWindows:
         assert _find("daily_oi_snapshots")["lookback_hours"] == 6
         assert _find("volatility_skew_history")["lookback_hours"] == 6
         assert _find("ohlcv_history")["lookback_hours"] == 72  # the collector rewrites the last 2 daily candles
-        for name in ("hourly_snapshots", "onchain_analysis_snapshots", "onchain_volatility_snapshots", "flow_delta_hourly"):
+        assert _find("hourly_snapshots")["lookback_hours"] == 168  # the collector fills missing hours up to 7 days back
+        for name in ("onchain_analysis_snapshots", "onchain_volatility_snapshots", "flow_delta_hourly"):
             assert _find(name)["lookback_hours"] == 24, name
 
     def test_lookback_is_only_used_with_an_upsert_key_and_a_timestamp_watermark(self):

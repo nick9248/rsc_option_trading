@@ -77,7 +77,9 @@ TUNNEL_WAIT_SEC = 3          # Seconds to wait for tunnel to establish
 # Every table the collector rewrites on the VPS (ON CONFLICT ... DO UPDATE) needs upsert_key: with
 # DO NOTHING the local copy keeps the first version for ever (found 2026-11-25: daily candles and
 # on-chain rows copied mid-hour stayed stale). A rewrite older than the lookback (a backfill script run
-# on the VPS) is not picked up: sync such a table once without lookback_hours.
+# on the VPS) is not picked up: sync such a table once without lookback_hours. That full re-read makes
+# every differing local row equal to the VPS, so FIRST check that no repair was made only locally (a
+# backfill script run on this PC): it would be undone.
 # optional       : optional, default False. True only for a table whose migration may
 #                  not be applied on the VPS yet: missing there, it is SKIPPED (logged).
 #                  Any other table missing on the VPS is an error (a schema fault).
@@ -101,7 +103,7 @@ SYNC_TABLES = [
         "watermark_type": "timestamp",
         "conflict_target": None,
         "upsert_key": ["instrument_name", "snapshot_hour"],
-        "lookback_hours": 24,  # an hour is re-aggregated in place
+        "lookback_hours": 168,  # the collector fills a missing hour up to 7 days later; manual re-aggregation rewrites hours
     },
     {
         "name": "onchain_analysis_snapshots",
@@ -545,7 +547,10 @@ def sync_table(vps_conn, local_conn, table: dict) -> tuple[int, str]:
     except Exception as e:
         logger.exception(f"Sync of {table['name']} failed")
         _best_effort(local_conn.rollback)
-        resume_hint = f" ({inserted:,} rows already committed; the next run resumes after them)" if inserted else ""
+        resume_hint = ""
+        if inserted:
+            next_run = "run it again: an upsert table is re-read, it does not resume" if table.get("upsert_key") else "the next run resumes after them"
+            resume_hint = f" ({inserted:,} rows already committed; {next_run})"
         return -1, f"ERROR: {e}{resume_hint}"
 
     finally:
