@@ -59,7 +59,7 @@ class PickResult:
     quantity: Optional[float]
     cost_usd: float
     stored_before: bool
-    """True when the instant had been picked already: nothing was paid and the stored row was returned."""
+    """True when a stored row was returned (the instant had been picked already, or in live mode the model was asked within the hour): nothing was paid."""
     expiration: Optional[str] = None
 
 
@@ -159,13 +159,15 @@ class StrategyPickService:
         if entry is None:
             logger.info("%s %s: not usable (%s)", currency, as_of.isoformat(), reason)
             return None
-        # Never pay twice: a replay instant is stored once; a live pick is not repeated within an hour for the same expiry and chain.
+        # Never pay twice: a replay instant is stored once; a live pick that asked the model is not repeated within an hour for the same expiry.
         stored = (self.repository.get_strategy_picks(currency, mode=mode, expiration=entry.expiration, as_of=as_of, method_version=METHOD_VERSION)
                   if mode == MODE_REPLAY else
                   self.repository.get_strategy_picks(currency, mode=mode, expiration=entry.expiration, as_of_since=as_of - timedelta(hours=1),
                                                      method_version=METHOD_VERSION))
         if mode == MODE_LIVE:
-            stored = [row for row in stored if row["status"] != "no_candidates"]          # a free "no candidates" row never blocks a new look (the code or the chain may have changed)
+            # A free "no candidates" row of an EARLIER instant does not block a new look (the code or the chain may have changed). One of THIS instant
+            # does: its row exists already, so a second answer could not be stored and its cost would be lost.
+            stored = [row for row in stored if row["status"] != "no_candidates" or row["as_of"] == as_of]
         if stored:
             row = stored[-1]
             return PickResult(row["id"], row["status"], row["choice"], None, [], row["quantity"], 0.0, True, entry.expiration)

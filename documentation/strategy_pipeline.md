@@ -33,7 +33,7 @@ the event, but the instants are labelled. Take the replay as a test of consisten
 
 ## In the Analysis tab
 "Ask Claude for strategies" (off by default, about 0.2 USD per currency): after the report, a strategy step asks the model about the expiries nearest 3, 7, 14 and
-30 days (one pick each, an expiry met twice once; a pick of the same expiry within the hour is not repeated), on the newest stored chain (the run has just
+30 days (one pick each, an expiry met twice once; a pick that asked the model is not repeated within the hour for the same expiry; a free "no candidates" result is looked at again), on the newest stored chain (the run has just
 synced). The Strategy tab of the unified dashboard shows the newest live pick of each open expiry: the choice, its size, the PnL-at-expiry chart, the reasons,
 risks and invalidation, and the shortlist in the model's order with the baseline marked. Without the tick the tab shows the picks already stored and nothing is
 paid. A missing key, an exhausted budget or an API error fails only that step; the dashboard is still built.

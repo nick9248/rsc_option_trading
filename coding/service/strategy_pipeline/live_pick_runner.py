@@ -65,7 +65,7 @@ class LivePickRunner:
             if result.expiration in seen:
                 continue
             seen.add(result.expiration)
-            paid += 0 if result.stored_before else 1
+            paid += 0 if result.stored_before or result.status == "no_candidates" else 1                   # only a pick that asked the model
             cost += result.cost_usd
             progress(f"{currency} {result.expiration}: {result.status}" + (f", {result.choice}" if result.choice else "")
                      + (" (already picked within the hour)" if result.stored_before else f", cost {result.cost_usd:.3f} USD"))

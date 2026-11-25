@@ -232,12 +232,21 @@ def test_a_unit_quantity_live_pick_is_stored_per_coin_with_the_metrics_maximum_l
     assert "No venue is configured" not in caplog.text
 
 
-def test_a_stored_no_candidates_live_row_does_not_block_a_new_pick_within_the_hour_but_a_paid_one_does():
-    free = {"id": 5, "status": "no_candidates", "choice": None, "quantity": None}
-    paid = {"id": 6, "status": "ok", "choice": "C1", "quantity": 1.0}
+def test_a_free_row_of_an_earlier_instant_does_not_block_a_new_live_pick_but_a_paid_row_does_even_behind_a_newer_free_one():
+    free = {"id": 5, "status": "no_candidates", "choice": None, "quantity": None, "as_of": AS_OF - timedelta(minutes=10)}
+    paid = {"id": 6, "status": "ok", "choice": "C1", "quantity": 1.0, "as_of": AS_OF - timedelta(minutes=30)}
     service, client, repository = make_service(stored=[free])
     reply, _ = reply_for(service)
     client.messages.create.return_value = reply
     assert run(service, mode=MODE_LIVE).stored_before is False and client.messages.create.call_count == 1
-    service, client, repository = make_service(stored=[free, paid])
-    assert run(service, mode=MODE_LIVE).stored_before is True and client.messages.create.call_count == 0
+    service, client, repository = make_service(stored=[paid, free])
+    result = run(service, mode=MODE_LIVE)
+    assert result.stored_before is True and result.row_id == 6 and client.messages.create.call_count == 0
+
+
+def test_a_free_row_of_the_same_instant_blocks_because_a_second_answer_could_not_be_stored():
+    same_instant = {"id": 7, "status": "no_candidates", "choice": None, "quantity": None, "as_of": AS_OF}
+    service, client, repository = make_service(stored=[same_instant])
+    result = run(service, mode=MODE_LIVE)
+    assert result.stored_before is True and result.row_id == 7
+    assert client.messages.create.call_count == 0 and repository.save_strategy_pick.call_count == 0
